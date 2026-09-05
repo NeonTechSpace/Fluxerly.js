@@ -1,0 +1,79 @@
+# SDK contracts
+
+This document defines cross-cutting implementation constraints for SDK contributors.
+These requirements do not imply that every planned API is implemented.
+Member signatures, defaults and caller-visible behavior belong in public source comments and the website reference.
+See [technology choices](/docs/TECHNOLOGY.md) for tooling and [the repository guide](/docs/REPOSITORY.md) for code and checks
+
+## Public API model
+
+Both public entry points share one Effect implementation.
+The default boundary owns execution and neverthrow conversion, without requiring a consumer-managed Effect runtime.
+Native operations preserve caller context, interruption and scope ownership without a detached SDK runtime.
+High-level helpers compose supported lower-level operations rather than exposing private modules.
+Add conveniences only for concrete use cases, with explicit ownership and proportionate maintenance cost
+
+## Results and failures
+
+Share expected-error definitions across both entry points, using one readonly `_tag` classification rather than a duplicate error code.
+Keep expected failures and cancellation distinct from SDK defects at the default boundary.
+An operation failure or interruption must remain observable when cleanup also defects.
+Do not overwrite either failure, downgrade a cleanup defect to a default expected error, or only log it.
+Preserve native Effect cause information, but expose only allowlisted, SDK-owned diagnostic details through the default boundary.
+Never include credentials, private payloads or arbitrary upstream errors in default diagnostic output
+
+## Connection and recovery
+
+Creation validates local configuration without opening sockets or starting background work.
+The client owns its credential reference, session, recovery loop and retained lifetime outcome.
+Connection readiness requires authentication and the required READY processing, not merely an open socket
+
+Startup, a managed run and an outcome observer have distinct ownership.
+Reject competing ownership without cancelling or cleaning up the accepted operation.
+An expected standalone startup failure permits reuse only after cleanup, while an accepted managed run owns one permanent client lifetime
+
+Cancellation of one outcome observer must not consume the retained outcome or stop other observers.
+Coordinate initial state delivery with subscription setup, and keep public state observation bounded rather than treating it as a lossless transition log
+
+Use separate startup and established-session retry policies, with one recovery loop rather than nested startup loops.
+Respect server-required waits and stop on permanent failures, cancellation or SDK defects
+
+Shutdown stops startup and recovery, shares cleanup across concurrent callers and awaits actual resource release.
+Do not report timeout or cancellation completion while abandoning an owned socket
+
+The SDK must not install process-signal handlers or terminate the consumer process
+
+## User-handler failures
+
+Isolate user-handler failure from unrelated work and internal SDK defects.
+Do not automatically retry a handler that may already have performed an external action.
+Report through the configured hook or shared operational logger, without private payloads.
+If the hook fails, attempt one safe fallback report without recursively invoking the hook.
+Reporting cannot guarantee delivery when the fallback logger also fails
+
+## Logging
+
+Use the shared Effect logger rather than a second logging implementation.
+Keep explicit SDK development-log opt-in separate from operational handler-error reporting and consumer Debug settings.
+The default runtime owns its logging configuration, while native execution preserves caller logger and tracing context
+
+No customization may bypass private-data exclusion
+
+## Naming
+
+Use concrete verbs and let the containing object supply the subject, as in `client.connect`.
+Use the same operation names across both public entry points, without an Effect suffix.
+Use `create` for construction without background work, `connect` for readiness, `run` for owned execution and `waitFor` for observation.
+Reserve `fetch` for remote retrieval and `get` for local lookup.
+Use `shutdown` for permanent, awaited cleanup.
+Name units explicitly, such as `timeoutMs`, and use `is`, `has` or `can` for boolean conditions
+
+## Validation requirements
+
+Validate both public entry points, their execution differences and packed consumer imports.
+Cover admission races, readiness, retry limits and server waits, cancellation ownership, retained outcomes and awaited cleanup.
+Check combined failures, handler isolation, diagnostic privacy and native context preservation.
+Verify bounded state delivery, late observers and unavailable/reset latency values
+
+Use separate runtime and consumer type checks, including natural process exit where resource ownership matters.
+Tests must establish the affected behavior rather than merely succeed against fixtures

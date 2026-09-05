@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": ">=12 <13",
+      "onFail": "download"
+    }
+  }
+}
