@@ -1,5 +1,9 @@
 {
   "private": true,
+  "scripts": {
+    "build": "pnpm --filter @neontechspace/fluxerly build",
+    "check": "pnpm --filter @neontechspace/fluxerly check"
+  },
   "devEngines": {
     "packageManager": {
       "name": "pnpm",

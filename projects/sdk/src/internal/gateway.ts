@@ -1,0 +1,297 @@
+import { platform } from "node:os"
+import { Clock, Deferred, Effect, Redacted } from "effect"
+import WebSocket from "ws"
+import {
+    AuthenticationError,
+    ConnectionError,
+    ConnectionTimeoutError,
+    RateLimitError,
+    type ConnectionFailure,
+} from "#sdk/errors"
+
+export interface Session {
+    id: string | undefined
+    sequence: number | null
+}
+
+/** Retry metadata is internal, not a promise that arbitrary consumer actions are repeatable */
+export class AttemptFailure {
+    readonly _tag = "AttemptFailure"
+    constructor(
+        readonly failure: ConnectionFailure,
+        readonly retry: boolean,
+        readonly resetSession = false,
+    ) {}
+}
+
+export function classifyClose(code: number, resuming: boolean): AttemptFailure {
+    if (code === 4004) return new AttemptFailure(new AuthenticationError(), false)
+    if (code === 4008) return new AttemptFailure(new RateLimitError("gateway", null), true)
+    const permanent = [4001, 4002, 4003, 4005, 4010, 4011, 4012].includes(code)
+    return new AttemptFailure(
+        new ConnectionError("gateway", permanent ? "protocol" : "closed", code),
+        !permanent,
+        code === 4007 && resuming,
+    )
+}
+
+function closeSocket(socket: WebSocket) {
+    return Effect.gen(function* () {
+        if (socket.readyState === WebSocket.CLOSED) return
+        const closed = Effect.callback<void>((resume) => {
+            const onClose = () => resume(Effect.void)
+            socket.once("close", onClose)
+            if (socket.readyState === WebSocket.CLOSED) onClose()
+            return Effect.sync(() => socket.off("close", onClose))
+        })
+        yield* Effect.sync(() => {
+            if (socket.readyState === WebSocket.CONNECTING) socket.terminate()
+            else socket.close(1000)
+        }).pipe(
+            Effect.onExit((exit) =>
+                exit._tag === "Failure"
+                    ? Effect.sync(() => socket.terminate()).pipe(Effect.andThen(closed))
+                    : Effect.void,
+            ),
+        )
+        yield* closed.pipe(
+            Effect.timeoutOrElse({
+                duration: 5_000,
+                orElse: () =>
+                    Effect.gen(function* () {
+                        socket.terminate()
+                        yield* closed
+                    }),
+            }),
+        )
+    })
+}
+
+/** One uncompressed protocol-v1 session, owned by the calling Effect scope */
+export const runGateway = (
+    url: string,
+    token: Redacted.Redacted<string>,
+    session: Session,
+    timeoutMs: number,
+    onReady: () => void,
+    onLatency: (milliseconds: number | null) => void,
+    onRecovering: () => void,
+) =>
+    Effect.scoped(
+        Effect.gen(function* () {
+            const clock = yield* Clock.Clock
+            const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000
+            const hello = Deferred.makeUnsafe<number, AttemptFailure>()
+            const ready = Deferred.makeUnsafe<void, AttemptFailure>()
+            const ended = Deferred.makeUnsafe<never, AttemptFailure>()
+            let stopping = false
+            let receivedHello = false
+            let receivedReady = false
+            let pendingHeartbeat: number | undefined
+            const resuming = session.id !== undefined && session.sequence !== null
+            const fail = (error: AttemptFailure) => {
+                if (Deferred.doneUnsafe(ended, Effect.fail(error))) {
+                    onLatency(null)
+                    if (receivedReady && error.retry) onRecovering()
+                }
+            }
+            const protocolFailure = () => fail(new AttemptFailure(new ConnectionError("gateway", "protocol"), false))
+            const socket = yield* Effect.acquireRelease(
+                Effect.sync(() => {
+                    const socket = new WebSocket(url, { perMessageDeflate: false, followRedirects: false })
+                    const send = (op: number, d: unknown) => {
+                        if (stopping) return
+                        if (socket.readyState !== WebSocket.OPEN) {
+                            fail(new AttemptFailure(new ConnectionError("gateway", "network"), true))
+                            return
+                        }
+                        socket.send(JSON.stringify({ op, d }), (error) => {
+                            if (error && !stopping)
+                                fail(new AttemptFailure(new ConnectionError("gateway", "network"), true))
+                        })
+                    }
+                    const heartbeat = () => {
+                        // Server requests must be answered even while a previous ACK is pending
+                        pendingHeartbeat ??= now()
+                        send(1, session.sequence)
+                    }
+                    const processMessage = (data: WebSocket.RawData, binary: boolean) => {
+                        if (stopping) return
+                        if (binary) {
+                            protocolFailure()
+                            return
+                        }
+                        let payload: unknown
+                        try {
+                            payload = JSON.parse(data.toString())
+                        } catch {
+                            protocolFailure()
+                            return
+                        }
+                        if (
+                            typeof payload !== "object" ||
+                            payload === null ||
+                            !("op" in payload) ||
+                            !Number.isInteger(payload.op)
+                        ) {
+                            protocolFailure()
+                            return
+                        }
+                        const body = "d" in payload ? payload.d : undefined
+                        switch (payload.op) {
+                            case 10: {
+                                if (
+                                    receivedHello ||
+                                    typeof body !== "object" ||
+                                    body === null ||
+                                    !("heartbeat_interval" in body) ||
+                                    typeof body.heartbeat_interval !== "number" ||
+                                    !Number.isSafeInteger(body.heartbeat_interval) ||
+                                    body.heartbeat_interval <= 0 ||
+                                    body.heartbeat_interval > 2_147_483_647
+                                ) {
+                                    protocolFailure()
+                                    return
+                                }
+                                receivedHello = true
+                                Deferred.doneUnsafe(hello, Effect.succeed(body.heartbeat_interval))
+                                if (resuming)
+                                    send(6, {
+                                        token: Redacted.value(token),
+                                        session_id: session.id,
+                                        seq: session.sequence,
+                                    })
+                                else
+                                    send(2, {
+                                        token: Redacted.value(token),
+                                        properties: { os: platform(), browser: "Fluxerly.js", device: "Fluxerly.js" },
+                                    })
+                                break
+                            }
+                            case 0: {
+                                if (
+                                    !receivedHello ||
+                                    !("s" in payload) ||
+                                    typeof payload.s !== "number" ||
+                                    !Number.isSafeInteger(payload.s) ||
+                                    payload.s < 0 ||
+                                    !("t" in payload) ||
+                                    typeof payload.t !== "string"
+                                ) {
+                                    protocolFailure()
+                                    return
+                                }
+                                if (payload.t === "READY") {
+                                    if (
+                                        receivedReady ||
+                                        resuming ||
+                                        typeof body !== "object" ||
+                                        body === null ||
+                                        !("session_id" in body) ||
+                                        typeof body.session_id !== "string" ||
+                                        !body.session_id
+                                    ) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    session.id = body.session_id
+                                    receivedReady = true
+                                } else if (payload.t === "RESUMED") {
+                                    if (!resuming || receivedReady) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    receivedReady = true
+                                } else if (!resuming && !receivedReady) {
+                                    protocolFailure()
+                                    return
+                                }
+                                // No event handlers or cache exist yet; dispatch bodies are discarded synchronously
+                                if (session.sequence !== null && payload.s < session.sequence) {
+                                    protocolFailure()
+                                    return
+                                }
+                                session.sequence = payload.s
+                                if (payload.t === "READY" || payload.t === "RESUMED")
+                                    Deferred.doneUnsafe(ready, Effect.void)
+                                break
+                            }
+                            case 1:
+                                heartbeat()
+                                break
+                            case 11:
+                                if (pendingHeartbeat !== undefined) {
+                                    onLatency(Math.max(0, now() - pendingHeartbeat))
+                                    pendingHeartbeat = undefined
+                                }
+                                break
+                            case 7:
+                                fail(new AttemptFailure(new ConnectionError("gateway", "closed"), true))
+                                break
+                            case 9:
+                                if (body !== false) {
+                                    protocolFailure()
+                                    return
+                                }
+                                fail(new AttemptFailure(new ConnectionError("gateway", "closed"), true, true))
+                                break
+                            // Unknown server opcodes do not force a reconnect
+                        }
+                    }
+                    const onMessage = (data: WebSocket.RawData, binary: boolean) => {
+                        try {
+                            processMessage(data, binary)
+                        } catch (defect) {
+                            Deferred.doneUnsafe(ended, Effect.die(defect))
+                        }
+                    }
+                    const onError = () => {
+                        if (!stopping) fail(new AttemptFailure(new ConnectionError("gateway", "network"), true))
+                    }
+                    const onClose = (code: number) => {
+                        if (!stopping) fail(classifyClose(code, resuming && !receivedReady))
+                    }
+                    socket.on("message", onMessage)
+                    socket.on("error", onError)
+                    socket.on("close", onClose)
+                    return {
+                        socket,
+                        heartbeat,
+                        detach: () => {
+                            socket.off("message", onMessage)
+                            socket.off("error", onError)
+                            socket.off("close", onClose)
+                        },
+                    }
+                }),
+                (transport) =>
+                    Effect.gen(function* () {
+                        stopping = true
+                        onLatency(null)
+                        yield* closeSocket(transport.socket).pipe(Effect.ensuring(Effect.sync(transport.detach)))
+                    }),
+            )
+            const startup = Effect.gen(function* () {
+                const interval = yield* Deferred.await(hello)
+                yield* Effect.forkScoped(
+                    Effect.forever(
+                        Effect.gen(function* () {
+                            yield* Effect.sleep(interval)
+                            if (pendingHeartbeat !== undefined && now() - pendingHeartbeat >= interval) {
+                                fail(new AttemptFailure(new ConnectionError("gateway", "network"), true))
+                            } else if (pendingHeartbeat === undefined) socket.heartbeat()
+                        }),
+                    ),
+                )
+                yield* Deferred.await(ready)
+            }).pipe(
+                Effect.timeoutOrElse({
+                    duration: timeoutMs,
+                    orElse: () => Effect.fail(new AttemptFailure(new ConnectionTimeoutError(timeoutMs), true)),
+                }),
+            )
+            yield* Effect.raceFirst(startup, Deferred.await(ended))
+            onReady()
+            return yield* Deferred.await(ended)
+        }),
+    )

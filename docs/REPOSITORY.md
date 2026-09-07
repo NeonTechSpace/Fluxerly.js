@@ -12,6 +12,24 @@ The documentation website remains a scaffold
 | [Website](/projects/web) | The documentation website, with its own [manifest](/projects/web/package.json) |
 | [Documentation](/docs) | Repository Markdown documents, including the public [README](/docs/README.md) and this guide |
 
+| Owner | Responsibility |
+| --- | --- |
+| [index.ts](/projects/sdk/src/index.ts) | Default public API and member documentation |
+| [effect.ts](/projects/sdk/src/effect.ts) | Effect-native public API and member documentation |
+| [client.ts](/projects/sdk/src/internal/client.ts) | Client lifetime and recovery ownership |
+| [discovery.ts](/projects/sdk/src/internal/discovery.ts) | Hosted service discovery |
+| [gateway.ts](/projects/sdk/src/internal/gateway.ts) | Gateway transport and protocol |
+
+Keep public API signatures and caller documentation in source, and user guides/reference in the website.
+Use [SDK tests](/projects/sdk/tests/) for behavior checks and [packed consumers](/projects/sdk/tests/consumers/) for package-boundary checks.
+The build emits ignored files under `projects/sdk/dist/`, which must not be edited by hand
+
+The [SDK import rule](/projects/sdk/AGENTS.md) uses package-private `#sdk/*` aliases across source areas, with short sibling imports kept relative.
+The SDK manifest maps these aliases to compiled output by default; TypeScript's NodeNext build resolves that output mapping back to source.
+The [test compiler configuration](/projects/sdk/tsconfig.test.json) and [Vitest configuration](/projects/sdk/vitest.config.ts) enable the `fluxerly-source` condition to select source directly.
+Built-process and packed-consumer checks use default resolution, without that condition.
+Source-module identity tests guard against accidentally testing stale output; packed checks verify the shipped mapping, runtime target and public declaration preservation
+
 See [technology choices](/docs/TECHNOLOGY.md) for tooling and support policy, and [SDK contracts](/docs/SDK-CONTRACTS.md) for cross-cutting implementation constraints
 
 ## Shared files
@@ -49,4 +67,45 @@ The workspace root and website are private packages.
 The SDK manifest also remains private to prevent npm publication before release setup is ready.
 This temporary safeguard does not change the intended public package identity
 
-Build, test, release and deployment commands are not configured yet
+## Development checks
+
+Run these commands from [projects/](/projects) using the development Node version
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm install --frozen-lockfile` | Install the recorded dependency graph |
+| `pnpm build` | Compile the SDK with TypeScript 7 |
+| `pnpm --filter @neontechspace/fluxerly format` | Format SDK source, tests and configuration with Prettier |
+| `pnpm --filter @neontechspace/fluxerly format:check` | Check SDK formatting without writing files |
+| `pnpm check` | Check SDK formatting, build, typecheck source/tests, run Vitest and check isolated packed JavaScript/TypeScript consumers |
+
+The SDK's [Prettier configuration](/projects/sdk/.prettierrc.json) sets a 120-column target and omits optional semicolons.
+Prettier reads 4-space indentation and LF endings from the shared [EditorConfig](/.editorconfig).
+Formatting runs only within the SDK and respects its [.gitignore](/projects/sdk/.gitignore), excluding build output and local sandbox files.
+The website and repository documents are outside these formatting commands
+
+Local networking checks use owned loopback fixtures, not Fluxer credentials or live sessions
+
+### Opt-in live sandbox check
+
+Run live checks only against the authorized test bot and server, from [projects/](/projects/).
+The SDK-local, Git-ignored `.env.test.local` must provide `FLUXER_TEST_GUILD_ID`, `FLUXER_TEST_APPLICATION_ID` and `FLUXER_TEST_BOT_TOKEN`.
+The checks verify bot/application/server identity and do not use a client secret.
+Never print credentials or private payloads when diagnosing a failure
+
+Run a table entry as `pnpm --filter @neontechspace/fluxerly <script>`.
+These checks are opt-in and excluded from `pnpm check`
+
+| Script | Purpose | Outside effects |
+| --- | --- | --- |
+| `test:live` | Hosted protocol discovery, readiness and heartbeats | No server-content changes |
+| `test:live:sdk` | Built default/native client connection and shutdown | No server-content changes |
+
+The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools.
+After a crash, verify that the recorded process has stopped before removing its stale lock.
+Do not stop unrelated processes or bypass a live owner's lock
+
+Use [live harness source](/projects/sdk/tests/live/) for assertions and bounded execution details.
+A passing run establishes only its checked scenarios, not complete replay, prolonged-outage recovery or production readiness
+
+Release and deployment commands are not configured yet

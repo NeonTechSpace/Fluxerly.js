@@ -1,0 +1,4 @@
+dist/
+.vitest/
+.env.test.local
+.env.test.local.lock

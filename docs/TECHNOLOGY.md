@@ -12,6 +12,7 @@ Use [the repository guide](/docs/REPOSITORY.md) for setup and file locations
 | Module format | ECMAScript modules (ESM) |
 | Runtime | Node.js 24 as the minimum consumer major |
 | Internal implementation | Effect 4 release-candidate line |
+| WebSocket transport | `ws`, kept behind internal SDK boundaries |
 | Public entry points | Default JavaScript/TypeScript and Effect-native, sharing one implementation |
 | Public error results | neverthrow `Result` for default synchronous creation and `ResultAsync` for default async operations, typed Effect failures for the native API |
 | Initial build | TypeScript 7 compiler-only ESM output, public declarations and source maps |
@@ -36,13 +37,18 @@ The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and
 
 The initial target is Effect 4's release-candidate line, not Effect 3 or a stable Effect 4 release.
 Use an exact prerelease pin for reproducible implementation and validation.
-The native consumer compatibility range and dependency or peer-dependency packaging remain undecided
+The private development package currently pins Effect as a runtime dependency.
+The published native consumer compatibility range and dependency or peer-dependency policy remain undecided
 
 ### Build and package optimization
 
 Start with TypeScript 7 compiler-only output: Readable ESM JavaScript, public type declarations and source maps.
 Keep deliberate public exports and clean package contents.
 Validate the packed artifacts through default JavaScript, TypeScript 7 and native Effect consumers rather than relying only on source imports
+
+The private development package uses version `0.0.0` so it can be packed for local consumer checks.
+Its tarball includes compiled output and source files for source-map and declaration-map navigation.
+Release packaging is not configured, and the tarball does not yet include the repository license or a package README
 
 Before publication, compare compiler-only and bundled artifacts once representative SDK code exists.
 Measure package size and cold-import or startup behavior.
@@ -62,9 +68,25 @@ Exercise default and native entry points, including failure, interruption and cl
 Examples must use supported public imports without casts that bypass the intended API or repeated low-level orchestration on the main path.
 Runtime success does not establish type correctness, and compiler success does not establish runtime behavior
 
-Exact dependency versions need a compatibility check before installation is treated as a validated toolchain.
 An Effect-specific Vitest adapter, coverage target and additional test libraries have not been selected.
 The [SDK validation requirements](/docs/SDK-CONTRACTS.md#validation-requirements) identify the behavior those tests must establish
+
+The current Effect and test-tool declarations require DOM and explicit-resource-management library types during SDK compilation.
+The SDK build includes `DOM` and `ESNext.Disposable` alongside `ES2024` without disabling dependency declaration checking.
+The default packed TypeScript consumer checks with `ES2024` alone and does not import Effect types.
+The native packed TypeScript consumer includes the additional libraries required by Effect's declarations.
+These compiler libraries do not add browser runtime support
+
+### Transport experiment
+
+The built-in WebSocket candidate is test-only and must not be promoted on the strength of its characterization tests.
+It lacks bounded forced closure, which is required to release owned resources before shutdown completes.
+Use the selected ws transport rather than abandoning a socket after a timeout
+
+#### Selected ws dependency
+
+Keep ws and its types behind internal boundaries, with Effect owning cancellation and cleanup.
+The [gateway implementation](/projects/sdk/src/internal/gateway.ts) owns production transport and protocol behavior
 
 ## Documentation website
 
@@ -91,6 +113,55 @@ Generated reference files must not require manual link edits
 
 The generator and routing integration are selected but not installed or implemented in this repository
 
+#### Documentation placement
+
+Before adding or expanding documentation, choose its owner:
+
+| Content | Owner |
+| --- | --- |
+| Member signatures, defaults and caller-visible behavior | Public source comments, preserved in declarations for the website reference |
+| User guides, tutorials, recipes and design explanations for SDK users | Documentation website |
+| Introduction, contributor setup, navigation, testing procedures and release policy | Repository Markdown |
+| Cross-component ownership, invariants and coordination that maintainers need beyond documented public members | Concise repository implementation contracts |
+
+Website Markdown and MDX are website source, not a parallel repository manual.
+Until the website is implemented, keep member behavior in source comments.
+Link to existing owners instead of repeating API reference, defaults, feature inventories or test assertions.
+Update repository docs only when the milestone changes a maintainer-facing rule, boundary, navigation or procedure
+
+Before completing a documentation change, inspect each added or expanded passage against this table.
+Retain repository prose only when its maintainer purpose is clear and an existing source does not already serve that purpose.
+For live checks, retain commands, prerequisites, outside effects and shared recovery instructions, while test implementations own detailed assertions.
+During read-only review, report misplaced or duplicated content rather than moving or deleting it
+
+#### Public API documentation completion gate
+
+Apply [documentation placement](/docs/TECHNOLOGY.md#documentation-placement) to accompanying prose
+
+For implementation or review of SDK public API changes, complete these steps before reporting completion:
+
+1. Inventory the affected public exports and members in both entry points, including shared types and behavior changes with unchanged signatures
+2. During implementation, write or update their source comments alongside the code.
+   Explain applicable inputs, defaults, units, completion, readiness, ownership, cancellation, expected failures, defects and observable side effects.
+   Describe caller-relevant behavior rather than restating the member name or type.
+   During read-only review, report missing or inaccurate comments as findings rather than editing them
+3. Compare those comments with the implementation and behavioral tests.
+   Check the default and native execution differences explicitly.
+   Retain a concise review record identifying the affected members, evidence and unresolved documentation gaps
+4. Run the [aggregate development check](/docs/REPOSITORY.md#development-checks).
+   Verify that each affected member's authored comments survive in the emitted and packed declarations.
+   Typecheck affected runnable examples against the public package exports, rather than a separately maintained copy
+5. Report the documentation review and verification results with the implementation result.
+   Unresolved gaps or skipped required checks mean the affected work is not complete
+
+Apply this gate even before reference generation is installed.
+Repository prose does not substitute for public source comments
+
+Comment-presence checks, successful compilation and declaration preservation cannot establish documentation accuracy.
+Review the described behavior against the code and tests even when automated checks pass
+
+This gate grants no implementation authority during a read-only review, and no website, dependency, publication or VCS authority
+
 ## Shared development tooling
 
 | Area | Selected choice |
@@ -113,6 +184,14 @@ Run `pnpm self-update 12` from `projects/`, then `pnpm install --lockfile-only` 
 Review and commit the resulting manifest and lockfile changes together.
 Moving to pnpm 13 requires a separate decision
 
-Lint and formatting tools have not been selected.
-The selected build and test tools are not installed or configured.
+Prettier is an SDK development dependency, with its version recorded in the manifest and lockfile.
+Its [configuration](/projects/sdk/.prettierrc.json) selects a 120-column target and no optional semicolons, with 4-space indentation and LF endings inherited from EditorConfig.
+Other formatting options use Prettier's stable defaults, without plugins or experimental formatting
+
+The [development checks](/docs/REPOSITORY.md#development-checks) include SDK formatting validation.
+Lint tooling and website formatting have not been selected
+
+The SDK build and test tools are installed and configured.
+The optional transitive `msgpackr-extract` install script is explicitly disabled in the workspace's `allowBuilds` policy.
+Unreviewed dependency builds still fail installation rather than being enabled globally.
 Release and deployment workflows are not configured

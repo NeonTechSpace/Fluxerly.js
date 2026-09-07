@@ -1,3 +1,5 @@
 packages:
   - sdk
   - web
+allowBuilds:
+  msgpackr-extract: false

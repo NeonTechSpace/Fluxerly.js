@@ -5,6 +5,8 @@ These requirements do not imply that every planned API is implemented.
 Member signatures, defaults and caller-visible behavior belong in public source comments and the website reference.
 See [technology choices](/docs/TECHNOLOGY.md) for tooling and [the repository guide](/docs/REPOSITORY.md) for code and checks
 
+The [default](/projects/sdk/src/index.ts) and [Effect-native](/projects/sdk/src/effect.ts) interfaces own the public API documentation
+
 ## Public API model
 
 Both public entry points share one Effect implementation.
@@ -36,12 +38,15 @@ Cancellation of one outcome observer must not consume the retained outcome or st
 Coordinate initial state delivery with subscription setup, and keep public state observation bounded rather than treating it as a lossless transition log
 
 Use separate startup and established-session retry policies, with one recovery loop rather than nested startup loops.
-Respect server-required waits and stop on permanent failures, cancellation or SDK defects
+Respect server-required waits and stop on permanent failures, cancellation or SDK defects.
+Attempt session resumption before fresh identification when the protocol permits it, without treating successful replay as lossless delivery
 
 Shutdown stops startup and recovery, shares cleanup across concurrent callers and awaits actual resource release.
 Do not report timeout or cancellation completion while abandoning an owned socket
 
 The SDK must not install process-signal handlers or terminate the consumer process
+
+Allow bounded graceful socket closure, then force termination and await closure, with immediate termination for pending handshakes
 
 ## User-handler failures
 
@@ -77,3 +82,5 @@ Verify bounded state delivery, late observers and unavailable/reset latency valu
 
 Use separate runtime and consumer type checks, including natural process exit where resource ownership matters.
 Tests must establish the affected behavior rather than merely succeed against fixtures
+
+Use [development checks](/docs/REPOSITORY.md#development-checks) for commands and public source comments for the behavior under test
