@@ -1,5 +1,15 @@
 import { Effect, type Scope } from "effect"
-import { createClient, type Client, type ConfigurationError } from "@neontechspace/fluxerly/effect"
+import {
+    createClient,
+    type Client,
+    type ConfigurationError,
+    type MessageReference,
+    type MessageOperationFailure,
+    type Message,
+    type MessageHistoryQuery,
+    type MessageDeletion,
+    type MessageBulkDeletion,
+} from "@neontechspace/fluxerly/effect"
 
 export function createWithinCallerScope(token: string): Effect.Effect<Client, ConfigurationError, Scope.Scope> {
     return createClient({ token })
@@ -23,3 +33,88 @@ export const managed = Effect.scoped(
         yield* client.run()
     }),
 ).pipe(Effect.catchTag("AuthenticationError", () => Effect.void))
+
+/** Typechecked registration fragment inside the application's owning Effect scope */
+export function registerReply(client: Client) {
+    return client.on(
+        "messageCreate",
+        (message) =>
+            Effect.gen(function* () {
+                if (message.author.isBot || message.content !== "!ping") return
+                yield* client.messages.reply(message, { content: "Pong!" })
+            }),
+        { concurrency: 4 },
+    )
+}
+
+export function rejectedMessageShapes(client: Client): void {
+    const page: readonly Message[] = []
+    // @ts-expect-error History arrays cannot be mutated
+    page.push(page[0]!)
+    // @ts-expect-error History cursor modes are mutually exclusive
+    client.messages.fetchHistory("20", { before: "10", around: "9" })
+    // @ts-expect-error Native history cancellation uses interruption
+    client.messages.fetchHistory("20", {}, { signal: new AbortController().signal })
+    // @ts-expect-error Native registration retains its owning scope requirement
+    Effect.runPromise(client.on("messageCreate", () => Effect.void))
+    // @ts-expect-error Native send cancellation uses interruption, not AbortSignal options
+    client.messages.send("20", { content: "hello" }, { signal: new AbortController().signal })
+    // @ts-expect-error Native message management also uses interruption rather than AbortSignal options
+    client.messages.fetch({ channelId: "20", id: "10" }, { signal: new AbortController().signal })
+    // @ts-expect-error Edit requires content
+    client.messages.edit({ channelId: "20", id: "10" }, {})
+}
+
+/** Typechecked explicit page navigation in the caller's Effect context */
+export function readOlderMessages(client: Client): Effect.Effect<readonly Message[], MessageOperationFailure> {
+    return Effect.gen(function* () {
+        const query: MessageHistoryQuery = { limit: 50 }
+        const page = yield* client.messages.fetchHistory("20", query, { timeoutMs: 5_000 })
+        const oldest = page.at(-1)
+        return oldest ? yield* client.messages.fetchHistory("20", { before: oldest.id }) : page
+    })
+}
+
+/** Typechecked message-management fragment in the application's Effect context */
+export function manageMessage(client: Client, target: MessageReference): Effect.Effect<void, MessageOperationFailure> {
+    return Effect.gen(function* () {
+        const message = yield* client.messages.fetch(target, { timeoutMs: 5_000 })
+        const edited = yield* client.messages.edit(message, { content: "Updated" })
+        yield* client.messages.delete(edited)
+    })
+}
+
+/** Typechecked event registration in the caller's scope, including existing explicit generic arguments */
+export function watchMessageChanges(client: Client) {
+    return Effect.gen(function* () {
+        yield* client.on<never, never>("messageCreate", (message) =>
+            Effect.sync(() => {
+                const current: Message = message
+                void current
+            }),
+        )
+        yield* client.on("messageUpdate", (message) =>
+            Effect.sync(() => {
+                const current: Message = message
+                void current
+            }),
+        )
+        yield* client.on("messageDelete", (message) =>
+            Effect.sync(() => {
+                const deletion: MessageDeletion = message
+                const content: string | null | undefined = deletion.content
+                void content
+                // @ts-expect-error Missing authors are not fabricated
+                message.author.username
+            }),
+        )
+        yield* client.on("messageDeleteBulk", (batch) =>
+            Effect.sync(() => {
+                const deletion: MessageBulkDeletion = batch
+                void deletion.ids
+                // @ts-expect-error Bulk IDs cannot be mutated
+                batch.ids.push("10")
+            }),
+        )
+    })
+}

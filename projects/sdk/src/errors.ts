@@ -3,7 +3,19 @@ export class ConfigurationError extends Error {
     readonly _tag = "ConfigurationError"
 
     constructor(
-        readonly field: "configuration" | "token" | "connection" | "startupTimeoutMs" | "maxStartupAttempts",
+        readonly field:
+            | "configuration"
+            | "token"
+            | "connection"
+            | "startupTimeoutMs"
+            | "maxStartupAttempts"
+            | "event"
+            | "handler"
+            | "eventOptions"
+            | "concurrency"
+            | "maxPendingMessages"
+            | "maxPendingBytes"
+            | "onError",
         message: string,
     ) {
         super(message)
@@ -11,7 +23,23 @@ export class ConfigurationError extends Error {
     }
 }
 
-export type Operation = "createClient" | "connect" | "run" | "waitForClose" | "shutdown"
+/** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
+export type Operation =
+    | "createClient"
+    | "connect"
+    | "run"
+    | "waitForClose"
+    | "shutdown"
+    | "on"
+    | "events"
+    | "next"
+    | "send"
+    | "reply"
+    | "fetch"
+    | "fetchHistory"
+    | "edit"
+    | "delete"
+    | "subscription.waitForClose"
 
 /** Fluxer rejected the credential, so the connection owner does not retry it unchanged */
 export class AuthenticationError extends Error {
@@ -98,7 +126,15 @@ export type ConnectError = ConnectionFailure | ClientBusyError | ClientClosedErr
 
 /** Safe cause categories retain combined failure information without raw upstream defects */
 export type DefectReason =
-    | { readonly kind: "Failure"; readonly failure: ConnectError | ConfigurationError }
+    | {
+          readonly kind: "Failure"
+          readonly failure:
+              | ConnectError
+              | ConfigurationError
+              | import("./message-errors.js").EventReadError
+              | import("./message-errors.js").MessageError
+              | import("./message-errors.js").MessageOperationError
+      }
     | { readonly kind: "Defect" }
     | { readonly kind: "Interruption" }
 

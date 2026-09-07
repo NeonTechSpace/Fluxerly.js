@@ -1,4 +1,6 @@
 import { platform } from "node:os"
+import type { EventMap, EventName } from "#sdk/events"
+import { decodeMessage, decodeDeletion, decodeBulkDeletion } from "./message.js"
 import { Clock, Deferred, Effect, Redacted } from "effect"
 import WebSocket from "ws"
 import {
@@ -76,6 +78,7 @@ export const runGateway = (
     onReady: () => void,
     onLatency: (milliseconds: number | null) => void,
     onRecovering: () => void,
+    onDispatch: <K extends EventName>(event: K, message: EventMap[K], bytes: number) => void,
 ) =>
     Effect.scoped(
         Effect.gen(function* () {
@@ -206,12 +209,37 @@ export const runGateway = (
                                     protocolFailure()
                                     return
                                 }
-                                // No event handlers or cache exist yet; dispatch bodies are discarded synchronously
                                 if (session.sequence !== null && payload.s < session.sequence) {
                                     protocolFailure()
                                     return
                                 }
                                 session.sequence = payload.s
+                                if (payload.t === "MESSAGE_CREATE" || payload.t === "MESSAGE_UPDATE") {
+                                    const message = decodeMessage(body)
+                                    if (!message) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch(
+                                        payload.t === "MESSAGE_CREATE" ? "messageCreate" : "messageUpdate",
+                                        message,
+                                        Buffer.byteLength(data.toString()),
+                                    )
+                                } else if (payload.t === "MESSAGE_DELETE") {
+                                    const deletion = decodeDeletion(body)
+                                    if (!deletion) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("messageDelete", deletion, Buffer.byteLength(data.toString()))
+                                } else if (payload.t === "MESSAGE_DELETE_BULK") {
+                                    const deletion = decodeBulkDeletion(body)
+                                    if (!deletion) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("messageDeleteBulk", deletion, Buffer.byteLength(data.toString()))
+                                }
                                 if (payload.t === "READY" || payload.t === "RESUMED")
                                     Deferred.doneUnsafe(ready, Effect.void)
                                 break

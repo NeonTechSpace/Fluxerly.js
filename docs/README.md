@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="#community"><img src="https://img.shields.io/badge/Fluxer-Coming%20soon-0E7490?style=for-the-badge&amp;logo=fluxer&amp;logoColor=white&amp;labelColor=0B1221" alt="Fluxer: Public community invite coming soon"></a>&nbsp;&nbsp;
+  <a href="/docs/README.md#community"><img src="https://img.shields.io/badge/Fluxer-Coming%20soon-0E7490?style=for-the-badge&amp;logo=fluxer&amp;logoColor=white&amp;labelColor=0B1221" alt="Fluxer: Public community invite coming soon"></a>&nbsp;&nbsp;
   <a href="https://ossinsight.io/analyze/NeonTechSpace/Fluxerly.js#overview"><img src="https://img.shields.io/badge/OSS%20Insight-Analytics-0E7490?style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;labelColor=0B1221" alt="OSS Insight: Repository analytics"></a>
 </p>
 

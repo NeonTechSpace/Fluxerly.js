@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Scope } from "effect"
+import { Cause, Deferred, Effect, Exit, Scope } from "effect"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
 import type { ClientState, ClientOptions, ConnectionState, OperationOptions } from "./client.js"
 import {
@@ -11,6 +11,163 @@ import {
     type Operation,
 } from "./errors.js"
 import { makeClient } from "#sdk/internal/client"
+import { replyInput } from "#sdk/internal/message"
+import type { EventSource } from "#sdk/internal/events"
+import {
+    MessageError,
+    MessageOperationError,
+    type MessageOperationFailure,
+    type EventOverflowError,
+    type EventReadError,
+    type RegistrationError,
+    type SendError,
+} from "./message-errors.js"
+import type {
+    EditMessageInput,
+    MessageHistoryQuery,
+    Message,
+    MessageReference,
+    MessageInput,
+    ReplyInput,
+    DefaultMessageOperationOptions,
+    DefaultSendOptions,
+} from "./messages.js"
+import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
+
+export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
+export type { EventReadError, RegistrationError, SendError, MessageOperationFailure } from "./message-errors.js"
+export type {
+    Message,
+    MessageHistoryQuery,
+    MessageDeletion,
+    MessageBulkDeletion,
+    MessageReference,
+    MessageInput,
+    ReplyInput,
+    AllowedMentions,
+    SendOptions,
+    DefaultSendOptions,
+    EditMessageInput,
+    MessageOperationOptions,
+    DefaultMessageOperationOptions,
+} from "./messages.js"
+export type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
+
+/** Subscription-local controls. Closing a subscription does not close the client */
+export interface Subscription {
+    /** Stop new deliveries, discard pending events and signal active callbacks. Cannot forcibly stop application promises */
+    unsubscribe(): void
+    /**
+     * Observe retained closure or overflow after SDK cleanup, not completion of arbitrary application promises.
+     * Cancelling this wait affects only the wait. Late observers retain the same outcome.
+     * Unexpected cleanup defects reject with SdkDefect
+     */
+    waitForClose(options?: OperationOptions): ResultAsync<void, EventOverflowError | CancelledError>
+}
+
+/** Live subscription for one event type without subscription history. The default type preserves existing messageCreate annotations */
+export interface EventSubscription<K extends EventName = "messageCreate"> extends Subscription {
+    /**
+     * Read the next payload for this event name, or null after normal closure. Only one pending read is accepted.
+     * Concurrent reads return EventReadBusyError. Cancellation releases only this read.
+     * Overflow remains a typed failure after the queue is discarded. SDK defects reject with SdkDefect
+     */
+    next(options?: OperationOptions): ResultAsync<EventMap[K] | null, EventReadError | CancelledError>
+}
+
+/** Default callback scheduling and optional safe error reporting */
+export interface EventHandlerOptions extends HandlerOptions {
+    /**
+     * Report failures without payloads. Reporter failure produces one safe fallback log, never a retry.
+     * At most one custom report is outstanding per registration. Further reports use the default logger while it is busy.
+     * Reporter promises remain application-owned and do not delay subscription closure
+     */
+    readonly onError?: (report: HandlerErrorReport) => void | Promise<void>
+}
+
+/**
+ * Client-owned text operations. Callable without a gateway connection until Closing or Closed.
+ * Calls share four active HTTP slots and at most 256 queued requests or 4 MiB of queued JSON bodies.
+ * Each call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
+ * Only confirmed rate-limit rejections retry within that deadline, with route-specific and client-global rate waits.
+ * Expected failures use Err. SDK/cleanup defects reject with SdkDefect.
+ * Cancellation fails this operation with CancelledError. Client closure fails pending/new operations with ClientClosedError.
+ * Neither failure proves that a dispatched mutation was undone
+ */
+export interface Messages {
+    /**
+     * Send text and return the decoded created message after the HTTP response, not gateway delivery or recipient acknowledgement
+     *
+     * Mentions are disabled by default. Total budget defaults to 30,000 ms including admission and rate waits
+     *
+     * One client admits four active HTTP requests and at most 256 pending bodies or 4 MiB of pending JSON.
+     * Confirmed rate-limit rejections may retry within that budget. Uncertain sends never retry automatically
+     *
+     * Cancellation after dispatch may leave a created message. There is no rollback or exactly-once guarantee.
+     * Expected failures use Err. SDK/cleanup defects reject with SdkDefect
+     */
+    send(
+        channelId: string,
+        input: MessageInput,
+        options?: DefaultSendOptions,
+    ): ResultAsync<Message, SendError | CancelledError>
+    /** Reference an existing message through send. Missing targets fail rather than falling back to an unreferenced send */
+    reply(
+        message: MessageReference,
+        input: ReplyInput,
+        options?: DefaultSendOptions,
+    ): ResultAsync<Message, SendError | CancelledError>
+    /**
+     * Fetch a frozen message snapshot from Fluxer, never from a cache. Accepts a reference or an existing Message.
+     * Returns after the API response is decoded and its message/channel IDs match the requested target.
+     * Missing targets fail with MessageOperationError reason notFound rather than returning an empty value.
+     * Cancellation releases only this request and awaits its cleanup
+     */
+    fetch(
+        message: MessageReference,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<Message, MessageOperationFailure | CancelledError>
+    /**
+     * Fetch one remote history page for a decimal channel ID, without requiring a gateway connection or consulting a cache.
+     * Defaults to the latest 50 messages. Query limit is 1 through 100 with at most one before, after or around cursor
+     *
+     * Returns after HTTP 200 and validation of the entire page as a frozen array of frozen Message snapshots, newest first.
+     * Empty and short arrays describe currently accessible results, not complete history. Pages are not a shared point-in-time snapshot.
+     * No prefetch, automatic traversal, gateway notifications or retained history. Use the oldest returned ID as before for an older page
+     *
+     * Invalid input, malformed pages and HTTP rejections use MessageOperationError with operation fetchHistory. HTTP 404 remains notFound.
+     * Shares REST admission and the 30,000 ms default total deadline. Only confirmed rate-limit rejections retry within that budget.
+     * Cancellation affects only this call and awaits cleanup. Closing/Closed fail with ClientClosedError and defects reject with SdkDefect
+     */
+    fetchHistory(
+        channelId: string,
+        query?: MessageHistoryQuery,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<readonly Message[], MessageOperationFailure | CancelledError>
+    /**
+     * Replace message text and return the frozen updated snapshot after the API response, without waiting for a gateway event.
+     * Required content is sent without trimming. Empty text requests clearing, subject to Fluxer validation.
+     * Mentions default off. The SDK omits attachments, embeds and unrelated fields rather than editing them.
+     * Fluxer preserves custom embeds but may regenerate text-derived link previews.
+     * A lost response or timeout after dispatch may leave the edit applied. Uncertain edits never retry automatically.
+     * Missing targets remain typed notFound failures. Cancellation/closure cannot undo a dispatched edit
+     */
+    edit(
+        message: MessageReference,
+        input: EditMessageInput,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<Message, MessageOperationFailure | CancelledError>
+    /**
+     * Delete the target and complete without a value after HTTP 204, without waiting for a gateway event.
+     * Missing targets fail with MessageOperationError reason notFound, including a repeated delete.
+     * A lost response or timeout after dispatch may leave the target deleted. Uncertain deletes never retry automatically.
+     * Cancellation/closure awaits owned cleanup but cannot undo a dispatched deletion
+     */
+    delete(
+        message: MessageReference,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+}
 
 export type { ClientOptions, ConnectionState, OperationOptions } from "./client.js"
 export {
@@ -32,6 +189,30 @@ export type { ConnectError, ConnectionFailure, DefectReason } from "./errors.js"
  * Use run for a managed lifetime, or pair connect with waitForClose and shutdown
  */
 export interface Client extends ClientState {
+    /** Message operations sharing this client's credentials, admission and rate-limit state */
+    readonly messages: Messages
+    /**
+     * Register a callback for one EventMap event before or after connect. No cached history or REST-generated events.
+     * Each subscription receives only its event type. Bulk deletions do not also invoke messageDelete handlers
+     *
+     * Default concurrency is 1. Receive-order starts do not imply completion order when concurrency is increased.
+     * Buffer defaults are 256 pending event payloads and 4 MiB of source JSON, not a process heap cap.
+     * A bulk payload counts once, including its full bytes. Ordering is per subscription, not across event types
+     *
+     * Overflow stops only this subscription. Handler failure is reported without retrying the invocation.
+     * Return/await callback work and inspect send Err values. Unawaited application work is not owned by the SDK
+     *
+     * The second argument requests cooperative cancellation on unsubscribe or shutdown.
+     * Observe the returned subscription's terminal outcome as well as the client's run/waitForClose outcome.
+     * Local registration failures use Result. Unexpected synchronous defects throw SdkDefect
+     */
+    on<K extends EventName>(
+        event: K,
+        handler: (message: EventMap[K], signal: NonNullable<OperationOptions["signal"]>) => void | Promise<void>,
+        options?: EventHandlerOptions,
+    ): Result<Subscription, RegistrationError>
+    /** Open one event type's bounded pull subscription in receive order without subscription history or bulk fan-out. Local errors use Result and defects throw SdkDefect */
+    events<K extends EventName>(event: K, options?: EventBufferOptions): Result<EventSubscription<K>, RegistrationError>
     /**
      * Connect and complete after authentication and the required READY event.
      * Readiness does not mean every guild or resource has loaded
@@ -114,11 +295,11 @@ export interface Client extends ClientState {
     observeState(listener: (state: ConnectionState) => void | Promise<void>): () => void
 }
 
-function fromExit<E extends ConnectError | ConfigurationError>(
-    exit: Exit.Exit<void, E>,
-    operation: Operation,
-): Result<void, E | CancelledError> {
-    if (Exit.isSuccess(exit)) return ok(undefined)
+function fromExit<
+    A,
+    E extends ConnectError | ConfigurationError | EventReadError | MessageError | MessageOperationError,
+>(exit: Exit.Exit<A, E>, operation: Operation): Result<A, E | CancelledError> {
+    if (Exit.isSuccess(exit)) return ok(exit.value)
     if (Cause.hasDies(exit.cause)) {
         const reasons: DefectReason[] = exit.cause.reasons.map((reason) =>
             reason._tag === "Fail"
@@ -150,14 +331,13 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         throw new SdkDefect()
     }
     const owner = exit.value
-    const execute = <E extends ConnectError>(
-        effect: Effect.Effect<void, E>,
+    const execute = <A, E extends ConnectError | EventReadError | MessageError | MessageOperationError>(
+        effect: Effect.Effect<A, E>,
         operation: Operation,
         options?: OperationOptions,
     ) => {
         const signal = options?.signal
-        if (signal?.aborted)
-            return new ResultAsync<void, E | CancelledError>(Promise.resolve(err(new CancelledError())))
+        if (signal?.aborted) return new ResultAsync<A, E | CancelledError>(Promise.resolve(err(new CancelledError())))
         const controller = signal ? new AbortController() : undefined
         const abort = () => controller?.abort()
         if (signal?.aborted) abort()
@@ -169,8 +349,109 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 .then((exit) => fromExit(exit, operation)),
         )
     }
+    const subscription = (source: Pick<EventSource, "stop" | "closed">): Subscription =>
+        Object.freeze({
+            unsubscribe: () => source.stop(),
+            waitForClose: (options?: OperationOptions) =>
+                execute(Deferred.await(source.closed), "subscription.waitForClose", options),
+        })
+    const register = <A>(
+        effect: Effect.Effect<A, RegistrationError>,
+        operation: "on" | "events",
+    ): Result<A, RegistrationError> => {
+        const exit = Effect.runSyncExit(effect)
+        if (Exit.isSuccess(exit)) return ok(exit.value)
+        if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause)) throw new SdkDefect(operation)
+        const reason = exit.cause.reasons.find((reason) => reason._tag === "Fail")
+        if (reason?._tag === "Fail") return err(reason.error)
+        throw new SdkDefect(operation)
+    }
     return ok(
         Object.freeze({
+            messages: Object.freeze({
+                send: (channelId: string, input: MessageInput, options?: DefaultSendOptions) =>
+                    execute(owner.send(channelId, input, options), "send", options),
+                reply: (target: MessageReference, input: ReplyInput, options?: DefaultSendOptions) => {
+                    const data = replyInput(target, input)
+                    return execute(
+                        data instanceof MessageError ? Effect.fail(data) : owner.send(target.channelId, data, options),
+                        "reply",
+                        options,
+                    )
+                },
+                fetch: (target: MessageReference, options?: DefaultMessageOperationOptions) =>
+                    execute(owner.fetch(target, options), "fetch", options),
+                fetchHistory: (
+                    channelId: string,
+                    query?: MessageHistoryQuery,
+                    options?: DefaultMessageOperationOptions,
+                ) => execute(owner.fetchHistory(channelId, query, options), "fetchHistory", options),
+                edit: (target: MessageReference, input: EditMessageInput, options?: DefaultMessageOperationOptions) =>
+                    execute(owner.edit(target, input, options), "edit", options),
+                delete: (target: MessageReference, options?: DefaultMessageOperationOptions) =>
+                    execute(owner.delete(target, options), "delete", options),
+            }),
+            on: <K extends EventName>(
+                event: K,
+                handler: (
+                    message: EventMap[K],
+                    signal: NonNullable<OperationOptions["signal"]>,
+                ) => void | Promise<void>,
+                options?: EventHandlerOptions,
+            ) => {
+                if (typeof handler !== "function")
+                    return err(new ConfigurationError("handler", "Handler must be a function"))
+                if (options?.onError !== undefined && typeof options.onError !== "function")
+                    return err(new ConfigurationError("onError", "Error reporter must be a function"))
+                const reporter = options?.onError
+                let reporting = false
+                const reportFailure = (kind: string) => {
+                    Effect.runSyncExit(Effect.logError(`Fluxerly message subscription ${kind} failure`))
+                }
+                return register(
+                    owner.events
+                        .on(
+                            event,
+                            (message) =>
+                                Effect.tryPromise({
+                                    try: (signal) => Promise.resolve(handler(message, signal)),
+                                    catch: () => new Error("Event handler failed"),
+                                }),
+                            options,
+                            reporter
+                                ? (report) =>
+                                      Effect.sync(() => {
+                                          if (reporting) {
+                                              reportFailure(report.kind)
+                                              return
+                                          }
+                                          reporting = true
+                                          void Promise.resolve()
+                                              .then(() => reporter(report))
+                                              .catch(() => reportFailure(`${report.kind}; reporter`))
+                                              .finally(() => {
+                                                  reporting = false
+                                              })
+                                      })
+                                : undefined,
+                            scope,
+                        )
+                        .pipe(Effect.map(subscription)),
+                    "on",
+                )
+            },
+            events: <K extends EventName>(event: K, options?: EventBufferOptions) =>
+                register(
+                    owner.events.open(event, options).pipe(
+                        Effect.map((source): EventSubscription<K> =>
+                            Object.freeze({
+                                ...subscription(source),
+                                next: (options?: OperationOptions) => execute(source.next(), "next", options),
+                            }),
+                        ),
+                    ),
+                    "events",
+                ),
             get state() {
                 return owner.state
             },

@@ -56,6 +56,32 @@ Report through the configured hook or shared operational logger, without private
 If the hook fails, attempt one safe fallback report without recursively invoking the hook.
 Reporting cannot guarantee delivery when the fallback logger also fails
 
+## Message event and send boundaries
+
+[Event intake](/projects/sdk/src/internal/events.ts) owns per-subscription scheduling and bounded pending delivery.
+[REST admission](/projects/sdk/src/internal/rest.ts) coordinates requests and rate state within one client, not across processes sharing a credential
+
+Overflow terminates the affected subscription rather than restarting the gateway.
+Shutdown discards pending delivery rather than draining external actions.
+Default callback promises remain application-owned, while native cleanup is cooperative and awaited.
+When a native handler requests shutdown, the client scope owns it to avoid the handler joining itself.
+Only confirmed rate-limit rejection permits automatic REST retry within the original deadline.
+Cancellation or a lost response after dispatch cannot establish non-delivery or rollback
+
+Byte budgets bound the accounted data, not total JavaScript heap or process memory
+
+## Message-management boundaries
+
+Fetch, edit and delete reuse [REST admission](/projects/sdk/src/internal/rest.ts), with method/channel rate state and shared global limits.
+Keep management failures separate from the send/reply delivery contract.
+Repeated deletion or a missing target does not prove a prior operation succeeded
+
+## Message-history boundary
+
+[REST admission](/projects/sdk/src/internal/rest.ts) owns explicit history pages independently of cache reads and gateway events.
+Keep history's channel rate bucket separate from single-message fetches while sharing global admission.
+Do not introduce background traversal or prefetch through this path
+
 ## Logging
 
 Use the shared Effect logger rather than a second logging implementation.

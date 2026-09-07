@@ -65,12 +65,26 @@ try {
             installed,
             10_000,
         )
-        for (const entry of ["index", "effect", "client", "errors"]) {
+        for (const entry of ["index", "effect", "client", "errors", "messages", "events", "message-errors"]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
                 readFileSync(join(installed, declaration), "utf8"),
                 readFileSync(join(sdk, declaration), "utf8"),
             )
+            const source = readFileSync(join(sdk, `src/${entry}.ts`), "utf8")
+            const normalizeComment = (text) => text.replace(/\s+/g, " ").trim()
+            const emitted = [...readFileSync(join(installed, declaration), "utf8").matchAll(/\/\*\*[\s\S]*?\*\//g)].map(
+                ([comment]) => normalizeComment(comment),
+            )
+            // Public source comments precede implementation helpers in the two entry points
+            const publicSource =
+                entry === "index" || entry === "effect" ? source.split("export function createClient")[0] : source
+            for (const [comment] of publicSource.matchAll(/\/\*\*[\s\S]*?\*\//g)) {
+                assert.ok(
+                    emitted.includes(normalizeComment(comment)),
+                    `Public comment missing from packed ${declaration}`,
+                )
+            }
         }
         for (const file of files.filter((file) => file.endsWith(".map"))) {
             const sourceMap = JSON.parse(readFileSync(join(installed, file), "utf8"))

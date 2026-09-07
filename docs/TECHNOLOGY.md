@@ -167,7 +167,7 @@ This gate grants no implementation authority during a read-only review, and no w
 | Area | Selected choice |
 | --- | --- |
 | Package manager | pnpm 12 |
-| Workspace | One pnpm workspace and lockfile under [projects/](/projects) |
+| Workspace | One pnpm workspace and lockfile under [projects/](/projects/) |
 | Development Node version | One shared version source in [projects/.node-version](/projects/.node-version) |
 | Editor defaults | [EditorConfig](/.editorconfig) |
 | Git line endings | [Git attributes](/.gitattributes) |

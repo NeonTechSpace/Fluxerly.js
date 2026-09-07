@@ -13,8 +13,20 @@ import {
 import { type Configuration, validateConfiguration } from "./configuration.js"
 import { discoverGateway } from "./discovery.js"
 import { AttemptFailure, runGateway, type Session } from "./gateway.js"
+import { EventBus } from "./events.js"
+import { RestOwner } from "./rest.js"
+import type {
+    EditMessageInput,
+    MessageHistoryQuery,
+    MessageInput,
+    MessageOperationOptions,
+    MessageReference,
+    SendOptions,
+} from "#sdk/messages"
 
 export class ClientOwner {
+    readonly events = new EventBus()
+    readonly rest = new RestOwner()
     #configuration: Configuration | undefined
     #state: ConnectionState = "Disconnected"
     #latency: number | null = null
@@ -74,10 +86,65 @@ export class ClientOwner {
     }
 
     #finish() {
+        this.events.stop()
+        this.rest.stop()
         if (this.#configuration) Redacted.wipeUnsafe(this.#configuration.token)
         this.#configuration = undefined
         this.#session = { id: undefined, sequence: null }
         this.#setState("Closed")
+    }
+
+    send(channelId: string, input: MessageInput, options?: SendOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.send(this.#configuration.token, channelId, input, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    fetch(target: MessageReference, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.fetch(this.#configuration.token, target, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    fetchHistory(channelId: string, query?: MessageHistoryQuery, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.fetchHistory(this.#configuration.token, channelId, query, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    edit(target: MessageReference, input: EditMessageInput, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.edit(this.#configuration.token, target, input, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    delete(target: MessageReference, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.delete(this.#configuration.token, target, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    #closeServices() {
+        this.events.stop()
+        this.rest.stop()
+        return Effect.all([Effect.exit(this.events.shutdown()), Effect.exit(this.rest.shutdown())], {
+            concurrency: "unbounded",
+        }).pipe(
+            Effect.flatMap((exits) => {
+                const reasons = exits.flatMap((exit) => (Exit.isFailure(exit) ? exit.cause.reasons : []))
+                return reasons.length ? Effect.failCause(Cause.fromReasons<never>(reasons)) : Effect.void
+            }),
+        )
     }
 
     #loop(configuration: Configuration, startup: Deferred.Deferred<void, ConnectError>) {
@@ -134,6 +201,7 @@ export class ClientOwner {
                             disconnectedAt ??= now()
                             owner.#setState("Recovering")
                         },
+                        (event, message, bytes) => owner.events.offer(event, message, bytes),
                     )
                 })
                 const result = yield* Effect.exit(attempt)
@@ -193,7 +261,7 @@ export class ClientOwner {
                 owner.#worker = yield* Effect.forkIn(
                     owner.#loop(configuration, startup).pipe(
                         Effect.onExit((exit) =>
-                            Effect.sync(() => {
+                            Effect.gen(function* () {
                                 trackReady()
                                 owner.#workerExit = exit
                                 const closing = owner.#state === "Closing" || owner.#state === "Closed"
@@ -203,8 +271,22 @@ export class ClientOwner {
                                     Deferred.doneUnsafe(startup, Effect.fail(new ClientClosedError()))
                                 else Deferred.doneUnsafe(startup, exit)
                                 if (becameReady || defect) {
+                                    owner.#setState("Closing")
+                                    const services = yield* Effect.exit(owner.#closeServices())
+                                    const outcome = Exit.isFailure(services)
+                                        ? Exit.failCause(
+                                              Cause.combine(
+                                                  Exit.isFailure(exit) ? exit.cause : Cause.empty,
+                                                  services.cause,
+                                              ),
+                                          )
+                                        : exit
+                                    owner.#workerExit = outcome
                                     owner.#finish()
-                                    Deferred.doneUnsafe(owner.#terminal, interrupted ? Effect.void : exit)
+                                    Deferred.doneUnsafe(
+                                        owner.#terminal,
+                                        interrupted && !Exit.isFailure(services) ? Effect.void : outcome,
+                                    )
                                 } else if (!closing) {
                                     owner.#session = { id: undefined, sequence: null }
                                     owner.#setState("Disconnected")
@@ -243,6 +325,15 @@ export class ClientOwner {
     }
 
     shutdown(): Effect.Effect<void> {
+        return Effect.withFiber((fiber) =>
+            this.events.ownsHandler(fiber.id)
+                ? // A native handler cannot join its own cleanup: The client scope owns shutdown and interrupts this caller
+                  Effect.forkIn(this.#performShutdown(), this.scope).pipe(Effect.andThen(Effect.never))
+                : this.#performShutdown(),
+        )
+    }
+
+    #performShutdown(): Effect.Effect<void> {
         const owner = this
         return Effect.uninterruptible(
             Effect.suspend(() => {
@@ -250,10 +341,17 @@ export class ClientOwner {
                 if (owner.#state === "Closed") return Effect.void
                 owner.#shutdownStarted = true
                 owner.#setState("Closing")
+                owner.events.stop()
+                owner.rest.stop()
                 return Effect.gen(function* () {
                     if (owner.#worker) yield* Fiber.interrupt(owner.#worker)
+                    const services = yield* Effect.exit(owner.#closeServices())
                     const exit = owner.#workerExit
                     owner.#finish()
+                    if (Exit.isFailure(services)) {
+                        Deferred.doneUnsafe(owner.#terminal, services)
+                        return yield* Effect.failCause(services.cause)
+                    }
                     if (exit && Exit.isFailure(exit) && Cause.hasDies(exit.cause)) {
                         Deferred.doneUnsafe(owner.#terminal, exit)
                         return yield* Effect.die(exit.cause)

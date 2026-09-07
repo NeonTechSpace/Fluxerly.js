@@ -8,9 +8,9 @@ The documentation website remains a scaffold
 
 | Location | Purpose |
 | --- | --- |
-| [SDK](/projects/sdk) | The Fluxer-native JavaScript SDK, with the package identity in its [manifest](/projects/sdk/package.json) |
-| [Website](/projects/web) | The documentation website, with its own [manifest](/projects/web/package.json) |
-| [Documentation](/docs) | Repository Markdown documents, including the public [README](/docs/README.md) and this guide |
+| [SDK](/projects/sdk/) | The Fluxer-native JavaScript SDK, with the package identity in its [manifest](/projects/sdk/package.json) |
+| [Website](/projects/web/) | The documentation website, with its own [manifest](/projects/web/package.json) |
+| [Documentation](/docs/) | Repository Markdown documents, including the public [README](/docs/README.md) and this guide |
 
 | Owner | Responsibility |
 | --- | --- |
@@ -19,6 +19,9 @@ The documentation website remains a scaffold
 | [client.ts](/projects/sdk/src/internal/client.ts) | Client lifetime and recovery ownership |
 | [discovery.ts](/projects/sdk/src/internal/discovery.ts) | Hosted service discovery |
 | [gateway.ts](/projects/sdk/src/internal/gateway.ts) | Gateway transport and protocol |
+| [events.ts](/projects/sdk/src/internal/events.ts) | Subscription scheduling and bounded event intake |
+| [rest.ts](/projects/sdk/src/internal/rest.ts) | REST admission, deadlines and rate state |
+| [message.ts](/projects/sdk/src/internal/message.ts) | Wire-message validation and projection |
 
 Keep public API signatures and caller documentation in source, and user guides/reference in the website.
 Use [SDK tests](/projects/sdk/tests/) for behavior checks and [packed consumers](/projects/sdk/tests/consumers/) for package-boundary checks.
@@ -34,7 +37,7 @@ See [technology choices](/docs/TECHNOLOGY.md) for tooling and support policy, an
 
 ## Shared files
 
-The development workspace root is [projects/](/projects), separate from the repository root.
+The development workspace root is [projects/](/projects/), separate from the repository root.
 Run shared pnpm commands from that directory
 
 | File | Purpose |
@@ -69,7 +72,7 @@ This temporary safeguard does not change the intended public package identity
 
 ## Development checks
 
-Run these commands from [projects/](/projects) using the development Node version
+Run these commands from [projects/](/projects/) using the development Node version
 
 | Command | Purpose |
 | --- | --- |
@@ -100,10 +103,24 @@ These checks are opt-in and excluded from `pnpm check`
 | --- | --- | --- |
 | `test:live` | Hosted protocol discovery, readiness and heartbeats | No server-content changes |
 | `test:live:sdk` | Built default/native client connection and shutdown | No server-content changes |
+| `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
+| `test:live:recovery` | Forced socket loss, resume and subsequent receive/reply | Temporary channel/messages and test-socket termination |
+| `test:live:management` | Remote fetch, edit and deletion | Temporary channel/messages and test-message edits/deletions |
+| `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
+| `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools.
 After a crash, verify that the recorded process has stopped before removing its stale lock.
 Do not stop unrelated processes or bypass a live owner's lock
+
+Message checks create a uniquely named test channel and verify deletion of that channel and its messages.
+The ignored `.env.test.messages.local` recovery journal records the server ID, unique channel marker and returned channel ID, never credentials or message bodies.
+It is written before channel creation so a lost response can be reconciled by the marker rather than blindly retried.
+A later run reconciles the journal before creating resources.
+Journal writes and remote creation are not atomic
+
+Corrupt or unresolved journal state fails closed and must be inspected, not deleted merely to make a check pass.
+Keep the journal until test-owned cleanup is verified
 
 Use [live harness source](/projects/sdk/tests/live/) for assertions and bounded execution details.
 A passing run establishes only its checked scenarios, not complete replay, prolonged-outage recovery or production readiness
