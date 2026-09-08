@@ -138,6 +138,13 @@ export function registerReply(client: Client) {
 }
 
 export function rejectedMessageShapes(client: Client): void {
+    const reactionTarget = { id: "10", channelId: "20" }
+    // @ts-expect-error Named removal requires an explicit user ID
+    client.messages.removeUserReaction(reactionTarget, "👍")
+    // @ts-expect-error Clearing one emoji requires its selector
+    client.messages.clearReaction(reactionTarget)
+    // @ts-expect-error Clear-all takes operation options, never an emoji selector
+    client.messages.clearReactions(reactionTarget, "👍")
     // @ts-expect-error Collector registration requires an owning scope
     Effect.runPromise(client.messages.collect("20"))
     // @ts-expect-error Native collector cancellation uses scope lifetime, not AbortSignal options

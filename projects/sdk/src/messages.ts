@@ -12,6 +12,8 @@ export interface MessageReference {
 
 /** Frozen message projection shared by REST responses and messageCreate/messageUpdate events, not a complete wire object */
 export interface Message extends MessageReference {
+    /** Pin status supplied by Fluxer. Omitted means unknown, not false. Snapshots do not update in place */
+    readonly pinned?: boolean
     /** Text exactly as returned by Fluxer, including empty text for non-text messages */
     readonly content: string
     /** Deeply frozen embeds in received order, empty when absent. Included in cache and collector byte budgets */
@@ -136,9 +138,9 @@ export type MessageHistoryQuery = {
       }
 )
 
-/** Per-call fetch, history, edit and delete deadline, separate from the client's gateway startup budget */
+/** Per-call remote message/reaction/pin deadline, separate from the client's gateway startup budget */
 export interface MessageOperationOptions {
-    /** Total admission, rate-limit wait and HTTP budget in milliseconds, from 1 to 2,147,483,647 as an integer. Defaults to 30,000, with cleanup awaited afterward */
+    /** Total admission, retry/rate-limit wait and HTTP budget in milliseconds, from 1 to 2,147,483,647 as an integer. Defaults to 30,000, with cleanup awaited afterward */
     readonly timeoutMs?: number
 }
 

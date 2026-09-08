@@ -19,7 +19,10 @@ import { type Configuration, validateConfiguration } from "./configuration.js"
 import { discoverGateway } from "./discovery.js"
 import { AttemptFailure, runGateway, type Session } from "./gateway.js"
 import { EventBus } from "./events.js"
+import type { ReactionCollector } from "./reaction-collector.js"
 import { RestOwner } from "./rest.js"
+import type { ReactionEmojiInput, ReactionUsersQuery } from "#sdk/reactions"
+import type { MessagePinsQuery } from "#sdk/pins"
 import type { ClientLogging } from "./logging.js"
 import type {
     Message,
@@ -32,6 +35,11 @@ import type {
 } from "#sdk/messages"
 
 export class ClientOwner {
+    #reactionCollectors = new Set<ReactionCollector>()
+    trackReactionCollector(collector: ReactionCollector) {
+        this.#reactionCollectors.add(collector)
+        return () => this.#reactionCollectors.delete(collector)
+    }
     readonly logging: ClientLogging
     readonly events = new EventBus()
     readonly rest: RestOwner
@@ -122,12 +130,55 @@ export class ClientOwner {
         )
     }
 
+    fetchReactionUsers(
+        target: MessageReference,
+        emoji: ReactionEmojiInput,
+        query?: ReactionUsersQuery,
+        options?: MessageOperationOptions,
+    ) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.fetchReactionUsers(this.#configuration.token, target, emoji, query, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    reaction(
+        operation: "addReaction" | "removeReaction" | "removeUserReaction" | "clearReaction" | "clearReactions",
+        target: MessageReference,
+        emoji: ReactionEmojiInput | undefined,
+        options?: MessageOperationOptions,
+        userId?: string,
+    ) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.reaction(this.#configuration.token, operation, target, emoji, options, userId)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
     fetch(target: MessageReference, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? (this.reports?.start() ?? Effect.void).pipe(
                       Effect.andThen(this.rest.fetch(this.#configuration.token, target, options)),
                   )
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    pin(operation: "pin" | "unpin", target: MessageReference, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.pin(this.#configuration.token, operation, target, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    fetchPins(channel: string, query?: MessagePinsQuery, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.fetchPins(this.#configuration.token, channel, query, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -179,6 +230,18 @@ export class ClientOwner {
                 Effect.exit(this.events.shutdown()),
                 Effect.exit(this.rest.shutdown()),
                 Effect.exit(this.reports?.shutdown() ?? Effect.void),
+                Effect.forEach(
+                    [...this.#reactionCollectors],
+                    (collector) => Effect.exit(Deferred.await(collector.closed)),
+                    { concurrency: "unbounded" },
+                ).pipe(
+                    Effect.map((exits) => {
+                        const reasons = exits.flatMap((exit) =>
+                            Exit.isFailure(exit) ? exit.cause.reasons.filter((reason) => reason._tag === "Die") : [],
+                        )
+                        return reasons.length ? Exit.failCause(Cause.fromReasons<never>(reasons)) : Exit.void
+                    }),
+                ),
             ],
             {
                 concurrency: "unbounded",
@@ -256,7 +319,7 @@ export class ClientOwner {
                             if ("author" in message) owner.cache?.observe(message)
                             else if ("ids" in message) {
                                 for (const id of message.ids) owner.cache?.delete({ id, channelId: message.channelId })
-                            } else owner.cache?.delete(message)
+                            } else if (event === "messageDelete" && "id" in message) owner.cache?.delete(message)
                             owner.events.offer(event, message, bytes)
                         },
                     )
@@ -416,7 +479,9 @@ export class ClientOwner {
 
     shutdown(): Effect.Effect<void> {
         return Effect.withFiber((fiber) =>
-            this.events.ownsHandler(fiber.id) || this.reports?.owns(fiber.id)
+            this.events.ownsHandler(fiber.id) ||
+            this.reports?.owns(fiber.id) ||
+            [...this.#reactionCollectors].some((collector) => collector.owns(fiber.id))
                 ? // A native handler cannot join its own cleanup: The client scope owns shutdown and interrupts this caller
                   Effect.forkIn(this.#performShutdown(), this.scope).pipe(Effect.andThen(Effect.never))
                 : this.#performShutdown(),

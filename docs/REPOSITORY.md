@@ -22,12 +22,15 @@ The documentation website remains a scaffold
 | [events.ts](/projects/sdk/src/internal/events.ts) | Subscription scheduling and bounded event intake |
 | [rest.ts](/projects/sdk/src/internal/rest.ts) | REST admission, deadlines and rate state |
 | [message.ts](/projects/sdk/src/internal/message.ts) | Wire-message validation and projection |
+| [reactions.ts](/projects/sdk/src/internal/reactions.ts) | Reaction emoji/query encoding and user-page/gateway projection; REST owns request scheduling |
+| [pins.ts](/projects/sdk/src/internal/pins.ts) | Pin-page query validation and page/event projection, with REST owning mutation and request scheduling |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
 | [attachments.ts](/projects/sdk/src/internal/attachments.ts) | File validation and metadata projection |
 | [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation, upload destination boundary and bounded file streams; REST owns scheduling and message completion |
 | [cache.ts](/projects/sdk/src/internal/cache.ts) | Cache retention and conflicting observations |
 | [cache-reports.ts](/projects/sdk/src/internal/cache-reports.ts) | Cache reporting lifetime |
 | [collector.ts](/projects/sdk/src/internal/collector.ts) | Collector budgets, deadlines and cleanup |
+| [reaction-collector.ts](/projects/sdk/src/internal/reaction-collector.ts) | Message-targeted reaction collection, batch intake, budgets and cleanup |
 | [logging.ts](/projects/sdk/src/internal/logging.ts) | Per-client logging configuration, Effect adapter and safe lifecycle diagnostics |
 
 Keep public API signatures and caller documentation in source, and user guides/reference in the website.
@@ -123,6 +126,8 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:recovery:cancel` | Managed cancellation during recovery and socket cleanup | Test-socket termination, no server-content changes |
 | `test:live:management` | Remote fetch, edit and deletion | Temporary channel/messages and test-message edits/deletions |
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
+| `test:live:reactions` | Unicode/custom reactions, collectors, reactor readback, clear events and recovery | Temporary channel/messages, reactions and guild emoji, plus test-socket termination |
+| `test:live:pins` | Pin/unpin, explicit pages, pin status/events and recovery | Temporary channel/messages and pins, server-created pin notices, plus test-socket termination |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
 | `test:live:cache` | Cache intake, expiry and recovery invalidation | Temporary channel/messages and test-socket termination |
 | `test:live:collectors` | Collector completion, gap failure and use after recovery | Temporary channel/messages and test-socket termination |
@@ -138,6 +143,9 @@ The ignored `.env.test.messages.local` recovery journal records the server ID, u
 It is written before channel creation so a lost response can be reconciled by the marker rather than blindly retried.
 A later run reconciles the journal before creating resources.
 Journal writes and remote creation are not atomic
+
+Reaction checks also journal a unique emoji name, uploader and returned ID before using a test-owned guild emoji.
+Cleanup verifies its identity and absence from the guild emoji list; this does not prove physical image-blob erasure
 
 Corrupt or unresolved journal state fails closed and must be inspected, not deleted merely to make a check pass.
 Keep the journal until test-owned cleanup is verified

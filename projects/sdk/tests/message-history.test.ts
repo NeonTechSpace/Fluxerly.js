@@ -180,10 +180,11 @@ test("history rejects whole malformed, oversized, mismatched, duplicate or out-o
     expect(unexpectedStatus.isErr() && unexpectedStatus.error).toMatchObject({ reason: "response", status: 204 })
 })
 
-test("history keeps HTTP failures typed and does not retry missing, forbidden, server or lost responses", async () => {
+test("history keeps failures typed and retries only transient server and lost responses", async () => {
     const server = await fixture()
     const client = defaultApi()
     for (const status of [403, 404, 500]) {
+        const before = server.requests.length
         server.control.respond = (response) => response.writeHead(status).end("private fixture response")
         const result = await client.messages.fetchHistory("20")
         expect(result.isErr() && result.error).toMatchObject({
@@ -193,11 +194,13 @@ test("history keeps HTTP failures typed and does not retry missing, forbidden, s
             outcome: status === 500 ? "unknown" : "rejected",
         })
         expect(JSON.stringify(result)).not.toContain("private fixture response")
+        expect(server.requests.length - before).toBe(status === 500 ? 3 : 1)
     }
+    const before = server.requests.length
     server.control.respond = (response) => response.destroy()
     const lost = await client.messages.fetchHistory("20")
     expect(lost.isErr() && lost.error).toMatchObject({ reason: "network", outcome: "unknown" })
-    expect(server.requests).toHaveLength(4)
+    expect(server.requests.length - before).toBe(3)
 })
 
 test("history shares its channel bucket across pages, separately from single fetch and other channels", async () => {

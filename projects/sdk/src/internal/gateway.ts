@@ -1,6 +1,8 @@
 import { platform } from "node:os"
 import type { EventMap, EventName } from "#sdk/events"
 import { decodeMessage, decodeDeletion, decodeBulkDeletion } from "./message.js"
+import { decodeReaction, reactionEvents } from "./reactions.js"
+import { decodePinsUpdate } from "./pins.js"
 import { Clock, Deferred, Effect, Redacted } from "effect"
 import WebSocket from "ws"
 import {
@@ -225,6 +227,13 @@ export const runGateway = (
                                         message,
                                         Buffer.byteLength(data.toString()),
                                     )
+                                } else if (payload.t === "CHANNEL_PINS_UPDATE") {
+                                    const update = decodePinsUpdate(body)
+                                    if (!update) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("channelPinsUpdate", update, Buffer.byteLength(data.toString()))
                                 } else if (payload.t === "MESSAGE_DELETE") {
                                     const deletion = decodeDeletion(body)
                                     if (!deletion) {
@@ -239,6 +248,14 @@ export const runGateway = (
                                         return
                                     }
                                     onDispatch("messageDeleteBulk", deletion, Buffer.byteLength(data.toString()))
+                                } else if (Object.hasOwn(reactionEvents, payload.t)) {
+                                    const event = payload.t as keyof typeof reactionEvents
+                                    const reaction = decodeReaction(event, body)
+                                    if (!reaction) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch(reactionEvents[event], reaction, Buffer.byteLength(data.toString()))
                                 }
                                 if (payload.t === "READY" || payload.t === "RESUMED")
                                     Deferred.doneUnsafe(ready, Effect.void)

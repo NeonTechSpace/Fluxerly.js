@@ -6,7 +6,7 @@ export class EventOverflowError extends Error {
     constructor(
         /** Budget exceeded by the incoming event */
         readonly limit: "messages" | "bytes",
-        /** Configured budget in event payloads or source-JSON bytes, according to limit. A bulk deletion counts as one payload */
+        /** Configured budget in event payloads or source-JSON bytes, according to limit. A bulk deletion or reaction batch counts as one payload */
         readonly capacity: number,
     ) {
         super(`Message subscription exceeded its pending ${limit} budget`)
@@ -44,9 +44,9 @@ export class MessageError extends Error {
 }
 
 /**
- * Expected get, fetch, history, edit or delete failure with safe metadata, never a response body, credential or message content.
+ * Expected message read or mutation failure with safe metadata, never a response body, credential or message content.
  * Local get failures use input and notDispatched. A cache miss succeeds with undefined.
- * Fetch and fetchHistory do not mutate messages. For edit/delete, unknown means the server may have applied the change.
+ * Remote reads do not mutate messages. For mutations, unknown means the server may have applied the change.
  * Default cancellation and client closure have separate error tags and can also follow a dispatched mutation
  */
 export class MessageOperationError extends Error {
@@ -54,10 +54,24 @@ export class MessageOperationError extends Error {
     readonly _tag = "MessageOperationError"
     constructor(
         /** The requested operation, independent of the gateway connection state */
-        readonly operation: "get" | "fetch" | "fetchHistory" | "edit" | "delete",
+        readonly operation:
+            | "get"
+            | "fetch"
+            | "fetchHistory"
+            | "fetchReactionUsers"
+            | "pin"
+            | "unpin"
+            | "fetchPins"
+            | "edit"
+            | "delete"
+            | "addReaction"
+            | "removeReaction"
+            | "removeUserReaction"
+            | "clearReaction"
+            | "clearReactions",
         /** Local validation/admission, HTTP rejection, transport, response decoding, deadline or rate limit. notFound means HTTP 404 for the target or its containing resource, not proof of a prior deletion */
         readonly reason: "input" | "busy" | "notFound" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
-        /** notDispatched means no message HTTP attempt; preparatory file uploads may already have occurred.
+        /** notDispatched means no message or reaction HTTP attempt; preparatory file uploads may already have occurred.
          * rejected means an API rejection, not proof of rollback. Message server errors and missing/invalid success responses remain unknown
          */
         readonly outcome: "notDispatched" | "rejected" | "unknown",
@@ -77,5 +91,5 @@ export type RegistrationError = ConfigurationError | ClientClosedError
 export type EventReadError = EventOverflowError | EventReadBusyError
 /** Send failures use the same definitions in both entry points */
 export type SendError = MessageError | ClientClosedError
-/** Get, fetch, history, edit and delete failures shared by both entry points. Native interruption remains outside this union */
+/** Message lookup, management and reaction failures shared by both entry points. Native interruption remains outside this union */
 export type MessageOperationFailure = MessageOperationError | ClientClosedError

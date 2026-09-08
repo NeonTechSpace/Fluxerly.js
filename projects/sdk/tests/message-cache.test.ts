@@ -690,30 +690,67 @@ test("a fetch queued before a gateway gap cannot populate after its delayed admi
     expect(cached(client, fresh)).toEqual(fresh)
 })
 
-test("a 429 retry delayed across a gateway gap returns normally without populating cache", async () => {
-    const server = await fixture()
-    const client = defaultApi({ cache: { messages: true } })
-    value(await client.connect())
-    let attempts = 0
-    server.control.respond = (request) => {
-        if (request.method !== "GET" || request.path !== "/v1/channels/20/messages/10")
-            throw new Error(`Unexpected fixture request: ${request.method} ${request.path}`)
-        attempts++
-        if (attempts === 1) {
-            request.response.writeHead(429, { "Content-Type": "application/json" })
-            request.response.end(JSON.stringify({ retry_after: 1.2 }))
-            return
+test.each([429, 503])(
+    "a %s retry delayed across a gateway gap returns normally without populating cache",
+    async (status) => {
+        const server = await fixture()
+        const client = defaultApi({ cache: { messages: true } })
+        value(await client.connect())
+        let attempts = 0
+        server.control.respond = (request) => {
+            if (request.method !== "GET" || request.path !== "/v1/channels/20/messages/10")
+                throw new Error(`Unexpected fixture request: ${request.method} ${request.path}`)
+            attempts++
+            if (attempts === 1) {
+                request.response.writeHead(status, { "Content-Type": "application/json", "Retry-After": "1.2" })
+                request.response.end(JSON.stringify({ retry_after: 1.2 }))
+                return
+            }
+            request.response.end(JSON.stringify(wire("10", "20", "after rate wait")))
         }
-        request.response.end(JSON.stringify(wire("10", "20", "after rate wait")))
-    }
-    const waiting = client.messages.fetch(target)
-    await vi.waitFor(() => expect(server.requests).toHaveLength(1))
-    server.closeCurrentSocket()
-    await vi.waitFor(() => expect(server.commands.some((command) => command.op === 6)).toBe(true), { timeout: 2_000 })
-    const result = value(await waiting)
-    expect(result.content).toBe("after rate wait")
-    expect(attempts).toBe(2)
-    expect(cached(client, target)).toBeUndefined()
+        const waiting = client.messages.fetch(target)
+        await vi.waitFor(() => expect(server.requests).toHaveLength(1))
+        server.closeCurrentSocket()
+        await vi.waitFor(() => expect(server.commands.some((command) => command.op === 6)).toBe(true), {
+            timeout: 2_000,
+        })
+        const result = value(await waiting)
+        expect(result.content).toBe("after rate wait")
+        expect(attempts).toBe(2)
+        expect(cached(client, target)).toBeUndefined()
+    },
+)
+
+test("native read retries retain the pre-gap cache generation", async () => {
+    const server = await fixture()
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createNative({
+                    token: "fixture-only-not-a-credential",
+                    cache: { messages: true },
+                })
+                yield* client.connect()
+                let attempts = 0
+                server.control.respond = (request) => {
+                    attempts++
+                    if (attempts === 1) request.response.writeHead(503, { "Retry-After": "1.2" }).end()
+                    else request.response.end(JSON.stringify(wire("10", "20", "after retry")))
+                }
+                const waiting = Effect.runPromise(client.messages.fetch(target))
+                yield* Effect.promise(() => vi.waitFor(() => expect(attempts).toBe(1)))
+                server.closeCurrentSocket()
+                yield* Effect.promise(() =>
+                    vi.waitFor(() => expect(server.commands.some((command) => command.op === 6)).toBe(true), {
+                        timeout: 2_000,
+                    }),
+                )
+                expect((yield* Effect.promise(() => waiting)).content).toBe("after retry")
+                expect(attempts).toBe(2)
+                expect(yield* client.messages.get(target)).toBeUndefined()
+            }),
+        ),
+    )
 })
 
 test("only a dispatched uncertain edit evicts a retained target", async () => {

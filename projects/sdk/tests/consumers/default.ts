@@ -152,6 +152,13 @@ export function registerReply(client: Client) {
 }
 
 export function rejectedMessageShapes(client: Client): void {
+    const reactionTarget = { id: "10", channelId: "20" }
+    // @ts-expect-error Named removal requires an explicit user ID
+    client.messages.removeUserReaction(reactionTarget, "👍")
+    // @ts-expect-error Clearing one emoji requires its selector
+    client.messages.clearReaction(reactionTarget)
+    // @ts-expect-error Clear-all takes operation options, never an emoji selector
+    client.messages.clearReactions(reactionTarget, "👍")
     // @ts-expect-error Collector filters must return synchronous booleans
     client.messages.collect("20", { filter: async () => true })
     // @ts-expect-error Collector IDs are decimal strings
@@ -170,7 +177,7 @@ export function rejectedMessageShapes(client: Client): void {
     // @ts-expect-error File lists must be arrays
     client.messages.send("20", { content: "hello", attachments: "file" })
     // @ts-expect-error Only implemented event names are public
-    client.on("messageReactionAdd", () => {})
+    client.on("typingStart", () => {})
     // @ts-expect-error Fetch takes a reference, not two positional IDs
     client.messages.fetch("20", "10")
     // @ts-expect-error Edit requires replacement content

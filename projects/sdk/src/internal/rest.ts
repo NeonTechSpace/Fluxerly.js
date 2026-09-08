@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { Deferred, Effect, Redacted } from "effect"
+import { Deferred, Effect, Random, Redacted } from "effect"
 import { ClientClosedError } from "#sdk/errors"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import type {
@@ -11,14 +11,19 @@ import type {
     MessageReference,
     SendOptions,
 } from "#sdk/messages"
-import { decodeMessage, encodeEdit, encodeHistory, encodeMessage, record, reference } from "./message.js"
+import { decodeMessage, encodeEdit, encodeHistory, encodeMessage, identifier, record, reference } from "./message.js"
 import type { MessageCache } from "./cache.js"
 import type { EncodedBody } from "./attachments.js"
 import { decodeUploadPlans, readUploadJson, uploadBody } from "./uploads.js"
+import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "#sdk/reactions"
+import { encodeReactionEmoji, encodeReactionUsersQuery, decodeReactionUsersPage } from "./reactions.js"
+import type { MessagePinsPage, MessagePinsQuery } from "#sdk/pins"
+import { decodePinsPage, encodePinsQuery } from "./pins.js"
 
 type Pending = {
     route: string
     bytes: number
+    until: number
     resume: (effect: Effect.Effect<() => void, RestFailure | ClientClosedError>) => void
 }
 type Bucket = { remaining: number; until: number }
@@ -27,7 +32,7 @@ type Outcome = MessageOperationError["outcome"]
 type Request<A> = {
     method: "POST" | "GET" | "PATCH" | "DELETE" | "PUT"
     channel: string
-    bucket?: "history" | "upload"
+    bucket?: "history" | "upload" | "reaction" | "pins"
     path: string
     body: EncodedBody | undefined
     status?: number
@@ -43,9 +48,17 @@ class RestFailure extends Error {
         readonly outcome: Outcome,
         readonly status: number | null = null,
         readonly retryAfterMs: number | null = null,
+        readonly retryableRead = false,
     ) {
         super("REST operation failed")
     }
+}
+
+function retryAfter(response: Response): number | null {
+    const value = response.headers.get("retry-after")?.trim()
+    if (!value) return null
+    const delay = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now()
+    return Number.isFinite(delay) ? Math.max(0, Math.ceil(delay)) : null
 }
 
 async function readMessage(response: Response, channel: string, id?: string): Promise<Message> {
@@ -106,7 +119,7 @@ export class RestOwner {
         for (let index = 0; index < this.#pending.length && this.#active < 4;) {
             const item = this.#pending[index]!
             const bucket = this.#buckets.get(item.route)
-            const until = Math.max(this.#globalUntil, bucket && bucket.remaining <= 0 ? bucket.until : 0)
+            const until = Math.max(item.until, this.#globalUntil, bucket && bucket.remaining <= 0 ? bucket.until : 0)
             if (until > now) {
                 earliest = Math.min(earliest, until)
                 index++
@@ -130,7 +143,7 @@ export class RestOwner {
             this.#timer = setTimeout(() => this.#pump(), Math.min(2_147_483_647, Math.max(1, earliest - now)))
     }
 
-    #acquire(route: string, bytes: number): Effect.Effect<() => void, RestFailure | ClientClosedError> {
+    #acquire(route: string, bytes: number, until = 0): Effect.Effect<() => void, RestFailure | ClientClosedError> {
         return Effect.callback((resume) => {
             if (this.#closed) {
                 resume(Effect.fail(new ClientClosedError()))
@@ -141,7 +154,7 @@ export class RestOwner {
                 resume(Effect.fail(new RestFailure("busy", "notDispatched")))
                 return
             }
-            const item = { route, bytes, resume }
+            const item = { route, bytes, until, resume }
             this.#pending.push(item)
             this.#bytes += bytes
             this.#pump()
@@ -186,14 +199,17 @@ export class RestOwner {
             Effect.sync(() => {
                 const controller = new AbortController()
                 owner.#controllers.add(controller)
-                const guard = request.preparation
-                    ? undefined
-                    : owner.cache?.begin(
-                          request.channel,
-                          request.target,
-                          request.method === "PATCH" || request.method === "DELETE",
-                          generation,
-                      )
+                const guard =
+                    request.preparation ||
+                    request.bucket === "reaction" ||
+                    (request.bucket === "pins" && request.method === "GET")
+                        ? undefined
+                        : owner.cache?.begin(
+                              request.channel,
+                              request.target,
+                              request.method === "PATCH" || request.method === "DELETE" || request.bucket === "pins",
+                              generation,
+                          )
                 const upload = request.put
                     ? uploadBody(request.put.data, request.put.offset, request.put.size)
                     : undefined
@@ -231,7 +247,9 @@ export class RestOwner {
                                           : {}),
                                     ...(state.upload === undefined ? {} : { duplex: "half" }),
                                 },
-                            )
+                            ).catch(() => {
+                                throw new RestFailure("network", progress.outcome, null, null, true)
+                            })
                             if (!request.put) owner.#headers(route, response)
                             try {
                                 if (response.status === 429) {
@@ -248,7 +266,7 @@ export class RestOwner {
                                         data.retry_after >= 0
                                     )
                                         delay = Math.max(Number.isFinite(delay) ? delay : 0, data.retry_after * 1000)
-                                    // Only a received rate-limit rejection is eligible for an automatic resend
+                                    // Mutation resends require a received rate-limit rejection
                                     if (!request.preparation) progress.outcome = "rejected"
                                     if (!Number.isFinite(delay) || delay <= 0)
                                         throw new RestFailure("rateLimit", progress.outcome, 429)
@@ -262,10 +280,14 @@ export class RestOwner {
                                 if (!response.ok) {
                                     const rejected = response.status >= 400 && response.status < 500
                                     if (rejected && !request.preparation) progress.outcome = "rejected"
+                                    const retryableRead =
+                                        request.method === "GET" && [500, 502, 503, 504].includes(response.status)
                                     throw new RestFailure(
                                         response.status === 404 && !request.preparation ? "notFound" : "rejected",
                                         progress.outcome,
                                         response.status,
+                                        retryableRead ? retryAfter(response) : null,
+                                        retryableRead,
                                     )
                                 }
                                 if (request.status !== undefined && response.status !== request.status)
@@ -294,7 +316,7 @@ export class RestOwner {
                         if (result.kind === "success") {
                             state.success = true
                             if (state.guard) {
-                                if (request.method === "DELETE")
+                                if (request.method === "DELETE" || request.bucket === "pins")
                                     owner.cache!.delete(
                                         { id: request.target!, channelId: request.channel },
                                         state.guard,
@@ -418,6 +440,182 @@ export class RestOwner {
         return this.#manage(token, "delete", target, undefined, options, async () => {})
     }
 
+    fetchReactionUsers(
+        token: Redacted.Redacted<string>,
+        target: MessageReference,
+        emoji: ReactionEmojiInput,
+        query?: ReactionUsersQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<ReactionUsersPage, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<ReactionUsersPage, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const encoded = encodeReactionEmoji(emoji)
+            const page = encodeReactionUsersQuery(query)
+            if (!reference(target) || encoded === undefined || !page)
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    method: "GET",
+                    channel: target.channelId,
+                    bucket: "reaction",
+                    path: `/channels/${target.channelId}/messages/${target.id}/reactions/${encoded}/users?${page.params}`,
+                    body: undefined,
+                    status: 200,
+                    decode: async (response) => {
+                        const decoded = decodeReactionUsersPage(await response.json().catch(() => null), page)
+                        if (!decoded) throw new RestFailure("response", "unknown", response.status)
+                        return decoded
+                    },
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new MessageOperationError(
+                          "fetchReactionUsers",
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                      )
+                    : error,
+            ),
+        )
+    }
+
+    fetchPins(
+        token: Redacted.Redacted<string>,
+        channel: string,
+        query?: MessagePinsQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<MessagePinsPage, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<MessagePinsPage, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const page = encodePinsQuery(channel, query)
+            if (!page) return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    method: "GET",
+                    channel,
+                    bucket: "pins",
+                    path: `/channels/${channel}/messages/pins?${page.params}`,
+                    body: undefined,
+                    status: 200,
+                    decode: async (response) => {
+                        const decoded = decodePinsPage(await response.json().catch(() => null), channel, page)
+                        if (!decoded) throw new RestFailure("response", "unknown", response.status)
+                        return decoded
+                    },
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new MessageOperationError(
+                          "fetchPins",
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                      )
+                    : error,
+            ),
+        )
+    }
+
+    pin(
+        token: Redacted.Redacted<string>,
+        operation: "pin" | "unpin",
+        target: MessageReference,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            if (!reference(target)) return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    method: operation === "pin" ? "PUT" : "DELETE",
+                    channel: target.channelId,
+                    target: target.id,
+                    bucket: "pins",
+                    path: `/channels/${target.channelId}/pins/${target.id}`,
+                    body: undefined,
+                    status: 204,
+                    decode: async () => {},
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new MessageOperationError(
+                          operation,
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                      )
+                    : error,
+            ),
+        )
+    }
+
+    reaction(
+        token: Redacted.Redacted<string>,
+        operation: "addReaction" | "removeReaction" | "removeUserReaction" | "clearReaction" | "clearReactions",
+        target: MessageReference,
+        emoji: ReactionEmojiInput | undefined,
+        options?: MessageOperationOptions,
+        userId?: string,
+    ): Effect.Effect<void, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const encoded = operation === "clearReactions" ? "" : encodeReactionEmoji(emoji as ReactionEmojiInput)
+            if (
+                !reference(target) ||
+                encoded === undefined ||
+                (operation === "removeUserReaction" && !identifier(userId))
+            )
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            const suffix =
+                operation === "clearReactions"
+                    ? ""
+                    : operation === "clearReaction"
+                      ? `/${encoded}`
+                      : `/${encoded}/${operation === "removeUserReaction" ? userId : "@me"}`
+            return this.#execute(
+                token,
+                {
+                    method: operation === "addReaction" ? "PUT" : "DELETE",
+                    channel: target.channelId,
+                    bucket: "reaction",
+                    path: `/channels/${target.channelId}/messages/${target.id}/reactions${suffix}`,
+                    body: undefined,
+                    status: 204,
+                    decode: async () => {},
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new MessageOperationError(
+                          operation,
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                      )
+                    : error,
+            ),
+        )
+    }
+
     #manage<A>(
         token: Redacted.Redacted<string>,
         operation: "fetch" | "edit" | "delete",
@@ -473,20 +671,42 @@ export class RestOwner {
         const route = `${request.bucket ?? request.method}:${request.channel}`
         const bytes = retainedBytes + Buffer.byteLength(request.body?.json ?? "")
         return Effect.gen(function* () {
+            let retries = 0
+            let until = 0
             while (true) {
-                const response = yield* Effect.acquireUseRelease(
-                    Effect.interruptible(owner.#acquire(route, bytes)).pipe(
-                        Effect.mapError((error) =>
-                            error instanceof RestFailure
-                                ? new RestFailure(error.reason, progress.outcome, error.status, error.retryAfterMs)
-                                : error,
+                const attempt = yield* Effect.result(
+                    Effect.acquireUseRelease(
+                        Effect.interruptible(owner.#acquire(route, bytes, until)).pipe(
+                            Effect.mapError((error) =>
+                                error instanceof RestFailure
+                                    ? new RestFailure(error.reason, progress.outcome, error.status, error.retryAfterMs)
+                                    : error,
+                            ),
                         ),
+                        () =>
+                            performance.now() >= deadline
+                                ? Effect.fail(new RestFailure("timeout", progress.outcome))
+                                : owner.#request(token, request, route, progress, generation),
+                        (release) => Effect.sync(release),
                     ),
-                    () => owner.#request(token, request, route, progress, generation),
-                    (release) => Effect.sync(release),
                 )
+                if (attempt._tag === "Failure") {
+                    const error = attempt.failure
+                    if (
+                        request.method !== "GET" ||
+                        !(error instanceof RestFailure) ||
+                        !error.retryableRead ||
+                        retries === 2
+                    )
+                        return yield* Effect.fail(error)
+                    const minimum = retries++ === 0 ? 125 : 250
+                    const delay = Math.max(minimum * (1 + (yield* Random.next)), error.retryAfterMs ?? 0)
+                    until = performance.now() + Math.ceil(delay)
+                    continue
+                }
+                const response = attempt.success
                 if (response.kind === "success") return response.value
-                const until = performance.now() + response.retry
+                until = performance.now() + response.retry
                 if (response.global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
                 else owner.#buckets.set(route, { remaining: 0, until })
                 if (until >= deadline)

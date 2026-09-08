@@ -11,6 +11,7 @@ export const identifier = (value: unknown): value is string =>
 export function decodeMessage(value: unknown): Message | undefined {
     if (!record(value) || !identifier(value.id) || !identifier(value.channel_id) || typeof value.content !== "string")
         return undefined
+    if (value.pinned !== undefined && typeof value.pinned !== "boolean") return undefined
     const author = value.author
     if (
         !record(author) ||
@@ -26,6 +27,7 @@ export function decodeMessage(value: unknown): Message | undefined {
         id: value.id,
         channelId: value.channel_id,
         content: value.content,
+        ...(value.pinned === undefined ? {} : { pinned: value.pinned }),
         embeds,
         attachments,
         author: Object.freeze({ id: author.id, username: author.username, isBot: author.bot === true }),

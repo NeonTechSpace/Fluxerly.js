@@ -30,8 +30,12 @@ export class ConfigurationError extends Error {
             | "collectorOptions"
             | "channelId"
             | "filter"
+            | "onReaction"
+            | "emoji"
             | "signal"
             | "maxMessages"
+            | "maxReactions"
+            | "message"
             | "timeoutMs",
         message: string,
     ) {
@@ -55,11 +59,22 @@ export type Operation =
     | "fetch"
     | "get"
     | "fetchHistory"
+    | "fetchReactionUsers"
+    | "pin"
+    | "unpin"
+    | "fetchPins"
+    | "addReaction"
+    | "removeReaction"
+    | "removeUserReaction"
+    | "clearReaction"
+    | "clearReactions"
     | "edit"
     | "delete"
     | "subscription.waitForClose"
     | "collect"
     | "collector.waitForClose"
+    | "collectReactions"
+    | "reactionCollector.waitForClose"
 
 /** Fluxer rejected the credential, so the connection owner does not retry it unchanged */
 export class AuthenticationError extends Error {

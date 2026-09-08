@@ -8,6 +8,8 @@ import {
     type RegistrationError,
 } from "#sdk/message-errors"
 import type { Message } from "#sdk/messages"
+import type { MessageReference } from "#sdk/messages"
+import type { MessageReaction, MessageReactionBatch } from "#sdk/reactions"
 import { record } from "./message.js"
 
 type Resume<A> = (value: Effect.Effect<A | null, EventOverflowError>) => void
@@ -16,7 +18,18 @@ type Limits = Required<HandlerOptions>
 function limits(event: unknown, options: unknown): Limits | ConfigurationError {
     if (
         typeof event !== "string" ||
-        !["messageCreate", "messageUpdate", "messageDelete", "messageDeleteBulk"].includes(event)
+        ![
+            "messageCreate",
+            "channelPinsUpdate",
+            "messageUpdate",
+            "messageDelete",
+            "messageDeleteBulk",
+            "messageReactionAdd",
+            "messageReactionAddMany",
+            "messageReactionRemove",
+            "messageReactionRemoveAll",
+            "messageReactionRemoveEmoji",
+        ].includes(event)
     )
         return new ConfigurationError("event", "Unsupported event name")
     if (options === undefined) options = {}
@@ -154,6 +167,25 @@ export class EventSource<A = Message> {
 }
 
 export class EventBus {
+    #reactionCollectors = new Map<
+        string,
+        Set<(reaction: MessageReaction | MessageReactionBatch, bytes: number) => void>
+    >()
+
+    /** Exact message selection precedes queue admission; user filters run outside gateway decoding */
+    listenReactions(
+        target: MessageReference,
+        listener: (reaction: MessageReaction | MessageReactionBatch, bytes: number) => void,
+    ) {
+        const key = `${target.channelId}:${target.id}`
+        let listeners = this.#reactionCollectors.get(key)
+        if (!listeners) this.#reactionCollectors.set(key, (listeners = new Set()))
+        listeners.add(listener)
+        return () => {
+            listeners.delete(listener)
+            if (!listeners.size) this.#reactionCollectors.delete(key)
+        }
+    }
     #collectors = new Map<string, Set<(message: Message, bytes: number) => void>>()
 
     /** Channel selection precedes collector queue admission. These callbacks only enqueue, never run user filters */
@@ -167,10 +199,16 @@ export class EventBus {
         }
     }
     #sources: { [K in EventName]: Set<EventSource<EventMap[K]>> } = {
+        channelPinsUpdate: new Set(),
         messageCreate: new Set(),
         messageUpdate: new Set(),
         messageDelete: new Set(),
         messageDeleteBulk: new Set(),
+        messageReactionAdd: new Set(),
+        messageReactionAddMany: new Set(),
+        messageReactionRemove: new Set(),
+        messageReactionRemoveAll: new Set(),
+        messageReactionRemoveEmoji: new Set(),
     }
     #closed = false
     #closingSources: Pick<EventSource, "stop" | "closed">[] = []
@@ -193,6 +231,11 @@ export class EventBus {
         })
     }
     offer<K extends EventName>(event: K, message: EventMap[K], bytes: number) {
+        if (event === "messageReactionAdd" || event === "messageReactionAddMany") {
+            const reaction = message as MessageReaction | MessageReactionBatch
+            for (const offer of this.#reactionCollectors.get(`${reaction.channelId}:${reaction.id}`) ?? [])
+                offer(reaction, bytes)
+        }
         if (event === "messageCreate")
             for (const offer of this.#collectors.get(message.channelId) ?? []) offer(message as Message, bytes)
         for (const source of this.#sources[event]) source.offer(message, bytes)

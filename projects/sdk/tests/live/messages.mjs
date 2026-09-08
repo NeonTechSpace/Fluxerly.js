@@ -7,6 +7,7 @@ import WebSocket from "ws"
 import { Logger } from "effect"
 import { fromEffectLogger } from "@neontechspace/fluxerly/effect"
 import { observeUploads, safeFailure } from "./upload-diagnostics.mjs"
+import { createReactionEmoji, cleanupReactionEmoji } from "./reaction-fixture.mjs"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
@@ -28,7 +29,9 @@ const collectors = process.argv[3] === "--collectors"
 const embeds = process.argv[3] === "--embeds"
 const smallAttachments = process.argv[3] === "--attachments-small"
 const attachments = process.argv[3] === "--attachments" || smallAttachments
-const forceRecovery = recover || cache || collectors || attachments
+const reactions = process.argv[3] === "--reactions"
+const pins = process.argv[3] === "--pins"
+const forceRecovery = recover || cache || collectors || attachments || reactions || pins
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const journalPath = new URL("../../.env.test.messages.local", import.meta.url)
 const report = (check, passed) => console.log(JSON.stringify({ mode, check, passed }))
@@ -132,10 +135,404 @@ async function api(method, path, body) {
             await sleep(delay)
             continue
         }
-        assert.ok(response.ok || response.status === 404)
+        if (reactions && !response.ok && response.status !== 404) {
+            const known = new Set([
+                "INVALID_BASE64_FORMAT",
+                "BASE64_LENGTH_INVALID",
+                "INVALID_IMAGE_FORMAT",
+                "IMAGE_SIZE_EXCEEDS_LIMIT",
+                "FAILED_TO_UPLOAD_IMAGE",
+                "STRING_LENGTH_INVALID",
+            ])
+            const validation = Array.isArray(data?.errors)
+                ? data.errors.slice(0, 8).map((error) => ({
+                      field: ["image", "name"].includes(error?.path) ? error.path : "unclassified",
+                      code: known.has(error?.code)
+                          ? error.code
+                          : known.has(error?.message)
+                            ? error.message
+                            : "unclassified",
+                  }))
+                : []
+            console.log(JSON.stringify({ mode, check: stage, method, status: response.status, validation }))
+        }
+        if (!response.ok && response.status !== 404)
+            throw Object.assign(new Error("Sandbox HTTP request failed"), {
+                status: response.status,
+                ...(data?.code === "INVALID_FORM_BODY" ? { code: "INVALID_FORM_BODY" } : {}),
+            })
         return { status: response.status, data }
     }
     throw new Error("Sandbox request budget exhausted")
+}
+
+async function verifyReactions(ops, channelId, botId, interrupt) {
+    stage = "reaction_custom_emoji_prerequisite"
+    const emoji = await createReactionEmoji(
+        api,
+        journal,
+        () => writeFileSync(journalPath, JSON.stringify(journal)),
+        botId,
+    )
+    const customPath = encodeURIComponent(`${emoji.name}:${emoji.id}`)
+    const message = await ops.send({ content: "SDK reaction verification" })
+    const received = []
+    const stops = []
+    const collect = async (options) => {
+        const collector = await ops.collect(message, { timeoutMs: 10_000, ...options })
+        stops.push(() => collector.stop())
+        return collector
+    }
+    const wait = async (event, matches = () => true) => {
+        const deadline = performance.now() + 10_000
+        while (performance.now() < deadline) {
+            const index = received.findIndex((item) => item.event === event && matches(item.value))
+            if (index !== -1) return received.splice(index, 1)[0].value
+            await sleep(20)
+        }
+        throw Error("Reaction event deadline")
+    }
+    const reactors = async (path) => {
+        const result = await api("GET", `/channels/${channelId}/messages/${message.id}/reactions/${path}`)
+        assert.equal(result.status, 200)
+        assert.ok(Array.isArray(result.data))
+        return result.data.map((user) => user.id)
+    }
+    try {
+        for (const event of [
+            "messageReactionAdd",
+            "messageReactionRemove",
+            "messageReactionRemoveAll",
+            "messageReactionRemoveEmoji",
+        ])
+            stops.push(
+                await ops.on(event, (value) => {
+                    if (value.id === message.id && value.channelId === channelId) {
+                        assert.ok(received.length < 32)
+                        received.push({ event, value })
+                    }
+                }),
+            )
+        stage = "reaction_collector_timeout_and_stop"
+        const timed = await collect({ timeoutMs: 50 })
+        assert.deepEqual(await timed.wait(), { reason: "timeout", reactions: [] })
+        const stopped = await collect({})
+        await stopped.stop()
+        assert.deepEqual(await stopped.wait(), { reason: "stopped", reactions: [] })
+        report(stage, true)
+        const selected = await collect({
+            emoji,
+            filter: (reaction) => reaction.userId === botId,
+        })
+        stage = "unicode_reaction_add_readback"
+        await ops.add(message, "👍")
+        const added = await wait("messageReactionAdd", (value) => value.emoji.name === "👍")
+        assert.equal(added.userId, botId)
+        assert.deepEqual(await reactors(encodeURIComponent("👍")), [botId])
+        report(stage, true)
+        stage = "custom_reaction_add_readback"
+        await ops.add(message, emoji)
+        assert.equal((await wait("messageReactionAdd", (value) => value.emoji.id === emoji.id)).userId, botId)
+        assert.deepEqual(await reactors(customPath), [botId])
+        report(stage, true)
+        stage = "reaction_collector_selected_custom_addition"
+        const collected = await selected.wait()
+        assert.equal(collected.reason, "limit")
+        assert.equal(collected.reactions.length, 1)
+        assert.equal(collected.reactions[0].id, message.id)
+        assert.equal(collected.reactions[0].channelId, channelId)
+        assert.equal(collected.reactions[0].userId, botId)
+        assert.equal(collected.reactions[0].emoji.id, emoji.id)
+        assert.ok(
+            Object.isFrozen(collected) &&
+                Object.isFrozen(collected.reactions) &&
+                Object.isFrozen(collected.reactions[0]),
+        )
+        report(stage, true)
+        stage = "reaction_users_page_readback"
+        for (const [input, path] of [
+            ["👍", encodeURIComponent("👍")],
+            [emoji, customPath],
+        ]) {
+            const page = await ops.users(message, input, { limit: 1 })
+            const raw = await api(
+                "GET",
+                `/channels/${channelId}/messages/${message.id}/reactions/${path}/users?limit=1`,
+            )
+            assert.equal(raw.status, 200)
+            assert.deepEqual(page, {
+                items: raw.data.items.map((user) => ({
+                    id: user.id,
+                    username: user.username,
+                    isBot: user.bot === true,
+                })),
+                hasMore: raw.data.has_more,
+                nextAfter: raw.data.next_after,
+            })
+            assert.deepEqual(
+                page.items.map((user) => user.id),
+                [botId],
+            )
+            assert.ok(Object.isFrozen(page) && Object.isFrozen(page.items) && Object.isFrozen(page.items[0]))
+            assert.deepEqual(await ops.users(message, input, { after: botId }), {
+                items: [],
+                hasMore: false,
+                nextAfter: null,
+            })
+        }
+        report(stage, true)
+        stage = "own_reaction_remove"
+        const guild = (await api("GET", `/guilds/${guildId}`)).data
+        assert.equal(guild.id, guildId)
+        assert.match(guild.owner_id, /^\d+$/)
+        assert.notEqual(guild.owner_id, botId)
+        stage = "named_reaction_removal"
+        // This test-owned message has only the bot's reactions; targeting the guild owner must preserve them
+        await ops.removeUser(message, "👍", guild.owner_id)
+        assert.equal(
+            (await wait("messageReactionRemove", (value) => value.userId === guild.owner_id)).userId,
+            guild.owner_id,
+        )
+        assert.deepEqual(await reactors(encodeURIComponent("👍")), [botId])
+        await ops.removeUser(message, "👍", botId)
+        await wait("messageReactionRemove", (value) => value.userId === botId)
+        assert.deepEqual(await reactors(encodeURIComponent("👍")), [])
+        assert.deepEqual(await reactors(customPath), [botId])
+        await ops.add(message, "👍")
+        await wait("messageReactionAdd", (value) => value.emoji.name === "👍")
+        report(stage, true)
+        stage = "own_reaction_remove"
+        await ops.remove(message, "👍")
+        assert.equal((await wait("messageReactionRemove", (value) => value.emoji.name === "👍")).userId, botId)
+        assert.deepEqual(await reactors(encodeURIComponent("👍")), [])
+        assert.deepEqual(await reactors(customPath), [botId])
+        report(stage, true)
+        stage = "reaction_progress_edit_readback"
+        const progress = await collect({ emoji: "🔥", maxReactions: 2, progressEdit: "SDK reaction progress observed" })
+        for (let index = 0; index < 2; index++) {
+            await ops.add(message, "🔥")
+            await wait("messageReactionAdd", (value) => value.emoji.name === "🔥")
+            const deadline = performance.now() + 10_000
+            let verified = false
+            while (performance.now() < deadline) {
+                const raw = await api("GET", `/channels/${channelId}/messages/${message.id}`)
+                if (raw.status === 200 && raw.data.content === `SDK reaction progress observed ${index + 1}`) {
+                    verified = true
+                    break
+                }
+                await sleep(100)
+            }
+            assert.ok(verified, "Progress edit was not visible through raw API")
+            await ops.remove(message, "🔥")
+            await wait("messageReactionRemove", (value) => value.emoji.name === "🔥")
+        }
+        assert.equal((await progress.wait()).reason, "limit")
+        report(stage, true)
+        stage = "reaction_progress_failure"
+        const failedProgress = await collect({ progressEdit: "SDK missing progress target", progressFailure: true })
+        const failedResult = failedProgress.wait().catch((error) => error)
+        await ops.add(message, "🔥")
+        await wait("messageReactionAdd", (value) => value.emoji.name === "🔥")
+        assert.equal((await failedResult).reason, "handler")
+        await ops.remove(message, "🔥")
+        await wait("messageReactionRemove", (value) => value.emoji.name === "🔥")
+        report(stage, true)
+        let progressStarted = false,
+            progressCleaned = false
+        const gap = await collect({
+            emoji: "🔥",
+            timeoutMs: 30_000,
+            maxReactions: 2,
+            progressWait: true,
+            onProgress: (state) => {
+                if (state === "started") progressStarted = true
+                else progressCleaned = true
+            },
+        })
+        // Attach the failure observer before interruption to avoid an unhandled expected rejection
+        const gapResult = gap.wait().then(
+            () => null,
+            (error) => error,
+        )
+        await ops.add(message, "🔥")
+        await wait("messageReactionAdd", (value) => value.emoji.name === "🔥")
+        const progressDeadline = performance.now() + 10_000
+        while (!progressStarted && performance.now() < progressDeadline) await sleep(20)
+        assert.ok(progressStarted)
+        await interrupt()
+        stage = "reaction_collector_connection_gap"
+        const gapError = await gapResult
+        assert.equal(gapError?._tag, "CollectorError")
+        assert.equal(gapError.reason, "connectionLost")
+        assert.ok(progressCleaned)
+        report(stage, true)
+        const resumedCollector = await collect({
+            emoji: "👍",
+            filter: (reaction) => reaction.userId === botId,
+        })
+        stage = "reaction_subscription_after_resume"
+        await ops.remove(message, emoji)
+        await wait("messageReactionRemove", (value) => value.emoji.id === emoji.id)
+        assert.deepEqual(await reactors(customPath), [])
+        assert.deepEqual(await ops.users(message, emoji), { items: [], hasMore: false, nextAfter: null })
+        await ops.add(message, "👍")
+        await wait("messageReactionAdd")
+        const resumedResult = await resumedCollector.wait()
+        assert.equal(resumedResult.reason, "limit")
+        assert.equal(resumedResult.reactions.length, 1)
+        assert.equal(resumedResult.reactions[0].userId, botId)
+        assert.equal(resumedResult.reactions[0].emoji.name, "👍")
+        report(stage, true)
+        stage = "message_read_paths_after_resume"
+        const read = await ops.reads(message)
+        const remote = await api("GET", `/channels/${channelId}/messages/${message.id}`)
+        assert.equal(remote.status, 200)
+        assert.equal(read.message.id, remote.data.id)
+        assert.equal(read.message.content, remote.data.content)
+        assert.deepEqual(
+            read.history.map((item) => item.id),
+            [message.id],
+        )
+        const remotePins = await api("GET", `/channels/${channelId}/messages/pins?limit=1`)
+        assert.equal(remotePins.status, 200)
+        assert.deepEqual(
+            read.pins.items.map((item) => item.message.id),
+            remotePins.data.items.map((item) => item.message.id),
+        )
+        assert.equal(read.pins.hasMore, remotePins.data.has_more)
+        report(stage, true)
+        stage = "reaction_clear_emoji_event"
+        await ops.add(message, emoji)
+        await wait("messageReactionAdd", (value) => value.emoji.id === emoji.id)
+        await ops.clearEmoji(message, "👍")
+        await wait("messageReactionRemoveEmoji", (value) => value.emoji.name === "👍")
+        assert.deepEqual(await reactors(encodeURIComponent("👍")), [])
+        assert.deepEqual(await reactors(customPath), [botId])
+        report(stage, true)
+        stage = "reaction_clear_all_event"
+        await ops.add(message, "👍")
+        await wait("messageReactionAdd")
+        await ops.clearAll(message)
+        await wait("messageReactionRemoveAll")
+        assert.deepEqual(await reactors(encodeURIComponent("👍")), [])
+        assert.deepEqual(await reactors(customPath), [])
+        report(stage, true)
+        stage = "reaction_users_missing_message"
+        assert.equal((await api("DELETE", `/channels/${channelId}/messages/${message.id}`)).status, 204)
+        await assert.rejects(ops.users(message, "👍"), {
+            _tag: "MessageOperationError",
+            operation: "fetchReactionUsers",
+            reason: "notFound",
+        })
+        report(stage, true)
+    } finally {
+        for (const stop of stops) await stop()
+    }
+}
+
+async function verifyPins(ops, channelId, interrupt) {
+    stage = "pin_fixture_messages"
+    const first = await ops.send({ content: "SDK pin verification one" })
+    const second = await ops.send({ content: "SDK pin verification two" })
+    assert.equal(first.channelId, channelId)
+    assert.equal(second.channelId, channelId)
+    assert.equal(first.pinned, false)
+    const updates = []
+    const notices = []
+    const stops = []
+    const wait = async (items, matches) => {
+        const deadline = performance.now() + 10_000
+        while (performance.now() < deadline) {
+            const index = items.findIndex(matches)
+            if (index !== -1) return items.splice(index, 1)[0]
+            await sleep(20)
+        }
+        throw Error("Pin event deadline")
+    }
+    const read = async (message) => {
+        const response = await api("GET", `/channels/${channelId}/messages/${message.id}`)
+        assert.equal(response.status, 200)
+        assert.equal(response.data.id, message.id)
+        assert.equal(response.data.channel_id, channelId)
+        return response.data
+    }
+    const page = async (query) => {
+        const result = await ops.pins(query)
+        const params = new URLSearchParams({ limit: String(query.limit ?? 50) })
+        if (query.before) params.set("before", query.before)
+        const raw = await api("GET", `/channels/${channelId}/messages/pins?${params}`)
+        assert.equal(raw.status, 200)
+        assert.deepEqual(
+            result.items.map((item) => ({ id: item.message.id, pinned: item.message.pinned, time: item.pinnedAt })),
+            raw.data.items.map((item) => ({ id: item.message.id, pinned: item.message.pinned, time: item.pinned_at })),
+        )
+        assert.equal(result.hasMore, raw.data.has_more)
+        assert.equal(result.nextBefore, result.hasMore ? result.items.at(-1).pinnedAt : null)
+        assert.ok(Object.isFrozen(result) && Object.isFrozen(result.items))
+        return result
+    }
+    try {
+        stops.push(
+            await ops.on("messageUpdate", (value) => {
+                if (value.channelId === channelId && [first.id, second.id].includes(value.id)) {
+                    assert.ok(updates.length < 32)
+                    updates.push(value)
+                }
+            }),
+        )
+        stops.push(
+            await ops.on("channelPinsUpdate", (value) => {
+                if (value.channelId === channelId) {
+                    assert.ok(notices.length < 32)
+                    notices.push(value)
+                }
+            }),
+        )
+        stage = "pin_state_and_events"
+        await ops.pin(first)
+        assert.equal((await read(first)).pinned, true)
+        assert.equal((await wait(updates, (item) => item.id === first.id && item.pinned === true)).pinned, true)
+        const notice = await wait(notices, () => true)
+        assert.ok(Object.isFrozen(notice))
+        assert.equal(typeof notice.lastPinTimestamp, "string")
+        await ops.pin(first)
+        assert.equal((await page({})).items.length, 1)
+        await ops.pin(second)
+        await wait(updates, (item) => item.id === second.id && item.pinned === true)
+        await wait(notices, () => true)
+        report(stage, true)
+        stage = "pin_pages_readback"
+        const firstPage = await page({ limit: 1 })
+        assert.equal(firstPage.items.length, 1)
+        assert.equal(firstPage.hasMore, true)
+        await page({ limit: 1, before: firstPage.nextBefore })
+        assert.deepEqual(new Set((await page({})).items.map((item) => item.message.id)), new Set([first.id, second.id]))
+        report(stage, true)
+        await interrupt()
+        stage = "unpin_after_resume_preserves_message"
+        await ops.unpin(first)
+        assert.equal((await read(first)).pinned, false)
+        assert.equal((await read(first)).content, first.content)
+        assert.equal((await read(second)).pinned, true)
+        await wait(updates, (item) => item.id === first.id && item.pinned === false)
+        await wait(notices, () => true)
+        assert.deepEqual(
+            (await page({})).items.map((item) => item.message.id),
+            [second.id],
+        )
+        await ops.unpin(first)
+        await ops.unpin(second)
+        await wait(updates, (item) => item.id === second.id && item.pinned === false)
+        await wait(notices, () => true)
+        assert.deepEqual(await page({}), { items: [], hasMore: false, nextBefore: null })
+        report(stage, true)
+        stage = "pin_missing_target_failure"
+        assert.equal((await api("DELETE", `/channels/${channelId}/messages/${first.id}`)).status, 204)
+        await assert.rejects(ops.pin(first), { _tag: "MessageOperationError", operation: "pin", reason: "notFound" })
+        report(stage, true)
+    } finally {
+        for (const stop of stops) await stop()
+    }
 }
 
 function cacheOptions() {
@@ -362,6 +759,13 @@ async function cleanup() {
     if (!journal) return
     assert.equal(journal.guildId, guildId)
     assert.match(journal.name, /^fluxerly-sdk-test-[a-f0-9]{32}$/)
+    let emojiFailure
+    try {
+        await cleanupReactionEmoji(api, journal)
+        if (journal.emojiName !== undefined) report("test_emoji_removed", true)
+    } catch (error) {
+        emojiFailure = error
+    }
     const listed = await api("GET", `/guilds/${guildId}/channels`)
     assert.ok(Array.isArray(listed.data))
     // The unique marker is persisted before creation, so a lost POST response can be reconciled without retrying creation
@@ -384,9 +788,10 @@ async function cleanup() {
     }
     const after = await api("GET", `/guilds/${guildId}/channels`)
     assert.ok(Array.isArray(after.data) && !after.data.some((channel) => channel.name === journal.name))
+    report("test_channel_and_messages_removed", true)
+    if (emojiFailure) throw emojiFailure
     unlinkSync(journalPath)
     journal = undefined
-    report("test_channel_and_messages_removed", true)
 }
 
 async function prepareManagement(channelId, botId) {
@@ -653,7 +1058,16 @@ try {
     assert.ok(
         process.argv.length === 3 ||
             (process.argv.length === 4 &&
-                (recover || manage || changes || history || cache || collectors || embeds || attachments)),
+                (recover ||
+                    manage ||
+                    changes ||
+                    history ||
+                    cache ||
+                    collectors ||
+                    embeds ||
+                    attachments ||
+                    reactions ||
+                    pins)),
     )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
@@ -820,6 +1234,115 @@ try {
                 () => done.resolve(null),
             )
             assert.ok((await client.connect()).isOk())
+            if (pins) {
+                const run = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) throw result.error
+                    return result.value
+                }
+                await verifyPins(
+                    {
+                        send: (input) => run(client.messages.send(channel.id, input)),
+                        pin: (target) => run(client.messages.pin(target)),
+                        unpin: (target) => run(client.messages.unpin(target)),
+                        pins: (query) => run(client.messages.fetchPins(channel.id, query)),
+                        on: async (event, handler) => {
+                            const subscription = await run(client.on(event, handler))
+                            return async () => {
+                                subscription.unsubscribe()
+                                await run(subscription.waitForClose())
+                            }
+                        },
+                    },
+                    channel.id,
+                    () => gatewayProbe.interruptAndWait(client, states),
+                )
+            }
+            if (reactions) {
+                const unwrap = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) reportFailure(result.error)
+                    assert.ok(result.isOk())
+                    return result.value
+                }
+                await verifyReactions(
+                    {
+                        send: (input) => unwrap(client.messages.send(channel.id, input)),
+                        add: (target, emoji) => unwrap(client.messages.addReaction(target, emoji)),
+                        remove: (target, emoji) => unwrap(client.messages.removeReaction(target, emoji)),
+                        removeUser: (target, emoji, userId) =>
+                            unwrap(client.messages.removeUserReaction(target, emoji, userId)),
+                        clearEmoji: (target, emoji) => unwrap(client.messages.clearReaction(target, emoji)),
+                        clearAll: (target) => unwrap(client.messages.clearReactions(target)),
+                        reads: async (target) => ({
+                            message: await unwrap(client.messages.fetch(target)),
+                            history: await unwrap(
+                                client.messages.fetchHistory(target.channelId, { around: target.id, limit: 1 }),
+                            ),
+                            pins: await unwrap(client.messages.fetchPins(target.channelId, { limit: 1 })),
+                        }),
+                        collect: async (target, options) => {
+                            const { progressEdit, progressFailure, progressWait, onProgress, ...settings } = options
+                            let count = 0
+                            const collector = await unwrap(
+                                client.messages.collectReactions(target, {
+                                    ...settings,
+                                    ...(progressEdit || progressWait
+                                        ? {
+                                              onReaction: async (_reaction, signal) => {
+                                                  onProgress?.("started")
+                                                  try {
+                                                      if (progressWait)
+                                                          await new Promise((resolve) => {
+                                                              if (signal.aborted) resolve()
+                                                              else
+                                                                  signal.addEventListener("abort", resolve, {
+                                                                      once: true,
+                                                                  })
+                                                          })
+                                                      else
+                                                          await unwrap(
+                                                              client.messages.edit(
+                                                                  progressFailure ? { ...target, id: "1" } : target,
+                                                                  { content: `${progressEdit} ${++count}` },
+                                                                  { signal },
+                                                              ),
+                                                          )
+                                                  } finally {
+                                                      onProgress?.("cleaned")
+                                                  }
+                                              },
+                                          }
+                                        : {}),
+                                }),
+                            )
+                            return {
+                                stop: async () => collector.stop(),
+                                wait: async () => {
+                                    const result = await collector.waitForClose()
+                                    if (result.isErr()) throw result.error
+                                    return result.value
+                                },
+                            }
+                        },
+                        users: async (target, emoji, query) => {
+                            const result = await client.messages.fetchReactionUsers(target, emoji, query)
+                            if (result.isErr()) throw result.error
+                            return result.value
+                        },
+                        on: async (event, handler) => {
+                            const subscription = await unwrap(client.on(event, handler))
+                            return async () => {
+                                subscription.unsubscribe()
+                                await unwrap(subscription.waitForClose())
+                            }
+                        },
+                    },
+                    channel.id,
+                    user.id,
+                    () => gatewayProbe.interruptAndWait(client, states),
+                )
+            }
             if (embeds || attachments) {
                 const unwrap = async (operation) => {
                     const result = await operation
@@ -848,7 +1371,7 @@ try {
                     channel.id,
                 )
             }
-            if (forceRecovery) {
+            if (forceRecovery && !reactions && !pins) {
                 if (cache) sdkRequests.length = 0
                 if (collectors)
                     await verifyCollectors(
@@ -1041,6 +1564,132 @@ try {
                         }),
                     )
                     yield* client.connect()
+                    if (pins) {
+                        const scope = yield* Effect.scope
+                        const run = async (operation) => {
+                            const result = await Effect.runPromise(Effect.result(operation))
+                            if (result._tag === "Failure") throw result.failure
+                            return result.success
+                        }
+                        yield* Effect.promise(() =>
+                            verifyPins(
+                                {
+                                    send: (input) => run(client.messages.send(channel.id, input)),
+                                    pin: (target) => run(client.messages.pin(target)),
+                                    unpin: (target) => run(client.messages.unpin(target)),
+                                    pins: (query) => run(client.messages.fetchPins(channel.id, query)),
+                                    on: async (event, handler) => {
+                                        const subscription = await run(
+                                            client
+                                                .on(event, (value) => Effect.sync(() => handler(value)))
+                                                .pipe(Scope.provide(scope)),
+                                        )
+                                        return async () => {
+                                            await run(subscription.unsubscribe())
+                                            await run(subscription.waitForClose())
+                                        }
+                                    },
+                                },
+                                channel.id,
+                                () => gatewayProbe.interruptAndWait(client, states),
+                            ),
+                        )
+                    }
+                    if (reactions) {
+                        const scope = yield* Effect.scope
+                        const run = async (operation) => {
+                            const result = await Effect.runPromise(Effect.result(operation))
+                            if (result._tag === "Failure") reportFailure(result.failure)
+                            assert.equal(result._tag, "Success")
+                            return result.success
+                        }
+                        yield* Effect.promise(() =>
+                            verifyReactions(
+                                {
+                                    send: (input) => run(client.messages.send(channel.id, input)),
+                                    add: (target, emoji) => run(client.messages.addReaction(target, emoji)),
+                                    remove: (target, emoji) => run(client.messages.removeReaction(target, emoji)),
+                                    removeUser: (target, emoji, userId) =>
+                                        run(client.messages.removeUserReaction(target, emoji, userId)),
+                                    clearEmoji: (target, emoji) => run(client.messages.clearReaction(target, emoji)),
+                                    clearAll: (target) => run(client.messages.clearReactions(target)),
+                                    reads: async (target) => ({
+                                        message: await run(client.messages.fetch(target)),
+                                        history: await run(
+                                            client.messages.fetchHistory(target.channelId, {
+                                                around: target.id,
+                                                limit: 1,
+                                            }),
+                                        ),
+                                        pins: await run(client.messages.fetchPins(target.channelId, { limit: 1 })),
+                                    }),
+                                    collect: async (target, options) => {
+                                        const { progressEdit, progressFailure, progressWait, onProgress, ...settings } =
+                                            options
+                                        let count = 0
+                                        const collector = await run(
+                                            client.messages
+                                                .collectReactions(target, {
+                                                    ...settings,
+                                                    ...(progressEdit || progressWait
+                                                        ? {
+                                                              onReaction: () =>
+                                                                  Effect.gen(function* () {
+                                                                      onProgress?.("started")
+                                                                      if (progressWait) yield* Effect.never
+                                                                      else
+                                                                          yield* client.messages.edit(
+                                                                              progressFailure
+                                                                                  ? { ...target, id: "1" }
+                                                                                  : target,
+                                                                              { content: `${progressEdit} ${++count}` },
+                                                                          )
+                                                                  }).pipe(
+                                                                      Effect.ensuring(
+                                                                          Effect.sync(() => onProgress?.("cleaned")),
+                                                                      ),
+                                                                  ),
+                                                          }
+                                                        : {}),
+                                                })
+                                                .pipe(Scope.provide(scope)),
+                                        )
+                                        return {
+                                            stop: () => run(collector.stop()),
+                                            wait: async () => {
+                                                const result = await Effect.runPromise(
+                                                    Effect.result(collector.waitForClose()),
+                                                )
+                                                if (result._tag === "Failure") throw result.failure
+                                                return result.success
+                                            },
+                                        }
+                                    },
+                                    users: async (target, emoji, query) => {
+                                        const result = await Effect.runPromise(
+                                            Effect.result(client.messages.fetchReactionUsers(target, emoji, query)),
+                                        )
+                                        if (result._tag === "Failure") throw result.failure
+                                        return result.success
+                                    },
+                                    on: async (event, handler) => {
+                                        const subscription = await run(
+                                            client
+                                                .on(event, (value) => Effect.sync(() => handler(value)))
+                                                .pipe(Scope.provide(scope)),
+                                        )
+                                        return async () => {
+                                            await run(subscription.unsubscribe())
+                                            await run(subscription.waitForClose())
+                                        }
+                                    },
+                                },
+                                channel.id,
+                                user.id,
+                                () => gatewayProbe.interruptAndWait(client, states),
+                            ),
+                        )
+                    }
                     if (embeds || attachments) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
@@ -1071,7 +1720,7 @@ try {
                             ),
                         )
                     }
-                    if (forceRecovery) {
+                    if (forceRecovery && !reactions && !pins) {
                         if (cache) sdkRequests.length = 0
                         if (collectors) {
                             const collectorScope = yield* Effect.scope
@@ -1196,7 +1845,7 @@ try {
     report("sdk_closed", true)
 } catch (error) {
     // Never print assertions, HTTP bodies, native causes, configured identities or credentials
-    if (attachments) reportFailure(error)
+    if (attachments || reactions || pins) reportFailure(error)
     report(stage, false)
     process.exitCode = 1
 } finally {

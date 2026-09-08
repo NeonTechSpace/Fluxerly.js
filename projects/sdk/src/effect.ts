@@ -14,6 +14,18 @@ export type {
 } from "./embeds.js"
 export type { MessageBody } from "./messages.js"
 export type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
+import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "./reactions.js"
+export type {
+    ReactionEmojiInput,
+    ReactionUsersQuery,
+    ReactionUsersPage,
+    ReactionUser,
+    ReactionEmoji,
+    ReactionTarget,
+    MessageReaction,
+    MessageReactionBatch,
+    MessageReactionEmojiRemoval,
+} from "./reactions.js"
 import type { Logger } from "effect"
 import type { LoggingOptions, DefaultLogger } from "./logging.js"
 import { adaptLogger } from "#sdk/internal/logging"
@@ -75,7 +87,26 @@ export interface ClientOptions<E = never, R = never> extends Omit<SharedClientOp
 }
 import type { ConfigurationError, ConnectError, ConnectionFailure } from "./errors.js"
 import { makeClient } from "#sdk/internal/client"
+import type { MessagePinsQuery, MessagePinsPage } from "./pins.js"
+export type { MessagePinsQuery, MessagePinsPage, MessagePin, ChannelPinsUpdate } from "./pins.js"
 import { collect, type MessageCollector } from "#sdk/internal/collector"
+import { collectReactions, type ReactionCollector as ReactionCollection } from "#sdk/internal/reaction-collector"
+import type {
+    ReactionCollectorOptions as SharedReactionCollectorOptions,
+    ReactionCollectorResult,
+} from "./collectors.js"
+export type { ReactionCollectorResult } from "./collectors.js"
+
+/** Bounded native reaction collection with progress work in the registration context */
+export interface ReactionCollectorOptions<E = never, R = never> extends SharedReactionCollectorOptions {
+    /** Run once per accepted addition, sequentially, before continuing collection.
+     * Failures and defects while active fail collection with CollectorError handler, without exposing the original cause.
+     * Stop, timeout, scope closure, recovery and shutdown interrupt active work and await its finalizers.
+     * Uninterruptible work can delay closure. Do not await this collector's completion inside its handler.
+     * Already-dispatched effects are not rolled back; callbacks are never retried
+     */
+    readonly onReaction?: (reaction: import("./reactions.js").MessageReaction) => Effect.Effect<unknown, E, R>
+}
 import type { CollectorOptions, CollectorResult, CollectorFailure, CollectorRegistrationError } from "./collectors.js"
 export { CollectorError } from "./collectors.js"
 export type { CollectorOptions, CollectorResult, CollectorFailure, CollectorRegistrationError } from "./collectors.js"
@@ -138,12 +169,201 @@ export interface EventHandlerOptions<E = never, R = never> extends HandlerOption
 /**
  * Lazy message operations preserving caller context and interruption. REST/local lookup work without a gateway. Collection requires Connected.
  * Closing/Closed reject new work. Remote calls share four active HTTP slots and 256 queued requests or 4 MiB of queued JSON bodies.
- * Each remote call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
- * Only confirmed rate-limit rejections retry within that deadline, with route-specific and client-global rate waits.
+ * Each remote call defaults to a 30,000 ms total deadline, including admission, retry and rate waits, with cleanup awaited afterward
+ *
+ * fetch, fetchHistory, fetchReactionUsers and fetchPins retry fetch transport failures and HTTP 500/502/503/504 at most twice.
+ * Retry delays are jittered 125–250 ms then 250–500 ms, or a valid longer Retry-After. Retries never reset the deadline.
+ * Reads retry the same target/query through the bounded queue, without snapshot isolation. Other rejections and malformed successes never retry.
+ * Confirmed 429 retries retain their existing route/global waits and do not consume the two transient-read retries.
+ * Mutations retry only confirmed rate-limit rejections, never uncertain writes.
  * Typed failures, defects and interruption retain native channels, including combined cleanup causes.
  * Interruption or client closure awaits owned cleanup but cannot undo a dispatched mutation
  */
 export interface Messages {
+    /**
+     * Pin one message identified by decimal id and channelId, without requiring gateway readiness.
+     * Lazy execution preserves caller context, interruption and native defects.
+     * Complete on HTTP 204, not event delivery. Fluxer enforces channel access and PIN_MESSAGES for guild pins.
+     * A new pin creates a system message and gateway notifications. Already-pinned targets are unchanged.
+     * Share bounded REST admission and the per-channel pins rate bucket with unpin/fetchPins.
+     * Default deadline is 30,000 ms. Only confirmed 429 rejection permits automatic retry within that deadline
+     *
+     * Expected failures use MessageOperationError operation pin, or ClientClosedError after shutdown.
+     * Local invalid input is notDispatched. Lost responses/cancellation cannot prove whether the server applied the pin
+     *
+     * Confirmed or uncertain mutations evict the cached target, without guessing pinned status or fetching it.
+     * No automatic unpin or rollback. No locally synthesized events
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     *
+     * export const pinsExample = (client: Client, message: MessageReference) => Effect.gen(function* () {
+     *     yield* client.messages.pin(message)
+     *     const page = yield* client.messages.fetchPins(message.channelId, { limit: 25 })
+     *     yield* client.messages.unpin(message)
+     *     return page
+     * })
+     * ```
+     * The caller owns error recovery and client lifetime. These calls are not an atomic transaction
+     */
+    pin(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Unpin one explicit message using pin's admission, deadline, retry, cancellation and cache-invalidation rules.
+     * Lazy execution preserves caller context, interruption and native defects.
+     * Complete on HTTP 204, including an already-unpinned message. Expected failures identify operation unpin.
+     * Fluxer enforces the same permissions as pin. Closing/Closed clients fail with ClientClosedError.
+     * Unpinning does not delete the message or the system message created by pinning, and does not reset the last-pin timestamp.
+     * No gateway readiness, automatic rollback, event synthesis or confirmation fetch
+     */
+    unpin(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Fetch one frozen pin page for a decimal channel ID, without gateway readiness, cache reads or cache population.
+     * Lazy execution preserves caller context, interruption and native defects
+     *
+     * Query defaults to limit 50 and the server's current time. Limit is 1 through 50 and before is an ISO timestamp
+     *
+     * Results use descending pin-time order with preserved pinnedAt values and an explicit nextBefore cursor.
+     * Timestamp ties may repeat messages across pages. Deduplicate IDs and stop on a non-advancing cursor.
+     * No automatic traversal, complete-list guarantee, pin acknowledgement or snapshot isolation.
+     * Share pin's admission, 30,000 ms default deadline and per-channel rate bucket, using Messages' bounded read-retry policy
+     *
+     * Invalid input and malformed responses use MessageOperationError operation fetchPins without partial pages.
+     * Visibility/history permissions can limit results. An empty page does not prove the channel has no pins.
+     * Closing/Closed uses ClientClosedError. Returned messages are observations, not live state
+     */
+    fetchPins(
+        channelId: string,
+        query?: MessagePinsQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<MessagePinsPage, MessageOperationFailure>
+    /**
+     * Remove one named user's reaction, leaving other users and emoji groups untouched.
+     * userId is a required decimal ID; naming the bot removes its own reaction.
+     * Uses addReaction's emoji inputs, REST admission, 30,000 ms default deadline, retry and interruption rules.
+     * No gateway readiness is required. Complete on HTTP 204, without waiting for or synthesizing events.
+     * Fluxer enforces visibility and history access; for another user, the bot must author the message or have MANAGE_MESSAGES in its guild
+     *
+     * Expected failures use MessageOperationError with operation removeUserReaction, or ClientClosedError.
+     * Lazy execution preserves caller context and native defects.
+     * Cleanup is awaited, but cannot undo a dispatched deletion. Only confirmed 429 rejections retry.
+     * Success means absent or removed, not proof the reaction existed. Unknown outcomes are not replayed.
+     * No cache mutation, automatic restoration or per-user state is retained; the bot cannot restore another user's reaction as them
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const reactionModerationExample = (client: Client, message: MessageReference, userId: string) =>
+     *     Effect.gen(function* () {
+     *         yield* client.messages.removeUserReaction(message, "👍", userId)
+     *         yield* client.messages.clearReaction(message, "👍")
+     *         yield* client.messages.clearReactions(message)
+     *     })
+     * ```
+     */
+    removeUserReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        userId: string,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Delete every user's reaction for one emoji, preserving other emoji groups.
+     * Uses removeUserReaction's execution, permission, deadline, failure and cleanup rules, with operation clearReaction.
+     * Complete on HTTP 204. Success does not prove reactions existed or that this call removed them.
+     * Fluxer emits a clear-emoji event, not individual removal events; the SDK does not synthesize or await it.
+     * Destructive: Other users' reactions cannot be restored by the bot as those users
+     */
+    clearReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Delete every user's reactions for every emoji on this message, without deleting the message.
+     * Uses clearReaction's execution, permission, deadline, failure and cleanup rules, with operation clearReactions.
+     * Takes no emoji selector. Complete on HTTP 204, whether reactions were present or absent.
+     * Fluxer emits one clear-all event, not per-emoji or per-user events; the SDK does not synthesize or await it.
+     * Destructive: Other users' reactions cannot be restored by the bot as those users
+     */
+    clearReactions(
+        message: MessageReference,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Fetch one frozen page of users who currently hold the specified reaction, without requiring gateway readiness.
+     * Accept the same literal Unicode or custom emoji input as addReaction.
+     * limit defaults to 25 (1–100); after is an exclusive user-ID cursor in ascending order, not reaction time.
+     * Empty reactions return an empty terminal page. No automatic pagination, user cache or message-cache changes.
+     * Pages are separate observations: Reactions may change between requests; no complete or atomic snapshot is promised
+     *
+     * Use the shared 30,000 ms deadline by default, overridden by options.timeoutMs.
+     * Share bounded REST admission, global limits and the channel bucket used by reaction mutations.
+     * Uses Messages' bounded read-retry policy within the original deadline, including separate confirmed-429 waits
+     *
+     * Invalid inputs, malformed pages, HTTP rejections, transport and deadlines use MessageOperationError with operation fetchReactionUsers.
+     * HTTP 404 means notFound; permission/history visibility is enforced by Fluxer. Closed clients use ClientClosedError.
+     * Lazy execution preserves caller context; interruption awaits owned request cleanup. Unexpected defects retain native causes
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const reactionUsersExample = (client: Client, message: MessageReference) =>
+     *     Effect.gen(function* () {
+     *         const page = yield* client.messages.fetchReactionUsers(message, "👍", { limit: 25 })
+     *         if (page.nextAfter !== null)
+     *             return yield* client.messages.fetchReactionUsers(message, "👍", { after: page.nextAfter })
+     *         return page
+     *     })
+     * ```
+     */
+    fetchReactionUsers(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        query?: ReactionUsersQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<ReactionUsersPage, MessageOperationFailure>
+    /**
+     * Add the bot's own reaction and complete after HTTP 204, without waiting for or synthesizing a gateway event.
+     * Accept literal Unicode or a custom { name, id }; Fluxer owns emoji availability and permission checks
+     *
+     * No gateway readiness is required. Use the shared 30,000 ms deadline by default; timeoutMs overrides it.
+     * Share bounded REST admission and global rate limits, with a channel reaction bucket separate from message operations.
+     * Only confirmed rate-limit rejections retry within the original deadline; uncertain outcomes are never retried
+     *
+     * Input, admission, rejection, transport and timeout failures use MessageOperationError; closed clients use ClientClosedError.
+     * Lazy execution preserves caller context. Interruption awaits owned cleanup but cannot undo a dispatched reaction.
+     * Unexpected defects retain native causes
+     *
+     * Existing own reactions are idempotent server-side. No local reaction state, counts or reactor lists are retained
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const reactionExample = (client: Client, message: MessageReference) =>
+     *     Effect.gen(function* () {
+     *         yield* client.messages.addReaction(message, "👍")
+     *         yield* client.messages.removeReaction(message, "👍")
+     *     })
+     * ```
+     */
+    addReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Remove only the bot's own reaction and complete after HTTP 204.
+     * Uses addReaction's input, admission, timeout, retry, failure and interruption rules.
+     * Success does not prove the reaction previously existed or that this call removed it.
+     * Other users' reactions are untouched. Neither this operation nor gateway reaction events alter the message cache
+     */
+    removeReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Lazily register future messageCreate collection in one decimal channel ID within the execution caller's scope.
      * Each execution returns a ready handle before subsequent sends. No history, cache reads, implicit connect or prompt correlation
@@ -182,6 +402,58 @@ export interface Messages {
         options?: CollectorOptions,
     ): Effect.Effect<Collector, CollectorRegistrationError, Scope.Scope>
     /**
+     * Lazily register future reaction additions for one message with decimal id and channelId in the caller's scope.
+     * Execute before the expected reaction. No REST request, existing-reactor lookup, implicit connect or cache reads
+     *
+     * Defaults: One accepted addition, 30,000 ms total lifetime and 4 MiB retained MessageReaction JSON.
+     * Copy target IDs/options when executed. Pending intake allows 256 payloads or 4 MiB full source JSON.
+     * Message selection precedes buffering; synchronous user/emoji filtering follows it
+     *
+     * Optional emoji uses addReaction's input shape and is copied when executed; matching precedes filter but follows queue admission.
+     * Unicode requires exact text and no custom ID; custom emoji match by ID, ignoring renames. Invalid selectors use ConfigurationError emoji
+     *
+     * Single additions and received batches share receive order; batch entries retain their order and count individually.
+     * A batch occupies one pending slot. Repeated user/emoji pairs count again. No batching flag is enabled.
+     * Removals, clears and message deletion neither undo observations nor stop collection. This is not a vote tally
+     *
+     * The deadline never resets and excludes observations processed at or after it, including slow filter returns
+     *
+     * Filter/overflow failures use CollectorError without partial results. Recovery fails with connectionLost, without restart.
+     * Require Connected or fail with CollectorError notConnected. Closing/Closed use ClientClosedError.
+     * Invalid target/options use ConfigurationError. Registration does not verify remote message existence or access
+     *
+     * Registration scope closure stops collection with partial results; client shutdown fails it with ClientClosedError.
+     * Waiter interruption does not stop collection. No AbortSignal option or detached runtime; defects retain native Cause
+     *
+     * Optional onReaction runs after acceptance and byte admission, sequentially, in the registration context.
+     * Limit completion waits for the final callback. Timeout/stop may retain an addition whose callback was interrupted.
+     * Pending budgets exclude the active payload, including its unprocessed batch entries. No callback retries or vote reconstruction.
+     * Handler failure ends this collector with CollectorError handler; defects during terminal cleanup remain in Cause
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     *
+     * export const reactionCollectorExample = (client: Client, message: MessageReference, userId: string) => Effect.scoped(
+     *     Effect.gen(function* () {
+     *         const collector = yield* client.messages.collectReactions(message, {
+     *             maxReactions: 3,
+     *             emoji: "✅",
+     *             filter: reaction => reaction.userId === userId,
+     *             onReaction: reaction => client.messages.edit(message, { content: `Accepted addition by ${reaction.userId}` }),
+     *         })
+     *         return yield* collector.waitForClose()
+     *     }),
+     * )
+     * ```
+     * The caller supplies a connected client and an existing message; timeout may return no reactions
+     */
+    collectReactions<E = never, R = never>(
+        message: MessageReference,
+        options?: ReactionCollectorOptions<E, R>,
+    ): Effect.Effect<ReactionCollector, CollectorRegistrationError, Scope.Scope | R>
+    /**
      * Lazily read a frozen local observation when executed, never making a request.
      * Disabled, absent, evicted, expired or wrong-channel entries yield undefined, not proof of server absence.
      * Hits update LRU recency without renewing age and do not guarantee current server state.
@@ -216,7 +488,17 @@ export interface Messages {
      * Returns after decoding the API response and checking its message/channel IDs against the requested target.
      * Missing targets fail with MessageOperationError reason notFound rather than returning an empty value.
      * Enabled caching retains eligible responses, but the returned result does not depend on cache admission.
-     * Interrupting the Effect releases only this request and awaits its cleanup
+     * Interrupting the Effect releases only this request and awaits its cleanup.
+     * Uses Messages' bounded read-retry policy; callers need no retry loop for its eligible transient failures
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const readExample = (client: Client, message: MessageReference) => Effect.gen(function* () {
+     *     const result = yield* client.messages.fetch(message, { timeoutMs: 2_000 })
+     *     return result.content
+     * })
+     * ```
      */
     fetch(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<Message, MessageOperationFailure>
     /**
@@ -230,7 +512,7 @@ export interface Messages {
      * Enabled caching admits eligible page members oldest first, so tight limits retain the newest members
      *
      * Invalid input, malformed pages and HTTP rejections are typed MessageOperationError failures with operation fetchHistory. HTTP 404 remains notFound.
-     * Shares REST admission and the 30,000 ms default total deadline. Only confirmed rate-limit rejections retry within that budget.
+     * Shares REST admission and the 30,000 ms default total deadline, using Messages' bounded read-retry policy.
      * Runs in caller context. Interruption releases only this call and awaits cleanup. Closing/Closed fail with ClientClosedError.
      * Defects and interruption retain native causes rather than becoming typed message-operation failures
      */
@@ -282,6 +564,18 @@ export interface Collector {
      * Application-held handles/results retain successful snapshots until released
      */
     waitForClose(): Effect.Effect<CollectorResult, CollectorFailure>
+}
+
+/** A scoped native reaction collection, separate from each result observer */
+export interface ReactionCollector {
+    /** Lazily request idempotent stop with accepted partial observations. Use waitForClose to await callback cleanup */
+    stop(): Effect.Effect<void>
+    /**
+     * Lazily observe the frozen result after queue, timer, filter, listener and callback cleanup; late/multiple observers share the outcome.
+     * Interruption affects only this waiter; defects retain Cause. Timeout/stop may return empty or partial observations.
+     * Failures carry no partial observations. Application-held handles/results retain successful snapshots until released
+     */
+    waitForClose(): Effect.Effect<ReactionCollectorResult, CollectorFailure>
 }
 
 export type { ConnectionState } from "./client.js"
@@ -388,6 +682,7 @@ export interface Client extends ClientState {
      * Permanently stop startup and recovery and await owned-resource cleanup.
      * This lazy Effect is uninterruptible once shutdown starts, so callers cannot abandon cleanup.
      * Release cached references and expiry timers, interrupt the cache reporter and await its finalizers.
+     * Interrupt reaction progress callbacks and await their finalizers; uninterruptible work can delay shutdown.
      * Uninterruptible reporter work can delay closure.
      * Inside an owned message handler or cache reporter, the client scope performs shutdown and interrupts that invocation.
      * Such an invocation does not resume after shutdown. This avoids waiting on its own cleanup.
@@ -438,6 +733,37 @@ export function createClient<E = never, R = never>(
         yield* Effect.addFinalizer((exit) => owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, exit))))
         return Object.freeze({
             messages: Object.freeze({
+                removeUserReaction: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    userId: string,
+                    options?: MessageOperationOptions,
+                ) => owner.reaction("removeUserReaction", target, emoji, options, userId),
+                clearReaction: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    options?: MessageOperationOptions,
+                ) => owner.reaction("clearReaction", target, emoji, options),
+                clearReactions: (target: MessageReference, options?: MessageOperationOptions) =>
+                    owner.reaction("clearReactions", target, undefined, options),
+                pin: (target: MessageReference, options?: MessageOperationOptions) => owner.pin("pin", target, options),
+                unpin: (target: MessageReference, options?: MessageOperationOptions) =>
+                    owner.pin("unpin", target, options),
+                fetchPins: (channel: string, query?: MessagePinsQuery, options?: MessageOperationOptions) =>
+                    owner.fetchPins(channel, query, options),
+                fetchReactionUsers: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    query?: ReactionUsersQuery,
+                    options?: MessageOperationOptions,
+                ) => owner.fetchReactionUsers(target, emoji, query, options),
+                addReaction: (target: MessageReference, emoji: ReactionEmojiInput, options?: MessageOperationOptions) =>
+                    owner.reaction("addReaction", target, emoji, options),
+                removeReaction: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    options?: MessageOperationOptions,
+                ) => owner.reaction("removeReaction", target, emoji, options),
                 collect: (channelId: string, options?: CollectorOptions) =>
                     Effect.uninterruptible(
                         Effect.gen(function* () {
@@ -458,6 +784,31 @@ export function createClient<E = never, R = never>(
                         }),
                     ),
                 get: (target: MessageReference) => owner.get(target),
+                collectReactions: <E = never, R = never>(
+                    target: MessageReference,
+                    options?: ReactionCollectorOptions<E, R>,
+                ) =>
+                    Effect.uninterruptible(
+                        Effect.gen(function* () {
+                            const callerScope = yield* Effect.scope
+                            const source = yield* collectReactions(owner, target, options, false, options?.onReaction)
+                            yield* Effect.forkIn(
+                                Deferred.await(source.closed).pipe(
+                                    Effect.asVoid,
+                                    Effect.interruptible,
+                                    Effect.onExit(() =>
+                                        Effect.sync(() => source.stop()).pipe(
+                                            Effect.andThen(Effect.exit(Deferred.await(source.closed))),
+                                        ),
+                                    ),
+                                    Effect.catchCause(() => Effect.void),
+                                ),
+                                callerScope,
+                                { uninterruptible: true },
+                            )
+                            return nativeReactionCollector(source)
+                        }),
+                    ),
                 send: (channelId: string, input: MessageInput, options?: SendOptions) =>
                     owner.send(channelId, input, options),
                 reply: (target: MessageReference, input: ReplyInput, options?: SendOptions) =>
@@ -509,6 +860,14 @@ function nativeSubscription(source: Pick<EventSource, "stop" | "closed">): Subsc
 }
 
 function nativeCollector(source: MessageCollector): Collector {
+    return Object.freeze({
+        stop: () => Effect.sync(() => source.stop()),
+        waitForClose: () => Deferred.await(source.closed),
+    })
+}
+
+// Keep completed handles outside the registration closure so they do not retain options or the caller's scope
+function nativeReactionCollector(source: ReactionCollection): ReactionCollector {
     return Object.freeze({
         stop: () => Effect.sync(() => source.stop()),
         waitForClose: () => Deferred.await(source.closed),

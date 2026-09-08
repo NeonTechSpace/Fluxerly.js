@@ -78,6 +78,8 @@ try {
             "logging",
             "embeds",
             "attachments",
+            "reactions",
+            "pins",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -129,9 +131,54 @@ try {
             )
             .filter((example) => /(?:function|const) askName/.test(example))
         assert.equal(collectorExamples.length, 1)
+        const pinsExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) pinsExample/.test(example))
+        assert.equal(pinsExamples.length, 1)
+        writeFileSync(join(consumer, "pins-example.ts"), pinsExamples[0])
+        const readExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) readExample/.test(example))
+        assert.equal(readExamples.length, 1)
+        writeFileSync(join(consumer, "read-example.ts"), readExamples[0])
         // Compile the actual authored example against the packed exports, not a separately maintained copy
         writeFileSync(join(consumer, "collector-example.ts"), collectorExamples[0])
+        const reactionExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) reaction(?:Users|Moderation|Collector)?Example/.test(example))
+        assert.equal(reactionExamples.length, 4)
+        writeFileSync(
+            join(consumer, "reaction-collector-example.ts"),
+            reactionExamples.find((example) => /reactionCollectorExample/.test(example)),
+        )
+        writeFileSync(
+            join(consumer, "reaction-example.ts"),
+            reactionExamples.find((example) => /reactionExample/.test(example)),
+        )
+        writeFileSync(
+            join(consumer, "reaction-users-example.ts"),
+            reactionExamples.find((example) => /reactionUsersExample/.test(example)),
+        )
         const loggingSource = readFileSync(join(sdk, "src", kind === "default" ? "client.ts" : "effect.ts"), "utf8")
+        writeFileSync(
+            join(consumer, "reaction-moderation-example.ts"),
+            reactionExamples.find((example) => /reactionModerationExample/.test(example)),
+        )
         const loggingExamples = [...loggingSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]
@@ -176,10 +223,15 @@ try {
                 },
                 include: [
                     "consumer.ts",
+                    "pins-example.ts",
                     "collector-example.ts",
                     "logging-example.ts",
                     "embed-example.ts",
                     "attachment-example.ts",
+                    "reaction-example.ts",
+                    "reaction-users-example.ts",
+                    "reaction-moderation-example.ts",
+                    "reaction-collector-example.ts",
                 ],
             }),
         )

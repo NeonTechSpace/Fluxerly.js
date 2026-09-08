@@ -14,6 +14,18 @@ export type {
 } from "./embeds.js"
 export type { MessageBody } from "./messages.js"
 export type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
+import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "./reactions.js"
+export type {
+    ReactionEmojiInput,
+    ReactionUsersQuery,
+    ReactionUsersPage,
+    ReactionUser,
+    ReactionEmoji,
+    ReactionTarget,
+    MessageReaction,
+    MessageReactionBatch,
+    MessageReactionEmojiRemoval,
+} from "./reactions.js"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
 export type { LoggingOptions, DefaultLoggingOptions, DefaultLogger } from "./logging.js"
 export type { CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions } from "./cache.js"
@@ -28,9 +40,18 @@ import {
     type Operation,
 } from "./errors.js"
 import { makeClient } from "#sdk/internal/client"
+import type { MessagePinsQuery, MessagePinsPage } from "./pins.js"
+export type { MessagePinsQuery, MessagePinsPage, MessagePin, ChannelPinsUpdate } from "./pins.js"
 import { collect, type MessageCollector } from "#sdk/internal/collector"
+import { collectReactions } from "#sdk/internal/reaction-collector"
+import type { DefaultReactionCollectorOptions, ReactionCollectorResult } from "./collectors.js"
+export type {
+    ReactionCollectorOptions,
+    DefaultReactionCollectorOptions,
+    ReactionCollectorResult,
+} from "./collectors.js"
 import {
-    type CollectorError,
+    CollectorError,
     type CollectorFailure,
     type CollectorRegistrationError,
     type CollectorResult,
@@ -121,13 +142,206 @@ export interface EventHandlerOptions extends HandlerOptions {
 /**
  * Client-owned message operations. REST and local lookup work without a gateway connection. Collection requires Connected.
  * Remote calls share four active HTTP slots and at most 256 queued requests or 4 MiB of queued JSON bodies.
- * Each remote call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
- * Only confirmed rate-limit rejections retry within that deadline, with route-specific and client-global rate waits.
+ * Each remote call defaults to a 30,000 ms total deadline, including admission, retry and rate waits, with cleanup awaited afterward
+ *
+ * fetch, fetchHistory, fetchReactionUsers and fetchPins retry fetch transport failures and HTTP 500/502/503/504 at most twice.
+ * Retry delays are jittered 125–250 ms then 250–500 ms, or a valid longer Retry-After. Retries never reset the deadline.
+ * Reads retry the same target/query through the bounded queue, without snapshot isolation. Other rejections and malformed successes never retry.
+ * Confirmed 429 retries retain their existing route/global waits and do not consume the two transient-read retries.
+ * Mutations retry only confirmed rate-limit rejections, never uncertain writes.
  * Expected failures use Err. SDK/cleanup defects reject remote calls with SdkDefect and throw from synchronous get.
  * Cancellation fails this operation with CancelledError. Client closure fails pending/new operations with ClientClosedError.
  * Neither failure proves that a dispatched mutation was undone
  */
 export interface Messages {
+    /**
+     * Pin one message identified by decimal id and channelId, without requiring gateway readiness.
+     * Starts immediately. AbortSignal cancellation returns CancelledError and unexpected defects reject with SdkDefect.
+     * Complete on HTTP 204, not event delivery. Fluxer enforces channel access and PIN_MESSAGES for guild pins.
+     * A new pin creates a system message and gateway notifications. Already-pinned targets are unchanged.
+     * Share bounded REST admission and the per-channel pins rate bucket with unpin/fetchPins.
+     * Default deadline is 30,000 ms. Only confirmed 429 rejection permits automatic retry within that deadline
+     *
+     * Expected failures use MessageOperationError operation pin, or ClientClosedError after shutdown.
+     * Local invalid input is notDispatched. Lost responses/cancellation cannot prove whether the server applied the pin
+     *
+     * Confirmed or uncertain mutations evict the cached target, without guessing pinned status or fetching it.
+     * No automatic unpin or rollback. No locally synthesized events
+     *
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     *
+     * export async function pinsExample(client: Client, message: MessageReference) {
+     *     const pinned = await client.messages.pin(message)
+     *     if (pinned.isErr()) throw pinned.error
+     *     const page = await client.messages.fetchPins(message.channelId, { limit: 25 })
+     *     if (page.isErr()) throw page.error
+     *     const unpinned = await client.messages.unpin(message)
+     *     if (unpinned.isErr()) throw unpinned.error
+     *     return page.value
+     * }
+     * ```
+     * The caller owns error recovery and client lifetime. These calls are not an atomic transaction
+     */
+    pin(
+        message: MessageReference,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    /**
+     * Unpin one explicit message using pin's admission, deadline, retry, cancellation and cache-invalidation rules.
+     * Starts immediately. AbortSignal cancellation returns CancelledError and unexpected defects reject with SdkDefect.
+     * Complete on HTTP 204, including an already-unpinned message. Expected failures identify operation unpin.
+     * Fluxer enforces the same permissions as pin. Closing/Closed clients fail with ClientClosedError.
+     * Unpinning does not delete the message or the system message created by pinning, and does not reset the last-pin timestamp.
+     * No gateway readiness, automatic rollback, event synthesis or confirmation fetch
+     */
+    unpin(
+        message: MessageReference,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    /**
+     * Fetch one frozen pin page for a decimal channel ID, without gateway readiness, cache reads or cache population.
+     * Starts immediately. AbortSignal cancellation returns CancelledError and unexpected defects reject with SdkDefect
+     *
+     * Query defaults to limit 50 and the server's current time. Limit is 1 through 50 and before is an ISO timestamp
+     *
+     * Results use descending pin-time order with preserved pinnedAt values and an explicit nextBefore cursor.
+     * Timestamp ties may repeat messages across pages. Deduplicate IDs and stop on a non-advancing cursor.
+     * No automatic traversal, complete-list guarantee, pin acknowledgement or snapshot isolation.
+     * Share pin's admission, 30,000 ms default deadline and per-channel rate bucket, using Messages' bounded read-retry policy
+     *
+     * Invalid input and malformed responses use MessageOperationError operation fetchPins without partial pages.
+     * Visibility/history permissions can limit results. An empty page does not prove the channel has no pins.
+     * Closing/Closed uses ClientClosedError. Returned messages are observations, not live state
+     */
+    fetchPins(
+        channelId: string,
+        query?: MessagePinsQuery,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<MessagePinsPage, MessageOperationFailure | CancelledError>
+    /**
+     * Remove one named user's reaction, leaving other users and emoji groups untouched.
+     * userId is a required decimal ID; naming the bot removes its own reaction.
+     * Uses addReaction's emoji inputs, REST admission, 30,000 ms default deadline, retry and cancellation rules.
+     * No gateway readiness is required. Complete on HTTP 204, without waiting for or synthesizing events.
+     * Fluxer enforces visibility and history access; for another user, the bot must author the message or have MANAGE_MESSAGES in its guild
+     *
+     * Expected failures use MessageOperationError with operation removeUserReaction, or ClientClosedError.
+     * Calls start immediately; AbortSignal cancellation returns CancelledError and defects reject with SdkDefect.
+     * Cleanup is awaited, but cannot undo a dispatched deletion. Only confirmed 429 rejections retry.
+     * Success means absent or removed, not proof the reaction existed. Unknown outcomes are not replayed.
+     * No cache mutation, automatic restoration or per-user state is retained; the bot cannot restore another user's reaction as them
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     * export async function reactionModerationExample(client: Client, message: MessageReference, userId: string) {
+     *     const removed = await client.messages.removeUserReaction(message, "👍", userId)
+     *     if (removed.isErr()) return removed
+     *     const cleared = await client.messages.clearReaction(message, "👍")
+     *     if (cleared.isErr()) return cleared
+     *     return client.messages.clearReactions(message)
+     * }
+     * ```
+     */
+    removeUserReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        userId: string,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    /**
+     * Delete every user's reaction for one emoji, preserving other emoji groups.
+     * Uses removeUserReaction's execution, permission, deadline, failure and cleanup rules, with operation clearReaction.
+     * Complete on HTTP 204. Success does not prove reactions existed or that this call removed them.
+     * Fluxer emits a clear-emoji event, not individual removal events; the SDK does not synthesize or await it.
+     * Destructive: Other users' reactions cannot be restored by the bot as those users
+     */
+    clearReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    /**
+     * Delete every user's reactions for every emoji on this message, without deleting the message.
+     * Uses clearReaction's execution, permission, deadline, failure and cleanup rules, with operation clearReactions.
+     * Takes no emoji selector. Complete on HTTP 204, whether reactions were present or absent.
+     * Fluxer emits one clear-all event, not per-emoji or per-user events; the SDK does not synthesize or await it.
+     * Destructive: Other users' reactions cannot be restored by the bot as those users
+     */
+    clearReactions(
+        message: MessageReference,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    /**
+     * Fetch one frozen page of users who currently hold the specified reaction, without requiring gateway readiness.
+     * Accept the same literal Unicode or custom emoji input as addReaction.
+     * limit defaults to 25 (1–100); after is an exclusive user-ID cursor in ascending order, not reaction time.
+     * Empty reactions return an empty terminal page. No automatic pagination, user cache or message-cache changes.
+     * Pages are separate observations: Reactions may change between requests; no complete or atomic snapshot is promised
+     *
+     * Use the shared 30,000 ms deadline by default, overridden by options.timeoutMs.
+     * Share bounded REST admission, global limits and the channel bucket used by reaction mutations.
+     * Uses Messages' bounded read-retry policy within the original deadline, including separate confirmed-429 waits
+     *
+     * Invalid inputs, malformed pages, HTTP rejections, transport and deadlines use MessageOperationError with operation fetchReactionUsers.
+     * HTTP 404 means notFound; permission/history visibility is enforced by Fluxer. Closed clients use ClientClosedError.
+     * Calls start immediately; AbortSignal cancellation awaits owned request cleanup and returns CancelledError. Unexpected defects reject with SdkDefect
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     * export async function reactionUsersExample(client: Client, message: MessageReference) {
+     *     const result = await client.messages.fetchReactionUsers(message, "👍", { limit: 25 })
+     *     if (result.isErr() || result.value.nextAfter === null) return result
+     *     return client.messages.fetchReactionUsers(message, "👍", { after: result.value.nextAfter })
+     * }
+     * ```
+     */
+    fetchReactionUsers(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        query?: ReactionUsersQuery,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<ReactionUsersPage, MessageOperationFailure | CancelledError>
+    /**
+     * Add the bot's own reaction and complete after HTTP 204, without waiting for or synthesizing a gateway event.
+     * Accept literal Unicode or a custom { name, id }; Fluxer owns emoji availability and permission checks
+     *
+     * No gateway readiness is required. Use the shared 30,000 ms deadline by default; timeoutMs overrides it.
+     * Share bounded REST admission and global rate limits, with a channel reaction bucket separate from message operations.
+     * Only confirmed rate-limit rejections retry within the original deadline; uncertain outcomes are never retried
+     *
+     * Input, admission, rejection, transport and timeout failures use MessageOperationError; closed clients use ClientClosedError.
+     * Calls start immediately. Cancellation awaits owned cleanup but cannot undo a dispatched reaction.
+     * Unexpected defects reject with SdkDefect
+     *
+     * Existing own reactions are idempotent server-side. No local reaction state, counts or reactor lists are retained
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     * export async function reactionExample(client: Client, message: MessageReference) {
+     *     const added = await client.messages.addReaction(message, "👍")
+     *     if (added.isErr()) return added
+     *     return client.messages.removeReaction(message, "👍")
+     * }
+     * ```
+     */
+    addReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    /**
+     * Remove only the bot's own reaction and complete after HTTP 204.
+     * Uses addReaction's input, admission, timeout, retry, failure and cancellation rules.
+     * Success does not prove the reaction previously existed or that this call removed it.
+     * Other users' reactions are untouched. Neither this operation nor gateway reaction events alter the message cache
+     */
+    removeReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
     /**
      * Start a bounded collection of future messageCreate observations in one decimal channel ID.
      * Returns a ready handle synchronously. Register before sending a prompt. No history, cache reads or implicit connection
@@ -170,6 +384,63 @@ export interface Messages {
         channelId: string,
         options?: DefaultCollectorOptions,
     ): Result<Collector, CollectorRegistrationError | CancelledError>
+    /**
+     * Synchronously register future reaction additions on one message with decimal id and channelId.
+     * Register before the expected reaction. No REST request, existing-reactor lookup, implicit connect or cache reads
+     *
+     * Defaults: One accepted addition, 30,000 ms total lifetime and 4 MiB retained MessageReaction JSON.
+     * Copy target IDs and options at registration. Pending intake allows 256 payloads or 4 MiB full source JSON.
+     * Message selection precedes buffering; synchronous user/emoji filtering follows it
+     *
+     * Optional emoji uses addReaction's input shape and matches before filter, after queue admission.
+     * Unicode requires exact text and no custom ID; custom emoji match by ID, ignoring renames. Invalid selectors use ConfigurationError emoji
+     *
+     * Single additions and received batches share receive order; batch entries retain their order and count individually.
+     * A batch occupies one pending slot. Repeated user/emoji pairs count again. No batching flag is enabled.
+     * Removals, clears and message deletion neither undo observations nor stop collection. This is not a vote tally
+     *
+     * The total deadline never resets and excludes observations processed at or after it, including slow filter returns
+     *
+     * Filter/overflow failures use CollectorError without partial results. Recovery fails with connectionLost, without restart.
+     * Require Connected or return CollectorError notConnected. Closing/Closed use ClientClosedError.
+     * Invalid target/options use ConfigurationError. Signal abort returns CancelledError; pre-abort starts no collection.
+     * Unexpected registration defects throw SdkDefect. Registration does not verify remote message existence or access.
+     * Optional onReaction runs after acceptance and byte admission, sequentially, before the next addition is processed.
+     * The final accepted callback must finish before limit completion. Timeout/stop can retain an addition whose callback was cancelled.
+     * Pending budgets exclude the active payload, including its unprocessed batch entries. No callback retries or vote reconstruction.
+     * Callback failure ends this collector with CollectorError handler. Terminal completion waits for returned callback work
+     *
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     *
+     * export async function reactionCollectorExample(client: Client, message: MessageReference, userId: string) {
+     *     let count = 0
+     *     const opened = client.messages.collectReactions(message, {
+     *         maxReactions: 3,
+     *         emoji: "✅",
+     *         filter: reaction => reaction.userId === userId,
+     *         onReaction: async (_reaction, signal) => {
+     *             const edited = await client.messages.edit(message, { content: `Accepted additions: ${++count}` }, { signal })
+     *             if (edited.isErr()) throw edited.error
+     *         },
+     *     })
+     *     if (opened.isErr()) throw opened.error
+     *     try {
+     *         const result = await opened.value.waitForClose()
+     *         if (result.isErr()) throw result.error
+     *         return result.value
+     *     } finally {
+     *         opened.value.stop()
+     *     }
+     * }
+     * ```
+     * The caller supplies a connected client and an existing message; timeout may return no reactions
+     */
+    collectReactions(
+        message: MessageReference,
+        options?: DefaultReactionCollectorOptions,
+    ): Result<ReactionCollector, CollectorRegistrationError | CancelledError>
     /**
      * Read this client's local retained snapshot synchronously, never making a request.
      * Disabled caching, absent/evicted/expired entries and a mismatched channel return Ok(undefined), not server absence.
@@ -214,7 +485,17 @@ export interface Messages {
      * Returns after the API response is decoded and its message/channel IDs match the requested target.
      * Missing targets fail with MessageOperationError reason notFound rather than returning an empty value.
      * Enabled caching retains eligible responses, but the returned result does not depend on cache admission.
-     * Cancellation releases only this request and awaits its cleanup
+     * Cancellation releases only this request and awaits its cleanup.
+     * Uses Messages' bounded read-retry policy; callers need no retry loop for its eligible transient failures
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     * export async function readExample(client: Client, message: MessageReference) {
+     *     const result = await client.messages.fetch(message, { timeoutMs: 2_000 })
+     *     if (result.isErr()) throw result.error
+     *     return result.value.content
+     * }
+     * ```
      */
     fetch(
         message: MessageReference,
@@ -231,7 +512,7 @@ export interface Messages {
      * Enabled caching admits eligible page members oldest first, so tight limits retain the newest members
      *
      * Invalid input, malformed pages and HTTP rejections use MessageOperationError with operation fetchHistory. HTTP 404 remains notFound.
-     * Shares REST admission and the 30,000 ms default total deadline. Only confirmed rate-limit rejections retry within that budget.
+     * Shares REST admission and the 30,000 ms default total deadline, using Messages' bounded read-retry policy.
      * Cancellation affects only this call and awaits cleanup. Closing/Closed fail with ClientClosedError and defects reject with SdkDefect
      */
     fetchHistory(
@@ -284,6 +565,19 @@ export interface Collector {
      * Unexpected SDK defects reject with SdkDefect. Keeping the handle/result retains successful message snapshots in memory
      */
     waitForClose(options?: OperationOptions): ResultAsync<CollectorResult, CollectorFailure | CancelledError>
+}
+
+/** One default reaction collection, independent of each result observer */
+export interface ReactionCollector {
+    /** Stop synchronously with accepted partial observations. Repeated calls preserve the first outcome */
+    stop(): void
+    /**
+     * Observe the frozen result after queue, timer, filter, listener and callback cleanup; late/multiple observers share the outcome.
+     * Cancelling this wait stops only this observer. Timeout/stop may succeed with empty or partial observations.
+     * Collection abort, filter/handler/overflow/gap failure and client shutdown return Err without partial observations.
+     * Unexpected defects reject with SdkDefect. Keeping the handle/result retains successful snapshots in memory
+     */
+    waitForClose(options?: OperationOptions): ResultAsync<ReactionCollectorResult, CollectorFailure | CancelledError>
 }
 
 export type { ClientOptions, ConnectionState, OperationOptions } from "./client.js"
@@ -393,6 +687,7 @@ export interface Client extends ClientState {
     /**
      * Permanently stop startup and recovery, release credentials and await owned-resource cleanup.
      * Release cached message references and expiry timers, without waiting for application-owned reporter promises.
+     * Abort active reaction progress callbacks and await their returned promises; non-cooperative callbacks can delay shutdown.
      * Repeated and concurrent calls wait for the same shutdown outcome.
      * A pending connection call reports ClientClosedError rather than caller cancellation
      *
@@ -446,6 +741,33 @@ function defaultCollector(source: MessageCollector): Collector {
         waitForClose: (options?: OperationOptions) =>
             executeOperation(Deferred.await(source.closed), "collector.waitForClose", options),
     })
+}
+
+function reactionHandler(handler: NonNullable<DefaultReactionCollectorOptions["onReaction"]>) {
+    return (reaction: import("./reactions.js").MessageReaction) =>
+        Effect.suspend(() => {
+            const controller = new AbortController()
+            let settled: Promise<void> = Promise.resolve()
+            return Effect.callback<void, CollectorError>((resume) => {
+                settled = Promise.resolve()
+                    .then(() => handler(reaction, controller.signal))
+                    .then(
+                        () => {
+                            resume(Effect.void)
+                        },
+                        () => {
+                            resume(Effect.fail(new CollectorError("handler")))
+                        },
+                    )
+            }).pipe(
+                Effect.ensuring(
+                    Effect.promise(async () => {
+                        controller.abort()
+                        await settled
+                    }),
+                ),
+            )
+        })
 }
 
 function fromExit<
@@ -516,12 +838,82 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     return ok(
         Object.freeze({
             messages: Object.freeze({
+                removeUserReaction: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    userId: string,
+                    options?: DefaultMessageOperationOptions,
+                ) =>
+                    execute(
+                        owner.reaction("removeUserReaction", target, emoji, options, userId),
+                        "removeUserReaction",
+                        options,
+                    ),
+                clearReaction: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    options?: DefaultMessageOperationOptions,
+                ) => execute(owner.reaction("clearReaction", target, emoji, options), "clearReaction", options),
+                clearReactions: (target: MessageReference, options?: DefaultMessageOperationOptions) =>
+                    execute(owner.reaction("clearReactions", target, undefined, options), "clearReactions", options),
+                pin: (target: MessageReference, options?: DefaultMessageOperationOptions) =>
+                    execute(owner.pin("pin", target, options), "pin", options),
+                unpin: (target: MessageReference, options?: DefaultMessageOperationOptions) =>
+                    execute(owner.pin("unpin", target, options), "unpin", options),
+                fetchPins: (channel: string, query?: MessagePinsQuery, options?: DefaultMessageOperationOptions) =>
+                    execute(owner.fetchPins(channel, query, options), "fetchPins", options),
+                fetchReactionUsers: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    query?: ReactionUsersQuery,
+                    options?: DefaultMessageOperationOptions,
+                ) => execute(owner.fetchReactionUsers(target, emoji, query, options), "fetchReactionUsers", options),
+                addReaction: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    options?: DefaultMessageOperationOptions,
+                ) => execute(owner.reaction("addReaction", target, emoji, options), "addReaction", options),
+                removeReaction: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    options?: DefaultMessageOperationOptions,
+                ) => execute(owner.reaction("removeReaction", target, emoji, options), "removeReaction", options),
                 collect: (
                     channelId: string,
                     options?: DefaultCollectorOptions,
                 ): Result<Collector, CollectorRegistrationError | CancelledError> => {
                     const opened = fromExit(Effect.runSyncExit(collect(owner, channelId, options, true)), "collect")
                     return opened.map(defaultCollector)
+                },
+                collectReactions: (
+                    target: MessageReference,
+                    options?: DefaultReactionCollectorOptions,
+                ): Result<ReactionCollector, CollectorRegistrationError | CancelledError> => {
+                    const opened = fromExit(
+                        Effect.runSyncExit(
+                            collectReactions(
+                                owner,
+                                target,
+                                options,
+                                true,
+                                typeof options?.onReaction === "function"
+                                    ? reactionHandler(options.onReaction)
+                                    : undefined,
+                            ),
+                        ),
+                        "collectReactions",
+                    )
+                    return opened.map((source) =>
+                        Object.freeze({
+                            stop: () => source.stop(),
+                            waitForClose: (options?: OperationOptions) =>
+                                executeOperation(
+                                    Deferred.await(source.closed),
+                                    "reactionCollector.waitForClose",
+                                    options,
+                                ),
+                        }),
+                    )
                 },
                 get: (target: MessageReference): Result<Message | undefined, MessageOperationFailure> => {
                     const exit = Effect.runSyncExit(owner.get(target))
