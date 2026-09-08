@@ -1,4 +1,19 @@
 import { Cause, Deferred, Effect, Exit, Scope } from "effect"
+export type {
+    EmbedInput,
+    EmbedAuthorInput,
+    EmbedFooterInput,
+    EmbedMediaInput,
+    EmbedFieldInput,
+    Embed,
+    EmbedChild,
+    EmbedAuthor,
+    EmbedFooter,
+    EmbedMedia,
+    EmbedField,
+} from "./embeds.js"
+export type { MessageBody } from "./messages.js"
+export type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
 export type { LoggingOptions, DefaultLoggingOptions, DefaultLogger } from "./logging.js"
 export type { CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions } from "./cache.js"
@@ -104,7 +119,7 @@ export interface EventHandlerOptions extends HandlerOptions {
 }
 
 /**
- * Client-owned text operations. REST and local lookup work without a gateway connection. Collection requires Connected.
+ * Client-owned message operations. REST and local lookup work without a gateway connection. Collection requires Connected.
  * Remote calls share four active HTTP slots and at most 256 queued requests or 4 MiB of queued JSON bodies.
  * Each remote call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
  * Only confirmed rate-limit rejections retry within that deadline, with route-specific and client-global rate waits.
@@ -164,7 +179,11 @@ export interface Messages {
      */
     get(message: MessageReference): Result<Message | undefined, MessageOperationFailure>
     /**
-     * Send text and return the decoded created message after the HTTP response, not gateway delivery or recipient acknowledgement
+     * Send text, embeds and/or files and return the decoded message after HTTP, not gateway delivery or recipient acknowledgement
+     *
+     * File bytes are snapshotted on invocation, up to 50 MiB per file and the separate uploads.maxBytes client budget.
+     * Full upload admission fails with busy before copying. No path access or downloads; servers may impose lower limits.
+     * Cleanup releases owned bytes; failed uploads may leave temporary server data, with no physical-erasure guarantee
      *
      * Mentions are disabled by default. Total budget defaults to 30,000 ms including admission and rate waits.
      * Enabled caching retains eligible created snapshots without changing send completion or delivery
@@ -182,7 +201,8 @@ export interface Messages {
     ): ResultAsync<Message, SendError | CancelledError>
     /**
      * Reference an existing message through send. Missing targets fail rather than falling back to an unreferenced send.
-     * The returned reply is eligible for the same cache intake as send
+     * The returned reply is eligible for the same cache intake as send.
+     * File inputs use send's snapshot, size, budget and cleanup rules
      */
     reply(
         message: MessageReference,
@@ -220,10 +240,16 @@ export interface Messages {
         options?: DefaultMessageOperationOptions,
     ): ResultAsync<readonly Message[], MessageOperationFailure | CancelledError>
     /**
-     * Replace message text and return the frozen updated snapshot after the API response, without waiting for a gateway event.
-     * Required content is sent without trimming. Empty text requests clearing, subject to Fluxer validation.
-     * Mentions default off. The SDK omits attachments, embeds and unrelated fields rather than editing them.
-     * Fluxer preserves custom embeds but may regenerate text-derived link previews
+     * Replace text/embeds/files and return the frozen updated snapshot after the API response, without waiting for a gateway event.
+     * Supplied values replace those fields; omitted values are not sent. No hidden fetch or cache merge
+     *
+     * List retained attachment IDs alongside new uploads; unknown IDs may be ignored by Fluxer
+     *
+     * Clear files with attachments: [] and nonempty text or embeds. Uploads use send's snapshot, budget and cleanup rules
+     *
+     * To remove embeds, send nonempty content alongside embeds: []; an empty edit alone is rejected by Fluxer.
+     * Empty content requests clearing text, subject to Fluxer validation. Mentions default off.
+     * Omitted rich embeds are preserved, but Fluxer may regenerate text-derived link previews
      *
      * Enabled caching retains eligible responses. An uncertain dispatched edit evicts the old local copy.
      * A lost response or timeout after dispatch may leave the edit applied. Uncertain edits never retry automatically.

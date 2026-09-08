@@ -41,8 +41,11 @@
         "test:live:recovery:cancel": "pnpm run build && node tests/live/sdk.mjs default --cancel-recovery && node tests/live/sdk.mjs effect --cancel-recovery",
         "test:live:cache": "pnpm run build && node tests/live/messages.mjs default --cache && node tests/live/messages.mjs effect --cache",
         "test:live:collectors": "pnpm run build && node tests/live/messages.mjs default --collectors && node tests/live/messages.mjs effect --collectors",
+        "test:live:embeds": "pnpm run build && node tests/live/messages.mjs default --embeds && node tests/live/messages.mjs effect --embeds",
+        "test:live:attachments": "pnpm run build && node tests/live/messages.mjs default --attachments && node tests/live/messages.mjs effect --attachments",
         "test:cache:memory": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/cache-memory.mjs",
         "test:cache:workload": "pnpm run build && node tests/cache-workload.mjs default && node tests/cache-workload.mjs effect",
+        "test:rest:queue": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/rest-queue-workload.mjs default && node --expose-gc --max-old-space-size=512 tests/rest-queue-workload.mjs effect",
         "check": "pnpm run format:check && pnpm run build && pnpm run test:types && pnpm run test && pnpm run test:package"
     },
     "dependencies": {

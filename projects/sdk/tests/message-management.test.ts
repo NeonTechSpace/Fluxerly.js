@@ -163,7 +163,7 @@ test("invalid references, edit fields, mention permissions and deadlines fail be
         await client.messages.delete({ id: "10", channelId: "20?x" }),
         await client.messages.edit(target, {} as never),
         await client.messages.edit(target, { content: null } as never),
-        await client.messages.edit(target, { content: "x", attachments: [] } as never),
+        await client.messages.edit(target, { content: "x", attachments: null } as never),
         await client.messages.edit(target, { content: "x", allowedMentions: { users: ["bad"] } }),
         await client.messages.fetch(target, { timeoutMs: 0 }),
         await client.messages.delete(target, { timeoutMs: Infinity }),

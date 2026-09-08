@@ -3,6 +3,16 @@ import type { DefaultLoggingOptions } from "./logging.js"
 
 /** Options accepted when creating a disconnected client */
 export interface ClientOptions {
+    /** Client-local upload admission, copied and validated at creation */
+    readonly uploads?: {
+        /** Maximum SDK-owned file bytes across queued and active operations, as a positive safe integer.
+         * Defaults to 104,857,600 (100 MiB), separate from the 4 MiB queued JSON budget.
+         * A full budget rejects with busy before copying, rather than waiting while retaining unbounded inputs.
+         * Reservations remain held across rate-limit retries and release after transport cleanup.
+         * Caller buffers, metadata and runtime overhead are excluded; this is not a process-memory ceiling
+         */
+        readonly maxBytes?: number
+    }
     /**
      * Client-local logging, copied and validated at creation without invoking a logger.
      * Development output is off by default, while operational handler/cache/observer errors remain enabled.

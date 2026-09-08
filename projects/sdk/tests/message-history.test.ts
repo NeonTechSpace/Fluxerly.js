@@ -75,7 +75,8 @@ test("history fetches one frozen remote page with defaults, without a gateway or
     expect(Object.isFrozen(page)).toBe(true)
     for (const message of page) {
         expect(Object.isFrozen(message) && Object.isFrozen(message.author)).toBe(true)
-        expect(message).not.toHaveProperty("attachments")
+        expect(message.attachments).toEqual([])
+        expect(Object.isFrozen(message.attachments)).toBe(true)
     }
     expect(server.requests.map((r) => r.url.pathname + r.url.search)).toEqual(["/v1/channels/20/messages?limit=50"])
     expect(client.state).toBe("Disconnected")

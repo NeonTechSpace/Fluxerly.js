@@ -29,7 +29,9 @@ export class MessageError extends Error {
     constructor(
         /** Local admission/validation, HTTP rejection, uncertain transport, response decoding, deadline or rate limit */
         readonly reason: "input" | "busy" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
-        /** notSent means local non-dispatch or an API rejection, not rollback proof. The unknown value means creation may have occurred */
+        /** notSent means no message creation attempt or an API rejection, not rollback proof. File uploads may already have occurred.
+         * The unknown value means message creation may have occurred
+         */
         readonly delivery: "notSent" | "unknown",
         /** HTTP status when available. Null for local failures or missing responses */
         readonly status: number | null = null,
@@ -55,7 +57,9 @@ export class MessageOperationError extends Error {
         readonly operation: "get" | "fetch" | "fetchHistory" | "edit" | "delete",
         /** Local validation/admission, HTTP rejection, transport, response decoding, deadline or rate limit. notFound means HTTP 404 for the target or its containing resource, not proof of a prior deletion */
         readonly reason: "input" | "busy" | "notFound" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
-        /** notDispatched means no HTTP attempt. rejected means an API rejection, not proof of rollback. Server errors and missing/invalid success responses remain unknown */
+        /** notDispatched means no message HTTP attempt; preparatory file uploads may already have occurred.
+         * rejected means an API rejection, not proof of rollback. Message server errors and missing/invalid success responses remain unknown
+         */
         readonly outcome: "notDispatched" | "rejected" | "unknown",
         /** HTTP status when available to this failure, otherwise null */
         readonly status: number | null = null,

@@ -1,4 +1,19 @@
 import { Deferred, Effect, Scope, type Stream } from "effect"
+export type {
+    EmbedInput,
+    EmbedAuthorInput,
+    EmbedFooterInput,
+    EmbedMediaInput,
+    EmbedFieldInput,
+    Embed,
+    EmbedChild,
+    EmbedAuthor,
+    EmbedFooter,
+    EmbedMedia,
+    EmbedField,
+} from "./embeds.js"
+export type { MessageBody } from "./messages.js"
+export type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
 import type { Logger } from "effect"
 import type { LoggingOptions, DefaultLogger } from "./logging.js"
 import { adaptLogger } from "#sdk/internal/logging"
@@ -175,7 +190,10 @@ export interface Messages {
      */
     get(message: MessageReference): Effect.Effect<Message | undefined, MessageOperationFailure>
     /**
-     * Send text without requiring a connected gateway. Closing/Closed reject new work
+     * Send text, embeds and/or files without requiring a connected gateway. Closing/Closed reject new work.
+     * Each execution snapshots file bytes before waiting, up to 50 MiB per file and the separate uploads.maxBytes budget.
+     * Full upload admission fails with busy before copying. No path access or downloads; servers may impose lower limits.
+     * Cleanup releases owned bytes; failed uploads may leave temporary server data, with no physical-erasure guarantee
      *
      * Returns the created snapshot after an API response, not gateway delivery or recipient acknowledgement.
      * Notifications default off. Deadline defaults to 30,000 ms across admission, rate waits and HTTP.
@@ -189,7 +207,8 @@ export interface Messages {
     send(channelId: string, input: MessageInput, options?: SendOptions): Effect.Effect<Message, SendError>
     /**
      * Lazy reply helper over send. Missing references fail, without unreferenced fallback or default author notification.
-     * The returned reply is eligible for the same cache intake as send
+     * The returned reply is eligible for the same cache intake as send.
+     * File inputs use send's per-execution snapshot, size, budget and cleanup rules
      */
     reply(message: MessageReference, input: ReplyInput, options?: SendOptions): Effect.Effect<Message, SendError>
     /**
@@ -221,10 +240,17 @@ export interface Messages {
         options?: MessageOperationOptions,
     ): Effect.Effect<readonly Message[], MessageOperationFailure>
     /**
-     * Replace text and return the frozen updated snapshot after the API response, without waiting for a gateway event.
-     * Required content is sent without trimming. Empty text requests clearing, subject to Fluxer validation.
-     * Mentions default off. The SDK omits attachments, embeds and unrelated fields rather than editing them.
-     * Fluxer preserves custom embeds but may regenerate text-derived link previews
+     * Replace text/embeds/files and return the frozen updated snapshot after the API response, without waiting for a gateway event.
+     * Supplied values replace those fields; omitted values are not sent. No hidden fetch or cache merge
+     *
+     * List retained attachment IDs alongside new uploads; unknown IDs may be ignored by Fluxer
+     *
+     * Clear files with attachments: [] and nonempty text or embeds. Uploads use send's per-execution snapshot and budget.
+     * Interruption awaits upload cleanup; failed edits may leave temporary server data, without physical-erasure guarantees
+     *
+     * To remove embeds, send nonempty content alongside embeds: []; an empty edit alone is rejected by Fluxer.
+     * Empty content requests clearing text, subject to Fluxer validation. Mentions default off.
+     * Omitted rich embeds are preserved, but Fluxer may regenerate text-derived link previews
      *
      * Enabled caching retains eligible responses. An uncertain dispatched edit evicts the old local copy.
      * Missing targets are typed notFound failures. A lost response or timeout after dispatch may leave the edit applied.

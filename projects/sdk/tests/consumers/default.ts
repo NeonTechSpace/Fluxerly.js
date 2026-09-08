@@ -15,6 +15,42 @@ import {
     type CollectorOptions,
     type CollectorResult,
 } from "@neontechspace/fluxerly"
+const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+export async function useAttachments(client: Client, channelId: string) {
+    const file = { data: new Uint8Array([1, 2]), filename: "fixture.bin" }
+    const sent = await client.messages.send(channelId, { attachments: [file] })
+    if (sent.isErr()) return sent
+    const attachment = sent.value.attachments[0]!
+    await client.messages.reply(sent.value, { attachments: [file] })
+    await client.messages.edit(sent.value, { attachments: [{ id: attachment.id }, file] })
+    await client.messages.edit(sent.value, { content: "Cleared", attachments: [] })
+    // @ts-expect-error References are edit-only
+    client.messages.send(channelId, { attachments: [{ id: attachment.id }] })
+    // @ts-expect-error Paths are not file bytes
+    client.messages.send(channelId, { attachments: [{ data: "path", filename: "x" }] })
+    // @ts-expect-error Received metadata is immutable
+    attachment.filename = "renamed"
+    return attachment.url
+}
+
+export async function useEmbeds(client: Client, channelId: string) {
+    const sent = await client.messages.send(channelId, { embeds: [exampleEmbed] })
+    if (sent.isErr()) return sent
+    const title: string | undefined = sent.value.embeds[0]?.title
+    void title
+    await client.messages.reply(sent.value, { embeds: [exampleEmbed] })
+    await client.messages.edit(sent.value, { embeds: [{ title: "Replacement" }] })
+    await client.messages.edit(sent.value, { content: "Plain text", embeds: [] })
+    // @ts-expect-error A message body must specify content or embeds
+    client.messages.send(channelId, {})
+    // @ts-expect-error A reply cannot supply a separate reference
+    client.messages.reply(sent.value, { embeds: [exampleEmbed], messageReference: sent.value })
+    // @ts-expect-error Received arrays are readonly
+    sent.value.embeds.push({ type: "rich" })
+    // @ts-expect-error Received-only metadata is not a send field
+    client.messages.send(channelId, { embeds: [{ type: "rich" }] })
+}
 
 export const cacheSettings: MessageCacheSettings = {
     maxAgeMs: (message) => (message.author.isBot ? 0 : null),
@@ -131,16 +167,19 @@ export function rejectedMessageShapes(client: Client): void {
     client.messages.fetchHistory("20", { around: 10 })
     // @ts-expect-error IDs must remain strings
     client.messages.send(123, { content: "hello" })
-    // @ts-expect-error The text-only slice does not accept attachments
-    client.messages.send("20", { content: "hello", attachments: [] })
+    // @ts-expect-error File lists must be arrays
+    client.messages.send("20", { content: "hello", attachments: "file" })
     // @ts-expect-error Only implemented event names are public
     client.on("messageReactionAdd", () => {})
     // @ts-expect-error Fetch takes a reference, not two positional IDs
     client.messages.fetch("20", "10")
     // @ts-expect-error Edit requires replacement content
     client.messages.edit({ channelId: "20", id: "10" }, {})
-    // @ts-expect-error Edit does not accept attachments
-    client.messages.edit({ channelId: "20", id: "10" }, { content: "text", attachments: [] })
+    client.messages.edit(
+        { channelId: "20", id: "10" },
+        // @ts-expect-error Uploads and retained references are mutually exclusive
+        { attachments: [{ id: "40", data: new Uint8Array(1), filename: "x" }] },
+    )
 }
 
 export async function collectReplies(client: Client) {

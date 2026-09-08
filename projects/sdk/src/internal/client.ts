@@ -59,7 +59,7 @@ export class ClientOwner {
         this.cache = configuration.cache
             ? new MessageCache(configuration.cache, (report) => reports!.offer(report), now)
             : undefined
-        this.rest = new RestOwner(this.cache)
+        this.rest = new RestOwner(this.cache, configuration.uploadMaxBytes)
     }
     get state(): ConnectionState {
         return this.#state

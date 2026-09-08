@@ -35,6 +35,8 @@ const projection = (id: string, content = id) => ({
     id,
     channelId: "20",
     content,
+    embeds: [],
+    attachments: [],
     author: { id: "30", username: "fixture", isBot: true },
 })
 const value = <A, E>(result: { isErr(): boolean; value?: A; error?: E }): A => {

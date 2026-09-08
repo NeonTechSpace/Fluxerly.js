@@ -50,6 +50,7 @@ function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationE
 }
 
 export interface Configuration {
+    readonly uploadMaxBytes: number
     readonly logging: ClientLogging
     readonly token: Redacted.Redacted<string>
     readonly startupTimeoutMs: number
@@ -100,10 +101,22 @@ export function validateConfiguration(
             )
         }
         const cache = cacheConfiguration("cache" in options ? options.cache : undefined)
+        const uploads = "uploads" in options ? options.uploads : undefined
+        if (uploads !== undefined && (!record(uploads) || Object.keys(uploads).some((key) => key !== "maxBytes")))
+            return Effect.fail(new ConfigurationError("uploads", "Upload settings must contain only maxBytes"))
+        const uploadMaxBytes = uploads?.maxBytes ?? 104_857_600
+        if (
+            typeof uploadMaxBytes !== "number" ||
+            !Number.isSafeInteger(uploadMaxBytes) ||
+            uploadMaxBytes <= 0 ||
+            uploads?.maxBytes === null
+        )
+            return Effect.fail(new ConfigurationError("maxBytes", "Upload budget must be a positive safe integer"))
         if (cache instanceof ConfigurationError) return Effect.fail(cache)
         const logging = loggingConfiguration("logging" in options ? options.logging : undefined, native)
         if (logging instanceof ConfigurationError) return Effect.fail(logging)
         return Effect.succeed({
+            uploadMaxBytes,
             logging,
             cache,
             token: Redacted.make(token),

@@ -76,6 +76,8 @@ try {
             "message-errors",
             "collectors",
             "logging",
+            "embeds",
+            "attachments",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -140,6 +142,24 @@ try {
             .filter((example) => /function loggingExample/.test(example))
         assert.equal(loggingExamples.length, 1)
         writeFileSync(join(consumer, "logging-example.ts"), loggingExamples[0])
+        const embedSource = readFileSync(join(sdk, "src/embeds.ts"), "utf8")
+        const embedExamples = [...embedSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)].map((match) =>
+            match[1]
+                .split(/\r?\n/)
+                .map((line) => line.replace(/^\s*\* ?/, ""))
+                .join("\n"),
+        )
+        assert.equal(embedExamples.length, 1)
+        writeFileSync(join(consumer, "embed-example.ts"), embedExamples[0])
+        const attachmentSource = readFileSync(join(sdk, "src/attachments.ts"), "utf8")
+        const attachmentExamples = [...attachmentSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)].map((match) =>
+            match[1]
+                .split(/\r?\n/)
+                .map((line) => line.replace(/^\s*\* ?/, ""))
+                .join("\n"),
+        )
+        assert.equal(attachmentExamples.length, 1)
+        writeFileSync(join(consumer, "attachment-example.ts"), attachmentExamples[0])
         writeFileSync(
             join(consumer, "tsconfig.json"),
             JSON.stringify({
@@ -154,7 +174,13 @@ try {
                     outDir: "out",
                     lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                 },
-                include: ["consumer.ts", "collector-example.ts", "logging-example.ts"],
+                include: [
+                    "consumer.ts",
+                    "collector-example.ts",
+                    "logging-example.ts",
+                    "embed-example.ts",
+                    "attachment-example.ts",
+                ],
             }),
         )
         run(process.execPath, [compiler, "-p", "tsconfig.json"], consumer)

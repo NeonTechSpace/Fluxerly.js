@@ -1,5 +1,7 @@
 import type { Message, MessageInput, MessageReference, MessageDeletion, MessageBulkDeletion } from "#sdk/messages"
 import { MessageError } from "#sdk/message-errors"
+import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
+import { decodeAttachments, encodeAttachments, type EncodedBody } from "./attachments.js"
 
 export const record = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value)
@@ -17,10 +19,15 @@ export function decodeMessage(value: unknown): Message | undefined {
         (author.bot !== undefined && typeof author.bot !== "boolean")
     )
         return undefined
+    const embeds = decodeEmbeds(value.embeds)
+    const attachments = decodeAttachments(value.attachments)
+    if (embeds === undefined || attachments === undefined) return undefined
     return Object.freeze({
         id: value.id,
         channelId: value.channel_id,
         content: value.content,
+        embeds,
+        attachments,
         author: Object.freeze({ id: author.id, username: author.username, isBot: author.bot === true }),
     })
 }
@@ -65,23 +72,42 @@ export function decodeBulkDeletion(value: unknown): MessageBulkDeletion | undefi
     return Object.freeze({ channelId: value.channel_id, ids: Object.freeze([...value.ids]) })
 }
 
-/** Validates only this SDK's text slice; unknown wire response fields are not copied into public snapshots */
-export function encodeMessage(channelId: unknown, input: unknown, nonce: string): string | MessageError {
+/** Unknown input fields fail before dispatch; unknown wire response fields are not copied into snapshots */
+export function encodeMessage(channelId: unknown, input: unknown, nonce: string): EncodedBody | MessageError {
     const invalid = () => new MessageError("input", "notSent")
-    if (!identifier(channelId) || !record(input) || typeof input.content !== "string" || input.content.length === 0)
+    if (!identifier(channelId) || !record(input)) return invalid()
+    if (
+        Object.keys(input).some(
+            (key) => !["content", "embeds", "attachments", "allowedMentions", "messageReference"].includes(key),
+        )
+    )
         return invalid()
-    if (Object.keys(input).some((key) => !["content", "allowedMentions", "messageReference"].includes(key)))
+    const body = encodeBody(input)
+    const attachments = encodeAttachments(input.attachments, false)
+    if (
+        !body ||
+        !attachments ||
+        (!(typeof input.content === "string" && input.content.length > 0) &&
+            !body.embeds?.length &&
+            !attachments.files.length)
+    )
         return invalid()
     const mentions = encodeAllowedMentions(input.allowedMentions)
     if (!mentions) return invalid()
     const ref = input.messageReference
     if (ref !== undefined && (!reference(ref) || ref.channelId !== channelId)) return invalid()
-    return JSON.stringify({
-        content: input.content,
-        nonce,
-        allowed_mentions: mentions,
-        ...(ref === undefined ? {} : { message_reference: { message_id: ref.id, channel_id: ref.channelId, type: 0 } }),
-    })
+    return {
+        files: attachments.files,
+        json: JSON.stringify({
+            ...body,
+            ...(attachments.metadata === undefined ? {} : { attachments: attachments.metadata }),
+            nonce,
+            allowed_mentions: mentions,
+            ...(ref === undefined
+                ? {}
+                : { message_reference: { message_id: ref.id, channel_id: ref.channelId, type: 0 } }),
+        }),
+    }
 }
 
 function encodeAllowedMentions(value: unknown) {
@@ -106,15 +132,40 @@ function encodeAllowedMentions(value: unknown) {
     }
 }
 
-export function encodeEdit(input: unknown): string | undefined {
-    if (!record(input) || typeof input.content !== "string") return undefined
-    if (Object.keys(input).some((key) => !["content", "allowedMentions"].includes(key))) return undefined
+export function encodeEdit(input: unknown): EncodedBody | undefined {
+    if (!record(input)) return undefined
+    if (Object.keys(input).some((key) => !["content", "embeds", "attachments", "allowedMentions"].includes(key)))
+        return undefined
+    const body = encodeBody(input)
+    if (!body) return undefined
     const mentions = encodeAllowedMentions(input.allowedMentions)
-    return mentions === undefined ? undefined : JSON.stringify({ content: input.content, allowed_mentions: mentions })
+    const attachments = encodeAttachments(input.attachments, true)
+    if (!mentions || !attachments || (attachments.metadata?.length === 0 && !input.content && !body.embeds?.length))
+        return undefined
+    return {
+        files: attachments.files,
+        json: JSON.stringify({
+            ...body,
+            allowed_mentions: mentions,
+            ...(attachments.metadata === undefined ? {} : { attachments: attachments.metadata }),
+        }),
+    }
 }
 
 export function replyInput(target: unknown, input: unknown): MessageInput | MessageError {
-    if (!reference(target) || !record(input) || typeof input.content !== "string" || "messageReference" in input)
+    if (!reference(target) || !record(input) || "messageReference" in input || !encodeBody(input))
         return new MessageError("input", "notSent")
-    return { ...input, content: input.content, messageReference: target }
+    // Body presence/types were checked above; send performs complete validation of mentions and unknown keys
+    return { ...input, messageReference: target } as MessageInput
+}
+
+function encodeBody(input: Record<string, unknown>) {
+    if (input.content === undefined && input.embeds === undefined && input.attachments === undefined) return undefined
+    if (input.content !== undefined && typeof input.content !== "string") return undefined
+    const embeds = input.embeds === undefined ? undefined : encodeEmbeds(input.embeds)
+    if (input.embeds !== undefined && embeds === undefined) return undefined
+    return {
+        ...(input.content === undefined ? {} : { content: input.content }),
+        ...(embeds === undefined ? {} : { embeds }),
+    }
 }

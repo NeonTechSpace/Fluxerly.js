@@ -17,6 +17,25 @@ import {
     type CollectorOptions,
     type CollectorResult,
 } from "@neontechspace/fluxerly/effect"
+const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+export const useEmbeds = (client: Client, channelId: string) =>
+    Effect.gen(function* () {
+        const sent = yield* client.messages.send(channelId, { embeds: [exampleEmbed] })
+        const title: string | undefined = sent.embeds[0]?.title
+        void title
+        yield* client.messages.reply(sent, { embeds: [exampleEmbed] })
+        yield* client.messages.edit(sent, { embeds: [{ title: "Replacement" }] })
+        yield* client.messages.edit(sent, { content: "Plain text", embeds: [] })
+        // @ts-expect-error A message body must specify content or embeds
+        client.messages.send(channelId, {})
+        // @ts-expect-error A reply cannot supply a separate reference
+        client.messages.reply(sent, { embeds: [exampleEmbed], messageReference: sent })
+        // @ts-expect-error Received arrays are readonly
+        sent.embeds.push({ type: "rich" })
+        // @ts-expect-error Received-only metadata is not a send field
+        client.messages.send(channelId, { embeds: [{ type: "rich" }] })
+    })
 
 export interface CacheReporter {
     readonly report: (report: CachePolicyErrorReport) => void
@@ -211,5 +230,20 @@ export function watchMessageChanges(client: Client) {
                 batch.ids.push("10")
             }),
         )
+    })
+}
+export function useAttachments(client: Client, channelId: string) {
+    return Effect.gen(function* () {
+        const file = { data: new Uint8Array([1, 2]), filename: "fixture.bin" }
+        const sent = yield* client.messages.send(channelId, { attachments: [file] })
+        const attachment = sent.attachments[0]!
+        yield* client.messages.reply(sent, { attachments: [file] })
+        yield* client.messages.edit(sent, { attachments: [{ id: attachment.id }, file] })
+        yield* client.messages.edit(sent, { content: "Cleared", attachments: [] })
+        // @ts-expect-error References are edit-only
+        client.messages.send(channelId, { attachments: [{ id: attachment.id }] })
+        // @ts-expect-error Received arrays are immutable
+        sent.attachments.push(attachment)
+        return attachment.url
     })
 }

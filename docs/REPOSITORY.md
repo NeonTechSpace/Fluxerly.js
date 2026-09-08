@@ -22,6 +22,9 @@ The documentation website remains a scaffold
 | [events.ts](/projects/sdk/src/internal/events.ts) | Subscription scheduling and bounded event intake |
 | [rest.ts](/projects/sdk/src/internal/rest.ts) | REST admission, deadlines and rate state |
 | [message.ts](/projects/sdk/src/internal/message.ts) | Wire-message validation and projection |
+| [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
+| [attachments.ts](/projects/sdk/src/internal/attachments.ts) | File validation and metadata projection |
+| [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation, upload destination boundary and bounded file streams; REST owns scheduling and message completion |
 | [cache.ts](/projects/sdk/src/internal/cache.ts) | Cache retention and conflicting observations |
 | [cache-reports.ts](/projects/sdk/src/internal/cache-reports.ts) | Cache reporting lifetime |
 | [collector.ts](/projects/sdk/src/internal/collector.ts) | Collector budgets, deadlines and cleanup |
@@ -97,6 +100,10 @@ Run `pnpm --filter @neontechspace/fluxerly test:cache:memory` for isolated GC-en
 Run `pnpm --filter @neontechspace/fluxerly test:cache:workload` for local cache workloads.
 Both build first and use controlled responses, not Fluxer credentials or production workloads
 
+Run `pnpm --filter @neontechspace/fluxerly test:rest:queue` to compare JSON queue-byte budgets through both built APIs.
+The benchmark uses isolated processes and controlled HTTP responses, changing only the loaded queue constant without editing source or build output.
+It reports rejection, timeout, latency and process-memory observations; it does not measure hosted service limits or select a default automatically
+
 ### Opt-in live sandbox check
 
 Run live checks only against the authorized test bot and server, from [projects/](/projects/).
@@ -119,6 +126,8 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
 | `test:live:cache` | Cache intake, expiry and recovery invalidation | Temporary channel/messages and test-socket termination |
 | `test:live:collectors` | Collector completion, gap failure and use after recovery | Temporary channel/messages and test-socket termination |
+| `test:live:embeds` | Embed send/reply/edit, readback, events, cache and collectors | Temporary channel/messages and test-message edits |
+| `test:live:attachments` | Uploads, binary readback, file edits, events/cache/collectors and recovery | Temporary channel/messages, 50 MiB file upload/download, file replacements and test-socket termination |
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools.
 After a crash, verify that the recorded process has stopped before removing its stale lock.

@@ -22,6 +22,7 @@ export class ConfigurationError extends Error {
             | "maxPendingBytes"
             | "onError"
             | "cache"
+            | "uploads"
             | "messages"
             | "maxEntries"
             | "maxBytes"

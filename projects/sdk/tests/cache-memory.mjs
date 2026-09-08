@@ -157,6 +157,8 @@ if (!child) {
                     id: cached.ids[0],
                     channelId,
                     content: `${"0".repeat(8)}${current.glyph.repeat((current.codeUnits - 8) / current.glyph.length)}`,
+                    embeds: [],
+                    attachments: [],
                     author: { id: "3000000000000000000", username: "SyntheticUser00000000000000000000", isBot: false },
                 }),
                 "utf8",

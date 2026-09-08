@@ -2,7 +2,7 @@ import type { Message, MessageDeletion, MessageBulkDeletion } from "./messages.j
 
 /** Implemented gateway events and their frozen payloads. No subscription history, cache reconstruction or REST-generated notifications */
 export interface EventMap {
-    /** Newly created message using the SDK's text-message projection */
+    /** Newly created message with text, deeply frozen embeds and attachment metadata, never file bytes. Malformed known message data fails the connection as a protocol error */
     readonly messageCreate: Message
     /** Current message projection, not an old/new pair or partial patch. Non-text changes may repeat the same projected values */
     readonly messageUpdate: Message

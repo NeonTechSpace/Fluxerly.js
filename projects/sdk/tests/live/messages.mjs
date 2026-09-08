@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
+import { randomUUID, createHash } from "node:crypto"
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
 import { parseEnv } from "node:util"
 import WebSocket from "ws"
 import { Logger } from "effect"
 import { fromEffectLogger } from "@neontechspace/fluxerly/effect"
+import { observeUploads, safeFailure } from "./upload-diagnostics.mjs"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
@@ -24,7 +25,10 @@ const changes = process.argv[3] === "--events"
 const history = process.argv[3] === "--history"
 const cache = process.argv[3] === "--cache"
 const collectors = process.argv[3] === "--collectors"
-const forceRecovery = recover || cache || collectors
+const embeds = process.argv[3] === "--embeds"
+const smallAttachments = process.argv[3] === "--attachments-small"
+const attachments = process.argv[3] === "--attachments" || smallAttachments
+const forceRecovery = recover || cache || collectors || attachments
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const journalPath = new URL("../../.env.test.messages.local", import.meta.url)
 const report = (check, passed) => console.log(JSON.stringify({ mode, check, passed }))
@@ -35,6 +39,7 @@ let guildId
 let verified = false
 let journal
 let gatewayProbe
+const reportFailure = (error) => console.log(JSON.stringify({ mode, check: stage, ...safeFailure(error) }))
 
 function observeGateway() {
     const descriptor = Object.getOwnPropertyDescriptor(WebSocket.prototype, "emit")
@@ -152,6 +157,194 @@ async function waitForCache(get, target, matches) {
         assert.ok(performance.now() < deadline)
         await sleep(20)
     }
+}
+
+async function verifyAttachments(ops, channelId) {
+    const filename = `fixture-${randomUUID()}.bin`
+    const data = new Uint8Array((smallAttachments ? 1 : 50) * 1024 * 1024)
+    for (let index = 0; index < data.length; index++) data[index] = index % 251
+    const digest = createHash("sha256").update(data).digest("hex")
+    stage = "attachments_collector_registration"
+    const wait = await ops.collect({
+        filter: (message) => message.attachments.some((file) => file.filename === filename),
+        timeoutMs: 90_000,
+    })
+    report(stage, true)
+    stage = smallAttachments ? "attachments_1_mib_send" : "attachments_50_mib_send"
+    const sent = await ops.send(
+        {
+            attachments: [
+                {
+                    data,
+                    filename,
+                    contentType: "application/octet-stream",
+                    title: "SDK fixture",
+                    description: "Nonprivate binary verification fixture",
+                    spoiler: true,
+                },
+            ],
+        },
+        { timeoutMs: 60_000 },
+    )
+    const file = sent.attachments[0]
+    stage = "attachments_created_metadata"
+    assert.equal(sent.attachments.length, 1)
+    assert.equal(file.filename, filename)
+    assert.equal(file.size, data.length)
+    assert.equal(file.title, "SDK fixture")
+    assert.equal(file.description, "Nonprivate binary verification fixture")
+    assert.ok((file.flags & 8) !== 0)
+    assert.ok(Object.isFrozen(sent.attachments) && Object.isFrozen(file))
+    report(stage, true)
+    stage = "attachments_download_byte_readback"
+    const url = new URL(file.url)
+    assert.equal(url.protocol, "https:")
+    assert.ok(
+        url.hostname === "fluxerusercontent.com" ||
+            url.hostname.endsWith(".fluxerusercontent.com") ||
+            url.hostname === "fluxer.app" ||
+            url.hostname.endsWith(".fluxer.app"),
+    )
+    const download = await rawFetch(url, { redirect: "error", signal: AbortSignal.timeout(60_000) })
+    assert.ok(download.ok)
+    const hash = createHash("sha256")
+    let size = 0
+    for await (const chunk of download.body) {
+        size += chunk.length
+        assert.ok(size <= data.length)
+        hash.update(chunk)
+    }
+    assert.equal(size, data.length)
+    assert.equal(hash.digest("hex"), digest)
+    report(stage, true)
+    stage = "attachments_events_cache_and_history"
+    const collected = await wait()
+    assert.equal(collected.messages[0]?.attachments[0]?.id, file.id)
+    await waitForCache(ops.get, sent, (message) => message?.attachments[0]?.id === file.id)
+    assert.equal((await ops.fetch(sent)).attachments[0]?.id, file.id)
+    assert.ok((await ops.history()).some((message) => message.id === sent.id && message.attachments[0]?.id === file.id))
+    const raw = (await api("GET", `/channels/${channelId}/messages/${sent.id}`)).data
+    assert.equal(raw.attachments[0].size, data.length)
+    report(stage, true)
+    stage = "attachments_reply_retain_add_remove"
+    const small = { data: new Uint8Array([0, 1, 255, 13, 10]), filename: "small.bin" }
+    const replied = await ops.reply(sent, { attachments: [small] })
+    assert.equal(replied.attachments[0]?.size, 5)
+    const replyWire = (await api("GET", `/channels/${channelId}/messages/${replied.id}`)).data
+    assert.equal(replyWire.message_reference.message_id, sent.id)
+    assert.equal((await ops.edit(sent, { content: "Keep existing file" })).attachments[0]?.id, file.id)
+    const added = await ops.edit(sent, { attachments: [{ id: file.id }, small] })
+    assert.equal(added.attachments.length, 2)
+    assert.ok(added.attachments.some((item) => item.id === file.id))
+    const kept = added.attachments.find((item) => item.id !== file.id)
+    assert.equal((await ops.edit(sent, { attachments: [{ id: kept.id }] })).attachments[0]?.id, kept.id)
+    // Raw mutation verifies gateway projection/cache update independently of SDK REST intake
+    await api("PATCH", `/channels/${channelId}/messages/${sent.id}`, { content: "Gateway cleared", attachments: [] })
+    await waitForCache(
+        ops.get,
+        sent,
+        (message) => message?.content === "Gateway cleared" && message.attachments.length === 0,
+    )
+    assert.equal(collected.messages[0].attachments[0].id, file.id)
+    const cleared = await ops.edit(replied, { content: "SDK cleared", attachments: [] })
+    assert.deepEqual(cleared.attachments, [])
+    assert.deepEqual((await api("GET", `/channels/${channelId}/messages/${replied.id}`)).data.attachments ?? [], [])
+    const rejected = await ops.editFailure(replied, { attachments: [] })
+    assert.equal(rejected.reason, "input")
+    report(stage, true)
+}
+
+async function verifyEmbeds(ops, channelId) {
+    stage = "embeds_send_collect_and_cache"
+    const imageUrl = "https://fluxer.app/static/img/web-apple-touch-icon.d11b564b6ae672d1.png"
+    const title = `embed-${randomUUID()}`
+    const wait = await ops.collect({
+        filter: (message) => message.embeds.some((embed) => embed.title === title),
+        timeoutMs: 10_000,
+    })
+    const waiting = wait()
+    // Observe failure immediately while the send is in flight
+    waiting.catch(() => {})
+    const sent = await ops.send({
+        embeds: [
+            {
+                title,
+                description: "SDK-owned sandbox embed",
+                url: "https://fluxer.app",
+                color: 0x3d66b8,
+                timestamp: "2026-09-08T14:30:00.000Z",
+                author: { name: "Sandbox bot", url: "https://fluxer.app", iconUrl: imageUrl },
+                footer: { text: "Owned fixture", iconUrl: imageUrl },
+                image: { url: imageUrl, description: "Fluxer public icon" },
+                thumbnail: { url: imageUrl, description: "Fluxer public thumbnail" },
+                fields: [
+                    { name: "Status", value: "Passed", inline: true },
+                    { name: "Details", value: "Verified" },
+                ],
+            },
+        ],
+    })
+    stage = "embeds_created_snapshot"
+    assert.equal(sent.content, "")
+    assert.equal(sent.embeds[0]?.title, title)
+    assert.ok(Object.isFrozen(sent.embeds) && Object.isFrozen(sent.embeds[0]?.fields?.[0]))
+    const collected = await waiting
+    stage = "embeds_collected_snapshot"
+    assert.equal(collected.messages[0]?.id, sent.id)
+    assert.equal(collected.messages[0]?.embeds[0]?.title, title)
+    await waitForCache(ops.get, sent, (message) => message?.embeds[0]?.title === title)
+    const actual = (await api("GET", `/channels/${channelId}/messages/${sent.id}`)).data
+    stage = "embeds_independent_readback"
+    assert.equal(actual?.embeds?.[0]?.title, title)
+    assert.equal(actual?.embeds?.[0]?.fields?.[1]?.inline, false)
+    stage = "embeds_destination_url"
+    assert.equal(new URL(actual?.embeds?.[0]?.url).href, "https://fluxer.app/")
+    stage = "embeds_image_url"
+    assert.equal(actual?.embeds?.[0]?.image?.url, imageUrl)
+    stage = "embeds_thumbnail_url"
+    assert.equal(actual?.embeds?.[0]?.thumbnail?.url, imageUrl)
+    stage = "embeds_icon_projection"
+    assert.equal(sent.embeds[0]?.author?.iconUrl, imageUrl)
+    assert.equal(sent.embeds[0]?.footer?.iconUrl, imageUrl)
+    stage = "embeds_media_description_projection"
+    assert.equal(sent.embeds[0]?.image?.description, "Fluxer public icon")
+    assert.equal(sent.embeds[0]?.thumbnail?.description, "Fluxer public thumbnail")
+    assert.equal((await ops.fetch(sent)).embeds[0]?.title, title)
+    assert.ok((await ops.history()).some((message) => message.id === sent.id && message.embeds[0]?.title === title))
+    report(stage, true)
+
+    stage = "embeds_reply_and_edit"
+    const replied = await ops.reply(sent, { embeds: [{ title: "Embed reply" }] })
+    const replyWire = (await api("GET", `/channels/${channelId}/messages/${replied.id}`)).data
+    assert.equal(replyWire?.message_reference?.message_id, sent.id)
+    assert.equal(replyWire?.embeds?.[0]?.title, "Embed reply")
+    assert.equal(replyWire?.mention_everyone, false)
+    const preserved = await ops.edit(sent, { content: "Text alongside embed" })
+    assert.equal(preserved.embeds[0]?.title, title)
+    const replacement = await ops.edit(sent, { embeds: [{ title: "Replacement" }] })
+    assert.equal(replacement.content, "Text alongside embed")
+    assert.deepEqual(
+        replacement.embeds.map((embed) => embed.title),
+        ["Replacement"],
+    )
+    // Mutate through independent HTTP so cache readback establishes gateway update intake, not REST intake
+    await api("PATCH", `/channels/${channelId}/messages/${sent.id}`, { embeds: [{ title: "Gateway update" }] })
+    await waitForCache(ops.get, sent, (message) => message?.embeds[0]?.title === "Gateway update")
+    assert.equal(collected.messages[0]?.embeds[0]?.title, title)
+    report(stage, true)
+
+    stage = "embeds_empty_edit_rejection_and_clear"
+    const rejected = await ops.editFailure(sent, { embeds: [] })
+    assert.equal(rejected?._tag, "MessageOperationError")
+    assert.equal(rejected?.reason, "rejected")
+    assert.equal(rejected?.status, 400)
+    assert.equal((await ops.fetch(sent)).embeds[0]?.title, "Gateway update")
+    const cleared = await ops.edit(sent, { content: "Plain text", embeds: [] })
+    assert.deepEqual(cleared.embeds, [])
+    const readback = (await api("GET", `/channels/${channelId}/messages/${sent.id}`)).data
+    assert.equal(readback?.content, "Plain text")
+    assert.deepEqual(readback?.embeds ?? [], [])
+    report(stage, true)
 }
 
 async function verifyCacheExpiry(send, get, channelId) {
@@ -447,16 +640,20 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
 }
 
 // Failure containment only: A forced exit is never reported as successful cleanup
-setTimeout(() => {
-    report("process_timeout", false)
-    process.exit(1)
-}, 120_000).unref()
+setTimeout(
+    () => {
+        report("process_timeout", false)
+        process.exit(1)
+    },
+    attachments ? 240_000 : 120_000,
+).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")
     assert.ok(
         process.argv.length === 3 ||
-            (process.argv.length === 4 && (recover || manage || changes || history || cache || collectors)),
+            (process.argv.length === 4 &&
+                (recover || manage || changes || history || cache || collectors || embeds || attachments)),
     )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
@@ -502,6 +699,10 @@ try {
             return rawFetch(...args)
         }
     }
+    if (attachments)
+        globalThis.fetch = observeUploads(rawFetch, (record) =>
+            console.log(JSON.stringify({ mode, check: stage, ...record })),
+        )
     let client
     let seed
     let reply
@@ -512,7 +713,7 @@ try {
         const { createClient } = await import("@neontechspace/fluxerly")
         const created = createClient({
             token,
-            ...(cache ? { cache: cacheOptions() } : {}),
+            ...(cache || embeds || attachments ? { cache: cacheOptions() } : {}),
             ...(recover ? { logging: { development: true, logger: fromEffectLogger(diagnosticLogger) } } : {}),
         })
         assert.ok(created.isOk())
@@ -619,6 +820,34 @@ try {
                 () => done.resolve(null),
             )
             assert.ok((await client.connect()).isOk())
+            if (embeds || attachments) {
+                const unwrap = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) reportFailure(result.error)
+                    assert.ok(result.isOk())
+                    return result.value
+                }
+                await (attachments ? verifyAttachments : verifyEmbeds)(
+                    {
+                        send: (input, options) => unwrap(client.messages.send(channel.id, input, options)),
+                        reply: (target, input) => unwrap(client.messages.reply(target, input)),
+                        edit: (target, input) => unwrap(client.messages.edit(target, input)),
+                        editFailure: async (target, input) => {
+                            const result = await client.messages.edit(target, input)
+                            assert.ok(result.isErr())
+                            return result.error
+                        },
+                        fetch: (target) => unwrap(client.messages.fetch(target)),
+                        history: () => unwrap(client.messages.fetchHistory(channel.id)),
+                        get: (target) => unwrap(client.messages.get(target)),
+                        collect: async (options) => {
+                            const collector = await unwrap(client.messages.collect(channel.id, options))
+                            return () => unwrap(collector.waitForClose())
+                        },
+                    },
+                    channel.id,
+                )
+            }
             if (forceRecovery) {
                 if (cache) sdkRequests.length = 0
                 if (collectors)
@@ -700,7 +929,7 @@ try {
                 Effect.gen(function* () {
                     client = yield* createClient({
                         token,
-                        ...(cache ? { cache: cacheOptions() } : {}),
+                        ...(cache || embeds || attachments ? { cache: cacheOptions() } : {}),
                         ...(recover ? { logging: { development: true } } : {}),
                     })
                     const cacheGet = async (target) => {
@@ -812,6 +1041,36 @@ try {
                         }),
                     )
                     yield* client.connect()
+                    if (embeds || attachments) {
+                        const scope = yield* Effect.scope
+                        const run = async (operation) => {
+                            const result = await Effect.runPromise(Effect.result(operation))
+                            if (result._tag === "Failure") reportFailure(result.failure)
+                            assert.equal(result._tag, "Success")
+                            return result.success
+                        }
+                        yield* Effect.promise(() =>
+                            (attachments ? verifyAttachments : verifyEmbeds)(
+                                {
+                                    send: (input, options) => run(client.messages.send(channel.id, input, options)),
+                                    reply: (target, input) => run(client.messages.reply(target, input)),
+                                    edit: (target, input) => run(client.messages.edit(target, input)),
+                                    editFailure: (target, input) =>
+                                        Effect.runPromise(client.messages.edit(target, input).pipe(Effect.flip)),
+                                    fetch: (target) => Effect.runPromise(client.messages.fetch(target)),
+                                    history: () => Effect.runPromise(client.messages.fetchHistory(channel.id)),
+                                    get: (target) => Effect.runPromise(client.messages.get(target)),
+                                    collect: async (options) => {
+                                        const collector = await run(
+                                            client.messages.collect(channel.id, options).pipe(Scope.provide(scope)),
+                                        )
+                                        return () => Effect.runPromise(collector.waitForClose())
+                                    },
+                                },
+                                channel.id,
+                            ),
+                        )
+                    }
                     if (forceRecovery) {
                         if (cache) sdkRequests.length = 0
                         if (collectors) {
@@ -891,6 +1150,12 @@ try {
                     : (effect) => effect,
             ),
         )
+        if (attachments && Exit.isFailure(exit))
+            for (const reason of exit.cause.reasons.slice(0, 8)) {
+                if (reason._tag === "Fail") reportFailure(reason.error)
+                else if (reason._tag === "Die") reportFailure(reason.defect)
+                else console.log(JSON.stringify({ mode, check: stage, type: "interrupted" }))
+            }
         assert.ok(Exit.isSuccess(exit))
     }
     assert.equal(client.state, "Closed")
@@ -929,8 +1194,9 @@ try {
     if (forceRecovery) report("post_resume_receive_and_reply", true)
     report("reply_reference_and_mentions_verified", true)
     report("sdk_closed", true)
-} catch {
+} catch (error) {
     // Never print assertions, HTTP bodies, native causes, configured identities or credentials
+    if (attachments) reportFailure(error)
     report(stage, false)
     process.exitCode = 1
 } finally {

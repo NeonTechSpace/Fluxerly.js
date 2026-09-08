@@ -1,4 +1,6 @@
 import type { OperationOptions } from "./client.js"
+import type { Embed, EmbedInput } from "./embeds.js"
+import type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
 
 /** Identifies a message without retaining a client or requiring a fetched snapshot */
 export interface MessageReference {
@@ -8,10 +10,14 @@ export interface MessageReference {
     readonly channelId: string
 }
 
-/** Frozen text-message projection shared by REST responses and messageCreate/messageUpdate events, not a complete wire object */
+/** Frozen message projection shared by REST responses and messageCreate/messageUpdate events, not a complete wire object */
 export interface Message extends MessageReference {
     /** Text exactly as returned by Fluxer, including empty text for non-text messages */
     readonly content: string
+    /** Deeply frozen embeds in received order, empty when absent. Included in cache and collector byte budgets */
+    readonly embeds: readonly Embed[]
+    /** Frozen file metadata in received order, empty when absent. Budgets count metadata, never remote file bytes */
+    readonly attachments: readonly Attachment[]
     /** Frozen author projection. No client-bound methods or cached live state */
     readonly author: {
         /** Decimal string user ID */
@@ -51,10 +57,39 @@ export interface AllowedMentions {
     readonly repliedUser?: boolean
 }
 
-/** Text-only send input. Attachments, embeds and forwards are not supported */
-export interface MessageInput {
-    /** Nonempty text, sent without trimming. Fluxer validates its applicable content limit */
-    readonly content: string
+/** Text, embeds or file uploads. TypeScript does not establish that strings or arrays are nonempty */
+export type MessageBody = Body<AttachmentInput>
+
+type Body<A> =
+    | {
+          /** Text sent without trimming. Fluxer validates its applicable content limit */
+          readonly content: string
+          /** Rich embeds in display order. Fluxer owns the applicable embed-count limit */
+          readonly embeds?: readonly EmbedInput[]
+          /** New uploads for send/reply; an explicit replacement list for edits */
+          readonly attachments?: readonly A[]
+      }
+    | {
+          /** Omit for an embed-only send or to preserve text during an edit */
+          readonly content?: string
+          /** Rich embeds in display order, or an empty replacement array during an edit */
+          readonly embeds: readonly EmbedInput[]
+          /** New uploads for send/reply; an explicit replacement list for edits */
+          readonly attachments?: readonly A[]
+      }
+    | {
+          /** Omit to send only files or preserve text during an edit */
+          readonly content?: string
+          /** Omit to preserve embeds during an edit */
+          readonly embeds?: readonly EmbedInput[]
+          /** New uploads for send/reply; edits must list retained IDs alongside new files */
+          readonly attachments: readonly A[]
+      }
+
+/** Send text, rich embeds and/or files. A send needs nonempty text, embeds or uploads.
+ * Unknown input keys are rejected. Forwards and attachment:// embed linking are not supported
+ */
+export type MessageInput = MessageBody & {
     /** Notifications are disabled by default, including the replied-to author */
     readonly allowedMentions?: AllowedMentions
     /** Optional reply reference. Its channelId must match the send destination */
@@ -62,12 +97,16 @@ export interface MessageInput {
 }
 
 /** Reply helper input. The reference comes from reply's first argument */
-export type ReplyInput = Omit<MessageInput, "messageReference">
+export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions">
 
-/** Text-only edit. Unknown input fields are rejected instead of silently changing unrelated message data */
-export interface EditMessageInput {
-    /** Required replacement text, sent without trimming. Empty text requests clearing, subject to Fluxer validation */
-    readonly content: string
+/** Replace supplied text/embeds/attachments without fetching or merging old data. Omitted properties are not sent.
+ * Omitted attachments preserve files; a supplied list replaces them, so list existing IDs to retain alongside new uploads.
+ * Clearing attachments requires nonempty content or embeds alongside attachments: [].
+ * Omitted embeds preserve rich embeds, though Fluxer may regenerate link previews when text changes.
+ * Clearing embeds requires nonempty content alongside embeds: []; an empty edit alone is rejected by Fluxer.
+ * Empty content requests clearing text, subject to Fluxer validation. Unknown input keys are rejected
+ */
+export type EditMessageInput = Body<AttachmentInput | AttachmentReference> & {
     /** Notifications default off for this edit, including the reply author. Explicit entries permit notifications */
     readonly allowedMentions?: AllowedMentions
 }
