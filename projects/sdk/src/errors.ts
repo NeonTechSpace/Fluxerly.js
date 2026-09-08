@@ -24,6 +24,9 @@ export class ConfigurationError extends Error {
             | "cache"
             | "uploads"
             | "messages"
+            | "guilds"
+            | "members"
+            | "roles"
             | "maxEntries"
             | "maxBytes"
             | "maxAgeMs"
@@ -46,6 +49,7 @@ export class ConfigurationError extends Error {
 
 /** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
 export type Operation =
+    | import("./guilds.js").GuildOperation
     | "createClient"
     | "connect"
     | "run"
@@ -169,6 +173,7 @@ export type DefectReason =
               | import("./message-errors.js").EventReadError
               | import("./message-errors.js").MessageError
               | import("./message-errors.js").MessageOperationError
+              | import("./guilds.js").GuildOperationError
               | import("./collectors.js").CollectorError
       }
     | { readonly kind: "Defect" }

@@ -19,6 +19,13 @@ function limits(event: unknown, options: unknown): Limits | ConfigurationError {
     if (
         typeof event !== "string" ||
         ![
+            "guildMemberAdd",
+            "guildMemberUpdate",
+            "guildMemberRemove",
+            "guildRoleDelete",
+            "guildRoleCreate",
+            "guildRoleUpdate",
+            "guildRoleUpdateBulk",
             "messageCreate",
             "channelPinsUpdate",
             "messageUpdate",
@@ -200,6 +207,13 @@ export class EventBus {
     }
     #sources: { [K in EventName]: Set<EventSource<EventMap[K]>> } = {
         channelPinsUpdate: new Set(),
+        guildMemberAdd: new Set(),
+        guildMemberUpdate: new Set(),
+        guildMemberRemove: new Set(),
+        guildRoleDelete: new Set(),
+        guildRoleCreate: new Set(),
+        guildRoleUpdate: new Set(),
+        guildRoleUpdateBulk: new Set(),
         messageCreate: new Set(),
         messageUpdate: new Set(),
         messageDelete: new Set(),
@@ -236,8 +250,10 @@ export class EventBus {
             for (const offer of this.#reactionCollectors.get(`${reaction.channelId}:${reaction.id}`) ?? [])
                 offer(reaction, bytes)
         }
-        if (event === "messageCreate")
-            for (const offer of this.#collectors.get(message.channelId) ?? []) offer(message as Message, bytes)
+        if (event === "messageCreate") {
+            const created = message as Message
+            for (const offer of this.#collectors.get(created.channelId) ?? []) offer(created, bytes)
+        }
         for (const source of this.#sources[event]) source.offer(message, bytes)
     }
     stop() {

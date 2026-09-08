@@ -38,6 +38,7 @@
         "test:live:events": "pnpm run build && node tests/live/messages.mjs default --events && node tests/live/messages.mjs effect --events",
         "test:live:reactions": "pnpm run build && node tests/live/messages.mjs default --reactions && node tests/live/messages.mjs effect --reactions",
         "test:live:pins": "pnpm run build && node tests/live/messages.mjs default --pins && node tests/live/messages.mjs effect --pins",
+        "test:live:guilds": "pnpm run build && node tests/live/messages.mjs default --guilds && node tests/live/messages.mjs effect --guilds",
         "test:live:history": "pnpm run build && node tests/live/messages.mjs default --history && node tests/live/messages.mjs effect --history",
         "test:live:recovery": "pnpm run build && node tests/live/messages.mjs default --recover && node tests/live/messages.mjs effect --recover",
         "test:live:recovery:cancel": "pnpm run build && node tests/live/sdk.mjs default --cancel-recovery && node tests/live/sdk.mjs effect --cancel-recovery",

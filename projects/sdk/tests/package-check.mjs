@@ -80,6 +80,7 @@ try {
             "attachments",
             "reactions",
             "pins",
+            "guilds",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -151,6 +152,19 @@ try {
             .filter((example) => /(?:function|const) readExample/.test(example))
         assert.equal(readExamples.length, 1)
         writeFileSync(join(consumer, "read-example.ts"), readExamples[0])
+        const guildExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) =>
+                /(?:function|const) (?:(?:assign|create)RoleExample|cachedRoleNamesExample)/.test(example),
+            )
+        assert.equal(guildExamples.length, 3)
+        for (const [index, example] of guildExamples.entries())
+            writeFileSync(join(consumer, `guild-example-${index}.ts`), example)
         // Compile the actual authored example against the packed exports, not a separately maintained copy
         writeFileSync(join(consumer, "collector-example.ts"), collectorExamples[0])
         const reactionExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
@@ -221,18 +235,7 @@ try {
                     outDir: "out",
                     lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                 },
-                include: [
-                    "consumer.ts",
-                    "pins-example.ts",
-                    "collector-example.ts",
-                    "logging-example.ts",
-                    "embed-example.ts",
-                    "attachment-example.ts",
-                    "reaction-example.ts",
-                    "reaction-users-example.ts",
-                    "reaction-moderation-example.ts",
-                    "reaction-collector-example.ts",
-                ],
+                include: ["*.ts"],
             }),
         )
         run(process.execPath, [compiler, "-p", "tsconfig.json"], consumer)

@@ -29,7 +29,51 @@ export type {
 import { err, ok, ResultAsync, type Result } from "neverthrow"
 export type { LoggingOptions, DefaultLoggingOptions, DefaultLogger } from "./logging.js"
 export type { CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions } from "./cache.js"
+export type { ResourceCacheSettings } from "./cache.js"
 import type { ClientState, ClientOptions, ConnectionState, OperationOptions } from "./client.js"
+import {
+    GuildOperationError,
+    type Guild,
+    type GuildRole,
+    type RoleReference,
+    type RolePosition,
+    type RoleCreate,
+    type RoleEdit,
+    type GuildMember,
+    type MemberReference,
+    type MemberQuery,
+    type GuildOperationFailure,
+    type DefaultGuildOperationOptions,
+} from "./guilds.js"
+export { GuildOperationError, Permissions } from "./guilds.js"
+export type {
+    Guild,
+    GuildRole,
+    GuildRoleUpdateBulk,
+    RoleReference,
+    RolePosition,
+    RoleCreate,
+    RoleEdit,
+    GuildMember,
+    MemberReference,
+    MemberQuery,
+    GuildOperation,
+    GuildOperationFailure,
+    GuildOperationOptions,
+    DefaultGuildOperationOptions,
+} from "./guilds.js"
+import {
+    guildFetch,
+    memberFetch,
+    memberSelf,
+    memberPage,
+    memberRole,
+    roleList,
+    roleCreate,
+    roleEdit,
+    roleDelete,
+    roleReorder,
+} from "#sdk/internal/guilds"
 import {
     CancelledError,
     ConfigurationError,
@@ -594,12 +638,182 @@ export {
 } from "./errors.js"
 export type { ConnectError, ConnectionFailure, DefectReason } from "./errors.js"
 
+/** Explicit guild reads and optional local lookup, independent of gateway readiness.
+ * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with message/member/role operations.
+ * Total deadline defaults to 30,000 ms, including waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
+ * Backoff is 125–250 ms then 250–500 ms, honoring longer Retry-After. Confirmed 429 waits are separate and never reset the deadline
+ *
+ * Input, 404, permission failures and malformed successes do not retry. Expected failures use GuildOperationError.
+ * Abort returns CancelledError after cleanup; closing clients use ClientClosedError and unexpected defects reject with SdkDefect
+ */
+export interface Guilds {
+    /** Synchronously read the enabled guild cache without HTTP or requiring a connection.
+     * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote observation.
+     * Invalid decimal IDs fail with GuildOperationError(input). Closing/closed clients fail with ClientClosedError.
+     * Unexpected defects throw SdkDefect. Lookup updates LRU order but never extends expiry
+     */
+    get(guildId: string): Result<Guild | undefined, GuildOperationFailure>
+    /** Fetch a frozen identity/configuration projection for a decimal guild ID. Fluxer requires guild membership.
+     * No embedded member/role/channel state is retained and no counts or completeness guarantee are inferred
+     */
+    fetch(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<Guild, GuildOperationFailure | CancelledError>
+}
+
+/** Guild membership reads and targeted role writes, sharing Guilds' admission, deadlines and failure rules.
+ * Returned members are frozen observations. Optional retention follows ClientOptions.cache.members, without permission prediction or automatic guild download.
+ * Writes retry only confirmed 429 rejections, never uncertain outcomes. Cancellation cannot undo a dispatched write
+ */
+export interface Members {
+    /** Local-only lookup by decimal guild/user IDs, with Guilds.get's miss, freshness, failure and LRU rules.
+     * Enable cache.members and cache.roles when creating the client. Explicit fetches or subsequent events populate them
+     * @example
+     * ```ts
+     * import type { Client, MemberReference } from "@neontechspace/fluxerly"
+     * export function cachedRoleNamesExample(client: Client, target: MemberReference) {
+     *     const member = client.members.get(target)
+     *     if (member.isErr()) throw member.error
+     *     return member.value?.roleIds.map(id => {
+     *         const role = client.roles.get({ guildId: target.guildId, id })
+     *         if (role.isErr()) throw role.error
+     *         return role.value?.name ?? id
+     *     })
+     * }
+     * ```
+     * Repeated rendering makes no requests. A missing member returns undefined and missing role names fall back to IDs.
+     * This displays observed names, not effective permissions or a completeness guarantee
+     */
+    get(member: MemberReference): Result<GuildMember | undefined, GuildOperationFailure>
+    /** Fetch one member by decimal guild/user IDs; HTTP 404 uses notFound rather than an empty result */
+    fetch(
+        member: MemberReference,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    /** Fetch the authenticated bot's membership directly, without requiring READY or a known bot ID */
+    fetchSelf(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    /** Fetch an ascending user-ID page; default limit 100, range 1–1000.
+     * Use the last userId as after. An empty page ends traversal; separate pages are not a consistent snapshot.
+     * No hasMore guarantee, automatic traversal or partial malformed page. Input is copied when this call starts
+     */
+    fetchPage(
+        guildId: string,
+        query?: MemberQuery,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<readonly GuildMember[], GuildOperationFailure | CancelledError>
+    /** Grant one decimal role ID without replacing other roles. Reject the implicit everyone role locally.
+     * Fluxer enforces MANAGE_ROLES and hierarchy. HTTP 204 is completion, not event acknowledgement or proof the role was previously absent
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     * export async function assignRoleExample(client: Client, message: MessageReference, guildId: string, roleId: string) {
+     *     const opened = client.messages.collectReactions(message, {
+     *         emoji: "✅",
+     *         onReaction: async (reaction, signal) => {
+     *             const assigned = await client.members.addRole({ guildId, userId: reaction.userId }, roleId, { signal })
+     *             if (assigned.isErr()) throw assigned.error
+     *         },
+     *     })
+     *     if (opened.isErr()) throw opened.error
+     *     try {
+     *         const result = await opened.value.waitForClose()
+     *         if (result.isErr()) throw result.error
+     *         return result.value
+     *     } finally { opened.value.stop() }
+     * }
+     * ```
+     * Supply a connected client, a message in this guild and a role the bot may assign. Timeout may collect nothing.
+     * This bounded one-addition example is not a persistent reaction-role system and does not revoke on reaction removal
+     */
+    addRole(
+        member: MemberReference,
+        roleId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    /** Revoke one role with addRole's permission/completion rules. Other roles remain untouched.
+     * No local snapshot suppresses the request; success does not prove a previously assigned role was removed
+     */
+    removeRole(
+        member: MemberReference,
+        roleId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+}
+
+/** Immediate role operations sharing Guilds' admission, deadlines and read retries.
+ * Writes retry only confirmed 429 rejections. Server permissions/hierarchy apply; no local permission prediction.
+ * Abort waits for owned cleanup but cannot undo dispatched writes. Success is not a gateway acknowledgement.
+ * Expected failures use GuildOperationError or ClientClosedError; abort uses CancelledError and defects reject with SdkDefect.
+ * Inputs are copied when the call starts; returned roles contain bigint permissions and require explicit JSON conversion
+ */
+export interface Roles {
+    /** Local-only lookup by decimal guild/role IDs, including everyone, with Guilds.get's miss, freshness, failure and LRU rules */
+    get(role: RoleReference): Result<GuildRole | undefined, GuildOperationFailure>
+    /** Fetch the current role list, including everyone, in server order. Always remote, without pagination or automatic refresh */
+    fetchAll(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<readonly GuildRole[], GuildOperationFailure | CancelledError>
+    /** Create a role with name, color and permissions. Permissions default to 0n, not Fluxer's inherited everyone grants.
+     * Returns the server's actual grants, which can differ from the request. Hoist/mentionable changes require a separate edit
+     * @example
+     * ```ts
+     * import { Permissions, type Client } from "@neontechspace/fluxerly"
+     * export async function createRoleExample(client: Client, guildId: string) {
+     *     const result = await client.roles.create(guildId, {
+     *         name: "Readers",
+     *         permissions: Permissions.ViewChannel | Permissions.ReadMessageHistory,
+     *     })
+     *     if (result.isErr()) throw result.error
+     *     return result.value
+     * }
+     * ```
+     * The caller owns the created role. On an unknown outcome, reconcile with fetchAll before deciding whether to create again
+     */
+    create(
+        guildId: string,
+        input: RoleCreate,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError>
+    /** Patch only defined fields and return the server's observation. Empty/unknown-field patches are input errors.
+     * permissions replaces the raw grants; it is not an additive grant. Everyone edits remain subject to server rules */
+    edit(
+        role: RoleReference,
+        input: RoleEdit,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError>
+    /** Delete a role, also removing its assignments upstream. Everyone cannot be deleted.
+     * HTTP 204 is completion, not proof of member-event delivery; old member/role observations remain unchanged */
+    delete(
+        role: RoleReference,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    /** Reorder distinct role IDs using nonnegative safe-integer positions; everyone cannot move.
+     * Fluxer normalizes manageable positions, so fetchAll afterward when final order matters. HTTP 204 carries no list.
+     * This operation and multi-step workflows are not transactions: Failures can leave partial state; refetch before reconciliation */
+    reorder(
+        guildId: string,
+        positions: readonly RolePosition[],
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+}
+
 /**
  * Default client with SDK-owned execution of asynchronous operations.
  * Expected failures use ResultAsync Err values, while SDK defects reject with SdkDefect.
  * Use run for a managed lifetime, or pair connect with waitForClose and shutdown
  */
 export interface Client extends ClientState {
+    /** Remote role management and explicitly enabled local role lookup */
+    readonly roles: Roles
+    /** Remote guild identity/configuration reads */
+    readonly guilds: Guilds
+    /** Remote member reads and targeted role assignment */
+    readonly members: Members
     /** REST, local lookup and live collection owned by this client */
     readonly messages: Messages
     /**
@@ -715,7 +929,8 @@ export interface Client extends ClientState {
 
 const executeOperation = <
     A,
-    E extends ConnectError | EventReadError | MessageError | MessageOperationError | CollectorError,
+    E extends
+        ConnectError | EventReadError | MessageError | MessageOperationError | CollectorError | GuildOperationError,
 >(
     effect: Effect.Effect<A, E>,
     operation: Operation,
@@ -773,7 +988,13 @@ function reactionHandler(handler: NonNullable<DefaultReactionCollectorOptions["o
 function fromExit<
     A,
     E extends
-        ConnectError | ConfigurationError | EventReadError | MessageError | MessageOperationError | CollectorError,
+        | ConnectError
+        | ConfigurationError
+        | EventReadError
+        | MessageError
+        | MessageOperationError
+        | CollectorError
+        | GuildOperationError,
 >(exit: Exit.Exit<A, E>, operation: Operation): Result<A, E | CancelledError> {
     if (Exit.isSuccess(exit)) return ok(exit.value)
     if (Cause.hasDies(exit.cause)) {
@@ -812,7 +1033,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     const owner = exit.value
     const execute = <
         A,
-        E extends ConnectError | EventReadError | MessageError | MessageOperationError | CollectorError,
+        E extends
+            ConnectError | EventReadError | MessageError | MessageOperationError | CollectorError | GuildOperationError,
     >(
         effect: Effect.Effect<A, E>,
         operation: Operation,
@@ -824,6 +1046,17 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             waitForClose: (options?: OperationOptions) =>
                 execute(Deferred.await(source.closed), "subscription.waitForClose", options),
         })
+    const lookup = <A>(
+        effect: Effect.Effect<A, GuildOperationFailure>,
+        operation: Operation,
+    ): Result<A, GuildOperationFailure> => {
+        const result = Effect.runSyncExit(effect)
+        if (Exit.isSuccess(result)) return ok(result.value)
+        if (Cause.hasDies(result.cause) || Cause.hasInterrupts(result.cause)) throw new SdkDefect(operation)
+        const failure = result.cause.reasons.find((reason) => reason._tag === "Fail")
+        if (failure?._tag === "Fail") return err(failure.error)
+        throw new SdkDefect(operation)
+    }
     const register = <A>(
         effect: Effect.Effect<A, RegistrationError>,
         operation: "on" | "events",
@@ -837,6 +1070,81 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     }
     return ok(
         Object.freeze({
+            guilds: Object.freeze({
+                get: (id: string) => lookup(owner.getResource("guilds", id), "guilds.get"),
+                fetch: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("guilds.fetch", () => guildFetch(id), options),
+                        "guilds.fetch",
+                        options,
+                    ),
+            }),
+            members: Object.freeze({
+                get: (target: MemberReference) => lookup(owner.getResource("members", target), "members.get"),
+                fetch: (target: MemberReference, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("members.fetch", () => memberFetch(target), options),
+                        "members.fetch",
+                        options,
+                    ),
+                fetchSelf: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("members.fetchSelf", () => memberSelf(id), options),
+                        "members.fetchSelf",
+                        options,
+                    ),
+                fetchPage: (id: string, query?: MemberQuery, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("members.fetchPage", () => memberPage(id, query), options),
+                        "members.fetchPage",
+                        options,
+                    ),
+                addRole: (target: MemberReference, id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("members.addRole", () => memberRole(target, id, true), options),
+                        "members.addRole",
+                        options,
+                    ),
+                removeRole: (target: MemberReference, id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("members.removeRole", () => memberRole(target, id, false), options),
+                        "members.removeRole",
+                        options,
+                    ),
+            }),
+            roles: Object.freeze({
+                get: (target: RoleReference) => lookup(owner.getResource("roles", target), "roles.get"),
+                fetchAll: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("roles.fetchAll", () => roleList(id), options),
+                        "roles.fetchAll",
+                        options,
+                    ),
+                create: (id: string, input: RoleCreate, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("roles.create", () => roleCreate(id, input), options),
+                        "roles.create",
+                        options,
+                    ),
+                edit: (target: RoleReference, input: RoleEdit, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("roles.edit", () => roleEdit(target, input), options),
+                        "roles.edit",
+                        options,
+                    ),
+                delete: (target: RoleReference, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("roles.delete", () => roleDelete(target), options),
+                        "roles.delete",
+                        options,
+                    ),
+                reorder: (id: string, positions: readonly RolePosition[], options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("roles.reorder", () => roleReorder(id, positions), options),
+                        "roles.reorder",
+                        options,
+                    ),
+            }),
             messages: Object.freeze({
                 removeUserReaction: (
                     target: MessageReference,

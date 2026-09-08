@@ -3,6 +3,7 @@ import { ConfigurationError } from "#sdk/errors"
 import type { MessageCacheSettings, CachePolicyErrorReport } from "#sdk/cache"
 import { record } from "./message.js"
 import { loggingConfiguration, type ClientLogging } from "./logging.js"
+import type { ResourceConfiguration } from "./guild-cache.js"
 
 export interface CacheConfiguration {
     readonly maxEntries: number
@@ -17,7 +18,7 @@ export function validAge(value: unknown): value is number | null {
 
 function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationError | undefined {
     if (value === undefined) return undefined
-    if (!record(value) || Object.keys(value).some((key) => key !== "messages"))
+    if (!record(value) || Object.keys(value).some((key) => !["messages", "guilds", "members", "roles"].includes(key)))
         return new ConfigurationError("cache", "Cache settings must contain only supported resource settings")
     const messages = value.messages
     if (messages === undefined || messages === false) return undefined
@@ -49,6 +50,31 @@ function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationE
     }
 }
 
+function resourceConfiguration(value: unknown): ResourceConfiguration | ConfigurationError {
+    const result: ResourceConfiguration = {}
+    if (!record(value)) return result
+    for (const kind of ["guilds", "members", "roles"] as const) {
+        const input = value[kind]
+        if (input === undefined || input === false) continue
+        if (input !== true && !record(input))
+            return new ConfigurationError(kind, "Resource cache must be a boolean or options object")
+        const options = input === true ? {} : input
+        if (Object.keys(options).some((key) => !["maxEntries", "maxBytes", "maxAgeMs"].includes(key)))
+            return new ConfigurationError(kind, "Unsupported resource cache setting")
+        const maxEntries = options.maxEntries === undefined ? 1_000 : options.maxEntries
+        const maxBytes = options.maxBytes === undefined ? 4_194_304 : options.maxBytes
+        const maxAgeMs = options.maxAgeMs === undefined ? null : options.maxAgeMs
+        if (typeof maxEntries !== "number" || !Number.isSafeInteger(maxEntries) || maxEntries <= 0)
+            return new ConfigurationError("maxEntries", "Cache budgets must be positive safe integers")
+        if (typeof maxBytes !== "number" || !Number.isSafeInteger(maxBytes) || maxBytes <= 0)
+            return new ConfigurationError("maxBytes", "Cache budgets must be positive safe integers")
+        if (!validAge(maxAgeMs))
+            return new ConfigurationError("maxAgeMs", "Resource cache age must be null or a nonnegative safe integer")
+        result[kind] = { maxEntries, maxBytes, maxAgeMs }
+    }
+    return result
+}
+
 export interface Configuration {
     readonly uploadMaxBytes: number
     readonly logging: ClientLogging
@@ -56,6 +82,7 @@ export interface Configuration {
     readonly startupTimeoutMs: number
     readonly maxStartupAttempts: number
     readonly cache: CacheConfiguration | undefined
+    readonly resourceCache: ResourceConfiguration
 }
 
 export function validateConfiguration(
@@ -113,12 +140,15 @@ export function validateConfiguration(
         )
             return Effect.fail(new ConfigurationError("maxBytes", "Upload budget must be a positive safe integer"))
         if (cache instanceof ConfigurationError) return Effect.fail(cache)
+        const resourceCache = resourceConfiguration("cache" in options ? options.cache : undefined)
+        if (resourceCache instanceof ConfigurationError) return Effect.fail(resourceCache)
         const logging = loggingConfiguration("logging" in options ? options.logging : undefined, native)
         if (logging instanceof ConfigurationError) return Effect.fail(logging)
         return Effect.succeed({
             uploadMaxBytes,
             logging,
             cache,
+            resourceCache,
             token: Redacted.make(token),
             startupTimeoutMs: timeout ?? 30_000,
             maxStartupAttempts: attempts ?? 3,

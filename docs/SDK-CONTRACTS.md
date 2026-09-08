@@ -65,8 +65,9 @@ Reporting cannot guarantee delivery when the fallback logger also fails
 Overflow terminates the affected subscription rather than restarting the gateway.
 Shutdown discards pending delivery rather than draining external actions.
 Default callback promises remain application-owned, while native cleanup is cooperative and awaited.
-When a native handler requests shutdown, the client scope owns it to avoid the handler joining itself.
-Only confirmed rate-limit rejection permits automatic REST retry within the original deadline.
+When a native handler requests shutdown, the client scope owns it to avoid the handler joining itself
+
+Mutations retry only confirmed rate-limit rejection; eligible reads use the bounded transient-retry policy documented on their public operation groups.
 Cancellation or a lost response after dispatch cannot establish non-delivery or rollback
 
 Byte budgets bound the accounted data, not total JavaScript heap or process memory
@@ -82,6 +83,20 @@ Repeated deletion or a missing target does not prove a prior operation succeeded
 [REST admission](/projects/sdk/src/internal/rest.ts) owns explicit history pages independently of cache reads and gateway events.
 Keep history's channel rate bucket separate from single-message fetches while sharing global admission.
 Do not introduce background traversal or prefetch through this path
+
+## Guild resource boundary
+
+[Guild projection](/projects/sdk/src/internal/guilds.ts) validates request inputs and maps REST/gateway observations without retaining resource state.
+Guild operations share the existing REST owner and client-global admission limits, with guild-major route buckets separate from message routes.
+They never enter the message cache or synthesize gateway events after HTTP responses
+
+The optional [guild cache owner](/projects/sdk/src/internal/guild-cache.ts) retains projected observations separately, with per-resource client-wide limits.
+REST registers resource conflict guards before admission waits and retains them through retries and cleanup.
+Gateway intake updates or invalidates caches before subscriber delivery, including related memberships after role deletion.
+Connection gaps prevent old requests from repopulating snapshots, while late writes still invalidate potentially affected newer observations
+
+Fluxer remains authoritative for membership, permissions and role hierarchy; an earlier observation cannot suppress a targeted role request.
+Multi-step resource workflows are not transactions, and uncertain writes must not be replayed as if they were reads
 
 ## Message-cache boundary
 

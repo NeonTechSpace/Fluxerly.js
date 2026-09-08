@@ -4,6 +4,20 @@ import type { MessageReaction, MessageReactionBatch, MessageReactionEmojiRemoval
 
 /** Implemented gateway events and their frozen payloads. No subscription history, cache reconstruction or REST-generated notifications */
 export interface EventMap {
+    /** Frozen role creation observation, without an initial enumeration */
+    readonly guildRoleCreate: import("./guilds.js").GuildRole
+    /** Frozen role update, not an old/new pair */
+    readonly guildRoleUpdate: import("./guilds.js").GuildRole
+    /** One batch without fan-out to guildRoleUpdate; not a complete guild role list */
+    readonly guildRoleUpdateBulk: import("./guilds.js").GuildRoleUpdateBulk
+    /** Role deletion notice, not a role snapshot or a guarantee of individual member-update events */
+    readonly guildRoleDelete: import("./guilds.js").RoleReference
+    /** Frozen member joined observation. No initial member enumeration or complete guild view */
+    readonly guildMemberAdd: import("./guilds.js").GuildMember
+    /** Frozen member update. Delivery can be limited by guild size/session visibility; refetch when current state matters */
+    readonly guildMemberUpdate: import("./guilds.js").GuildMember
+    /** Membership ended; only IDs are available. No account lookup, cause inference or automatic cache */
+    readonly guildMemberRemove: import("./guilds.js").MemberReference
     /** Channel pin-list change notice. No target message ID or automatic fetch; its timestamp can stay unchanged after unpin */
     readonly channelPinsUpdate: ChannelPinsUpdate
     /** Newly created message with text, deeply frozen embeds and attachment metadata, never file bytes. Malformed known message data fails the connection as a protocol error */

@@ -8,6 +8,7 @@ import { Logger } from "effect"
 import { fromEffectLogger } from "@neontechspace/fluxerly/effect"
 import { observeUploads, safeFailure } from "./upload-diagnostics.mjs"
 import { createReactionEmoji, cleanupReactionEmoji } from "./reaction-fixture.mjs"
+import { createGuildTestRole, cleanupGuildTestRole } from "./guild-fixture.mjs"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
@@ -31,7 +32,8 @@ const smallAttachments = process.argv[3] === "--attachments-small"
 const attachments = process.argv[3] === "--attachments" || smallAttachments
 const reactions = process.argv[3] === "--reactions"
 const pins = process.argv[3] === "--pins"
-const forceRecovery = recover || cache || collectors || attachments || reactions || pins
+const guilds = process.argv[3] === "--guilds"
+const forceRecovery = recover || cache || collectors || attachments || reactions || pins || guilds
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const journalPath = new URL("../../.env.test.messages.local", import.meta.url)
 const report = (check, passed) => console.log(JSON.stringify({ mode, check, passed }))
@@ -164,6 +166,257 @@ async function api(method, path, body) {
         return { status: response.status, data }
     }
     throw new Error("Sandbox request budget exhausted")
+}
+
+async function verifyGuildMembers(ops, channelId, botId, interrupt) {
+    stage = "guild_member_readback"
+    const target = { guildId, userId: botId }
+    const rawGuild = (await api("GET", `/guilds/${guildId}`)).data
+    const fetchedGuild = await ops.guild()
+    assert.equal(fetchedGuild.id, rawGuild.id)
+    assert.equal(fetchedGuild.ownerId, rawGuild.owner_id)
+    const before = (await api("GET", `/guilds/${guildId}/members/${botId}`)).data
+    const fetched = await ops.member(target)
+    assert.equal(fetched.userId, botId)
+    assert.deepEqual([...fetched.roleIds].sort(), [...before.roles].sort())
+    assert.deepEqual(await ops.self(), fetched)
+    const page = await ops.page()
+    const rawPage = (await api("GET", `/guilds/${guildId}/members?limit=2`)).data
+    assert.deepEqual(
+        page.map((member) => member.userId),
+        rawPage.map((member) => member.user.id),
+    )
+    assert.ok(Object.isFrozen(fetched) && Object.isFrozen(fetched.roleIds))
+    report(stage, true)
+    stage = "test_role_creation"
+    const roleId = await createGuildTestRole(
+        api,
+        journal,
+        () => writeFileSync(journalPath, JSON.stringify(journal)),
+        ops.createRole,
+    )
+    const seen = []
+    const stop = await ops.on("guildMemberUpdate", (member) => {
+        if (member.guildId === guildId && member.userId === botId) {
+            assert.ok(seen.length < 16)
+            seen.push(member)
+        }
+    })
+    const waitRole = async (present) => {
+        const deadline = performance.now() + 10_000
+        while (!seen.some((member) => member.roleIds.includes(roleId) === present)) {
+            assert.ok(performance.now() < deadline, "Member event deadline")
+            await sleep(20)
+        }
+        seen.length = 0
+        const actual = (await api("GET", `/guilds/${guildId}/members/${botId}`)).data
+        assert.deepEqual([...actual.roles].sort(), [...before.roles, ...(present ? [roleId] : [])].sort())
+        assert.deepEqual([...(await ops.member(target)).roleIds].sort(), [...actual.roles].sort())
+    }
+    try {
+        stage = "reaction_role_workflow"
+        const message = await ops.send()
+        const collector = await ops.collect(message, target, roleId)
+        try {
+            await ops.react(message)
+            assert.equal((await collector.wait()).reason, "limit")
+            await waitRole(true)
+            const raw = (await api("GET", `/channels/${channelId}/messages/${message.id}`)).data
+            assert.equal(raw.content, "SDK role assigned")
+        } finally {
+            await collector.stop()
+        }
+        await ops.remove(target, roleId)
+        await waitRole(false)
+        report(stage, true)
+        await verifyGuildCache(ops, target, roleId)
+        await interrupt()
+        assert.equal(await ops.getGuild(), undefined)
+        assert.equal(await ops.getMember(target), undefined)
+        assert.equal(await ops.getRole(roleId), undefined)
+        report("guild_cache_gap_clear", true)
+        stage = "member_role_after_resume"
+        await ops.add(target, roleId)
+        await waitRole(true)
+        await ops.remove(target, roleId)
+        await waitRole(false)
+        assert.deepEqual(fetched.roleIds, before.roles)
+        report(stage, true)
+        await verifyGuildRoles(ops, roleId)
+    } finally {
+        await stop()
+    }
+}
+
+async function verifyGuildCache(ops, target, roleId) {
+    stage = "guild_cache_local_lookup"
+    const guild = await ops.guild()
+    const member = await ops.member(target)
+    const roles = await ops.roles()
+    const role = roles.find((value) => value.id === roleId)
+    assert.ok(role)
+    const originalFetch = globalThis.fetch
+    let requests = 0
+    globalThis.fetch = (...args) => {
+        requests++
+        return originalFetch(...args)
+    }
+    try {
+        for (let index = 0; index < 10; index++) {
+            assert.deepEqual(await ops.getGuild(), guild)
+            assert.deepEqual(await ops.getMember(target), member)
+            assert.deepEqual(await ops.getRole(roleId), role)
+        }
+        assert.equal(requests, 0)
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+    report(stage, true)
+
+    const waitColor = async (color) => {
+        const deadline = performance.now() + 10_000
+        while ((await ops.getRole(roleId))?.color !== color) {
+            assert.ok(performance.now() < deadline, "Cached role event deadline")
+            await sleep(20)
+        }
+    }
+    stage = "guild_cache_external_event"
+    const changed = await api("PATCH", `/guilds/${guildId}/roles/${roleId}`, { color: 0x345678 })
+    assert.equal(changed.status, 200)
+    await waitColor(0x345678)
+    report(stage, true)
+
+    stage = "guild_cache_uncertain_write"
+    let dispatched = 0
+    globalThis.fetch = async (...args) => {
+        const response = await originalFetch(...args)
+        if (args[1]?.method === "PATCH" && new URL(args[0]).pathname === `/v1/guilds/${guildId}/roles/${roleId}`) {
+            dispatched++
+            assert.equal(response.status, 200)
+            await response.arrayBuffer()
+            // The owned role really changed; lose the response only after its real gateway event was observed
+            await waitColor(0x456789)
+            throw new Error("Test-owned response loss")
+        }
+        return response
+    }
+    try {
+        await assert.rejects(ops.editRole(roleId, { color: 0x456789 }), (error) => error.outcome === "unknown")
+        assert.equal(dispatched, 1)
+        assert.equal(await ops.getRole(roleId), undefined)
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+    const readback = (await api("GET", `/guilds/${guildId}/roles`)).data.find((value) => value.id === roleId)
+    assert.equal(readback.color, 0x456789)
+    await ops.roles()
+    assert.equal((await ops.getRole(roleId)).color, readback.color)
+    report(stage, true)
+}
+
+async function verifyGuildRoles(ops, roleId) {
+    stage = "role_management_after_resume"
+    const seen = []
+    const stops = []
+    for (const event of ["guildRoleCreate", "guildRoleUpdate", "guildRoleUpdateBulk", "guildRoleDelete"]) {
+        stops.push(
+            await ops.on(event, (value) => {
+                if (value.guildId !== guildId) return
+                assert.ok(seen.length < 64)
+                seen.push({ event, value })
+            }),
+        )
+    }
+    const waitEvent = async (event, predicate) => {
+        const deadline = performance.now() + 10_000
+        while (!seen.some((item) => item.event === event && predicate(item.value))) {
+            assert.ok(performance.now() < deadline, "Role event deadline")
+            await sleep(20)
+        }
+    }
+    try {
+        journal.secondRole = { guildId }
+        stage = "role_create"
+        const secondId = await createGuildTestRole(
+            api,
+            journal.secondRole,
+            () => writeFileSync(journalPath, JSON.stringify(journal)),
+            ops.createRole,
+        )
+        stage = "role_create_event"
+        await waitEvent("guildRoleCreate", (role) => role.id === secondId && role.permissions === 0n)
+        stage = "role_list_readback"
+        const listed = await ops.roles()
+        const raw = (await api("GET", `/guilds/${guildId}/roles`)).data
+        assert.deepEqual(
+            listed.map((role) => role.id),
+            raw.map((role) => role.id),
+        )
+        for (const role of listed) {
+            const independent = raw.find((item) => item.id === role.id)
+            assert.equal(role.permissions.toString(), independent.permissions)
+            assert.equal(role.position, independent.position)
+        }
+        const first = listed.find((role) => role.id === roleId)
+        const second = listed.find((role) => role.id === secondId)
+        assert.ok(first && second)
+        const beforeOrder = listed.indexOf(first) - listed.indexOf(second)
+        stage = "role_edit_readback"
+        const edited = await ops.editRole(roleId, { color: 0x123456, permissions: 0n })
+        assert.equal(edited.color, 0x123456)
+        assert.equal(edited.permissions, 0n)
+        stage = "role_edit_event"
+        await waitEvent("guildRoleUpdate", (role) => role.id === roleId && role.color === 0x123456)
+        assert.equal(
+            (await api("GET", `/guilds/${guildId}/roles`)).data.find((role) => role.id === roleId).color,
+            0x123456,
+        )
+        stage = "role_reorder"
+        await ops.reorderRoles([
+            { id: roleId, position: first.position === second.position ? (beforeOrder < 0 ? 0 : 1) : second.position },
+            { id: secondId, position: first.position === second.position ? (beforeOrder < 0 ? 1 : 0) : first.position },
+        ])
+        stage = "role_reorder_readback"
+        const reordered = await ops.roles()
+        const firstAfter = reordered.find((role) => role.id === roleId)
+        const secondAfter = reordered.find((role) => role.id === secondId)
+        assert.ok(firstAfter && secondAfter)
+        assert.ok((reordered.indexOf(firstAfter) - reordered.indexOf(secondAfter)) * beforeOrder < 0)
+        const untouched = (roles) =>
+            roles.filter((role) => role.id !== roleId && role.id !== secondId).map((role) => role.id)
+        assert.deepEqual(untouched(reordered), untouched(listed))
+        const readback = (await api("GET", `/guilds/${guildId}/roles`)).data
+        assert.deepEqual(
+            reordered.map((role) => [role.id, role.position]),
+            readback.map((role) => [role.id, role.position]),
+        )
+        stage = "role_reorder_event"
+        await waitEvent("guildRoleUpdateBulk", (value) =>
+            value.roles.some(
+                (role) =>
+                    (role.id === roleId && role.position === firstAfter.position && role.position !== first.position) ||
+                    (role.id === secondId &&
+                        role.position === secondAfter.position &&
+                        role.position !== second.position),
+            ),
+        )
+        for (const id of [roleId, secondId]) {
+            stage = "role_delete"
+            await ops.deleteRole(id)
+            stage = "role_delete_event"
+            await waitEvent("guildRoleDelete", (role) => role.id === id)
+        }
+        stage = "role_delete_readback"
+        const after = (await api("GET", `/guilds/${guildId}/roles`)).data
+        assert.ok(!after.some((role) => role.id === roleId || role.id === secondId))
+        assert.deepEqual(untouched(after), untouched(listed))
+        const member = (await api("GET", `/guilds/${guildId}/members/@me`)).data
+        assert.ok(!member.roles.includes(roleId) && !member.roles.includes(secondId))
+        stage = "role_management_after_resume"
+        report(stage, true)
+    } finally {
+        for (const stop of stops) await stop()
+    }
 }
 
 async function verifyReactions(ops, channelId, botId, interrupt) {
@@ -744,6 +997,61 @@ async function verifyEmbeds(ops, channelId) {
     report(stage, true)
 }
 
+async function verifyCacheProjectionConflict(send, fetch, get, channelId) {
+    stage = "cache_full_projection_conflict"
+    const sent = await send(channelId, { content: "Cache conflict verification", embeds: [{ description: "before" }] })
+    const originalFetch = globalThis.fetch
+    let release
+    const waiting = new Promise((resolve) => {
+        release = resolve
+    })
+    let ready = false
+    let held = false
+    globalThis.fetch = async (...args) => {
+        const response = await originalFetch(...args)
+        if (
+            !held &&
+            args[1]?.method === "GET" &&
+            new URL(args[0]).pathname === `/v1/channels/${channelId}/messages/${sent.id}`
+        ) {
+            held = true
+            const json = response.json.bind(response)
+            response.json = async () => {
+                const body = await json()
+                ready = true
+                await waiting
+                return body
+            }
+        }
+        return response
+    }
+    const pending = fetch(sent)
+    const settled = pending.catch(() => undefined)
+    try {
+        const deadline = performance.now() + 10_000
+        while (!ready) {
+            assert.ok(performance.now() < deadline, "Held read deadline")
+            await sleep(20)
+        }
+        // Hold only consumption of an actual old HTTP response; do not fabricate its body or a gateway event
+        const changed = await api("PATCH", `/channels/${channelId}/messages/${sent.id}`, {
+            embeds: [{ description: "after" }],
+        })
+        assert.equal(changed.status, 200)
+        await waitForCache(get, sent, (snapshot) => snapshot?.embeds[0]?.description === "after")
+        release()
+        assert.equal((await pending).embeds[0]?.description, "before")
+        assert.equal(await get(sent), undefined)
+        const remote = await api("GET", `/channels/${channelId}/messages/${sent.id}`)
+        assert.equal(remote.data?.embeds[0]?.description, "after")
+        report(stage, true)
+    } finally {
+        release()
+        await settled
+        globalThis.fetch = originalFetch
+    }
+}
+
 async function verifyCacheExpiry(send, get, channelId) {
     stage = "cache_active_expiry"
     const sent = await send(channelId, { content: `cache-expire-${randomUUID()}` })
@@ -765,6 +1073,13 @@ async function cleanup() {
         if (journal.emojiName !== undefined) report("test_emoji_removed", true)
     } catch (error) {
         emojiFailure = error
+    }
+    let roleFailure
+    try {
+        await cleanupGuildTestRole(api, journal)
+        if (journal.roleName !== undefined) report("test_role_removed", true)
+    } catch (error) {
+        roleFailure = error
     }
     const listed = await api("GET", `/guilds/${guildId}/channels`)
     assert.ok(Array.isArray(listed.data))
@@ -790,6 +1105,7 @@ async function cleanup() {
     assert.ok(Array.isArray(after.data) && !after.data.some((channel) => channel.name === journal.name))
     report("test_channel_and_messages_removed", true)
     if (emojiFailure) throw emojiFailure
+    if (roleFailure) throw roleFailure
     unlinkSync(journalPath)
     journal = undefined
 }
@@ -1067,7 +1383,8 @@ try {
                     embeds ||
                     attachments ||
                     reactions ||
-                    pins)),
+                    pins ||
+                    guilds)),
     )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
@@ -1128,6 +1445,7 @@ try {
         const created = createClient({
             token,
             ...(cache || embeds || attachments ? { cache: cacheOptions() } : {}),
+            ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
             ...(recover ? { logging: { development: true, logger: fromEffectLogger(diagnosticLogger) } } : {}),
         })
         assert.ok(created.isOk())
@@ -1234,6 +1552,60 @@ try {
                 () => done.resolve(null),
             )
             assert.ok((await client.connect()).isOk())
+            if (guilds) {
+                const run = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) throw result.error
+                    return result.value
+                }
+                await verifyGuildMembers(
+                    {
+                        guild: () => run(client.guilds.fetch(guildId)),
+                        getGuild: () => run(client.guilds.get(guildId)),
+                        getMember: (target) => run(client.members.get(target)),
+                        getRole: (id) => run(client.roles.get({ guildId, id })),
+                        roles: () => run(client.roles.fetchAll(guildId)),
+                        createRole: (input) => run(client.roles.create(guildId, input)),
+                        editRole: (id, input) => run(client.roles.edit({ guildId, id }, input)),
+                        deleteRole: (id) => run(client.roles.delete({ guildId, id })),
+                        reorderRoles: (positions) => run(client.roles.reorder(guildId, positions)),
+                        member: (target) => run(client.members.fetch(target)),
+                        self: () => run(client.members.fetchSelf(guildId)),
+                        page: () => run(client.members.fetchPage(guildId, { limit: 2 })),
+                        add: (target, roleId) => run(client.members.addRole(target, roleId)),
+                        remove: (target, roleId) => run(client.members.removeRole(target, roleId)),
+                        send: () =>
+                            run(client.messages.send(channel.id, { content: "SDK reaction role verification" })),
+                        react: (target) => run(client.messages.addReaction(target, "✅")),
+                        collect: async (message, target, roleId) => {
+                            const collector = await run(
+                                client.messages.collectReactions(message, {
+                                    emoji: "✅",
+                                    timeoutMs: 10_000,
+                                    filter: (reaction) => reaction.userId === user.id,
+                                    onReaction: async (_reaction, signal) => {
+                                        await run(client.members.addRole(target, roleId, { signal }))
+                                        await run(
+                                            client.messages.edit(message, { content: "SDK role assigned" }, { signal }),
+                                        )
+                                    },
+                                }),
+                            )
+                            return { wait: () => run(collector.waitForClose()), stop: () => collector.stop() }
+                        },
+                        on: async (event, handler) => {
+                            const subscription = await run(client.on(event, handler))
+                            return async () => {
+                                subscription.unsubscribe()
+                                await run(subscription.waitForClose())
+                            }
+                        },
+                    },
+                    channel.id,
+                    user.id,
+                    () => gatewayProbe.interruptAndWait(client, states),
+                )
+            }
             if (pins) {
                 const run = async (operation) => {
                     const result = await operation
@@ -1371,7 +1743,7 @@ try {
                     channel.id,
                 )
             }
-            if (forceRecovery && !reactions && !pins) {
+            if (forceRecovery && !reactions && !pins && !guilds) {
                 if (cache) sdkRequests.length = 0
                 if (collectors)
                     await verifyCollectors(
@@ -1410,6 +1782,16 @@ try {
                 assert.equal((await cacheGet(reply))?.content, reply.content)
                 report("cache_rest_send_and_reply", true)
                 if (forceRecovery) report("cache_rebuilt_after_recovery", true)
+                await verifyCacheProjectionConflict(
+                    cacheSend,
+                    async (target) => {
+                        const result = await client.messages.fetch(target)
+                        assert.ok(result.isOk())
+                        return result.value
+                    },
+                    cacheGet,
+                    channel.id,
+                )
                 await verifyCacheExpiry(cacheSend, cacheGet, channel.id)
             }
             if (changes || cache) {
@@ -1453,6 +1835,7 @@ try {
                     client = yield* createClient({
                         token,
                         ...(cache || embeds || attachments ? { cache: cacheOptions() } : {}),
+                        ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
                         ...(recover ? { logging: { development: true } } : {}),
                     })
                     const cacheGet = async (target) => {
@@ -1564,6 +1947,77 @@ try {
                         }),
                     )
                     yield* client.connect()
+                    if (guilds) {
+                        const scope = yield* Effect.scope
+                        const run = async (operation) => {
+                            const result = await Effect.runPromise(Effect.result(operation))
+                            if (result._tag === "Failure") throw result.failure
+                            return result.success
+                        }
+                        yield* Effect.promise(() =>
+                            verifyGuildMembers(
+                                {
+                                    guild: () => run(client.guilds.fetch(guildId)),
+                                    getGuild: () => run(client.guilds.get(guildId)),
+                                    getMember: (target) => run(client.members.get(target)),
+                                    getRole: (id) => run(client.roles.get({ guildId, id })),
+                                    roles: () => run(client.roles.fetchAll(guildId)),
+                                    createRole: (input) => run(client.roles.create(guildId, input)),
+                                    editRole: (id, input) => run(client.roles.edit({ guildId, id }, input)),
+                                    deleteRole: (id) => run(client.roles.delete({ guildId, id })),
+                                    reorderRoles: (positions) => run(client.roles.reorder(guildId, positions)),
+                                    member: (target) => run(client.members.fetch(target)),
+                                    self: () => run(client.members.fetchSelf(guildId)),
+                                    page: () => run(client.members.fetchPage(guildId, { limit: 2 })),
+                                    add: (target, roleId) => run(client.members.addRole(target, roleId)),
+                                    remove: (target, roleId) => run(client.members.removeRole(target, roleId)),
+                                    send: () =>
+                                        run(
+                                            client.messages.send(channel.id, {
+                                                content: "SDK reaction role verification",
+                                            }),
+                                        ),
+                                    react: (target) => run(client.messages.addReaction(target, "✅")),
+                                    collect: async (message, target, roleId) => {
+                                        const collector = await run(
+                                            client.messages
+                                                .collectReactions(message, {
+                                                    emoji: "✅",
+                                                    timeoutMs: 10_000,
+                                                    filter: (reaction) => reaction.userId === user.id,
+                                                    onReaction: () =>
+                                                        Effect.gen(function* () {
+                                                            yield* client.members.addRole(target, roleId)
+                                                            yield* client.messages.edit(message, {
+                                                                content: "SDK role assigned",
+                                                            })
+                                                        }),
+                                                })
+                                                .pipe(Scope.provide(scope)),
+                                        )
+                                        return {
+                                            wait: () => run(collector.waitForClose()),
+                                            stop: () => run(collector.stop()),
+                                        }
+                                    },
+                                    on: async (event, handler) => {
+                                        const subscription = await run(
+                                            client
+                                                .on(event, (value) => Effect.sync(() => handler(value)))
+                                                .pipe(Scope.provide(scope)),
+                                        )
+                                        return async () => {
+                                            await run(subscription.unsubscribe())
+                                            await run(subscription.waitForClose())
+                                        }
+                                    },
+                                },
+                                channel.id,
+                                user.id,
+                                () => gatewayProbe.interruptAndWait(client, states),
+                            ),
+                        )
+                    }
                     if (pins) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
@@ -1720,7 +2174,7 @@ try {
                             ),
                         )
                     }
-                    if (forceRecovery && !reactions && !pins) {
+                    if (forceRecovery && !reactions && !pins && !guilds) {
                         if (cache) sdkRequests.length = 0
                         if (collectors) {
                             const collectorScope = yield* Effect.scope
@@ -1772,6 +2226,14 @@ try {
                         assert.equal((yield* Effect.promise(() => cacheGet(reply)))?.content, reply.content)
                         report("cache_rest_send_and_reply", true)
                         if (forceRecovery) report("cache_rebuilt_after_recovery", true)
+                        yield* Effect.promise(() =>
+                            verifyCacheProjectionConflict(
+                                cacheSend,
+                                (target) => Effect.runPromise(client.messages.fetch(target)),
+                                cacheGet,
+                                channel.id,
+                            ),
+                        )
                         yield* Effect.promise(() => verifyCacheExpiry(cacheSend, cacheGet, channel.id))
                     }
                     if (changes || cache) {
@@ -1845,7 +2307,7 @@ try {
     report("sdk_closed", true)
 } catch (error) {
     // Never print assertions, HTTP bodies, native causes, configured identities or credentials
-    if (attachments || reactions || pins) reportFailure(error)
+    if (attachments || reactions || pins || guilds) reportFailure(error)
     report(stage, false)
     process.exitCode = 1
 } finally {

@@ -19,6 +19,9 @@ import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "
 import { encodeReactionEmoji, encodeReactionUsersQuery, decodeReactionUsersPage } from "./reactions.js"
 import type { MessagePinsPage, MessagePinsQuery } from "#sdk/pins"
 import { decodePinsPage, encodePinsQuery } from "./pins.js"
+import { GuildOperationError, type GuildOperation, type GuildOperationOptions } from "#sdk/guilds"
+import type { GuildRequest } from "./guilds.js"
+import type { GuildCache, ResourceGuard, ResourceRequest } from "./guild-cache.js"
 
 type Pending = {
     route: string
@@ -32,7 +35,10 @@ type Outcome = MessageOperationError["outcome"]
 type Request<A> = {
     method: "POST" | "GET" | "PATCH" | "DELETE" | "PUT"
     channel: string
-    bucket?: "history" | "upload" | "reaction" | "pins"
+    bucket?: string
+    cache?: false
+    resourceCache?: ResourceRequest
+    resourceGuard?: ResourceGuard
     path: string
     body: EncodedBody | undefined
     status?: number
@@ -97,6 +103,7 @@ export class RestOwner {
     constructor(
         private readonly cache?: MessageCache,
         private readonly uploadMaxBytes = 104_857_600,
+        private readonly resources?: GuildCache,
     ) {}
     #uploadBytes = 0
     #closed = false
@@ -200,6 +207,7 @@ export class RestOwner {
                 const controller = new AbortController()
                 owner.#controllers.add(controller)
                 const guard =
+                    request.cache === false ||
                     request.preparation ||
                     request.bucket === "reaction" ||
                     (request.bucket === "pins" && request.method === "GET")
@@ -278,6 +286,8 @@ export class RestOwner {
                                     return { kind: "retry" as const, retry, global }
                                 }
                                 if (!response.ok) {
+                                    if (response.status === 404 && request.method === "GET" && request.resourceGuard)
+                                        owner.resources!.missing(request.resourceGuard)
                                     const rejected = response.status >= 400 && response.status < 500
                                     if (rejected && !request.preparation) progress.outcome = "rejected"
                                     const retryableRead =
@@ -315,6 +325,7 @@ export class RestOwner {
                     Effect.map((result) => {
                         if (result.kind === "success") {
                             state.success = true
+                            if (request.resourceGuard) owner.resources!.complete(request.resourceGuard, result.value)
                             if (state.guard) {
                                 if (request.method === "DELETE" || request.bucket === "pins")
                                     owner.cache!.delete(
@@ -831,6 +842,51 @@ export class RestOwner {
         })
     }
 
+    guild<A>(
+        token: Redacted.Redacted<string>,
+        operation: GuildOperation,
+        build: () => GuildRequest<A> | undefined,
+        options?: GuildOperationOptions,
+    ) {
+        return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const input = build()
+            if (
+                !input ||
+                (options !== undefined &&
+                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
+            )
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    // The scheduler's major-resource key is the guild here, never a message-cache channel
+                    channel: input.guildId,
+                    bucket: input.bucket,
+                    cache: false,
+                    resourceCache: input.cache,
+                    path: input.path,
+                    method: input.method,
+                    status: input.status,
+                    body: input.json === undefined ? undefined : { json: input.json, files: [] },
+                    decode: async (response) => {
+                        if (input.status === 204) return undefined as A
+                        const value = input.decode(await response.json().catch(() => null))
+                        if (value === undefined) throw new RestFailure("response", "unknown", response.status)
+                        return value
+                    },
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new GuildOperationError(operation, error.reason, error.outcome, error.status, error.retryAfterMs)
+                    : error,
+            ),
+        )
+    }
+
     #execute<A>(
         token: Redacted.Redacted<string>,
         request: Request<A>,
@@ -869,6 +925,9 @@ export class RestOwner {
             const deadline = performance.now() + timeout
             const generation = owner.cache?.generation ?? 0
             const progress: { outcome: Outcome } = { outcome: "notDispatched" }
+            // Register before queue/rate waits so events, writes and gaps invalidate the whole operation, including retries
+            const resourceGuard = request.resourceCache && owner.resources?.begin(request.resourceCache)
+            if (resourceGuard) request = { ...request, resourceGuard }
             const operation = Deferred.makeUnsafe<void>()
             owner.#operations.add(operation)
             return Effect.gen(function* () {
@@ -882,6 +941,7 @@ export class RestOwner {
                 }),
                 Effect.ensuring(
                     Effect.sync(() => {
+                        if (resourceGuard) owner.resources!.end(resourceGuard, progress.outcome === "unknown")
                         if (request.body) request.body.files.length = 0
                         owner.#uploadBytes -= uploadBytes
                         owner.#operations.delete(operation)

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util"
 import type { Message, MessageReference } from "#sdk/messages"
 import type { CachePolicyErrorReport } from "#sdk/cache"
 import { validAge, type CacheConfiguration } from "./configuration.js"
@@ -9,17 +10,6 @@ export type CacheRequest = {
     readonly mutation: boolean
     readonly generation: number
     invalid: boolean
-}
-
-function same(a: Message, b: Message) {
-    return (
-        a.id === b.id &&
-        a.channelId === b.channelId &&
-        a.content === b.content &&
-        a.author.id === b.author.id &&
-        a.author.username === b.author.username &&
-        a.author.isBot === b.author.isBot
-    )
 }
 
 /** One client's retained observations and bounded in-flight guards, never a server-state replica */
@@ -98,7 +88,7 @@ export class MessageCache {
             const message = messages[index]!
             if (request.invalid) {
                 const entry = this.#peek(message)
-                if (entry && !same(entry.message, message)) {
+                if (entry && !isDeepStrictEqual(entry.message, message)) {
                     this.#remove(message)
                     this.#invalidate(message, request)
                 }

@@ -1,4 +1,4 @@
-import type { MessageCacheOptions } from "./cache.js"
+import type { MessageCacheOptions, ResourceCacheSettings } from "./cache.js"
 import type { DefaultLoggingOptions } from "./logging.js"
 
 /** Options accepted when creating a disconnected client */
@@ -32,6 +32,20 @@ export interface ClientOptions {
     readonly token: string
     /** Optional resource retention, copied and validated at creation. Omission retains no resource snapshots */
     readonly cache?: {
+        /** Guild identity snapshots from explicit reads and guild create/update events, never nested member/role preload.
+         * Guild removal/unavailability clears this guild's entries in all three resource caches
+         */
+        readonly guilds?: boolean | ResourceCacheSettings
+        /** Member snapshots from explicit reads/pages and member add/update events.
+         * Member removal evicts one membership. Successful or uncertain role assignment evicts its target rather than guessing a new role set
+         */
+        readonly members?: boolean | ResourceCacheSettings
+        /** Role snapshots from explicit list/create/edit results and role events, with bigint-aware byte accounting.
+         * Successful or uncertain creation/reordering evicts guild role entries. Edits evict their target, or the guild role set when changing hoistPosition.
+         * Role deletion also evicts guild memberships because assignments can change without individual member events.
+         * Full list reads remove absent roles only without overlapping observations. Partial bulk events replace only supplied roles
+         */
+        readonly roles?: boolean | ResourceCacheSettings
         /**
          * Omitted/false disables message caching. True or an options object enables it.
          * Memory-only snapshots populate from eligible REST results and gateway events, never automatic history requests.

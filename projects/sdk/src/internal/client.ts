@@ -2,8 +2,9 @@ import { Cause, Clock, Deferred, Effect, Exit, Fiber, Queue, Random, Redacted, S
 import type { ConnectionState } from "#sdk/client"
 import type { CachePolicyErrorReport } from "#sdk/cache"
 import { MessageOperationError } from "#sdk/message-errors"
-import { reference } from "./message.js"
+import { identifier, record, reference } from "./message.js"
 import { MessageCache } from "./cache.js"
+import { GuildCache, type ResourceKind, type Resources } from "./guild-cache.js"
 import { makeCacheReports, type CacheReports } from "./cache-reports.js"
 import {
     ClientBusyError,
@@ -20,6 +21,14 @@ import { discoverGateway } from "./discovery.js"
 import { AttemptFailure, runGateway, type Session } from "./gateway.js"
 import { EventBus } from "./events.js"
 import type { ReactionCollector } from "./reaction-collector.js"
+import {
+    GuildOperationError,
+    type GuildOperation,
+    type GuildOperationOptions,
+    type MemberReference,
+    type RoleReference,
+} from "#sdk/guilds"
+import type { GuildRequest } from "./guilds.js"
 import { RestOwner } from "./rest.js"
 import type { ReactionEmojiInput, ReactionUsersQuery } from "#sdk/reactions"
 import type { MessagePinsQuery } from "#sdk/pins"
@@ -44,6 +53,7 @@ export class ClientOwner {
     readonly events = new EventBus()
     readonly rest: RestOwner
     readonly cache: MessageCache | undefined
+    readonly resources: GuildCache | undefined
     #configuration: Configuration | undefined
     #state: ConnectionState = "Disconnected"
     #latency: number | null = null
@@ -67,7 +77,10 @@ export class ClientOwner {
         this.cache = configuration.cache
             ? new MessageCache(configuration.cache, (report) => reports!.offer(report), now)
             : undefined
-        this.rest = new RestOwner(this.cache, configuration.uploadMaxBytes)
+        this.resources = Object.keys(configuration.resourceCache).length
+            ? new GuildCache(configuration.resourceCache, now)
+            : undefined
+        this.rest = new RestOwner(this.cache, configuration.uploadMaxBytes, this.resources)
     }
     get state(): ConnectionState {
         return this.#state
@@ -80,6 +93,8 @@ export class ClientOwner {
         if (this.#state === state) return
         if (state === "Recovering") this.cache?.gap()
         if (state === "Closing" || state === "Closed") this.cache?.close()
+        if (state === "Recovering") this.resources?.gap()
+        if (state === "Closing" || state === "Closed") this.resources?.close()
         this.#state = state
         if (state !== "Connected") this.#latency = null
         for (const listener of this.#listeners) listener(state)
@@ -118,6 +133,33 @@ export class ClientOwner {
         this.#configuration = undefined
         this.#session = { id: undefined, sequence: null }
         this.#setState("Closed")
+    }
+
+    guild<A>(operation: GuildOperation, build: () => GuildRequest<A> | undefined, options?: GuildOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.guild(this.#configuration.token, operation, build, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    getResource<K extends ResourceKind>(kind: K, target: string | MemberReference | RoleReference) {
+        return Effect.suspend((): Effect.Effect<Resources[K] | undefined, ClientClosedError | GuildOperationError> => {
+            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
+                return Effect.fail(new ClientClosedError())
+            const guildId = kind === "guilds" ? target : record(target) ? target.guildId : undefined
+            const id =
+                kind === "guilds"
+                    ? guildId
+                    : record(target)
+                      ? kind === "members"
+                          ? target.userId
+                          : target.id
+                      : undefined
+            if (!identifier(guildId) || !identifier(id))
+                return Effect.fail(new GuildOperationError(`${kind}.get`, "input", "notDispatched"))
+            return Effect.succeed(this.resources?.get(kind, guildId, id))
+        })
     }
 
     send(channelId: string, input: MessageInput, options?: SendOptions) {
@@ -316,12 +358,15 @@ export class ClientOwner {
                             owner.#setState("Recovering")
                         },
                         (event, message, bytes) => {
+                            owner.resources?.event(event, message)
                             if ("author" in message) owner.cache?.observe(message)
                             else if ("ids" in message) {
                                 for (const id of message.ids) owner.cache?.delete({ id, channelId: message.channelId })
-                            } else if (event === "messageDelete" && "id" in message) owner.cache?.delete(message)
+                            } else if (event === "messageDelete" && "id" in message && "channelId" in message)
+                                owner.cache?.delete(message)
                             owner.events.offer(event, message, bytes)
                         },
+                        owner.resources ? (event, value) => owner.resources!.guildEvent(event, value) : undefined,
                     )
                 })
                 const result = yield* Effect.exit(attempt)

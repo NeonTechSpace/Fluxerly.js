@@ -843,6 +843,49 @@ test("an unexpected accounting defect stays outside default typed message failur
     expect(cached(client, target)).toBeUndefined()
 })
 
+test.each(["default", "native"] as const)(
+    "%s cache conflicts include embeds, attachments and pin state",
+    async (mode) => {
+        const server = await fixture()
+        const scope = Scope.makeUnsafe()
+        const regular = mode === "default" ? defaultApi({ cache: { messages: true } }) : undefined
+        const native =
+            mode === "native"
+                ? await Effect.runPromise(
+                      createNative({
+                          token: "fixture-only-not-a-credential",
+                          cache: { messages: true },
+                      }).pipe(Scope.provide(scope)),
+                  )
+                : undefined
+        onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+        const get = async () =>
+            regular ? value(regular.messages.get(target)) : Effect.runPromise(native!.messages.get(target))
+        if (regular) value(await regular.connect())
+        else await Effect.runPromise(native!.connect())
+        for (const extra of [
+            { embeds: [{ type: "rich", description: "different embed" }] },
+            { attachments: [{ id: "40", filename: "different.txt", size: 1, flags: 0 }] },
+            { pinned: true },
+        ]) {
+            let reply!: () => void
+            server.control.respond = (request) => {
+                reply = () => request.response.end(JSON.stringify(wire("10", "20", "same text")))
+            }
+            const before = server.requests.length
+            const pending = regular
+                ? Promise.resolve(regular.messages.edit(target, { content: "same text" })).then(value)
+                : Effect.runPromise(native!.messages.edit(target, { content: "same text" }))
+            await vi.waitFor(() => expect(server.requests).toHaveLength(before + 1))
+            server.dispatch("MESSAGE_UPDATE", { ...wire("10", "20", "same text"), ...extra })
+            await vi.waitFor(async () => expect(await get()).toBeDefined())
+            reply()
+            expect((await pending).content).toBe("same text")
+            expect(await get()).toBeUndefined()
+        }
+    },
+)
+
 test("overlapping writes preserve only an identical observed snapshot and leave other channels untouched", async () => {
     const server = await fixture()
     const client = defaultApi({ cache: { messages: true } })

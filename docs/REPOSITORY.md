@@ -24,10 +24,12 @@ The documentation website remains a scaffold
 | [message.ts](/projects/sdk/src/internal/message.ts) | Wire-message validation and projection |
 | [reactions.ts](/projects/sdk/src/internal/reactions.ts) | Reaction emoji/query encoding and user-page/gateway projection; REST owns request scheduling |
 | [pins.ts](/projects/sdk/src/internal/pins.ts) | Pin-page query validation and page/event projection, with REST owning mutation and request scheduling |
+| [guilds.ts](/projects/sdk/src/internal/guilds.ts) | Guild/member/role request validation and response/event projection; shared REST owns admission and client-global rate state |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
 | [attachments.ts](/projects/sdk/src/internal/attachments.ts) | File validation and metadata projection |
 | [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation, upload destination boundary and bounded file streams; REST owns scheduling and message completion |
 | [cache.ts](/projects/sdk/src/internal/cache.ts) | Cache retention and conflicting observations |
+| [guild-cache.ts](/projects/sdk/src/internal/guild-cache.ts) | Optional guild/member/role retention, related-resource invalidation and request conflicts |
 | [cache-reports.ts](/projects/sdk/src/internal/cache-reports.ts) | Cache reporting lifetime |
 | [collector.ts](/projects/sdk/src/internal/collector.ts) | Collector budgets, deadlines and cleanup |
 | [reaction-collector.ts](/projects/sdk/src/internal/reaction-collector.ts) | Message-targeted reaction collection, batch intake, budgets and cleanup |
@@ -128,6 +130,7 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
 | `test:live:reactions` | Unicode/custom reactions, collectors, reactor readback, clear events and recovery | Temporary channel/messages, reactions and guild emoji, plus test-socket termination |
 | `test:live:pins` | Pin/unpin, explicit pages, pin status/events and recovery | Temporary channel/messages and pins, server-created pin notices, plus test-socket termination |
+| `test:live:guilds` | Guild/member reads, reaction-driven role assignment, role management/events, optional caches and recovery | Temporary channel/messages, two zero-permission test roles with assignment only to the designated bot, plus test-socket termination and test-owned response loss |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
 | `test:live:cache` | Cache intake, expiry and recovery invalidation | Temporary channel/messages and test-socket termination |
 | `test:live:collectors` | Collector completion, gap failure and use after recovery | Temporary channel/messages and test-socket termination |
@@ -147,7 +150,12 @@ Journal writes and remote creation are not atomic
 Reaction checks also journal a unique emoji name, uploader and returned ID before using a test-owned guild emoji.
 Cleanup verifies its identity and absence from the guild emoji list; this does not prove physical image-blob erasure
 
-Corrupt or unresolved journal state fails closed and must be inspected, not deleted merely to make a check pass.
+Corrupt or unresolved journal state fails closed and must be inspected, not deleted merely to make a check pass
+
+Guild checks also journal unique role names and returned IDs before assigning a zero-permission role to the test bot.
+Two test roles exercise SDK creation, editing, relative reordering and deletion after recovery.
+Cleanup reconciles only those markers/IDs, verifies remaining roles still have zero permissions and confirms absence after deletion.
+The role check preserves existing bot roles and does not edit human memberships or existing roles.
 Keep the journal until test-owned cleanup is verified
 
 Use [live harness source](/projects/sdk/tests/live/) for assertions and bounded execution details.

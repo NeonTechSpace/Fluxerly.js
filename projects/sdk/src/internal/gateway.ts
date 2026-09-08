@@ -3,6 +3,7 @@ import type { EventMap, EventName } from "#sdk/events"
 import { decodeMessage, decodeDeletion, decodeBulkDeletion } from "./message.js"
 import { decodeReaction, reactionEvents } from "./reactions.js"
 import { decodePinsUpdate } from "./pins.js"
+import { decodeGuildEvent, guildEvents } from "./guilds.js"
 import { Clock, Deferred, Effect, Redacted } from "effect"
 import WebSocket from "ws"
 import {
@@ -81,6 +82,7 @@ export const runGateway = (
     onLatency: (milliseconds: number | null) => void,
     onRecovering: () => void,
     onDispatch: <K extends EventName>(event: K, message: EventMap[K], bytes: number) => void,
+    onGuild?: (event: string, value: unknown) => void,
 ) =>
     Effect.scoped(
         Effect.gen(function* () {
@@ -216,6 +218,12 @@ export const runGateway = (
                                     return
                                 }
                                 session.sequence = payload.s
+                                if (
+                                    payload.t === "GUILD_CREATE" ||
+                                    payload.t === "GUILD_UPDATE" ||
+                                    payload.t === "GUILD_DELETE"
+                                )
+                                    onGuild?.(payload.t, body)
                                 if (payload.t === "MESSAGE_CREATE" || payload.t === "MESSAGE_UPDATE") {
                                     const message = decodeMessage(body)
                                     if (!message) {
@@ -227,6 +235,14 @@ export const runGateway = (
                                         message,
                                         Buffer.byteLength(data.toString()),
                                     )
+                                } else if (Object.hasOwn(guildEvents, payload.t)) {
+                                    const event = payload.t as keyof typeof guildEvents
+                                    const update = decodeGuildEvent(event, body)
+                                    if (!update) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch(guildEvents[event], update, Buffer.byteLength(data.toString()))
                                 } else if (payload.t === "CHANNEL_PINS_UPDATE") {
                                     const update = decodePinsUpdate(body)
                                     if (!update) {
