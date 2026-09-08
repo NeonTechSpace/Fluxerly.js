@@ -126,6 +126,26 @@ test.each(modes)("%s reaction collector validates registration without network w
     await expect(api.collect()).rejects.toMatchObject({ _tag: "ClientClosedError" })
 })
 
+test("default reaction collection turns an onReaction getter defect into a sanitized SdkDefect", async () => {
+    const api = await setup("default")
+    const privateBody = "private onReaction getter defect"
+    const options = Object.defineProperty({}, "onReaction", {
+        get() {
+            throw new Error(privateBody)
+        },
+    })
+    let error: unknown
+    try {
+        api.defaultApi!.messages.collectReactions(target, options as DefaultReactionCollectorOptions)
+    } catch (caught) {
+        error = caught
+    }
+    expect(error).toBeInstanceOf(SdkDefect)
+    expect(error).toMatchObject({ operation: "collectReactions", reasons: [{ kind: "Defect" }] })
+    expect(JSON.stringify(error)).not.toContain(privateBody)
+    expect(String(error)).not.toContain(privateBody)
+})
+
 test.each(modes)("%s rejects malformed emoji selectors locally using the shared reaction input rules", async (mode) => {
     const requests = vi.fn(async () => new Response(null, { status: 204 }))
     mockRest(requests)
@@ -941,6 +961,44 @@ test.each(modes)("%s progress failure is sanitized and collector-local, without 
     const next = await api.collect()
     deliverReaction(addition()).deliver()
     expect(await next.wait()).toMatchObject({ reason: "limit" })
+})
+
+test.each(modes)("%s releases failed reaction progress callbacks and snapshots after closure", async (mode) => {
+    await gateway()
+    mockRest(async () => new Response(null, { status: 204 }))
+    const api = await setup(mode)
+    await api.connect()
+    const weak: WeakRef<object>[] = []
+
+    async function trackedFailure() {
+        const defaultApi = (reaction: import("../src/index.js").MessageReaction) => {
+            weak.push(new WeakRef(reaction))
+            throw new Error("fixture failure")
+        }
+        const native = (reaction: import("../src/index.js").MessageReaction) => Effect.sync(() => defaultApi(reaction))
+        weak.push(new WeakRef(defaultApi), new WeakRef(native))
+        return progress(api, defaultApi, native, { maxReactions: 2 })
+    }
+
+    const failed = await trackedFailure()
+    deliverReaction(addition()).deliver()
+    await expect(failed.wait()).rejects.toMatchObject({ _tag: "CollectorError", reason: "handler" })
+
+    const session = new Session()
+    session.connect()
+    try {
+        for (let attempt = 0; attempt < 10; attempt++) {
+            await turn()
+            await new Promise<void>((resolve, reject) =>
+                session.post("HeapProfiler.collectGarbage", (error) => (error ? reject(error) : resolve())),
+            )
+            if (weak.every((reference) => reference.deref() === undefined)) break
+        }
+        expect(weak.map((reference) => reference.deref() === undefined)).toEqual([true, true, true])
+    } finally {
+        session.disconnect()
+    }
+    expect(await failed.wait().catch((error) => error)).toMatchObject({ _tag: "CollectorError", reason: "handler" })
 })
 
 test.each(

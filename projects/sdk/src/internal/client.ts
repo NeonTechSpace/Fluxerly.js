@@ -20,6 +20,7 @@ import { type Configuration, validateConfiguration } from "./configuration.js"
 import { discoverGateway } from "./discovery.js"
 import { AttemptFailure, runGateway, type Session } from "./gateway.js"
 import { EventBus } from "./events.js"
+import type { MessageCollector } from "./collector.js"
 import type { ReactionCollector } from "./reaction-collector.js"
 import {
     GuildOperationError,
@@ -44,6 +45,11 @@ import type {
 } from "#sdk/messages"
 
 export class ClientOwner {
+    #messageCollectors = new Set<MessageCollector>()
+    trackMessageCollector(collector: MessageCollector) {
+        this.#messageCollectors.add(collector)
+        return () => this.#messageCollectors.delete(collector)
+    }
     #reactionCollectors = new Set<ReactionCollector>()
     trackReactionCollector(collector: ReactionCollector) {
         this.#reactionCollectors.add(collector)
@@ -272,15 +278,29 @@ export class ClientOwner {
                 Effect.exit(this.events.shutdown()),
                 Effect.exit(this.rest.shutdown()),
                 Effect.exit(this.reports?.shutdown() ?? Effect.void),
-                Effect.forEach(
-                    [...this.#reactionCollectors],
-                    (collector) => Effect.exit(Deferred.await(collector.closed)),
+                Effect.all(
+                    [
+                        Effect.forEach(
+                            [...this.#messageCollectors],
+                            (collector) => Effect.exit(Deferred.await(collector.closed).pipe(Effect.asVoid)),
+                            { concurrency: "unbounded" },
+                        ),
+                        Effect.forEach(
+                            [...this.#reactionCollectors],
+                            (collector) => Effect.exit(Deferred.await(collector.closed).pipe(Effect.asVoid)),
+                            { concurrency: "unbounded" },
+                        ),
+                    ],
                     { concurrency: "unbounded" },
                 ).pipe(
                     Effect.map((exits) => {
-                        const reasons = exits.flatMap((exit) =>
-                            Exit.isFailure(exit) ? exit.cause.reasons.filter((reason) => reason._tag === "Die") : [],
-                        )
+                        const reasons = exits
+                            .flat()
+                            .flatMap((exit) =>
+                                Exit.isFailure(exit)
+                                    ? exit.cause.reasons.filter((reason) => reason._tag === "Die")
+                                    : [],
+                            )
                         return reasons.length ? Exit.failCause(Cause.fromReasons<never>(reasons)) : Exit.void
                     }),
                 ),
@@ -526,6 +546,7 @@ export class ClientOwner {
         return Effect.withFiber((fiber) =>
             this.events.ownsHandler(fiber.id) ||
             this.reports?.owns(fiber.id) ||
+            [...this.#messageCollectors].some((collector) => collector.owns(fiber.id)) ||
             [...this.#reactionCollectors].some((collector) => collector.owns(fiber.id))
                 ? // A native handler cannot join its own cleanup: The client scope owns shutdown and interrupts this caller
                   Effect.forkIn(this.#performShutdown(), this.scope).pipe(Effect.andThen(Effect.never))

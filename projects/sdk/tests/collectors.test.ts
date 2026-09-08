@@ -157,7 +157,7 @@ async function driver(mode: Mode, connected = true, cache = true) {
         connect,
         shutdown,
         state: () => (defaultApi ?? native)!.state,
-        async open(options?: DefaultCollectorOptions, channelId = "20") {
+        async open(options?: Omit<DefaultCollectorOptions, "onMessage">, channelId = "20") {
             if (defaultApi) {
                 const collector = value(defaultApi.messages.collect(channelId, options))
                 return {

@@ -10,7 +10,7 @@ Use [the repository guide](/docs/REPOSITORY.md) for setup and file locations
 | Package | `@neontechspace/fluxerly`, initially one published package with internal module boundaries |
 | Language | TypeScript 7 |
 | Module format | ECMAScript modules (ESM) |
-| Runtime | Node.js 24 as the minimum consumer major |
+| Runtime | Node.js 24.11.0 minimum consumer version |
 | Internal implementation | Effect 4 release-candidate line |
 | WebSocket transport | `ws`, kept behind internal SDK boundaries |
 | Public entry points | Default JavaScript/TypeScript and Effect-native, sharing one implementation |
@@ -25,7 +25,8 @@ Planned support covers JavaScript and TypeScript 7 only.
 TypeScript 6 and earlier are outside the SDK's support policy.
 JavaScript consumers will not need a TypeScript installation
 
-The exact minimum Node.js 24 minor and patch versions remain to be selected and tested
+The minimum is Node.js 24.11.0, the [first Node 24 LTS release](https://nodejs.org/en/blog/release/v24.11.0).
+This compatibility floor is separate from the development pin and does not recommend running an old patch instead of current security updates
 
 ### Versioning and release stages
 
@@ -79,7 +80,8 @@ The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and
 The initial target is Effect 4's release-candidate line, not Effect 3 or a stable Effect 4 release.
 Use an exact prerelease pin for reproducible implementation and validation.
 The private development package currently pins Effect as a runtime dependency.
-The published native consumer compatibility range and dependency or peer-dependency policy remain undecided
+Native consumers must use the same exact Effect version as the SDK for now, not an arbitrary Effect 4 RC.
+The published dependency-versus-peer arrangement remains a separate release decision
 
 ### Build and package optimization
 

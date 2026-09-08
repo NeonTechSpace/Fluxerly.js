@@ -140,13 +140,17 @@ test.each(modes)(
             [wireRole(), wireRole()],
             [wireRole(), wireRole("51", { permissions: "18446744073709551616" })],
             [wireRole("50", { permissions: "01" })],
+            [wireRole("50", { color: -1 })],
+            [wireRole("50", { position: -1 })],
         ]) {
             response = value
             await expect(api.roles.list()).rejects.toMatchObject({ reason: "response", outcome: "unknown" })
         }
+        response = [wireRole("51", { color: 0x1000000 })]
+        expect((await api.roles.list())[0]?.color).toBe(0x1000000)
         response = wireRole("51")
         await expect(api.roles.edit({ name: "ok" })).rejects.toMatchObject({ reason: "response" })
-        expect(calls).toBe(4)
+        expect(calls).toBe(7)
     },
 )
 

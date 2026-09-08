@@ -1,4 +1,20 @@
 import { Deferred, Effect, Scope, type Stream } from "effect"
+import type { PaginationError, HistoryIterationQuery, UserIterationQuery, PinIterationQuery } from "./pagination.js"
+export { PaginationError } from "./pagination.js"
+export type {
+    PaginationQuery,
+    HistoryIterationQuery,
+    UserIterationQuery,
+    PinIterationQuery,
+    PaginationOperation,
+} from "./pagination.js"
+import {
+    historyPagination,
+    memberPagination,
+    reactionUserPagination,
+    pinPagination,
+    paginationStream,
+} from "#sdk/internal/pagination"
 export type {
     EmbedInput,
     EmbedAuthorInput,
@@ -149,9 +165,25 @@ export interface ReactionCollectorOptions<E = never, R = never> extends SharedRe
      */
     readonly onReaction?: (reaction: import("./reactions.js").MessageReaction) => Effect.Effect<unknown, E, R>
 }
-import type { CollectorOptions, CollectorResult, CollectorFailure, CollectorRegistrationError } from "./collectors.js"
+import type {
+    CollectorOptions as SharedCollectorOptions,
+    CollectorResult,
+    CollectorFailure,
+    CollectorRegistrationError,
+} from "./collectors.js"
 export { CollectorError } from "./collectors.js"
-export type { CollectorOptions, CollectorResult, CollectorFailure, CollectorRegistrationError } from "./collectors.js"
+export type { CollectorResult, CollectorFailure, CollectorRegistrationError } from "./collectors.js"
+
+/** Bounded native message collection with progress work in the registration context */
+export interface CollectorOptions<E = never, R = never> extends SharedCollectorOptions {
+    /** Run once per accepted message ID, sequentially, after filtering and retained-byte admission.
+     * Failures and defects while active fail collection with CollectorError handler, without exposing the original cause.
+     * Stop, timeout, scope closure, recovery and shutdown interrupt active work and await its finalizers.
+     * Uninterruptible work can delay closure. Do not await this collector's completion or client shutdown inside its handler.
+     * Already-dispatched effects are not rolled back. Callbacks are never retried
+     */
+    readonly onMessage?: (message: Message) => Effect.Effect<unknown, E, R>
+}
 import { replyInput } from "#sdk/internal/message"
 import type { EventSource } from "#sdk/internal/events"
 import {
@@ -222,6 +254,74 @@ export interface EventHandlerOptions<E = never, R = never> extends HandlerOption
  * Interruption or client closure awaits owned cleanup but cannot undo a dispatched mutation
  */
 export interface Messages {
+    /** Traverse remote history newest-to-oldest as a lazy Stream, without connecting or prefetching another page.
+     * Each execution copies inputs and owns independent progress in the caller's context, without a detached runtime
+     *
+     * maxItems is required. pageSize/maxPages follow PaginationQuery. timeoutMs applies separately to each remote page
+     *
+     * Emits frozen snapshots. PaginationError covers input, cursorStalled and pageLimit; remote failures keep fetchHistory's operation.
+     * Interruption and defects retain native causes, including cleanup failures. Termination awaits in-flight request finalizers.
+     * Stream early termination releases buffered items. Closing/Closed also releases the page and fails the next pull
+     *
+     * Retains one bounded page, not all results. Enabled message caching follows fetchHistory's normal admission.
+     * Stops at maxItems or an empty remote page, not a short page. Separate pages are not a consistent snapshot.
+     * Delivered items remain caller-owned after a later error. Caller processing is not retried or rolled back
+     * @example
+     * ```ts
+     * import { Effect, Stream } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const paginationHistoryExample = (client: Client, channelId: string) =>
+     *     client.messages.iterateHistory(channelId, { maxItems: 500 }).pipe(
+     *         Stream.runForEach(message => Effect.sync(() => message.content.length)),
+     *     )
+     * ```
+     */
+    iterateHistory(
+        channelId: string,
+        query: HistoryIterationQuery,
+        options?: MessageOperationOptions,
+    ): Stream.Stream<Message, MessageOperationFailure | PaginationError>
+    /** Traverse ascending remote user IDs for one message and the selected literal Unicode or custom emoji.
+     * Shares iterateHistory's lazy Stream, per-page deadlines, caller context, interruption and release behavior.
+     * Stops at maxItems or hasMore=false. Remote errors retain fetchReactionUsers's operation.
+     * No reactor cache or automatic member lookup. Concurrent removals can invalidate earlier observations
+     * @example
+     * ```ts
+     * import { Stream } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const paginationReactionExample = (client: Client, message: MessageReference, userId: string) =>
+     *     client.messages.iterateReactionUsers(message, "👍", { maxItems: 500 }).pipe(
+     *         Stream.filter(user => user.id === userId), Stream.take(1), Stream.runCollect,
+     *     )
+     * ```
+     * An empty result means not found within this bounded scan, not proof that the user has never reacted
+     */
+    iterateReactionUsers(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        query: UserIterationQuery,
+        options?: MessageOperationOptions,
+    ): Stream.Stream<import("./reactions.js").ReactionUser, MessageOperationFailure | PaginationError>
+    /** Traverse remote pins in descending timestamp order without populating the message cache.
+     * Shares iterateHistory's lazy Stream, per-page deadlines, caller context, interruption and release behavior.
+     * PinIterationQuery defines per-run deduplication and completeness limits. Retains at most maxItems deduplication IDs.
+     * Remote errors retain fetchPins's operation. Valid stalled-page items may emit before cursorStalled on the next pull.
+     * Stops at maxItems or hasMore=false. Timestamp ties can prevent enumerating every pin even without concurrent edits
+     * @example
+     * ```ts
+     * import { Stream } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const paginationPinsExample = (client: Client, channelId: string) =>
+     *     client.messages.iteratePins(channelId, { maxItems: 20 }).pipe(
+     *         Stream.map(pin => pin.message.id), Stream.runCollect,
+     *     )
+     * ```
+     */
+    iteratePins(
+        channelId: string,
+        query: PinIterationQuery,
+        options?: MessageOperationOptions,
+    ): Stream.Stream<import("./pins.js").MessagePin, MessageOperationFailure | PaginationError>
     /**
      * Pin one message identified by decimal id and channelId, without requiring gateway readiness.
      * Lazy execution preserves caller context, interruption and native defects.
@@ -422,7 +522,14 @@ export interface Messages {
      *
      * The registration scope stops its collector with partial replies. Client shutdown fails it with ClientClosedError.
      * Interrupting a waiter does not stop collection. Closing its registration scope does. No AbortSignal option or detached runtime.
-     * Defects retain native Cause. Slow synchronous filters block JavaScript and cannot be preempted or have their side effects undone
+     * Defects retain native Cause. Slow synchronous filters block JavaScript and cannot be preempted or have their side effects undone.
+     * Optional onMessage runs sequentially in registration context after filtering, ID deduplication and retained-byte admission.
+     * Limit completion waits for the final callback. Timeout/stop may retain a message whose callback was interrupted.
+     * Once the accepted count is reached, later messages are ignored while the final callback finishes
+     *
+     * Handler failure ends collection with CollectorError handler. Terminal cleanup defects remain in Cause.
+     * Scope closure and client shutdown await callback cleanup. Pending budgets exclude the active message.
+     * Callbacks are never retried and their effects are not rolled back
      *
      * @example
      * ```ts
@@ -438,11 +545,29 @@ export interface Messages {
      * )
      * ```
      * The caller supplies a connected client and handles empty timeout results and client lifetime separately
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     *
+     * export const messageCollectorProgressExample = (client: Client, channelId: string, userId: string) => Effect.scoped(
+     *     Effect.gen(function* () {
+     *         const collector = yield* client.messages.collect(channelId, {
+     *             filter: message => message.author.id === userId,
+     *             maxMessages: 3,
+     *             onMessage: message => client.messages.reply(message, { content: "Received your reply" }),
+     *         })
+     *         return yield* collector.waitForClose()
+     *     }),
+     * )
+     * ```
+     * The author filter must exclude the bot itself to avoid collecting its acknowledgements
      */
-    collect(
+    collect<E = never, R = never>(
         channelId: string,
-        options?: CollectorOptions,
-    ): Effect.Effect<Collector, CollectorRegistrationError, Scope.Scope>
+        options?: CollectorOptions<E, R>,
+    ): Effect.Effect<Collector, CollectorRegistrationError, Scope.Scope | R>
     /**
      * Lazily register future reaction additions for one message with decimal id and channelId in the caller's scope.
      * Execute before the expected reaction. No REST request, existing-reactor lookup, implicit connect or cache reads
@@ -597,10 +722,10 @@ export interface Messages {
 
 /** A scoped native collection, separate from each caller observing it */
 export interface Collector {
-    /** Lazy idempotent stop, retaining accepted partial replies and releasing collector-owned work */
+    /** Lazily request idempotent stop with accepted partial replies. Use waitForClose to await callback cleanup */
     stop(): Effect.Effect<void>
     /**
-     * Lazily observe the retained frozen result/error after queue, timer, filter and listener cleanup.
+     * Lazily observe the retained frozen result/error after queue, timer, filter, listener and callback cleanup.
      * Multiple/late callers share the first outcome. Interruption affects only this waiter and defects retain Cause.
      * Timeout and stop can return empty/partial replies. Failures carry no partial message bodies.
      * Application-held handles/results retain successful snapshots until released
@@ -659,6 +784,30 @@ export interface Guilds {
  * Writes retry only confirmed 429 rejections, never uncertain outcomes. Interruption cannot undo a dispatched write
  */
 export interface Members {
+    /** Traverse ascending remote user IDs as a lazy Stream, without connecting or eagerly downloading the guild.
+     * Each execution copies inputs and owns independent progress in the caller's context.
+     * maxItems is required, pageSize defaults to 100 and maxPages to 100. timeoutMs applies separately to each page.
+     * Emits frozen members until maxItems or an empty page, not a short page. Pages are not a consistent snapshot
+     *
+     * PaginationError covers input, cursorStalled and pageLimit. Remote errors retain members.fetchPage's operation/retry policy.
+     * Interruption and defects retain native causes. Termination awaits request cleanup and releases the buffered page.
+     * Closing/Closed releases the page and fails the next pull. Delivered items remain caller-owned after later failure.
+     * Enabled member caching follows fetchPage admission. No role preloading, permission prediction or full-result retention
+     * @example
+     * ```ts
+     * import { Stream } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const paginationMembersExample = (client: Client, guildId: string) =>
+     *     client.members.iterate(guildId, { maxItems: 1000 }).pipe(
+     *         Stream.filter(member => !member.isBot), Stream.take(1), Stream.runCollect,
+     *     )
+     * ```
+     */
+    iterate(
+        guildId: string,
+        query: UserIterationQuery,
+        options?: GuildOperationOptions,
+    ): Stream.Stream<GuildMember, GuildOperationFailure | PaginationError>
     /** Lazy local-only lookup by decimal guild/user IDs, with Guilds.get's miss, freshness, failure and LRU rules.
      * Enable cache.members and cache.roles when creating the client. Explicit fetches or subsequent events populate them
      * @example
@@ -873,9 +1022,9 @@ export interface Client extends ClientState {
      * Permanently stop startup and recovery and await owned-resource cleanup.
      * This lazy Effect is uninterruptible once shutdown starts, so callers cannot abandon cleanup.
      * Release cached references and expiry timers, interrupt the cache reporter and await its finalizers.
-     * Interrupt reaction progress callbacks and await their finalizers; uninterruptible work can delay shutdown.
+     * Interrupt message/reaction collector callbacks and await their finalizers. Uninterruptible work can delay shutdown.
      * Uninterruptible reporter work can delay closure.
-     * Inside an owned message handler or cache reporter, the client scope performs shutdown and interrupts that invocation.
+     * Inside an owned event handler, collector callback or cache reporter, the client scope performs shutdown and interrupts that invocation.
      * Such an invocation does not resume after shutdown. This avoids waiting on its own cleanup.
      * Repeated and concurrent calls observe the same shutdown outcome.
      * Explicit shutdown makes pending connect fail with ClientClosedError rather than interruption
@@ -904,6 +1053,8 @@ export interface Client extends ClientState {
  *
  * Validate configuration locally without authenticating the token
  *
+ * Hosted Fluxer only; self-hosted instances and custom REST or gateway endpoints are not supported
+ *
  * Cache settings are copied and validated here without invoking retention policies or reporters.
  * Unknown cache or message-cache option keys fail validation. Caching is disabled by default
  *
@@ -929,6 +1080,8 @@ export function createClient<E = never, R = never>(
                     owner.guild("guilds.fetch", () => guildFetch(id), options),
             }),
             members: Object.freeze({
+                iterate: (id: string, query: UserIterationQuery, options?: GuildOperationOptions) =>
+                    paginationStream(memberPagination(owner, id, query, options)),
                 get: (target: MemberReference) => owner.getResource("members", target),
                 fetch: (target: MemberReference, options?: GuildOperationOptions) =>
                     owner.guild("members.fetch", () => memberFetch(target), options),
@@ -955,6 +1108,16 @@ export function createClient<E = never, R = never>(
                     owner.guild("roles.reorder", () => roleReorder(id, positions), options),
             }),
             messages: Object.freeze({
+                iterateHistory: (id: string, query: HistoryIterationQuery, options?: MessageOperationOptions) =>
+                    paginationStream(historyPagination(owner, id, query, options)),
+                iterateReactionUsers: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    query: UserIterationQuery,
+                    options?: MessageOperationOptions,
+                ) => paginationStream(reactionUserPagination(owner, target, emoji, query, options)),
+                iteratePins: (id: string, query: PinIterationQuery, options?: MessageOperationOptions) =>
+                    paginationStream(pinPagination(owner, id, query, options)),
                 removeUserReaction: (
                     target: MessageReference,
                     emoji: ReactionEmojiInput,
@@ -986,17 +1149,21 @@ export function createClient<E = never, R = never>(
                     emoji: ReactionEmojiInput,
                     options?: MessageOperationOptions,
                 ) => owner.reaction("removeReaction", target, emoji, options),
-                collect: (channelId: string, options?: CollectorOptions) =>
+                collect: <E = never, R = never>(channelId: string, options?: CollectorOptions<E, R>) =>
                     Effect.uninterruptible(
                         Effect.gen(function* () {
                             const callerScope = yield* Effect.scope
-                            const source = yield* collect(owner, channelId, options)
+                            const source = yield* collect(owner, channelId, options, false, options?.onMessage)
                             // A scoped waiter releases its registration when done, rather than retaining every completed collector until scope closure
                             yield* Effect.forkIn(
                                 Deferred.await(source.closed).pipe(
                                     Effect.asVoid,
                                     Effect.interruptible,
-                                    Effect.onExit(() => Effect.sync(() => source.stop())),
+                                    Effect.onExit(() =>
+                                        Effect.sync(() => source.stop()).pipe(
+                                            Effect.andThen(Effect.exit(Deferred.await(source.closed))),
+                                        ),
+                                    ),
                                     Effect.catchCause(() => Effect.void),
                                 ),
                                 callerScope,

@@ -1,7 +1,11 @@
 import type { MessageCacheOptions, ResourceCacheSettings } from "./cache.js"
 import type { DefaultLoggingOptions } from "./logging.js"
 
-/** Options accepted when creating a disconnected client */
+/**
+ * Options accepted when creating a disconnected client
+ *
+ * Hosted Fluxer only; self-hosted instances and custom REST or gateway endpoints are not supported
+ */
 export interface ClientOptions {
     /** Client-local upload admission, copied and validated at creation */
     readonly uploads?: {

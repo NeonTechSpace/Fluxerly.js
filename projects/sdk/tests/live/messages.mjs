@@ -4,7 +4,7 @@ import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSyn
 import { setTimeout as sleep } from "node:timers/promises"
 import { parseEnv } from "node:util"
 import WebSocket from "ws"
-import { Logger } from "effect"
+import { Cause, Logger } from "effect"
 import { fromEffectLogger } from "@neontechspace/fluxerly/effect"
 import { observeUploads, safeFailure } from "./upload-diagnostics.mjs"
 import { createReactionEmoji, cleanupReactionEmoji } from "./reaction-fixture.mjs"
@@ -25,6 +25,7 @@ const diagnosticLogger = Logger.make((entry) => {
 const manage = process.argv[3] === "--manage"
 const changes = process.argv[3] === "--events"
 const history = process.argv[3] === "--history"
+const pagination = process.argv[3] === "--pagination"
 const cache = process.argv[3] === "--cache"
 const collectors = process.argv[3] === "--collectors"
 const embeds = process.argv[3] === "--embeds"
@@ -225,6 +226,7 @@ async function verifyGuildMembers(ops, channelId, botId, interrupt) {
             assert.equal(raw.content, "SDK role assigned")
         } finally {
             await collector.stop()
+            await collector.close?.()
         }
         await ops.remove(target, roleId)
         await waitRole(false)
@@ -1256,6 +1258,142 @@ function observeMessageChanges(channelId) {
     }
 }
 
+async function verifyPagination(ops, channelId, botId) {
+    const seeded = await prepareHistory(channelId, botId)
+    const expected = seeded.cases[0].ids
+    const gather = async (iterable) => {
+        const items = []
+        for await (const item of iterable) items.push(item)
+        return items
+    }
+    const previousFetch = globalThis.fetch
+    let requests = 0
+    let responseMode = "normal"
+    let started, release
+    let held
+    globalThis.fetch = async (...args) => {
+        const url = new URL(args[0])
+        if (url.origin !== "https://api.fluxer.app" || url.pathname !== `/v1/channels/${channelId}/messages`)
+            return previousFetch(...args)
+        requests++
+        if (responseMode === "retry") {
+            responseMode = "normal"
+            return new Response(null, { status: 503 })
+        }
+        const response = await previousFetch(...args)
+        if (responseMode !== "hold") return response
+        responseMode = "normal"
+        // Consume the actual owned-channel response before simulating delayed delivery and awaited cancellation
+        await response.arrayBuffer()
+        started()
+        await new Promise((resolve) => {
+            if (args[1].signal.aborted) resolve()
+            else args[1].signal.addEventListener("abort", resolve, { once: true })
+        })
+        await held
+        throw new DOMException("Test-owned response cancellation", "AbortError")
+    }
+    try {
+        stage = "pagination_history_readback"
+        const all = await gather(ops.history({ maxItems: 10, pageSize: 2 }))
+        assert.deepEqual(
+            all.map((item) => item.id),
+            expected,
+        )
+        assert.equal(requests, 4)
+        await seeded.verify(Object.freeze(all), seeded.cases[0])
+        report(stage, true)
+        stage = "pagination_early_exit_and_page_limit"
+        requests = 0
+        for await (const _item of ops.history({ maxItems: 10, pageSize: 2 })) break
+        assert.equal(requests, 1)
+        requests = 0
+        await assert.rejects(gather(ops.history({ maxItems: 10, pageSize: 2, maxPages: 1 })), {
+            _tag: "PaginationError",
+            reason: "pageLimit",
+        })
+        assert.equal(requests, 1)
+        report(stage, true)
+        stage = "pagination_transient_read_recovery"
+        responseMode = "retry"
+        requests = 0
+        assert.equal((await gather(ops.history({ maxItems: 1 })))[0].id, expected[0])
+        assert.equal(requests, 2)
+        report(stage, true)
+        stage = "pagination_cancellation_cleanup_and_reuse"
+        responseMode = "hold"
+        const ready = new Promise((resolve) => {
+            started = resolve
+        })
+        held = new Promise((resolve) => {
+            release = resolve
+        })
+        const controller = new AbortController()
+        let settled = false
+        const waiting = ops.cancelHistory(controller.signal).finally(() => {
+            settled = true
+        })
+        await ready
+        controller.abort()
+        try {
+            await sleep(25)
+            assert.equal(settled, false)
+        } finally {
+            release()
+        }
+        await waiting
+        assert.equal((await gather(ops.history({ maxItems: 1 })))[0].id, expected[0])
+        report(stage, true)
+    } finally {
+        release?.()
+        globalThis.fetch = previousFetch
+    }
+    stage = "pagination_members_readback"
+    const members = await gather(ops.members({ maxItems: 2, pageSize: 1 }))
+    const rawMembers = await api("GET", `/guilds/${guildId}/members?limit=2`)
+    assert.equal(rawMembers.status, 200)
+    assert.deepEqual(
+        members.map((item) => item.userId),
+        rawMembers.data.map((item) => item.user.id),
+    )
+    report(stage, true)
+    stage = "pagination_selected_reactor_readback"
+    const message = { channelId, id: expected.at(-1) }
+    await ops.react(message)
+    const reactors = await gather(ops.users(message, "👍", { maxItems: 10, pageSize: 1 }))
+    const rawUsers = await api(
+        "GET",
+        `/channels/${channelId}/messages/${message.id}/reactions/${encodeURIComponent("👍")}/users?limit=100`,
+    )
+    assert.equal(rawUsers.status, 200)
+    assert.deepEqual(
+        reactors.map((item) => item.id),
+        rawUsers.data.items.map((item) => item.id),
+    )
+    assert.deepEqual(
+        reactors.map((item) => item.id),
+        [botId],
+    )
+    report(stage, true)
+    stage = "pagination_pin_pages_readback"
+    await ops.pin(message)
+    await sleep(10)
+    const other = { channelId, id: expected[0] }
+    await ops.pin(other)
+    const rawPins = await api("GET", `/channels/${channelId}/messages/pins?limit=50`)
+    assert.equal(rawPins.status, 200)
+    const pinItems = await gather(ops.pins({ maxItems: 10, pageSize: 1 }))
+    assert.deepEqual(
+        pinItems.map((item) => item.message.id),
+        rawPins.data.items.map((item) => item.message.id),
+    )
+    assert.equal(pinItems.length, 2)
+    await ops.unpin(message)
+    await ops.unpin(other)
+    assert.equal((await api("GET", `/channels/${channelId}/messages/pins?limit=50`)).data.items.length, 0)
+    report(stage, true)
+}
+
 async function prepareHistory(channelId, botId) {
     stage = "history_seed"
     const seeds = []
@@ -1339,25 +1477,216 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
             report(stage, true)
         } finally {
             await collector.stop()
+            await collector.close?.()
         }
     }
+
+    async function collectProgress(label, count = 1) {
+        const progressMarker = `collector-progress-${randomUUID()}`
+        const acknowledgement = `collector acknowledgement ${randomUUID()}`
+        const sent = []
+        const started = []
+        const replies = []
+        const cleaned = []
+        const releaseFirst = Promise.withResolvers()
+        let firstMessage
+        let active
+        stage = `collector_progress_${label}`
+        const collector = await open({
+            filter: (message) => message.author.id === botId && message.content.startsWith(progressMarker),
+            maxMessages: count,
+            timeoutMs: 30_000,
+            progressReply: acknowledgement,
+            progressGate: (message) => {
+                firstMessage ??= message.id
+                return message.id === firstMessage ? releaseFirst.promise : Promise.resolve()
+            },
+            onProgress: (event, message, reply) => {
+                if (event === "started") {
+                    assert.equal(active, undefined, "Collector message handlers must not overlap")
+                    active = message.id
+                    started.push(message.id)
+                } else if (event === "reply") {
+                    assert.equal(active, message.id)
+                    replies.push({ message, reply })
+                } else if (event === "cleaned") {
+                    assert.equal(active, message.id)
+                    active = undefined
+                    cleaned.push(message.id)
+                }
+            },
+        })
+        try {
+            sent.push(await send(channelId, { content: `${progressMarker}-0` }))
+            await waitForProgressStart(started)
+            // Keep the first callback active until every planned source message has been created
+            for (let index = 1; index < count; index++)
+                sent.push(await send(channelId, { content: `${progressMarker}-${index}` }))
+            releaseFirst.resolve()
+            const result = await collector.wait()
+            assert.equal(result.error, undefined)
+            assert.equal(result.value.reason, "limit")
+            assert.deepEqual(
+                result.value.messages.map((message) => message.id),
+                sent.map((message) => message.id),
+            )
+            assert.deepEqual(
+                started,
+                sent.map((message) => message.id),
+            )
+            assert.deepEqual(
+                cleaned,
+                sent.map((message) => message.id),
+            )
+            assert.equal(active, undefined)
+            assert.equal(replies.length, sent.length)
+            for (const [index, { message, reply }] of replies.entries()) {
+                assert.equal(message.id, sent[index].id)
+                const actual = await api("GET", `/channels/${channelId}/messages/${reply.id}`)
+                assert.equal(actual.status, 200)
+                assert.equal(actual.data?.channel_id, channelId)
+                assert.equal(actual.data?.content, `${acknowledgement}-${message.id}`)
+                assert.equal(actual.data?.message_reference?.message_id, message.id)
+                assert.equal(actual.data?.mention_everyone, false)
+                assert.deepEqual(actual.data?.mentions, [])
+            }
+            report(stage, true)
+        } finally {
+            releaseFirst.resolve()
+            await collector.stop()
+            await collector.close?.()
+        }
+    }
+
+    async function waitForProgressStart(started) {
+        const deadline = performance.now() + 10_000
+        while (started.length === 0 && performance.now() < deadline) await sleep(20)
+        assert.equal(started.length, 1, "Collector progress handler deadline")
+    }
+
+    async function cancelProgress() {
+        const progressMarker = `collector-cancel-${randomUUID()}`
+        const started = []
+        const cleanupStarted = []
+        const cleaned = []
+        const releaseCleanup = Promise.withResolvers()
+        let active
+        const collector = await open({
+            filter: (message) => message.author.id === botId && message.content.startsWith(progressMarker),
+            maxMessages: 1,
+            timeoutMs: 30_000,
+            progressWait: true,
+            progressCancel: true,
+            progressCleanup: async () => {
+                await releaseCleanup.promise
+            },
+            onProgress: (event, message) => {
+                if (event === "started") {
+                    assert.equal(active, undefined)
+                    active = message.id
+                    started.push(message.id)
+                } else if (event === "cleanupStarted") {
+                    assert.equal(active, message.id)
+                    cleanupStarted.push(message.id)
+                } else if (event === "cleaned") {
+                    assert.equal(active, message.id)
+                    active = undefined
+                    cleaned.push(message.id)
+                }
+            },
+        })
+        try {
+            const sent = await send(channelId, { content: `${progressMarker}-source` })
+            await waitForProgressStart(started)
+            stage = "collector_progress_cancellation"
+            assert.equal(typeof collector.cancel, "function")
+            const outcome = collector.wait()
+            let outcomeSettled = false
+            void outcome.then(() => {
+                outcomeSettled = true
+            })
+            const cancellation = Promise.resolve(collector.cancel())
+            let cancellationSettled = false
+            void cancellation.then(() => {
+                cancellationSettled = true
+            })
+            await waitForProgressStart(cleanupStarted)
+            await Promise.resolve()
+            assert.equal(outcomeSettled, false)
+            if (collector.cancelKind === "scope") assert.equal(cancellationSettled, false)
+            releaseCleanup.resolve()
+            await cancellation
+            const result = await outcome
+            if (collector.cancelKind === "signal") {
+                assert.equal(result.value, undefined)
+                assert.equal(result.error?._tag, "CancelledError")
+            } else {
+                assert.equal(result.error, undefined)
+                assert.equal(result.value.reason, "stopped")
+            }
+            assert.deepEqual(started, [sent.id])
+            assert.deepEqual(cleanupStarted, [sent.id])
+            assert.deepEqual(cleaned, [sent.id])
+            assert.equal(active, undefined)
+            report(stage, true)
+        } finally {
+            releaseCleanup.resolve()
+            await collector.stop()
+            await collector.close?.()
+        }
+    }
+
+    async function recoverProgress() {
+        const progressMarker = `collector-recovery-${randomUUID()}`
+        const started = []
+        const cleaned = []
+        let active
+        const gap = await open({
+            filter: (message) => message.author.id === botId && message.content.startsWith(progressMarker),
+            maxMessages: 1,
+            timeoutMs: 30_000,
+            progressWait: true,
+            onProgress: (event, message) => {
+                if (event === "started") {
+                    assert.equal(active, undefined)
+                    active = message.id
+                    started.push(message.id)
+                } else if (event === "cleaned") {
+                    assert.equal(active, message.id)
+                    active = undefined
+                    cleaned.push(message.id)
+                }
+            },
+        })
+        try {
+            const result = gap.wait()
+            const sent = await send(channelId, { content: `${progressMarker}-source` })
+            await waitForProgressStart(started)
+            await interrupt()
+            stage = "collector_connection_gap"
+            const outcome = await result
+            assert.equal(outcome.value, undefined)
+            assert.equal(outcome.error?._tag, "CollectorError")
+            assert.equal(outcome.error?.reason, "connectionLost")
+            assert.equal("messages" in outcome.error, false)
+            assert.deepEqual(started, [sent.id])
+            assert.deepEqual(cleaned, [sent.id])
+            assert.equal(active, undefined)
+            report(stage, true)
+        } finally {
+            await gap.stop()
+            await gap.close?.()
+        }
+    }
+
     await collectAndSend(2, 2, 30_000, "limit")
     await collectAndSend(5, 1, 5_000, "timeout")
-    const gap = await open({ filter: () => false, timeoutMs: 60_000 })
-    try {
-        await interrupt()
-        stage = "collector_connection_gap"
-        const result = await gap.wait()
-        assert.equal(result.value, undefined)
-        assert.equal(result.error?._tag, "CollectorError")
-        assert.equal(result.error?.reason, "connectionLost")
-        assert.equal("messages" in result.error, false)
-        report(stage, true)
-        await collectAndSend(1, 1, 30_000, "limit")
-        report("collector_after_resume", true)
-    } finally {
-        await gap.stop()
-    }
+    await collectProgress("replies_readback", 2)
+    await cancelProgress()
+    await collectProgress("after_cancellation")
+    await recoverProgress()
+    await collectProgress("after_resume")
+    report("collector_after_resume", true)
 }
 
 // Failure containment only: A forced exit is never reported as successful cleanup
@@ -1378,6 +1707,7 @@ try {
                     manage ||
                     changes ||
                     history ||
+                    pagination ||
                     cache ||
                     collectors ||
                     embeds ||
@@ -1469,6 +1799,45 @@ try {
             : undefined
         let timer
         try {
+            if (pagination) {
+                const value = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) throw result.error
+                    return result.value
+                }
+                const items = async function* (iterable) {
+                    for await (const result of iterable) {
+                        if (result.isErr()) throw result.error
+                        yield result.value
+                    }
+                }
+                await verifyPagination(
+                    {
+                        history: (query) => items(client.messages.iterateHistory(channel.id, query)),
+                        members: (query) => items(client.members.iterate(guildId, query)),
+                        users: (target, emoji, query) =>
+                            items(client.messages.iterateReactionUsers(target, emoji, query)),
+                        pins: (query) => items(client.messages.iteratePins(channel.id, query)),
+                        react: (target) => value(client.messages.addReaction(target, "👍")),
+                        pin: (target) => value(client.messages.pin(target)),
+                        unpin: (target) => value(client.messages.unpin(target)),
+                        cancelHistory: async (signal) => {
+                            for await (const result of client.messages.iterateHistory(
+                                channel.id,
+                                { maxItems: 1 },
+                                { signal },
+                            )) {
+                                assert.ok(result.isErr())
+                                assert.equal(result.error._tag, "CancelledError")
+                                return
+                            }
+                            assert.fail("Cancelled traversal unexpectedly completed")
+                        },
+                    },
+                    channel.id,
+                    user.id,
+                )
+            }
             if (history || cache) {
                 const probe = await prepareHistory(channel.id, user.id)
                 assert.equal(client.state, "Disconnected")
@@ -1748,9 +2117,56 @@ try {
                 if (collectors)
                     await verifyCollectors(
                         async (options) => {
-                            const opened = client.messages.collect(channel.id, options)
+                            const {
+                                progressReply,
+                                progressWait,
+                                progressCancel,
+                                progressGate,
+                                progressCleanup,
+                                onProgress,
+                                ...settings
+                            } = options
+                            const cancellation = progressCancel ? new AbortController() : undefined
+                            const opened = client.messages.collect(channel.id, {
+                                ...settings,
+                                ...(cancellation ? { signal: cancellation.signal } : {}),
+                                ...(progressReply || progressWait
+                                    ? {
+                                          onMessage: async (message, signal) => {
+                                              onProgress?.("started", message)
+                                              try {
+                                                  if (progressGate) await progressGate(message, signal)
+                                                  if (progressWait)
+                                                      await new Promise((resolve) => {
+                                                          if (signal.aborted) resolve()
+                                                          else signal.addEventListener("abort", resolve, { once: true })
+                                                      })
+                                                  else {
+                                                      const reply = await client.messages.reply(
+                                                          message,
+                                                          { content: `${progressReply}-${message.id}` },
+                                                          { signal },
+                                                      )
+                                                      if (reply.isErr()) throw reply.error
+                                                      onProgress?.("reply", message, reply.value)
+                                                  }
+                                              } finally {
+                                                  if (progressCleanup) {
+                                                      onProgress?.("cleanupStarted", message)
+                                                      await progressCleanup(message)
+                                                  }
+                                                  onProgress?.("cleaned", message)
+                                              }
+                                          },
+                                      }
+                                    : {}),
+                            })
                             assert.ok(opened.isOk())
-                            return { wait: () => opened.value.waitForClose(), stop: () => opened.value.stop() }
+                            return {
+                                wait: () => opened.value.waitForClose(),
+                                stop: () => opened.value.stop(),
+                                ...(cancellation ? { cancel: () => cancellation.abort(), cancelKind: "signal" } : {}),
+                            }
                         },
                         cacheSend,
                         channel.id,
@@ -1845,6 +2261,36 @@ try {
                         return cached.value
                     }
                     const cacheSend = (channelId, input) => Effect.runPromise(client.messages.send(channelId, input))
+                    if (pagination)
+                        yield* Effect.promise(() =>
+                            verifyPagination(
+                                {
+                                    history: (query) =>
+                                        Stream.toAsyncIterable(client.messages.iterateHistory(channel.id, query)),
+                                    members: (query) => Stream.toAsyncIterable(client.members.iterate(guildId, query)),
+                                    users: (target, emoji, query) =>
+                                        Stream.toAsyncIterable(
+                                            client.messages.iterateReactionUsers(target, emoji, query),
+                                        ),
+                                    pins: (query) =>
+                                        Stream.toAsyncIterable(client.messages.iteratePins(channel.id, query)),
+                                    react: (target) => Effect.runPromise(client.messages.addReaction(target, "👍")),
+                                    pin: (target) => Effect.runPromise(client.messages.pin(target)),
+                                    unpin: (target) => Effect.runPromise(client.messages.unpin(target)),
+                                    cancelHistory: async (signal) => {
+                                        const result = await Effect.runPromiseExit(
+                                            Stream.runDrain(
+                                                client.messages.iterateHistory(channel.id, { maxItems: 1 }),
+                                            ),
+                                            { signal },
+                                        )
+                                        assert.ok(Exit.isFailure(result) && Cause.hasInterrupts(result.cause))
+                                    },
+                                },
+                                channel.id,
+                                user.id,
+                            ),
+                        )
                     if (history || cache) {
                         const probe = yield* Effect.promise(() => prepareHistory(channel.id, user.id))
                         assert.equal(client.state, "Disconnected")
@@ -2177,15 +2623,78 @@ try {
                     if (forceRecovery && !reactions && !pins && !guilds) {
                         if (cache) sdkRequests.length = 0
                         if (collectors) {
-                            const collectorScope = yield* Effect.scope
                             yield* Effect.promise(() =>
                                 verifyCollectors(
                                     async (options) => {
-                                        const opened = await Effect.runPromise(
-                                            client.messages
-                                                .collect(channel.id, options)
-                                                .pipe(Scope.provide(collectorScope)),
-                                        )
+                                        const {
+                                            progressReply,
+                                            progressWait,
+                                            progressCancel,
+                                            progressGate,
+                                            progressCleanup,
+                                            onProgress,
+                                            ...settings
+                                        } = options
+                                        const collectorScope = Scope.makeUnsafe()
+                                        let opened
+                                        try {
+                                            opened = await Effect.runPromise(
+                                                client.messages
+                                                    .collect(channel.id, {
+                                                        ...settings,
+                                                        ...(progressReply || progressWait
+                                                            ? {
+                                                                  onMessage: (message) =>
+                                                                      Effect.gen(function* () {
+                                                                          yield* Effect.sync(() =>
+                                                                              onProgress?.("started", message),
+                                                                          )
+                                                                          if (progressGate)
+                                                                              yield* Effect.promise(() =>
+                                                                                  progressGate(message),
+                                                                              )
+                                                                          if (progressWait) yield* Effect.never
+                                                                          else {
+                                                                              const reply =
+                                                                                  yield* client.messages.reply(
+                                                                                      message,
+                                                                                      {
+                                                                                          content: `${progressReply}-${message.id}`,
+                                                                                      },
+                                                                                  )
+                                                                              yield* Effect.sync(() =>
+                                                                                  onProgress?.("reply", message, reply),
+                                                                              )
+                                                                          }
+                                                                      }).pipe(
+                                                                          Effect.ensuring(
+                                                                              Effect.gen(function* () {
+                                                                                  if (progressCleanup) {
+                                                                                      yield* Effect.sync(() =>
+                                                                                          onProgress?.(
+                                                                                              "cleanupStarted",
+                                                                                              message,
+                                                                                          ),
+                                                                                      )
+                                                                                      yield* Effect.promise(() =>
+                                                                                          progressCleanup(message),
+                                                                                      )
+                                                                                  }
+                                                                                  yield* Effect.sync(() =>
+                                                                                      onProgress?.("cleaned", message),
+                                                                                  )
+                                                                              }),
+                                                                          ),
+                                                                      ),
+                                                              }
+                                                            : {}),
+                                                    })
+                                                    .pipe(Scope.provide(collectorScope)),
+                                            )
+                                        } catch (error) {
+                                            await Effect.runPromise(Scope.close(collectorScope, Exit.void))
+                                            throw error
+                                        }
                                         return {
                                             wait: () =>
                                                 Effect.runPromise(
@@ -2197,6 +2706,14 @@ try {
                                                     ),
                                                 ),
                                             stop: () => Effect.runPromise(opened.stop()),
+                                            close: () => Effect.runPromise(Scope.close(collectorScope, Exit.void)),
+                                            ...(progressCancel
+                                                ? {
+                                                      cancel: () =>
+                                                          Effect.runPromise(Scope.close(collectorScope, Exit.void)),
+                                                      cancelKind: "scope",
+                                                  }
+                                                : {}),
                                         }
                                     },
                                     cacheSend,

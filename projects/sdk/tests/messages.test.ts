@@ -3,7 +3,7 @@ import { once } from "node:events"
 import { Cause, Effect, Exit, Fiber, Logger, References, Stream } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
-import { createClient, type Client, type Message } from "../src/index.js"
+import { createClient, SdkDefect, type Client, type Message } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 
 const transport = vi.hoisted(() => ({ url: "" }))
@@ -377,6 +377,151 @@ test("invalid options and message inputs fail without network work; native sends
         ),
     )
     expect(server.requests).toHaveLength(0)
+})
+
+test("default reply returns a sanitized SdkDefect for an eager input getter", async () => {
+    const client = defaultApi()
+    const privateBody = "private default boundary getter defect"
+    const reply = client.messages.reply(
+        { id: "10", channelId: "20" },
+        Object.defineProperty({}, "content", {
+            get() {
+                throw new Error(privateBody)
+            },
+        }) as import("../src/index.js").ReplyInput,
+    )
+    let error: unknown
+    try {
+        await reply
+    } catch (caught) {
+        error = caught
+    }
+    expect(error).toBeInstanceOf(SdkDefect)
+    expect(error).toMatchObject({ operation: "reply", reasons: [{ kind: "Defect" }] })
+    expect(JSON.stringify(error)).not.toContain(privateBody)
+    expect(String(error)).not.toContain(privateBody)
+})
+
+test("default async operations reject a sanitized SdkDefect for an eager signal getter", async () => {
+    const client = defaultApi()
+    const privateBody = "private default boundary getter defect"
+    const fetch = client.messages.fetch(
+        { id: "10", channelId: "20" },
+        Object.defineProperty({}, "signal", {
+            get() {
+                throw new Error(privateBody)
+            },
+        }) as import("../src/index.js").DefaultMessageOperationOptions,
+    )
+    let error: unknown
+    try {
+        await fetch
+    } catch (caught) {
+        error = caught
+    }
+    expect(error).toBeInstanceOf(SdkDefect)
+    expect(error).toMatchObject({ operation: "fetch", reasons: [{ kind: "Defect" }] })
+    expect(JSON.stringify(error)).not.toContain(privateBody)
+    expect(String(error)).not.toContain(privateBody)
+})
+
+test("default async operations sanitize listener cleanup defects without losing their primary failure", async () => {
+    const client = defaultApi()
+    const privateBody = "private default listener cleanup defect"
+    const listeners = new Set<() => void>()
+    let removals = 0
+    const fetch = client.messages.fetch(
+        { id: "invalid", channelId: "20" },
+        {
+            signal: {
+                aborted: false,
+                addEventListener: (_type, listener) => {
+                    listeners.add(listener)
+                },
+                removeEventListener: (_type, listener) => {
+                    removals++
+                    listeners.delete(listener)
+                    throw new Error(privateBody)
+                },
+            },
+        },
+    )
+    let error: unknown
+    try {
+        await fetch
+    } catch (caught) {
+        error = caught
+    }
+    expect(error).toBeInstanceOf(SdkDefect)
+    expect(error).toMatchObject({
+        operation: "fetch",
+        reasons: [
+            { kind: "Failure", failure: { _tag: "MessageOperationError", reason: "input", outcome: "notDispatched" } },
+            { kind: "Defect" },
+        ],
+    })
+    expect(removals).toBe(1)
+    expect(listeners.size).toBe(0)
+    expect(JSON.stringify(error)).not.toContain(privateBody)
+    expect(String(error)).not.toContain(privateBody)
+})
+
+test("default async operations remove a listener registered before signal setup throws", async () => {
+    const client = defaultApi()
+    const privateBody = "private default listener setup defect"
+    const listeners = new Set<() => void>()
+    let removals = 0
+    const fetch = client.messages.fetch(
+        { id: "10", channelId: "20" },
+        {
+            signal: {
+                aborted: false,
+                addEventListener: (_type, listener) => {
+                    listeners.add(listener)
+                    throw new Error(privateBody)
+                },
+                removeEventListener: (_type, listener) => {
+                    removals++
+                    listeners.delete(listener)
+                },
+            },
+        },
+    )
+    let error: unknown
+    try {
+        await fetch
+    } catch (caught) {
+        error = caught
+    }
+    expect(error).toBeInstanceOf(SdkDefect)
+    expect(error).toMatchObject({ operation: "fetch", reasons: [{ kind: "Defect" }] })
+    expect(removals).toBe(1)
+    expect(listeners.size).toBe(0)
+    expect(JSON.stringify(error)).not.toContain(privateBody)
+    expect(String(error)).not.toContain(privateBody)
+})
+
+test("default subscriptions throw a sanitized SdkDefect for an eager reporter getter", () => {
+    const client = defaultApi()
+    const privateBody = "private default boundary getter defect"
+    let error: unknown
+    try {
+        client.on(
+            "messageCreate",
+            () => {},
+            Object.defineProperty({}, "onError", {
+                get() {
+                    throw new Error(privateBody)
+                },
+            }) as import("../src/index.js").EventHandlerOptions,
+        )
+    } catch (caught) {
+        error = caught
+    }
+    expect(error).toBeInstanceOf(SdkDefect)
+    expect(error).toMatchObject({ operation: "on" })
+    expect(JSON.stringify(error)).not.toContain(privateBody)
+    expect(String(error)).not.toContain(privateBody)
 })
 
 test("a full outgoing queue rejects only new work, queued cancellation releases admission and shutdown closes active HTTP", async () => {

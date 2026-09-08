@@ -1,4 +1,4 @@
-import { Cause, Clock, Deferred, Effect, Exit } from "effect"
+import { Cause, Clock, Deferred, Effect, Exit, type Fiber } from "effect"
 import type { ConnectionState, OperationOptions } from "#sdk/client"
 import {
     CollectorError,
@@ -27,7 +27,11 @@ function settings(channelId: unknown, options: unknown, defaultApi: boolean): Se
     }
     if (
         Object.keys(input).some(
-            (key) => !Object.hasOwn(result, key) && key !== "filter" && !(defaultApi && key === "signal"),
+            (key) =>
+                !Object.hasOwn(result, key) &&
+                key !== "filter" &&
+                key !== "onMessage" &&
+                !(defaultApi && key === "signal"),
         )
     )
         return new ConfigurationError("collectorOptions", "Unsupported collector option")
@@ -48,6 +52,8 @@ function settings(channelId: unknown, options: unknown, defaultApi: boolean): Se
     }
     if (input.filter !== undefined && typeof input.filter !== "function")
         return new ConfigurationError("filter", "Collector filter must be a function")
+    if (input.onMessage !== undefined && typeof input.onMessage !== "function")
+        return new ConfigurationError("onMessage", "Message handler must be a function")
     const signal = input.signal
     if (
         signal !== undefined &&
@@ -78,6 +84,73 @@ export class MessageCollector {
     #release: (() => void) | undefined
     #settings: Settings | undefined
     readonly #deadline: number
+    #busy = false
+    #next = Deferred.makeUnsafe<Message>()
+    #worker: Fiber.Fiber<void> | undefined
+    #outcome: Exit.Exit<CollectorResult, CollectorFailure> | undefined
+    #untrack: (() => void) | undefined
+
+    owns(fiberId: number) {
+        return this.#worker?.id === fiberId
+    }
+
+    run<E, R>(owner: ClientOwner, handler: (message: Message) => Effect.Effect<unknown, E, R>) {
+        const collector = this
+        return Effect.gen(function* () {
+            collector.#untrack = owner.trackMessageCollector(collector)
+            const work = Effect.gen(function* () {
+                while (collector.#active) {
+                    const message = yield* Deferred.await(collector.#next)
+                    collector.#next = Deferred.makeUnsafe<Message>()
+                    yield* Effect.scoped(Effect.suspend(() => handler(message))).pipe(
+                        Effect.catchCause((cause) =>
+                            !collector.#active && Cause.hasDies(cause)
+                                ? Effect.failCause(
+                                      Cause.fromReasons<never>(
+                                          cause.reasons.filter((reason) => reason._tag !== "Fail"),
+                                      ),
+                                  )
+                                : Effect.sync(() => collector.fail(collector.#handlerFailure())),
+                        ),
+                    )
+                    collector.#busy = false
+                    if (!collector.#active) return
+                    if (collector.#expired()) return
+                    if (collector.#messages.length === collector.#settings!.maxMessages) collector.#succeed("limit")
+                    else collector.#scheduleDrain()
+                }
+            }).pipe(
+                Effect.interruptible,
+                Effect.onExit((exit) => Effect.sync(() => collector.#workerFinished(exit))),
+            )
+            collector.#worker = yield* Effect.forkIn(work, owner.scope, { uninterruptible: true })
+        })
+    }
+
+    #handlerFailure() {
+        const error = new CollectorError("handler")
+        // Materialize the retained safe stack without keeping its callback frame alive
+        const stack = error.stack
+        if (stack !== undefined) error.stack = stack
+        return error
+    }
+
+    #workerFinished(exit: Exit.Exit<void, unknown>) {
+        if (this.#active) this.stop()
+        this.#worker = undefined
+        if (Exit.isFailure(exit) && Cause.hasDies(exit.cause)) {
+            const cause = Cause.fromReasons<CollectorFailure>(
+                exit.cause.reasons.filter((reason) => reason._tag === "Die"),
+            )
+            this.#outcome = Exit.failCause(
+                Cause.combine(
+                    this.#outcome && Exit.isFailure(this.#outcome) ? this.#outcome.cause : Cause.empty,
+                    cause,
+                ),
+            )
+        }
+        this.#complete()
+    }
 
     constructor(
         settings: Settings,
@@ -145,6 +218,7 @@ export class MessageCollector {
 
     #offer(message: Message, bytes: number) {
         if (!this.#active) return
+        if (this.#busy && this.#messages.length === this.#settings!.maxMessages) return
         try {
             if (this.#expired()) return
             const settings = this.#settings!
@@ -164,6 +238,7 @@ export class MessageCollector {
     }
 
     #scheduleDrain() {
+        if (this.#busy || !this.#active) return
         // Do not create this callback inside offer: Retained error stacks can keep its closure and the offered payload alive
         this.#drain ??= setImmediate(() => {
             this.#drain = undefined
@@ -194,6 +269,11 @@ export class MessageCollector {
             this.#messages.push(message)
             this.#ids.add(message.id)
             this.#bytes += size
+            if (this.#worker) {
+                this.#busy = true
+                Deferred.doneUnsafe(this.#next, Effect.succeed(message))
+                return
+            }
             if (this.#messages.length === this.#settings!.maxMessages) return this.#succeed("limit")
         }
     }
@@ -228,16 +308,25 @@ export class MessageCollector {
                 Cause.combine(Exit.isFailure(outcome) ? outcome.cause : Cause.empty, Cause.die(error)),
             )
         }
-        Deferred.doneUnsafe(this.closed, outcome)
+        this.#outcome = outcome
+        if (this.#worker) this.#worker.interruptUnsafe()
+        else this.#complete()
+    }
+    #complete() {
+        this.#untrack?.()
+        this.#untrack = undefined
+        this.#next = Deferred.makeUnsafe<Message>()
+        if (this.#outcome) Deferred.doneUnsafe(this.closed, this.#outcome)
     }
 }
 
-export function collect(
+export function collect<E = never, R = never>(
     owner: ClientOwner,
     channelId: string,
     options?: CollectorOptions,
     defaultApi = false,
-): Effect.Effect<MessageCollector, CollectorRegistrationError> {
+    handler?: (message: Message) => Effect.Effect<unknown, E, R>,
+): Effect.Effect<MessageCollector, CollectorRegistrationError, R> {
     return Effect.gen(function* () {
         if (owner.state === "Closing" || owner.state === "Closed") return yield* Effect.fail(new ClientClosedError())
         const config = settings(channelId, options, defaultApi)
@@ -246,6 +335,7 @@ export function collect(
         if (owner.state !== "Connected") return yield* Effect.fail(new CollectorError("notConnected"))
         const clock = yield* Clock.Clock
         const collector = new MessageCollector(config, clock)
+        if (handler) yield* collector.run(owner, handler)
         collector.start(owner, channelId)
         return collector
     })

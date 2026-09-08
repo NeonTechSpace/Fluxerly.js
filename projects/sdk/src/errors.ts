@@ -34,6 +34,7 @@ export class ConfigurationError extends Error {
             | "channelId"
             | "filter"
             | "onReaction"
+            | "onMessage"
             | "emoji"
             | "signal"
             | "maxMessages"
@@ -50,6 +51,7 @@ export class ConfigurationError extends Error {
 /** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
 export type Operation =
     | import("./guilds.js").GuildOperation
+    | import("./pagination.js").PaginationOperation
     | "createClient"
     | "connect"
     | "run"
@@ -174,6 +176,7 @@ export type DefectReason =
               | import("./message-errors.js").MessageError
               | import("./message-errors.js").MessageOperationError
               | import("./guilds.js").GuildOperationError
+              | import("./pagination.js").PaginationError
               | import("./collectors.js").CollectorError
       }
     | { readonly kind: "Defect" }

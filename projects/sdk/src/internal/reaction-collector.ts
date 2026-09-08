@@ -126,7 +126,7 @@ export class ReactionCollector {
                                           cause.reasons.filter((reason) => reason._tag !== "Fail"),
                                       ),
                                   )
-                                : Effect.sync(() => collector.fail(new CollectorError("handler"))),
+                                : Effect.sync(() => collector.fail(collector.#handlerFailure())),
                         ),
                     )
                     collector.#busy = false
@@ -141,6 +141,14 @@ export class ReactionCollector {
             )
             collector.#worker = yield* Effect.forkIn(work, owner.scope, { uninterruptible: true })
         })
+    }
+
+    #handlerFailure() {
+        const error = new CollectorError("handler")
+        // Materialize the retained safe stack without keeping its callback frame alive
+        const stack = error.stack
+        if (stack !== undefined) error.stack = stack
+        return error
     }
 
     #workerFinished(exit: Exit.Exit<void, unknown>) {

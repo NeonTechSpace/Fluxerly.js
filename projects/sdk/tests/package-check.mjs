@@ -12,7 +12,7 @@ import {
 } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
-import { dirname, join, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const sdk = fileURLToPath(new URL("../", import.meta.url))
@@ -22,6 +22,7 @@ const require = createRequire(import.meta.url)
 const compiler = join(dirname(require.resolve("typescript/package.json")), "bin/tsc")
 const pnpm = process.env.npm_execpath
 assert.ok(pnpm, "Run the package check through pnpm run test:package")
+console.log(`Packed consumer check runtime: Node ${process.version}`)
 
 function run(command, args, cwd, timeout = 120_000) {
     return execFileSync(command, args, { cwd, timeout, encoding: "utf8", windowsHide: true })
@@ -55,6 +56,7 @@ try {
 
         const installed = join(consumer, "node_modules", manifest.name)
         assert.deepEqual(JSON.parse(readFileSync(join(installed, "package.json"), "utf8")).imports, manifest.imports)
+        assert.deepEqual(JSON.parse(readFileSync(join(installed, "package.json"), "utf8")).engines, manifest.engines)
         run(
             process.execPath,
             [
@@ -75,6 +77,7 @@ try {
             "events",
             "message-errors",
             "collectors",
+            "pagination",
             "logging",
             "embeds",
             "attachments",
@@ -113,7 +116,10 @@ try {
             const sourceMap = JSON.parse(readFileSync(join(installed, file), "utf8"))
             assert.ok(sourceMap.sources.length > 0)
             for (const source of sourceMap.sources) {
-                assert.ok(existsSync(resolve(installed, dirname(file), sourceMap.sourceRoot ?? "", source)))
+                const resolved = resolve(installed, dirname(file), sourceMap.sourceRoot ?? "", source)
+                const packedPath = relative(installed, resolved)
+                assert.ok(!isAbsolute(packedPath) && packedPath !== ".." && !packedPath.startsWith(`..${sep}`))
+                assert.ok(existsSync(resolved))
             }
         }
 
@@ -132,6 +138,16 @@ try {
             )
             .filter((example) => /(?:function|const) askName/.test(example))
         assert.equal(collectorExamples.length, 1)
+        const collectorProgressExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) messageCollectorProgressExample/.test(example))
+        assert.equal(collectorProgressExamples.length, 1)
+        writeFileSync(join(consumer, "collector-progress-example.ts"), collectorProgressExamples[0])
         const pinsExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]
@@ -163,6 +179,17 @@ try {
                 /(?:function|const) (?:(?:assign|create)RoleExample|cachedRoleNamesExample)/.test(example),
             )
         assert.equal(guildExamples.length, 3)
+        const paginationExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) pagination(?:History|Reaction|Pins|Members)Example/.test(example))
+        assert.equal(paginationExamples.length, 4)
+        for (const [index, example] of paginationExamples.entries())
+            writeFileSync(join(consumer, `pagination-example-${index}.ts`), example)
         for (const [index, example] of guildExamples.entries())
             writeFileSync(join(consumer, `guild-example-${index}.ts`), example)
         // Compile the actual authored example against the packed exports, not a separately maintained copy

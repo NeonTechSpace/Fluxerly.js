@@ -84,6 +84,10 @@ Repeated deletion or a missing target does not prove a prior operation succeeded
 Keep history's channel rate bucket separate from single-message fetches while sharing global admission.
 Do not introduce background traversal or prefetch through this path
 
+The [pagination owner](/projects/sdk/src/internal/pagination.ts) composes existing remote page operations without changing their retries, rate state or cache admission.
+Each consumption owns one buffered page and bounded pin-deduplication state, released on termination or client closure.
+The default iterator owns Result conversion, while native streams keep request execution and cleanup in the caller's scope
+
 ## Guild resource boundary
 
 [Guild projection](/projects/sdk/src/internal/guilds.ts) validates request inputs and maps REST/gateway observations without retaining resource state.
@@ -112,8 +116,12 @@ Neither retention nor reporting failure may change a successful REST result or e
 The [collector owner](/projects/sdk/src/internal/collector.ts) selects the channel before buffering and runs synchronous filters outside gateway decoding.
 It owns separate pending-input and retained-result budgets, without REST or cache reads
 
-Observe internal lifecycle transitions rather than the coalescing public state stream so a brief gap cannot be missed.
-Terminal cleanup releases intake, state and signal listeners, timers, queued payloads and filter references.
+Observe internal lifecycle transitions rather than the coalescing public state stream so a brief gap cannot be missed
+
+Optional progress work runs in a collector-owned fiber under the client scope, with the registration context.
+Client shutdown and registration-scope closure wait for that work, while stopping intake prevents later callbacks
+
+Terminal cleanup releases intake, state and signal listeners, timers, queued payloads and filter/handler references.
 Application-held successful results may outlive collector cleanup
 
 Do not change existing subscription recovery behavior or imply atomic registration and remote sending

@@ -30,6 +30,7 @@ The documentation website remains a scaffold
 | [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation, upload destination boundary and bounded file streams; REST owns scheduling and message completion |
 | [cache.ts](/projects/sdk/src/internal/cache.ts) | Cache retention and conflicting observations |
 | [guild-cache.ts](/projects/sdk/src/internal/guild-cache.ts) | Optional guild/member/role retention, related-resource invalidation and request conflicts |
+| [pagination.ts](/projects/sdk/src/internal/pagination.ts) | Demand-driven page traversal, cursor progress, limits and per-consumption cleanup |
 | [cache-reports.ts](/projects/sdk/src/internal/cache-reports.ts) | Cache reporting lifetime |
 | [collector.ts](/projects/sdk/src/internal/collector.ts) | Collector budgets, deadlines and cleanup |
 | [reaction-collector.ts](/projects/sdk/src/internal/reaction-collector.ts) | Message-targeted reaction collection, batch intake, budgets and cleanup |
@@ -64,7 +65,8 @@ Run shared pnpm commands from that directory
 | [LICENSE](/LICENSE) | Apache-2.0 license for the SDK, website code, and authored documentation |
 
 The development Node pin is separate from the SDK's consumer compatibility policy.
-Node 24 is the selected minimum consumer major, but the exact minimum minor and patch remain undecided
+The consumer minimum is Node.js 24.11.0, the first LTS release of the Node 24 line.
+The SDK manifest declares that floor independently of the development pin
 
 The workspace manifest selects pnpm 12 through `devEngines.packageManager`, with the exact resolved version recorded in the shared lockfile.
 See [technology choices](/docs/TECHNOLOGY.md#shared-development-tooling) for the update procedure
@@ -101,6 +103,10 @@ The website and repository documents are outside these formatting commands
 
 Local networking checks use owned loopback fixtures, not Fluxer credentials or live sessions
 
+Run the packed-consumer check with Node.js 24.11.0 as well as the development runtime when changing runtime compatibility.
+Use `pnpm --filter @neontechspace/fluxerly test:package` after building with the development runtime.
+The check reports its actual Node version and uses that executable for its isolated consumers
+
 Run `pnpm --filter @neontechspace/fluxerly test:cache:memory` for isolated GC-enabled retention checks.
 Run `pnpm --filter @neontechspace/fluxerly test:cache:workload` for local cache workloads.
 Both build first and use controlled responses, not Fluxer credentials or production workloads
@@ -132,6 +138,7 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:pins` | Pin/unpin, explicit pages, pin status/events and recovery | Temporary channel/messages and pins, server-created pin notices, plus test-socket termination |
 | `test:live:guilds` | Guild/member reads, reaction-driven role assignment, role management/events, optional caches and recovery | Temporary channel/messages, two zero-permission test roles with assignment only to the designated bot, plus test-socket termination and test-owned response loss |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
+| `test:live:pagination` | History/member/reactor/pin traversal, early exit, read recovery and cancellation cleanup | Temporary channel/messages, reactions and pins, plus test-owned transient read failure and delayed response delivery |
 | `test:live:cache` | Cache intake, expiry and recovery invalidation | Temporary channel/messages and test-socket termination |
 | `test:live:collectors` | Collector completion, gap failure and use after recovery | Temporary channel/messages and test-socket termination |
 | `test:live:embeds` | Embed send/reply/edit, readback, events, cache and collectors | Temporary channel/messages and test-message edits |

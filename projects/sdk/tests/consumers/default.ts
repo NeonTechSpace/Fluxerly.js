@@ -13,6 +13,7 @@ import {
     type MessageCacheSettings,
     type Collector,
     type CollectorOptions,
+    type DefaultCollectorOptions,
     type CollectorResult,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
@@ -207,6 +208,22 @@ export async function collectReplies(client: Client) {
     // @ts-expect-error Successful collector results are immutable
     completed.messages.push(completed.messages[0]!)
     return completed.reason
+}
+
+export function collectWithProgress(client: Client) {
+    const options: DefaultCollectorOptions = {
+        onMessage: async (message, signal) => {
+            const reply = await client.messages.reply(message, { content: "Accepted" }, { signal })
+            if (reply.isErr()) throw reply.error
+        },
+    }
+    client.messages.collect("20", {
+        onMessage: (message) => {
+            // @ts-expect-error Progress callbacks receive immutable message snapshots
+            message.id = "21"
+        },
+    })
+    return client.messages.collect("20", options)
 }
 
 /** Typechecked page-navigation fragment. The application owns client lifetime and decides when to request another page */

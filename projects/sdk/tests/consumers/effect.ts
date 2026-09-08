@@ -16,6 +16,7 @@ import {
     type Collector,
     type CollectorOptions,
     type CollectorResult,
+    type CollectorRegistrationError,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
 
@@ -184,6 +185,24 @@ export function collectReplies(client: Client) {
         result.messages.push(result.messages[0]!)
         return result.reason
     })
+}
+
+const MessageProgress = Context.Service<{ readonly accept: (message: Message) => void }>("packed-message-progress")
+
+export function collectWithProgressService(client: Client) {
+    const options: CollectorOptions<never, Context.Service.Identifier<typeof MessageProgress>> = {
+        onMessage: (message) => Effect.map(MessageProgress, (service) => service.accept(message)),
+    }
+    const registration: Effect.Effect<
+        Collector,
+        CollectorRegistrationError,
+        Scope.Scope | Context.Service.Identifier<typeof MessageProgress>
+    > = client.messages.collect("20", options)
+    // @ts-expect-error Providing the scope alone does not satisfy the callback's required service
+    Effect.runPromise(Effect.scoped(registration))
+    // @ts-expect-error Native progress callbacks return Effects, not Promises
+    client.messages.collect("20", { onMessage: async () => {} })
+    return registration.pipe(Effect.provideService(MessageProgress, { accept: () => {} }))
 }
 
 /** Typechecked explicit page navigation in the caller's Effect context */

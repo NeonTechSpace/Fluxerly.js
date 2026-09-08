@@ -22,6 +22,13 @@ export interface CollectorOptions extends EventBufferOptions {
 
 /** Default collection settings. The signal controls the collection, not just one observer */
 export interface DefaultCollectorOptions extends CollectorOptions {
+    /** Run once per accepted message ID, sequentially, after filtering and retained-byte admission.
+     * Return/await work and inspect Result errors yourself. Throws/rejections fail with CollectorError handler.
+     * Stop, timeout, cancellation, recovery and shutdown abort the signal and await the returned promise.
+     * Ignoring cancellation can delay completion indefinitely. Do not await this collector's completion or client shutdown here.
+     * Already-dispatched effects are not rolled back. Callbacks are never retried
+     */
+    readonly onMessage?: (message: Message, signal: NonNullable<OperationOptions["signal"]>) => void | Promise<void>
     /** Already-aborted signals reject registration. Later abort fails collection with CancelledError, without partial replies */
     readonly signal?: OperationOptions["signal"]
 }
@@ -30,7 +37,7 @@ export interface DefaultCollectorOptions extends CollectorOptions {
 export interface CollectorResult {
     /** Frozen snapshots in receive order, counting accepted IDs once. Later edits/deletions do not change them */
     readonly messages: readonly Message[]
-    /** The limit reason meets the requested count. Timeout and stopped results can contain partial or empty arrays */
+    /** Limit meets the requested count after callback completion. Timeout/stopped may be empty or include a message whose callback was cancelled */
     readonly reason: "limit" | "timeout" | "stopped"
 }
 

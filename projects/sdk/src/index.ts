@@ -1,4 +1,27 @@
 import { Cause, Deferred, Effect, Exit, Scope } from "effect"
+import {
+    PaginationError,
+    type HistoryIterationQuery,
+    type UserIterationQuery,
+    type PinIterationQuery,
+    type PaginationOperation,
+} from "./pagination.js"
+export { PaginationError } from "./pagination.js"
+export type {
+    PaginationQuery,
+    HistoryIterationQuery,
+    UserIterationQuery,
+    PinIterationQuery,
+    PaginationOperation,
+} from "./pagination.js"
+import {
+    historyPagination,
+    memberPagination,
+    reactionUserPagination,
+    pinPagination,
+    iterationOptions,
+    type Pagination,
+} from "#sdk/internal/pagination"
 export type {
     EmbedInput,
     EmbedAuthorInput,
@@ -198,6 +221,84 @@ export interface EventHandlerOptions extends HandlerOptions {
  * Neither failure proves that a dispatched mutation was undone
  */
 export interface Messages {
+    /** Traverse remote history newest-to-oldest, without connecting or prefetching another page.
+     * Returns a reusable AsyncIterable, not a started request. Each consumption copies inputs and owns independent progress
+     *
+     * maxItems is required. pageSize/maxPages follow PaginationQuery. timeoutMs applies separately to each remote page
+     *
+     * Yields frozen snapshots as Ok values. One expected failure or cancellation is yielded as Err, then iteration ends.
+     * PaginationError identifies invalid traversal input, cursorStalled or pageLimit. Remote errors keep fetchHistory's operation.
+     * SDK defects reject with SdkDefect, including combined failure/cleanup defects. Already-emitted items are not rolled back
+     *
+     * break/return releases buffered items. To interrupt an in-flight next call, abort the supplied signal and await it.
+     * Closing/Closed fail on the next pull and release buffered snapshots. No listener is retained after completion or early exit
+     *
+     * Retains one bounded page, not the full result. Enabled message caching follows fetchHistory's normal admission.
+     * Stops on an empty remote page or maxItems, not on a short page. Separate pages are not a consistent snapshot
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function paginationHistoryExample(client: Client, channelId: string) {
+     *     for await (const result of client.messages.iterateHistory(channelId, { maxItems: 500 })) {
+     *         if (result.isErr()) return result
+     *         if (result.value.content === "stop") break
+     *     }
+     * }
+     * ```
+     */
+    iterateHistory(
+        channelId: string,
+        query: HistoryIterationQuery,
+        options?: DefaultMessageOperationOptions,
+    ): AsyncIterable<Result<Message, MessageOperationFailure | PaginationError | CancelledError>>
+    /** Traverse ascending remote user IDs for one message and the selected literal Unicode or custom emoji.
+     * Uses iterateHistory's lazy Result, cancellation, deadline, failure and release rules, with fetchReactionUsers remote errors.
+     * Stops at maxItems or the server's hasMore=false. No reactor cache or automatic member lookup is added.
+     * These observations are not a stable voter list. A later removal can invalidate an earlier observation
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     * export async function paginationReactionExample(client: Client, message: MessageReference, userId: string) {
+     *     for await (const result of client.messages.iterateReactionUsers(message, "👍", { maxItems: 500 })) {
+     *         if (result.isErr()) return result
+     *         if (result.value.id === userId) return result
+     *     }
+     *     return undefined
+     * }
+     * ```
+     * An undefined result means not found within the bounded scan, not proof that the user has never reacted
+     */
+    iterateReactionUsers(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        query: UserIterationQuery,
+        options?: DefaultMessageOperationOptions,
+    ): AsyncIterable<
+        Result<import("./reactions.js").ReactionUser, MessageOperationFailure | PaginationError | CancelledError>
+    >
+    /** Traverse remote pins in descending timestamp order, without populating the message cache.
+     * Uses iterateHistory's lazy Result, cancellation, deadline, failure and release rules, with fetchPins remote errors.
+     * PinIterationQuery defines per-run deduplication and completeness limits. Retains at most maxItems deduplication IDs.
+     * Valid items from a stalled page can be emitted before cursorStalled appears on the next pull.
+     * Stop at maxItems or hasMore=false. Timestamp ties can prevent enumerating every pin, even without concurrent edits
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function paginationPinsExample(client: Client, channelId: string) {
+     *     const ids: string[] = []
+     *     for await (const result of client.messages.iteratePins(channelId, { maxItems: 20 })) {
+     *         if (result.isErr()) return result
+     *         ids.push(result.value.message.id)
+     *     }
+     *     return ids
+     * }
+     * ```
+     */
+    iteratePins(
+        channelId: string,
+        query: PinIterationQuery,
+        options?: DefaultMessageOperationOptions,
+    ): AsyncIterable<Result<import("./pins.js").MessagePin, MessageOperationFailure | PaginationError | CancelledError>>
     /**
      * Pin one message identified by decimal id and channelId, without requiring gateway readiness.
      * Starts immediately. AbortSignal cancellation returns CancelledError and unexpected defects reject with SdkDefect.
@@ -403,6 +504,12 @@ export interface Messages {
      * Invalid settings use ConfigurationError. The optional signal controls collection and abort returns CancelledError.
      * An already-aborted signal starts no collection. Unexpected registration defects throw SdkDefect
      *
+     * Optional onMessage runs sequentially after filtering, ID deduplication and retained-byte admission.
+     * Limit completion waits for the final callback. Timeout/stop may retain a message whose callback was cancelled.
+     * Once the accepted count is reached, later messages are ignored while the final callback finishes.
+     * Handler failure ends this collector with CollectorError handler. Closure waits for returned callback work.
+     * Pending budgets exclude the active message. Callbacks are never retried and their effects are not rolled back
+     *
      * @example
      * ```ts
      * import type { Client } from "@neontechspace/fluxerly"
@@ -423,6 +530,25 @@ export interface Messages {
      * }
      * ```
      * The caller supplies a connected client and handles empty timeout results and client lifetime separately
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     *
+     * export async function messageCollectorProgressExample(client: Client, channelId: string, userId: string) {
+     *     const opened = client.messages.collect(channelId, {
+     *         filter: message => message.author.id === userId,
+     *         maxMessages: 3,
+     *         onMessage: async (message, signal) => {
+     *             const reply = await client.messages.reply(message, { content: "Received your reply" }, { signal })
+     *             if (reply.isErr()) throw reply.error
+     *         },
+     *     })
+     *     if (opened.isErr()) throw opened.error
+     *     return await opened.value.waitForClose()
+     * }
+     * ```
+     * The author filter must exclude the bot itself to avoid collecting its acknowledgements
      */
     collect(
         channelId: string,
@@ -600,12 +726,12 @@ export interface Messages {
 
 /** One default collection, independent of observers and the client's connection lifetime */
 export interface Collector {
-    /** Stop synchronously, returning accepted partial replies through waitForClose. Repeated stops preserve the first outcome */
+    /** Request stop synchronously with accepted partial replies. Use waitForClose to await callback cleanup. Repeated calls preserve the first outcome */
     stop(): void
     /**
-     * Observe the retained frozen result after timer, queue, filter and listener cleanup.
+     * Observe the retained frozen result after timer, queue, filter, listener and callback cleanup.
      * Multiple and late observers share the same result/error. Cancelling this wait affects only this observer.
-     * Timeout/stop may return empty results. Collection cancellation, filter/overflow/gap failure or client closure returns Err without partial replies.
+     * Timeout/stop may return empty results. Collection cancellation, filter/handler/overflow/gap failure or client closure returns Err without partial replies.
      * Unexpected SDK defects reject with SdkDefect. Keeping the handle/result retains successful message snapshots in memory
      */
     waitForClose(options?: OperationOptions): ResultAsync<CollectorResult, CollectorFailure | CancelledError>
@@ -667,6 +793,36 @@ export interface Guilds {
  * Writes retry only confirmed 429 rejections, never uncertain outcomes. Cancellation cannot undo a dispatched write
  */
 export interface Members {
+    /** Traverse ascending remote user IDs without connecting or downloading the whole guild eagerly.
+     * Reusable lazy AsyncIterable of frozen Ok members and at most one terminal Err, with independent state per consumption
+     *
+     * Copies inputs on consumption. maxItems is required, pageSize defaults to 100 and maxPages to 100.
+     * Stop at maxItems or an empty page, not a short page. Pages are not a consistent membership snapshot
+     *
+     * timeoutMs applies per page. Remote failures keep members.fetchPage's GuildOperationError and shared retry policy.
+     * PaginationError covers input, cursorStalled and pageLimit. Aborting the signal yields CancelledError after request cleanup
+     *
+     * break/return releases the page. Abort the signal to interrupt a pending next. SDK defects reject with SdkDefect.
+     * Closing/Closed releases the page and fails the next pull with ClientClosedError. Delivered items remain caller-owned
+     *
+     * Enabled member caching follows fetchPage admission. Traversal keeps one page and does not fetch roles or predict permissions
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function paginationMembersExample(client: Client, guildId: string) {
+     *     for await (const result of client.members.iterate(guildId, { maxItems: 1000 })) {
+     *         if (result.isErr()) return result
+     *         if (!result.value.isBot) return result
+     *     }
+     *     return undefined
+     * }
+     * ```
+     */
+    iterate(
+        guildId: string,
+        query: UserIterationQuery,
+        options?: DefaultGuildOperationOptions,
+    ): AsyncIterable<Result<GuildMember, GuildOperationFailure | PaginationError | CancelledError>>
     /** Local-only lookup by decimal guild/user IDs, with Guilds.get's miss, freshness, failure and LRU rules.
      * Enable cache.members and cache.roles when creating the client. Explicit fetches or subsequent events populate them
      * @example
@@ -901,7 +1057,7 @@ export interface Client extends ClientState {
     /**
      * Permanently stop startup and recovery, release credentials and await owned-resource cleanup.
      * Release cached message references and expiry timers, without waiting for application-owned reporter promises.
-     * Abort active reaction progress callbacks and await their returned promises; non-cooperative callbacks can delay shutdown.
+     * Abort active message/reaction collector callbacks and await their returned promises. Non-cooperative callbacks can delay shutdown.
      * Repeated and concurrent calls wait for the same shutdown outcome.
      * A pending connection call reports ClientClosedError rather than caller cancellation
      *
@@ -930,24 +1086,73 @@ export interface Client extends ClientState {
 const executeOperation = <
     A,
     E extends
-        ConnectError | EventReadError | MessageError | MessageOperationError | CollectorError | GuildOperationError,
+        | ConnectError
+        | EventReadError
+        | MessageError
+        | MessageOperationError
+        | CollectorError
+        | GuildOperationError
+        | PaginationError,
 >(
     effect: Effect.Effect<A, E>,
     operation: Operation,
     options?: OperationOptions,
 ) => {
-    const signal = options?.signal
-    if (signal?.aborted) return new ResultAsync<A, E | CancelledError>(Promise.resolve(err(new CancelledError())))
-    const controller = signal ? new AbortController() : undefined
-    const abort = () => controller?.abort()
-    if (signal?.aborted) abort()
-    else signal?.addEventListener("abort", abort, { once: true })
-    // Interrupt the operation itself rather than discarding a losing race's cleanup cause
-    return new ResultAsync(
-        Effect.runPromiseExit(effect, controller ? { signal: controller.signal } : undefined)
-            .finally(() => signal?.removeEventListener("abort", abort))
-            .then((exit) => fromExit(exit, operation)),
-    )
+    let signal: OperationOptions["signal"]
+    let abort: (() => void) | undefined
+    let registered = false
+    try {
+        signal = options?.signal
+        if (signal?.aborted) return new ResultAsync<A, E | CancelledError>(Promise.resolve(err(new CancelledError())))
+        const controller = signal ? new AbortController() : undefined
+        abort = () => controller?.abort()
+        if (signal?.aborted) abort()
+        else if (signal) {
+            // Treat registration as owned before calling it: A custom signal can attach then throw
+            registered = true
+            signal.addEventListener("abort", abort, { once: true })
+        }
+        // Interrupt the operation itself rather than discarding a losing race's cleanup cause
+        return new ResultAsync(
+            (async () => {
+                let exit: Exit.Exit<A, E>
+                try {
+                    exit = await Effect.runPromiseExit(effect, controller ? { signal: controller.signal } : undefined)
+                } catch (error) {
+                    exit = Exit.failCause(Cause.die(error))
+                }
+                if (registered) {
+                    registered = false
+                    try {
+                        signal!.removeEventListener("abort", abort!)
+                    } catch (error) {
+                        exit = Exit.failCause(
+                            Cause.combine(Exit.isFailure(exit) ? exit.cause : Cause.empty, Cause.die(error)),
+                        )
+                    }
+                }
+                return fromExit(exit, operation)
+            })(),
+        )
+    } catch {
+        let cleanupDefect = false
+        if (registered) {
+            registered = false
+            try {
+                signal!.removeEventListener("abort", abort!)
+            } catch {
+                cleanupDefect = true
+            }
+        }
+        return new ResultAsync<A, E | CancelledError>(
+            Promise.reject(
+                new SdkDefect(
+                    operation,
+                    cleanupDefect ? [{ kind: "Defect" }, { kind: "Defect" }] : [{ kind: "Defect" }],
+                ),
+            ),
+        )
+    }
 }
 
 function defaultCollector(source: MessageCollector): Collector {
@@ -958,14 +1163,16 @@ function defaultCollector(source: MessageCollector): Collector {
     })
 }
 
-function reactionHandler(handler: NonNullable<DefaultReactionCollectorOptions["onReaction"]>) {
-    return (reaction: import("./reactions.js").MessageReaction) =>
+function collectorHandler<A>(
+    handler: (item: A, signal: NonNullable<OperationOptions["signal"]>) => void | Promise<void>,
+) {
+    return (item: A) =>
         Effect.suspend(() => {
             const controller = new AbortController()
             let settled: Promise<void> = Promise.resolve()
             return Effect.callback<void, CollectorError>((resume) => {
                 settled = Promise.resolve()
-                    .then(() => handler(reaction, controller.signal))
+                    .then(() => handler(item, controller.signal))
                     .then(
                         () => {
                             resume(Effect.void)
@@ -994,7 +1201,8 @@ function fromExit<
         | MessageError
         | MessageOperationError
         | CollectorError
-        | GuildOperationError,
+        | GuildOperationError
+        | PaginationError,
 >(exit: Exit.Exit<A, E>, operation: Operation): Result<A, E | CancelledError> {
     if (Exit.isSuccess(exit)) return ok(exit.value)
     if (Cause.hasDies(exit.cause)) {
@@ -1011,6 +1219,8 @@ function fromExit<
 
 /**
  * Create a Disconnected client without sockets, timers or process-signal handlers
+ *
+ * Hosted Fluxer only; self-hosted instances and custom REST or gateway endpoints are not supported
  *
  * Validate configuration locally without authenticating the token
  *
@@ -1034,12 +1244,61 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     const execute = <
         A,
         E extends
-            ConnectError | EventReadError | MessageError | MessageOperationError | CollectorError | GuildOperationError,
+            | ConnectError
+            | EventReadError
+            | MessageError
+            | MessageOperationError
+            | CollectorError
+            | GuildOperationError
+            | PaginationError,
     >(
         effect: Effect.Effect<A, E>,
         operation: Operation,
         options?: OperationOptions,
     ) => executeOperation(owner.logging.provide(effect), operation, options)
+    const iterate = <A, E extends MessageOperationFailure | GuildOperationFailure>(
+        create: (
+            options: import("./messages.js").MessageOperationOptions,
+        ) => Effect.Effect<Pagination<A, E>, PaginationError>,
+        operation: PaginationOperation,
+        options?: DefaultMessageOperationOptions,
+    ): AsyncIterable<Result<A, E | PaginationError | CancelledError | import("./errors.js").ClientClosedError>> =>
+        Object.freeze({
+            async *[Symbol.asyncIterator]() {
+                const opened = await execute(
+                    Effect.gen(function* () {
+                        const copied = iterationOptions(options)
+                        if (!copied) return yield* Effect.fail(new PaginationError(operation, "input"))
+                        const source = yield* create(copied.request)
+                        return { source, signal: copied.signal }
+                    }),
+                    operation,
+                )
+                if (opened.isErr()) {
+                    yield err(opened.error)
+                    return
+                }
+                const { source, signal } = opened.value
+                try {
+                    while (!source.done) {
+                        const result = await execute(
+                            source.next,
+                            operation,
+                            signal === undefined ? undefined : { signal },
+                        )
+                        if (result.isErr()) {
+                            source.close()
+                            yield err(result.error)
+                            return
+                        }
+                        if (result.value === undefined) return
+                        yield ok(result.value)
+                    }
+                } finally {
+                    source.close()
+                }
+            },
+        })
     const subscription = (source: Pick<EventSource, "stop" | "closed">): Subscription =>
         Object.freeze({
             unsubscribe: () => source.stop(),
@@ -1080,6 +1339,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     ),
             }),
             members: Object.freeze({
+                iterate: (id: string, query: UserIterationQuery, options?: DefaultGuildOperationOptions) =>
+                    iterate((request) => memberPagination(owner, id, query, request), "members.iterate", options),
                 get: (target: MemberReference) => lookup(owner.getResource("members", target), "members.get"),
                 fetch: (target: MemberReference, options?: DefaultGuildOperationOptions) =>
                     execute(
@@ -1146,6 +1407,21 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     ),
             }),
             messages: Object.freeze({
+                iterateHistory: (id: string, query: HistoryIterationQuery, options?: DefaultMessageOperationOptions) =>
+                    iterate((request) => historyPagination(owner, id, query, request), "iterateHistory", options),
+                iterateReactionUsers: (
+                    target: MessageReference,
+                    emoji: ReactionEmojiInput,
+                    query: UserIterationQuery,
+                    options?: DefaultMessageOperationOptions,
+                ) =>
+                    iterate(
+                        (request) => reactionUserPagination(owner, target, emoji, query, request),
+                        "iterateReactionUsers",
+                        options,
+                    ),
+                iteratePins: (id: string, query: PinIterationQuery, options?: DefaultMessageOperationOptions) =>
+                    iterate((request) => pinPagination(owner, id, query, request), "iteratePins", options),
                 removeUserReaction: (
                     target: MessageReference,
                     emoji: ReactionEmojiInput,
@@ -1190,13 +1466,34 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     channelId: string,
                     options?: DefaultCollectorOptions,
                 ): Result<Collector, CollectorRegistrationError | CancelledError> => {
-                    const opened = fromExit(Effect.runSyncExit(collect(owner, channelId, options, true)), "collect")
+                    const opened = fromExit(
+                        Effect.runSyncExit(
+                            Effect.suspend(() =>
+                                collect(
+                                    owner,
+                                    channelId,
+                                    options,
+                                    true,
+                                    typeof options?.onMessage === "function"
+                                        ? collectorHandler(options.onMessage)
+                                        : undefined,
+                                ),
+                            ),
+                        ),
+                        "collect",
+                    )
                     return opened.map(defaultCollector)
                 },
                 collectReactions: (
                     target: MessageReference,
                     options?: DefaultReactionCollectorOptions,
                 ): Result<ReactionCollector, CollectorRegistrationError | CancelledError> => {
+                    let callback: DefaultReactionCollectorOptions["onReaction"]
+                    try {
+                        callback = options?.onReaction
+                    } catch {
+                        throw new SdkDefect("collectReactions", [{ kind: "Defect" }])
+                    }
                     const opened = fromExit(
                         Effect.runSyncExit(
                             collectReactions(
@@ -1204,9 +1501,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                                 target,
                                 options,
                                 true,
-                                typeof options?.onReaction === "function"
-                                    ? reactionHandler(options.onReaction)
-                                    : undefined,
+                                typeof callback === "function" ? collectorHandler(callback) : undefined,
                             ),
                         ),
                         "collectReactions",
@@ -1233,14 +1528,17 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 },
                 send: (channelId: string, input: MessageInput, options?: DefaultSendOptions) =>
                     execute(owner.send(channelId, input, options), "send", options),
-                reply: (target: MessageReference, input: ReplyInput, options?: DefaultSendOptions) => {
-                    const data = replyInput(target, input)
-                    return execute(
-                        data instanceof MessageError ? Effect.fail(data) : owner.send(target.channelId, data, options),
+                reply: (target: MessageReference, input: ReplyInput, options?: DefaultSendOptions) =>
+                    execute(
+                        Effect.suspend(() => {
+                            const data = replyInput(target, input)
+                            return data instanceof MessageError
+                                ? Effect.fail(data)
+                                : owner.send(target.channelId, data, options)
+                        }),
                         "reply",
                         options,
-                    )
-                },
+                    ),
                 fetch: (target: MessageReference, options?: DefaultMessageOperationOptions) =>
                     execute(owner.fetch(target, options), "fetch", options),
                 fetchHistory: (
@@ -1261,46 +1559,48 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 ) => void | Promise<void>,
                 options?: EventHandlerOptions,
             ) => {
-                if (typeof handler !== "function")
-                    return err(new ConfigurationError("handler", "Handler must be a function"))
-                if (options?.onError !== undefined && typeof options.onError !== "function")
-                    return err(new ConfigurationError("onError", "Error reporter must be a function"))
-                const reporter = options?.onError
-                let reporting = false
-                const reportFailure = (kind: string) => {
-                    Effect.runSyncExit(
-                        owner.logging.provide(Effect.logError(`Fluxerly message subscription ${kind} failure`)),
-                    )
-                }
                 return register(
-                    owner.events
-                        .on(
-                            event,
-                            (message) =>
-                                Effect.tryPromise({
-                                    try: (signal) => Promise.resolve(handler(message, signal)),
-                                    catch: () => new Error("Event handler failed"),
-                                }),
-                            options,
-                            reporter
-                                ? (report) =>
-                                      Effect.sync(() => {
-                                          if (reporting) {
-                                              reportFailure(report.kind)
-                                              return
-                                          }
-                                          reporting = true
-                                          void Promise.resolve()
-                                              .then(() => reporter(report))
-                                              .catch(() => reportFailure(`${report.kind}; reporter`))
-                                              .finally(() => {
-                                                  reporting = false
-                                              })
-                                      })
-                                : undefined,
-                            scope,
-                        )
-                        .pipe(Effect.map(subscription)),
+                    Effect.suspend(() => {
+                        if (typeof handler !== "function")
+                            return Effect.fail(new ConfigurationError("handler", "Handler must be a function"))
+                        const reporter = options?.onError
+                        if (reporter !== undefined && typeof reporter !== "function")
+                            return Effect.fail(new ConfigurationError("onError", "Error reporter must be a function"))
+                        let reporting = false
+                        const reportFailure = (kind: string) => {
+                            Effect.runSyncExit(
+                                owner.logging.provide(Effect.logError(`Fluxerly message subscription ${kind} failure`)),
+                            )
+                        }
+                        return owner.events
+                            .on(
+                                event,
+                                (message) =>
+                                    Effect.tryPromise({
+                                        try: (signal) => Promise.resolve(handler(message, signal)),
+                                        catch: () => new Error("Event handler failed"),
+                                    }),
+                                options,
+                                reporter
+                                    ? (report) =>
+                                          Effect.sync(() => {
+                                              if (reporting) {
+                                                  reportFailure(report.kind)
+                                                  return
+                                              }
+                                              reporting = true
+                                              void Promise.resolve()
+                                                  .then(() => reporter(report))
+                                                  .catch(() => reportFailure(`${report.kind}; reporter`))
+                                                  .finally(() => {
+                                                      reporting = false
+                                                  })
+                                          })
+                                    : undefined,
+                                scope,
+                            )
+                            .pipe(Effect.map(subscription))
+                    }),
                     "on",
                 )
             },

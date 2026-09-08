@@ -4,6 +4,9 @@
     "private": true,
     "type": "module",
     "license": "Apache-2.0",
+    "engines": {
+        "node": ">=24.11.0"
+    },
     "imports": {
         "#sdk/*": {
             "fluxerly-source": "./src/*.ts",
@@ -40,6 +43,7 @@
         "test:live:pins": "pnpm run build && node tests/live/messages.mjs default --pins && node tests/live/messages.mjs effect --pins",
         "test:live:guilds": "pnpm run build && node tests/live/messages.mjs default --guilds && node tests/live/messages.mjs effect --guilds",
         "test:live:history": "pnpm run build && node tests/live/messages.mjs default --history && node tests/live/messages.mjs effect --history",
+        "test:live:pagination": "pnpm run build && node tests/live/messages.mjs default --pagination && node tests/live/messages.mjs effect --pagination",
         "test:live:recovery": "pnpm run build && node tests/live/messages.mjs default --recover && node tests/live/messages.mjs effect --recover",
         "test:live:recovery:cancel": "pnpm run build && node tests/live/sdk.mjs default --cancel-recovery && node tests/live/sdk.mjs effect --cancel-recovery",
         "test:live:cache": "pnpm run build && node tests/live/messages.mjs default --cache && node tests/live/messages.mjs effect --cache",

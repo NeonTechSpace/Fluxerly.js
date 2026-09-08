@@ -213,6 +213,7 @@ export function memberRole(target: MemberReference, roleId: string, add: boolean
 
 const int32 = (value: unknown): value is number =>
     typeof value === "number" && Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
+const nonNegativeInt32 = (value: unknown): value is number => int32(value) && value >= 0
 const permission = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= 18_446_744_073_709_551_615n
 
@@ -221,8 +222,8 @@ export function decodeRole(value: unknown, guildId: string): GuildRole | undefin
         !record(value) ||
         !identifier(value.id) ||
         typeof value.name !== "string" ||
-        !int32(value.color) ||
-        !int32(value.position) ||
+        !nonNegativeInt32(value.color) ||
+        !nonNegativeInt32(value.position) ||
         typeof value.permissions !== "string" ||
         !/^(0|[1-9][0-9]{0,19})$/.test(value.permissions) ||
         !permission(BigInt(value.permissions)) ||
