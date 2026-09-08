@@ -2,6 +2,7 @@ import { Effect, Redacted } from "effect"
 import { ConfigurationError } from "#sdk/errors"
 import type { MessageCacheSettings, CachePolicyErrorReport } from "#sdk/cache"
 import { record } from "./message.js"
+import { loggingConfiguration, type ClientLogging } from "./logging.js"
 
 export interface CacheConfiguration {
     readonly maxEntries: number
@@ -49,13 +50,17 @@ function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationE
 }
 
 export interface Configuration {
+    readonly logging: ClientLogging
     readonly token: Redacted.Redacted<string>
     readonly startupTimeoutMs: number
     readonly maxStartupAttempts: number
     readonly cache: CacheConfiguration | undefined
 }
 
-export function validateConfiguration(options: unknown): Effect.Effect<Configuration, ConfigurationError> {
+export function validateConfiguration(
+    options: unknown,
+    native = false,
+): Effect.Effect<Configuration, ConfigurationError> {
     return Effect.suspend(() => {
         if (typeof options !== "object" || options === null || Array.isArray(options)) {
             return Effect.fail(new ConfigurationError("configuration", "Client configuration must be an object"))
@@ -96,7 +101,10 @@ export function validateConfiguration(options: unknown): Effect.Effect<Configura
         }
         const cache = cacheConfiguration("cache" in options ? options.cache : undefined)
         if (cache instanceof ConfigurationError) return Effect.fail(cache)
+        const logging = loggingConfiguration("logging" in options ? options.logging : undefined, native)
+        if (logging instanceof ConfigurationError) return Effect.fail(logging)
         return Effect.succeed({
+            logging,
             cache,
             token: Redacted.make(token),
             startupTimeoutMs: timeout ?? 30_000,

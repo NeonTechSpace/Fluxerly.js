@@ -1,4 +1,4 @@
-/** Locally invalid client configuration, without the rejected input value */
+/** Locally invalid client configuration or operation options, without the rejected input value */
 export class ConfigurationError extends Error {
     readonly _tag = "ConfigurationError"
 
@@ -6,6 +6,10 @@ export class ConfigurationError extends Error {
         /** The invalid option or containing object, including unsupported cache keys, without its rejected value */
         readonly field:
             | "configuration"
+            | "logging"
+            | "development"
+            | "minimumLevel"
+            | "logger"
             | "token"
             | "connection"
             | "startupTimeoutMs"
@@ -21,7 +25,13 @@ export class ConfigurationError extends Error {
             | "messages"
             | "maxEntries"
             | "maxBytes"
-            | "maxAgeMs",
+            | "maxAgeMs"
+            | "collectorOptions"
+            | "channelId"
+            | "filter"
+            | "signal"
+            | "maxMessages"
+            | "timeoutMs",
         message: string,
     ) {
         super(message)
@@ -47,6 +57,8 @@ export type Operation =
     | "edit"
     | "delete"
     | "subscription.waitForClose"
+    | "collect"
+    | "collector.waitForClose"
 
 /** Fluxer rejected the credential, so the connection owner does not retry it unchanged */
 export class AuthenticationError extends Error {
@@ -141,6 +153,7 @@ export type DefectReason =
               | import("./message-errors.js").EventReadError
               | import("./message-errors.js").MessageError
               | import("./message-errors.js").MessageOperationError
+              | import("./collectors.js").CollectorError
       }
     | { readonly kind: "Defect" }
     | { readonly kind: "Interruption" }

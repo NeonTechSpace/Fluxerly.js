@@ -4,15 +4,27 @@ import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSyn
 import { setTimeout as sleep } from "node:timers/promises"
 import { parseEnv } from "node:util"
 import WebSocket from "ws"
+import { Logger } from "effect"
+import { fromEffectLogger } from "@neontechspace/fluxerly/effect"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
 const recover = process.argv[3] === "--recover"
+const diagnosticRecords = []
+let diagnosticOverflow = false
+const diagnosticLogger = Logger.make((entry) => {
+    if (diagnosticRecords.length >= 100) {
+        diagnosticOverflow = true
+        return
+    }
+    diagnosticRecords.push({ message: entry.message, cause: entry.cause })
+})
 const manage = process.argv[3] === "--manage"
 const changes = process.argv[3] === "--events"
 const history = process.argv[3] === "--history"
 const cache = process.argv[3] === "--cache"
-const forceRecovery = recover || cache
+const collectors = process.argv[3] === "--collectors"
+const forceRecovery = recover || cache || collectors
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const journalPath = new URL("../../.env.test.messages.local", import.meta.url)
 const report = (check, passed) => console.log(JSON.stringify({ mode, check, passed }))
@@ -384,6 +396,56 @@ async function prepareHistory(channelId, botId) {
     }
 }
 
+async function verifyCollectors(open, send, channelId, botId, interrupt) {
+    const marker = `collector-${randomUUID()}`
+    const filter = (message) => message.author.id === botId && message.content.startsWith(marker)
+    async function collectAndSend(maxMessages, count, timeoutMs, reason) {
+        stage = `collector_${reason}`
+        const collector = await open({ filter, maxMessages, timeoutMs })
+        const sent = []
+        try {
+            // Intake is ready before sending. No retry of ambiguous mutations; the existing channel journal owns cleanup
+            for (let index = 0; index < count; index++)
+                sent.push(await send(channelId, { content: `${marker}-${reason}-${index}` }))
+            const result = await collector.wait()
+            assert.equal(result.error, undefined)
+            assert.equal(result.value.reason, reason)
+            assert.deepEqual(
+                result.value.messages.map((message) => message.id),
+                sent.map((message) => message.id),
+            )
+            assert.ok(Object.isFrozen(result.value) && Object.isFrozen(result.value.messages))
+            for (const message of result.value.messages) {
+                assert.equal(message.channelId, channelId)
+                assert.equal(message.author.id, botId)
+                const actual = await api("GET", `/channels/${channelId}/messages/${message.id}`)
+                assert.equal(actual.status, 200)
+                assert.equal(actual.data?.content, message.content)
+            }
+            report(stage, true)
+        } finally {
+            await collector.stop()
+        }
+    }
+    await collectAndSend(2, 2, 30_000, "limit")
+    await collectAndSend(5, 1, 5_000, "timeout")
+    const gap = await open({ filter: () => false, timeoutMs: 60_000 })
+    try {
+        await interrupt()
+        stage = "collector_connection_gap"
+        const result = await gap.wait()
+        assert.equal(result.value, undefined)
+        assert.equal(result.error?._tag, "CollectorError")
+        assert.equal(result.error?.reason, "connectionLost")
+        assert.equal("messages" in result.error, false)
+        report(stage, true)
+        await collectAndSend(1, 1, 30_000, "limit")
+        report("collector_after_resume", true)
+    } finally {
+        await gap.stop()
+    }
+}
+
 // Failure containment only: A forced exit is never reported as successful cleanup
 setTimeout(() => {
     report("process_timeout", false)
@@ -393,7 +455,8 @@ setTimeout(() => {
 try {
     assert.ok(mode === "default" || mode === "effect")
     assert.ok(
-        process.argv.length === 3 || (process.argv.length === 4 && (recover || manage || changes || history || cache)),
+        process.argv.length === 3 ||
+            (process.argv.length === 4 && (recover || manage || changes || history || cache || collectors)),
     )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
@@ -447,7 +510,11 @@ try {
     stage = "sdk_receive_and_reply"
     if (mode === "default") {
         const { createClient } = await import("@neontechspace/fluxerly")
-        const created = createClient(cache ? { token, cache: cacheOptions() } : { token })
+        const created = createClient({
+            token,
+            ...(cache ? { cache: cacheOptions() } : {}),
+            ...(recover ? { logging: { development: true, logger: fromEffectLogger(diagnosticLogger) } } : {}),
+        })
         assert.ok(created.isOk())
         client = created.value
         const cacheGet = async (target) => {
@@ -554,7 +621,19 @@ try {
             assert.ok((await client.connect()).isOk())
             if (forceRecovery) {
                 if (cache) sdkRequests.length = 0
-                await gatewayProbe.interruptAndWait(client, states)
+                if (collectors)
+                    await verifyCollectors(
+                        async (options) => {
+                            const opened = client.messages.collect(channel.id, options)
+                            assert.ok(opened.isOk())
+                            return { wait: () => opened.value.waitForClose(), stop: () => opened.value.stop() }
+                        },
+                        cacheSend,
+                        channel.id,
+                        user.id,
+                        () => gatewayProbe.interruptAndWait(client, states),
+                    )
+                else await gatewayProbe.interruptAndWait(client, states)
                 if (cache) {
                     assert.equal(await cacheGet(beforeRecovery), undefined)
                     assert.deepEqual(sdkRequests, [])
@@ -614,12 +693,16 @@ try {
             stopState?.()
         }
     } else {
-        const { Deferred, Effect, Exit, Stream } = await import("effect")
+        const { Deferred, Effect, Exit, Scope, Stream } = await import("effect")
         const { createClient } = await import("@neontechspace/fluxerly/effect")
         const exit = await Effect.runPromiseExit(
             Effect.scoped(
                 Effect.gen(function* () {
-                    client = yield* createClient(cache ? { token, cache: cacheOptions() } : { token })
+                    client = yield* createClient({
+                        token,
+                        ...(cache ? { cache: cacheOptions() } : {}),
+                        ...(recover ? { logging: { development: true } } : {}),
+                    })
                     const cacheGet = async (target) => {
                         if (!cache) return undefined
                         const cached = await Effect.runPromiseExit(client.messages.get(target))
@@ -731,7 +814,36 @@ try {
                     yield* client.connect()
                     if (forceRecovery) {
                         if (cache) sdkRequests.length = 0
-                        yield* Effect.promise(() => gatewayProbe.interruptAndWait(client, states))
+                        if (collectors) {
+                            const collectorScope = yield* Effect.scope
+                            yield* Effect.promise(() =>
+                                verifyCollectors(
+                                    async (options) => {
+                                        const opened = await Effect.runPromise(
+                                            client.messages
+                                                .collect(channel.id, options)
+                                                .pipe(Scope.provide(collectorScope)),
+                                        )
+                                        return {
+                                            wait: () =>
+                                                Effect.runPromise(
+                                                    opened.waitForClose().pipe(
+                                                        Effect.match({
+                                                            onSuccess: (value) => ({ value }),
+                                                            onFailure: (error) => ({ error }),
+                                                        }),
+                                                    ),
+                                                ),
+                                            stop: () => Effect.runPromise(opened.stop()),
+                                        }
+                                    },
+                                    cacheSend,
+                                    channel.id,
+                                    user.id,
+                                    () => gatewayProbe.interruptAndWait(client, states),
+                                ),
+                            )
+                        } else yield* Effect.promise(() => gatewayProbe.interruptAndWait(client, states))
                         if (cache) {
                             assert.equal(yield* Effect.promise(() => cacheGet(beforeRecovery)), undefined)
                             assert.deepEqual(sdkRequests, [])
@@ -773,11 +885,38 @@ try {
                         )
                     }
                 }),
+            ).pipe(
+                recover
+                    ? Effect.provideService(Logger.CurrentLoggers, new Set([diagnosticLogger]))
+                    : (effect) => effect,
             ),
         )
         assert.ok(Exit.isSuccess(exit))
     }
     assert.equal(client.state, "Closed")
+    if (recover) {
+        stage = "recovery_diagnostics"
+        assert.equal(diagnosticOverflow, false)
+        assert.ok(diagnosticRecords.every((entry) => entry.cause.reasons.length === 0))
+        const records = diagnosticRecords.map((entry) => entry.message[1])
+        for (const event of ["connecting", "attempt", "connected", "connectionLost", "retry", "closing", "closed"])
+            assert.ok(records.some((entry) => entry.event === event))
+        assert.ok(
+            records.some(
+                (entry) => entry.event === "connected" && entry.mode === "resume" && entry.phase === "recovery",
+            ),
+        )
+        assert.ok(records.some((entry) => entry.event === "retry" && Number.isFinite(entry.delayMs)))
+        assert.ok(
+            records.every((entry) =>
+                Object.keys(entry).every((key) =>
+                    ["event", "phase", "attempt", "delayMs", "mode", "failure"].includes(key),
+                ),
+            ),
+        )
+        assert.ok(!JSON.stringify(diagnosticRecords).includes(token))
+        report("recovery_diagnostics", true)
+    }
     gatewayProbe?.verifyClosed()
     stage = "live_reply_readback"
     const actual = (await api("GET", `/channels/${channel.id}/messages/${reply.id}`)).data

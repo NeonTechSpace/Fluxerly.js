@@ -65,7 +65,18 @@ try {
             installed,
             10_000,
         )
-        for (const entry of ["index", "effect", "cache", "client", "errors", "messages", "events", "message-errors"]) {
+        for (const entry of [
+            "index",
+            "effect",
+            "cache",
+            "client",
+            "errors",
+            "messages",
+            "events",
+            "message-errors",
+            "collectors",
+            "logging",
+        ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
                 readFileSync(join(installed, declaration), "utf8"),
@@ -106,6 +117,29 @@ try {
         process.stdout.write(run(process.execPath, ["--enable-source-maps", "consumer.mjs"], consumer, 10_000))
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
+        const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
+        const collectorExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) askName/.test(example))
+        assert.equal(collectorExamples.length, 1)
+        // Compile the actual authored example against the packed exports, not a separately maintained copy
+        writeFileSync(join(consumer, "collector-example.ts"), collectorExamples[0])
+        const loggingSource = readFileSync(join(sdk, "src", kind === "default" ? "client.ts" : "effect.ts"), "utf8")
+        const loggingExamples = [...loggingSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /function loggingExample/.test(example))
+        assert.equal(loggingExamples.length, 1)
+        writeFileSync(join(consumer, "logging-example.ts"), loggingExamples[0])
         writeFileSync(
             join(consumer, "tsconfig.json"),
             JSON.stringify({
@@ -120,7 +154,7 @@ try {
                     outDir: "out",
                     lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                 },
-                include: ["consumer.ts"],
+                include: ["consumer.ts", "collector-example.ts", "logging-example.ts"],
             }),
         )
         run(process.execPath, [compiler, "-p", "tsconfig.json"], consumer)

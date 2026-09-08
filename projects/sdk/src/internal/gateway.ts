@@ -75,7 +75,7 @@ export const runGateway = (
     token: Redacted.Redacted<string>,
     session: Session,
     timeoutMs: number,
-    onReady: () => void,
+    onReady: (mode: "identify" | "resume") => void,
     onLatency: (milliseconds: number | null) => void,
     onRecovering: () => void,
     onDispatch: <K extends EventName>(event: K, message: EventMap[K], bytes: number) => void,
@@ -319,7 +319,7 @@ export const runGateway = (
                 }),
             )
             yield* Effect.raceFirst(startup, Deferred.await(ended))
-            onReady()
+            onReady(resuming ? "resume" : "identify")
             return yield* Deferred.await(ended)
         }),
     )

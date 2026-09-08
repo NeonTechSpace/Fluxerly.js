@@ -48,6 +48,7 @@ Fluxerly.js is the next step: An independent SDK with the freedom to turn those 
 ## Documentation
 
 - [Technology choices](/docs/TECHNOLOGY.md): SDK and website technologies, tooling and support policy
+- [Versioning and release stages](/docs/TECHNOLOGY.md#versioning-and-release-stages): Epoch numbering and alpha, beta, RC and stable releases
 - [SDK contracts](/docs/SDK-CONTRACTS.md): Cross-cutting implementation constraints for contributors
 - [Repository guide](/docs/REPOSITORY.md): Project layout and file locations
 

@@ -13,6 +13,9 @@ import {
     type ClientOptions,
     type MessageCacheOptions,
     type MessageCacheSettings,
+    type Collector,
+    type CollectorOptions,
+    type CollectorResult,
 } from "@neontechspace/fluxerly/effect"
 
 export interface CacheReporter {
@@ -45,7 +48,13 @@ export function createWithCacheReporter(
 }
 
 export function createWithinCallerScope(token: string): Effect.Effect<Client, ConfigurationError, Scope.Scope> {
-    return createClient({ token })
+    return createClient({ token, logging: { development: false } })
+}
+
+export function nativeLoggingOptions(token: string) {
+    // @ts-expect-error Native minimum levels belong to the caller's Effect context
+    createClient({ token, logging: { minimumLevel: "Info" } })
+    return createClient({ token, logging: { development: true } })
 }
 
 export const handled = createClient({ token: "" }).pipe(
@@ -110,6 +119,12 @@ export function registerReply(client: Client) {
 }
 
 export function rejectedMessageShapes(client: Client): void {
+    // @ts-expect-error Collector registration requires an owning scope
+    Effect.runPromise(client.messages.collect("20"))
+    // @ts-expect-error Native collector cancellation uses scope lifetime, not AbortSignal options
+    client.messages.collect("20", { signal: new AbortController().signal })
+    // @ts-expect-error Native filters also return synchronous booleans, not Effects
+    client.messages.collect("20", { filter: () => Effect.succeed(true) })
     const page: readonly Message[] = []
     // @ts-expect-error History arrays cannot be mutated
     page.push(page[0]!)
@@ -125,6 +140,24 @@ export function rejectedMessageShapes(client: Client): void {
     client.messages.fetch({ channelId: "20", id: "10" }, { signal: new AbortController().signal })
     // @ts-expect-error Edit requires content
     client.messages.edit({ channelId: "20", id: "10" }, {})
+}
+
+export function collectReplies(client: Client) {
+    const options: CollectorOptions = {
+        maxMessages: 2,
+        timeoutMs: 5_000,
+        maxBytes: 1_024,
+        maxPendingMessages: 10,
+        maxPendingBytes: 2_048,
+    }
+    return Effect.gen(function* () {
+        const collector: Collector = yield* client.messages.collect("20", options)
+        yield* collector.stop()
+        const result: CollectorResult = yield* collector.waitForClose()
+        // @ts-expect-error Successful collector results are immutable
+        result.messages.push(result.messages[0]!)
+        return result.reason
+    })
 }
 
 /** Typechecked explicit page navigation in the caller's Effect context */

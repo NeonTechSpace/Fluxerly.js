@@ -15,7 +15,7 @@ export interface EventMap {
 /** Names accepted by on/events in both API styles */
 export type EventName = keyof EventMap
 
-/** Pending queue budgets for one live event subscription, not total process memory limits */
+/** Pending queue budgets for one live event subscription or message collector, not total process memory limits */
 export interface EventBufferOptions {
     /** Maximum queued event payloads, excluding active handlers. A bulk deletion counts once. Positive safe integer, default 256 */
     readonly maxPendingMessages?: number

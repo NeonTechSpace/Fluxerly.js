@@ -1,11 +1,11 @@
 import { createServer } from "node:http"
 import { once } from "node:events"
 import { inspect } from "node:util"
-import { Cause, Clock, Effect, Exit, Fiber, Scope, Stream } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, Scope, Stream, Logger, References } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer, WebSocket } from "ws"
 import { createClient, SdkDefect, type ClientOptions } from "../src/index.js"
-import { createClient as createNative } from "../src/effect.js"
+import { createClient as createNative, fromEffectLogger } from "../src/effect.js"
 import { startServer } from "./transport/server.js"
 
 const transport = vi.hoisted(() => ({ url: "", sockets: [] as import("ws").WebSocket[] }))
@@ -23,6 +23,203 @@ vi.mock("ws", async (original) => {
     }
 })
 const realFetch = globalThis.fetch
+
+function capturedLogs(throws = false) {
+    const entries: { message: unknown; cause: unknown; annotation: unknown; span: unknown }[] = []
+    const logger = Logger.make((entry) => {
+        entries.push({
+            message: entry.message,
+            cause: entry.cause,
+            annotation: entry.fiber.getRef(References.CurrentLogAnnotations).requestId,
+            span: entry.fiber.currentSpan?._tag === "Span" ? entry.fiber.currentSpan.name : undefined,
+        })
+        if (throws) throw new Error("private-logger-sentinel")
+    })
+    const diagnostics = () =>
+        entries.flatMap((entry) => {
+            const message = entry.message
+            return Array.isArray(message) && message[0] === "Fluxerly" ? [message[1] as Record<string, unknown>] : []
+        })
+    return { entries, logger, diagnostics }
+}
+
+test("default development logging is opt-in, client-local and respects its minimum level", async () => {
+    await fixture()
+    const enabled = capturedLogs()
+    const disabled = capturedLogs()
+    const filtered = capturedLogs()
+    const clients = [
+        defaultApi(undefined, { development: true, logger: fromEffectLogger(enabled.logger) }),
+        defaultApi(undefined, { logger: fromEffectLogger(disabled.logger) }),
+        defaultApi(undefined, { development: true, minimumLevel: "Error", logger: fromEffectLogger(filtered.logger) }),
+    ]
+    for (const client of clients) {
+        expect((await client.connect()).isOk()).toBe(true)
+        expect((await client.shutdown()).isOk()).toBe(true)
+    }
+    expect(enabled.diagnostics().map((entry) => entry.event)).toEqual([
+        "connecting",
+        "attempt",
+        "connected",
+        "closing",
+        "closed",
+    ])
+    expect(disabled.entries).toEqual([])
+    expect(filtered.entries).toEqual([])
+    expect(enabled.diagnostics().find((entry) => entry.event === "connected")).toMatchObject({
+        phase: "startup",
+        mode: "identify",
+        attempt: 1,
+    })
+})
+
+test("default development output needs no custom logger", async () => {
+    await fixture()
+    const output = vi.spyOn(console, "log").mockImplementation(() => {})
+    const client = defaultApi(undefined, { development: true })
+    await client.connect()
+    await client.shutdown()
+    expect(output.mock.calls.some((args) => args.some((arg) => String(arg).includes("Fluxerly")))).toBe(true)
+})
+
+test.each([false, true])(
+    "native diagnostics preserve execution annotations and require opt-in: %s",
+    async (development) => {
+        await fixture()
+        const captured = capturedLogs()
+        const scope = Scope.makeUnsafe()
+        const client = await Effect.runPromise(
+            createNative({ token: "fixture-only-not-a-credential", logging: { development } }).pipe(
+                Scope.provide(scope),
+            ),
+        )
+        await Effect.runPromise(
+            Effect.gen(function* () {
+                yield* client.connect()
+                yield* client.shutdown()
+            }).pipe(
+                Effect.withLogger(captured.logger),
+                Effect.annotateLogs("requestId", "execution"),
+                Effect.withSpan("connection-owner"),
+                Effect.provideService(References.MinimumLogLevel, "Debug"),
+            ),
+        )
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+        expect(captured.entries.length > 0).toBe(development)
+        expect(captured.entries.every((entry) => entry.annotation === "execution")).toBe(true)
+        expect(captured.entries.every((entry) => entry.span === "connection-owner")).toBe(true)
+    },
+)
+
+test.each(["default", "native"] as const)(
+    "%s diagnostics survive throwing loggers and classify recovery without private data",
+    async (mode) => {
+        const server = await fixture()
+        const captured = capturedLogs(true)
+        const scope = Scope.makeUnsafe()
+        const client =
+            mode === "default"
+                ? defaultApi(undefined, { development: true, logger: fromEffectLogger(captured.logger) })
+                : await Effect.runPromise(
+                      createNative({ token: "fixture-only-not-a-credential", logging: { development: true } }).pipe(
+                          Scope.provide(scope),
+                      ),
+                  )
+        const connect = client.connect()
+        if (Effect.isEffect(connect)) await Effect.runPromise(connect.pipe(Effect.withLogger(captured.logger)))
+        else expect((await connect).isOk()).toBe(true)
+        onTestFinished(async () => {
+            const closing = client.shutdown()
+            if (Effect.isEffect(closing)) await Effect.runPromise(closing)
+            else await closing
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+        })
+        server.sockets[0]!.close(4000, "private-close-sentinel")
+        await vi.waitFor(
+            () =>
+                expect(
+                    captured.diagnostics().some((entry) => entry.event === "connected" && entry.mode === "resume"),
+                ).toBe(true),
+            { timeout: 3500 },
+        )
+        server.options.invalidResume = true
+        server.sockets.at(-1)!.close(4000)
+        await vi.waitFor(
+            () => expect(captured.diagnostics().some((entry) => entry.event === "sessionReset")).toBe(true),
+            { timeout: 8000 },
+        )
+        await vi.waitFor(
+            () =>
+                expect(
+                    captured
+                        .diagnostics()
+                        .some(
+                            (entry) =>
+                                entry.event === "connected" && entry.phase === "recovery" && entry.mode === "identify",
+                        ),
+                ).toBe(true),
+            { timeout: 8000 },
+        )
+        const retry = captured.diagnostics().find((entry) => entry.event === "retry")!
+        expect(retry.delayMs).toEqual(expect.any(Number))
+        expect(retry.failure).toBe("closed")
+        const serialized = JSON.stringify(captured.entries)
+        for (const privateValue of [
+            "fixture-only-not-a-credential",
+            "fixture-session",
+            "private-close-sentinel",
+            "private-logger-sentinel",
+            "gateway.fluxer.app",
+        ])
+            expect(serialized).not.toContain(privateValue)
+        expect(captured.entries.every((entry) => (entry.cause as Cause.Cause<unknown>).reasons.length === 0)).toBe(true)
+    },
+    20_000,
+)
+
+test("default observer errors use the configured logger with development disabled", async () => {
+    const captured = capturedLogs(true)
+    const client = defaultApi(undefined, { logger: fromEffectLogger(captured.logger) })
+    const stop = client.observeState(() => {
+        throw new Error("private-observer-sentinel")
+    })
+    await vi.waitFor(() => expect(captured.entries).toHaveLength(1))
+    stop()
+    await client.shutdown()
+    expect(JSON.stringify(captured.entries)).toContain("Fluxerly state observer failed")
+    expect(JSON.stringify(captured.entries)).not.toContain("private-observer-sentinel")
+})
+
+test.each([
+    [null, "logging"],
+    [{ development: "yes" }, "development"],
+    [{ minimumLevel: "verbose" }, "minimumLevel"],
+    [{ minimumLevel: null }, "minimumLevel"],
+    [{ logger: {} }, "logger"],
+    [{ unknown: true }, "logging"],
+])("invalid logging configuration fails before connection: %j", (logging, field) => {
+    const result = createClient({ token: "fixture-only-not-a-credential", logging } as unknown as ClientOptions)
+    expect(result._unsafeUnwrapErr()).toMatchObject({ _tag: "ConfigurationError", field })
+})
+
+test("native options reject default logger controls, and the adapter rejects a non-Effect logger", async () => {
+    const exit = await Effect.runPromiseExit(
+        Effect.scoped(
+            createNative({
+                token: "fixture-only-not-a-credential",
+                logging: { minimumLevel: "Info" },
+            } as unknown as import("../src/effect.js").ClientOptions),
+        ),
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit))
+        expect(exit.cause.reasons).toEqual([
+            expect.objectContaining({ error: expect.objectContaining({ field: "logging" }) }),
+        ])
+    expect(() => fromEffectLogger({ log() {} } as unknown as Logger.Logger<unknown, unknown>)).toThrow(
+        "Expected an Effect logger",
+    )
+})
 afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
@@ -109,8 +306,12 @@ async function fixture(
     return { sockets, commands, requests: () => requests, options }
 }
 
-function defaultApi(connection?: ClientOptions["connection"]) {
-    const result = createClient({ token: "fixture-only-not-a-credential", ...(connection ? { connection } : {}) })
+function defaultApi(connection?: ClientOptions["connection"], logging?: ClientOptions["logging"]) {
+    const result = createClient({
+        token: "fixture-only-not-a-credential",
+        ...(connection ? { connection } : {}),
+        ...(logging ? { logging } : {}),
+    })
     if (result.isErr()) throw result.error
     onTestFinished(async () => {
         await result.value.shutdown()
@@ -258,12 +459,24 @@ test("connection recovery resumes with the processed sequence, then falls back t
 
 test("permanent background failure is retained after readiness", async () => {
     const server = await fixture()
-    const client = defaultApi()
+    const captured = capturedLogs(true)
+    const client = defaultApi(undefined, { development: true, logger: fromEffectLogger(captured.logger) })
     await client.connect()
     server.sockets[0]!.close(4004)
     expect((await client.waitForClose())._unsafeUnwrapErr()._tag).toBe("AuthenticationError")
     expect(client.state).toBe("Closed")
     expect((await client.waitForClose())._unsafeUnwrapErr()._tag).toBe("AuthenticationError")
+    expect(captured.diagnostics().filter((entry) => entry.event === "retry")).toEqual([])
+    expect(captured.diagnostics().find((entry) => entry.event === "connectionEnded")).toMatchObject({
+        failure: "AuthenticationError",
+        phase: "recovery",
+    })
+    expect(
+        captured
+            .diagnostics()
+            .slice(-2)
+            .map((entry) => entry.event),
+    ).toEqual(["closing", "closed"])
 })
 
 test("default state observation preserves initial state and only the newest pending update", async () => {

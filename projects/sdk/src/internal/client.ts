@@ -20,6 +20,7 @@ import { discoverGateway } from "./discovery.js"
 import { AttemptFailure, runGateway, type Session } from "./gateway.js"
 import { EventBus } from "./events.js"
 import { RestOwner } from "./rest.js"
+import type { ClientLogging } from "./logging.js"
 import type {
     Message,
     EditMessageInput,
@@ -31,6 +32,7 @@ import type {
 } from "#sdk/messages"
 
 export class ClientOwner {
+    readonly logging: ClientLogging
     readonly events = new EventBus()
     readonly rest: RestOwner
     readonly cache: MessageCache | undefined
@@ -53,6 +55,7 @@ export class ClientOwner {
         now: () => number,
     ) {
         this.#configuration = configuration
+        this.logging = configuration.logging
         this.cache = configuration.cache
             ? new MessageCache(configuration.cache, (report) => reports!.offer(report), now)
             : undefined
@@ -191,6 +194,9 @@ export class ClientOwner {
     #loop(configuration: Configuration, startup: Deferred.Deferred<void, ConnectError>) {
         const owner = this
         return Effect.gen(function* () {
+            const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
+            const emit = (diagnostic: Parameters<ClientLogging["emit"]>[1]) => owner.logging.emit(fiber, diagnostic)
+            emit({ event: "connecting", phase: "startup" })
             const clock = yield* Clock.Clock
             const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000
             const deadline = now() + configuration.startupTimeoutMs
@@ -202,6 +208,9 @@ export class ClientOwner {
             let url: string | undefined
             while (true) {
                 attempts += 1
+                const phase = established ? "recovery" : "startup"
+                const mode = owner.#session.id !== undefined && owner.#session.sequence !== null ? "resume" : "identify"
+                emit({ event: "attempt", phase, attempt: attempts, mode })
                 const budget = established ? 30_000 : Math.max(0, deadline - now())
                 const attempt = Effect.gen(function* () {
                     const attemptDeadline = now() + budget
@@ -228,11 +237,12 @@ export class ClientOwner {
                         configuration.token,
                         owner.#session,
                         Math.max(0, attemptDeadline - now()),
-                        () => {
+                        (readyMode) => {
                             established = true
                             connectedAt = now()
                             disconnectedAt = undefined
                             owner.#setState("Connected")
+                            emit({ event: "connected", phase, attempt: attempts, mode: readyMode })
                             Deferred.doneUnsafe(startup, Effect.void)
                         },
                         (latency) => {
@@ -256,18 +266,35 @@ export class ClientOwner {
                     return yield* Effect.die(new Error("Gateway lifetime ended without an outcome"))
                 // Inspect the full cause before considering a retry; typed matching can hide a cleanup defect
                 if (Cause.hasDies(result.cause) || Cause.hasInterrupts(result.cause)) {
+                    emit({
+                        event: "connectionEnded",
+                        phase: established ? "recovery" : "startup",
+                        failure: Cause.hasDies(result.cause) ? "defect" : "interrupted",
+                    })
                     return yield* Effect.failCause(Cause.map(result.cause, (failure) => failure.failure))
                 }
                 const reason = result.cause.reasons.find((reason) => reason._tag === "Fail")
                 if (reason?._tag !== "Fail") return yield* Effect.die(new Error("Gateway failure had no reason"))
                 const failure = reason.error
-                if (failure.resetSession) owner.#session = { id: undefined, sequence: null }
+                if (established && connectedAt !== undefined) emit({ event: "connectionLost", phase: "recovery" })
+                if (failure.resetSession) {
+                    owner.#session = { id: undefined, sequence: null }
+                    emit({ event: "sessionReset", phase, mode: "identify" })
+                }
                 const reported =
                     !established && failure.failure instanceof ConnectionTimeoutError
                         ? new ConnectionTimeoutError(configuration.startupTimeoutMs)
                         : failure.failure
-                if (!failure.retry) return yield* Effect.fail(reported)
-                if (!established && attempts >= configuration.maxStartupAttempts) return yield* Effect.fail(reported)
+                const classification =
+                    failure.failure instanceof ConnectionError ? failure.failure.reason : failure.failure._tag
+                if (!failure.retry || (!established && attempts >= configuration.maxStartupAttempts)) {
+                    emit({
+                        event: "connectionEnded",
+                        phase: established ? "recovery" : "startup",
+                        failure: classification,
+                    })
+                    return yield* Effect.fail(reported)
+                }
                 if (established) {
                     owner.#setState("Recovering")
                     if (connectedAt !== undefined && (disconnectedAt ?? now()) - connectedAt >= 60_000) recoveryStep = 0
@@ -280,10 +307,22 @@ export class ClientOwner {
                 const requiredWait = failure.failure instanceof RateLimitError ? (failure.failure.retryAfterMs ?? 0) : 0
                 const delay = Math.max(jitter, requiredWait)
                 if (!established && delay >= deadline - now()) {
+                    emit({
+                        event: "connectionEnded",
+                        phase,
+                        failure: requiredWait > 0 ? "RateLimitError" : "ConnectionTimeoutError",
+                    })
                     return yield* Effect.fail(
                         requiredWait > 0 ? failure.failure : new ConnectionTimeoutError(configuration.startupTimeoutMs),
                     )
                 }
+                emit({
+                    event: "retry",
+                    phase: established ? "recovery" : "startup",
+                    attempt: attempts,
+                    delayMs: delay,
+                    failure: classification,
+                })
                 yield* Effect.sleep(delay)
             }
         })
@@ -319,6 +358,8 @@ export class ClientOwner {
                                     Deferred.doneUnsafe(startup, Effect.fail(new ClientClosedError()))
                                 else Deferred.doneUnsafe(startup, exit)
                                 if (becameReady || defect) {
+                                    const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
+                                    if (!closing) owner.logging.emit(fiber, { event: "closing" })
                                     owner.#setState("Closing")
                                     const services = yield* Effect.exit(owner.#closeServices())
                                     const outcome = Exit.isFailure(services)
@@ -331,6 +372,7 @@ export class ClientOwner {
                                         : exit
                                     owner.#workerExit = outcome
                                     owner.#finish()
+                                    if (!closing) owner.logging.emit(fiber, { event: "closed" })
                                     Deferred.doneUnsafe(
                                         owner.#terminal,
                                         interrupted && !Exit.isFailure(services) ? Effect.void : outcome,
@@ -392,10 +434,13 @@ export class ClientOwner {
                 owner.events.stop()
                 owner.rest.stop()
                 return Effect.gen(function* () {
+                    const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
+                    owner.logging.emit(fiber, { event: "closing" })
                     if (owner.#worker) yield* Fiber.interrupt(owner.#worker)
                     const services = yield* Effect.exit(owner.#closeServices())
                     const exit = owner.#workerExit
                     owner.#finish()
+                    owner.logging.emit(fiber, { event: "closed" })
                     if (Exit.isFailure(services)) {
                         Deferred.doneUnsafe(owner.#terminal, services)
                         return yield* Effect.failCause(services.cause)
@@ -431,34 +476,38 @@ export function makeClient(
     native = false,
 ): Effect.Effect<ClientOwner, ConfigurationError> {
     return Effect.gen(function* () {
-        const configuration = yield* validateConfiguration(options)
-        const callback = configuration.cache?.onError
-        const reporter = callback
-            ? (report: CachePolicyErrorReport): Effect.Effect<unknown, unknown> =>
-                  native
-                      ? Effect.suspend(() => {
-                            const result = callback(report)
-                            // The report worker supplies the captured creation context, including the native reporter's services
-                            return Effect.isEffect(result)
-                                ? (result as Effect.Effect<unknown, unknown>)
-                                : Effect.die(new Error("Cache reporter must return an Effect"))
-                        })
-                      : Effect.callback((resume) => {
-                            void Promise.resolve()
-                                .then(() => callback(report))
-                                .then(
-                                    () => resume(Effect.void),
-                                    () => resume(Effect.die(new Error("Cache reporter failed"))),
-                                )
-                        })
-            : undefined
-        const reports = configuration.cache ? yield* makeCacheReports(reporter, scope) : undefined
-        const clock = yield* Clock.Clock
-        return new ClientOwner(
-            configuration,
-            scope,
-            reports,
-            () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000,
+        const configuration = yield* validateConfiguration(options, native)
+        return yield* configuration.logging.provide(
+            Effect.gen(function* () {
+                const callback = configuration.cache?.onError
+                const reporter = callback
+                    ? (report: CachePolicyErrorReport): Effect.Effect<unknown, unknown> =>
+                          native
+                              ? Effect.suspend(() => {
+                                    const result = callback(report)
+                                    // The report worker supplies the captured creation context, including the native reporter's services
+                                    return Effect.isEffect(result)
+                                        ? (result as Effect.Effect<unknown, unknown>)
+                                        : Effect.die(new Error("Cache reporter must return an Effect"))
+                                })
+                              : Effect.callback((resume) => {
+                                    void Promise.resolve()
+                                        .then(() => callback(report))
+                                        .then(
+                                            () => resume(Effect.void),
+                                            () => resume(Effect.die(new Error("Cache reporter failed"))),
+                                        )
+                                })
+                    : undefined
+                const reports = configuration.cache ? yield* makeCacheReports(reporter, scope) : undefined
+                const clock = yield* Clock.Clock
+                return new ClientOwner(
+                    configuration,
+                    scope,
+                    reports,
+                    () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000,
+                )
+            }),
         )
     })
 }

@@ -3,7 +3,8 @@ import { realpathSync } from "node:fs"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { Context, Effect, Logger, References } from "effect"
-import { createClient, MessageOperationError } from "@neontechspace/fluxerly/effect"
+import { createClient, MessageOperationError, CollectorError, fromEffectLogger } from "@neontechspace/fluxerly/effect"
+import { createClient as createDefault } from "@neontechspace/fluxerly"
 
 globalThis.fetch = () => {
     throw new Error("Creation must not make HTTP requests")
@@ -15,11 +16,31 @@ globalThis.WebSocket = class {
 }
 
 const messages = []
+const defaultLogs = []
+const defaultApi = createDefault({
+    token: "fixture-only-not-a-credential",
+    logging: {
+        development: true,
+        logger: fromEffectLogger(Logger.make((entry) => defaultLogs.push(entry.message))),
+    },
+})._unsafeUnwrap()
+assert.ok((await defaultApi.shutdown()).isOk())
+assert.deepEqual(
+    defaultLogs.map((message) => message[1].event),
+    ["closing", "closed"],
+)
 const client = await Effect.runPromise(
     Effect.scoped(
         Effect.gen(function* () {
             const client = yield* createClient({ token: "fixture-only-not-a-credential" })
             assert.equal(client.state, "Disconnected")
+            const collector = yield* client.messages.collect("20").pipe(Effect.flip)
+            assert.ok(collector instanceof CollectorError)
+            assert.equal(collector.reason, "notConnected")
+            assert.equal(
+                (yield* client.messages.collect("20", { maxMessages: 0 }).pipe(Effect.flip))._tag,
+                "ConfigurationError",
+            )
             yield* Effect.yieldNow
             assert.equal((yield* Effect.currentSpan).name, "Packed consumer")
             assert.equal((yield* References.CurrentLogAnnotations).requestId, "package-check")

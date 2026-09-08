@@ -27,6 +27,47 @@ JavaScript consumers will not need a TypeScript installation
 
 The exact minimum Node.js 24 minor and patch versions remain to be selected and tested
 
+### Versioning and release stages
+
+The SDK uses [Epoch Semantic Versioning](https://antfu.me/posts/epoch-semver), with this SemVer-compatible package version format:
+
+```text
+(EPOCH * 1000 + MAJOR).MINOR.PATCH[-STAGE.NUMBER]
+```
+
+The epoch identifies a major project generation.
+Within an epoch, MAJOR increases for breaking public API changes, MINOR for backward-compatible features and PATCH for backward-compatible fixes.
+MAJOR ranges from 0 to 999 with this mapping.
+The release suffix describes readiness, independently of compatibility changes
+
+| Suffix | Meaning |
+| --- | --- |
+| `-alpha.N` | Initial SDK development, not ready for supported public use |
+| `-beta.N` | Preview of upcoming changes, available for testing |
+| `-rc.N` | Release candidate believed ready to ship, with no known release blockers, pending final validation |
+| No suffix | Stable release supported for public use |
+
+There is no literal `-none` suffix.
+A prerelease containing breaking changes targets the next breaking version even when the suffix is beta or RC
+
+Initial development uses default `0.x.y-alpha.N` versions without a stable public API guarantee.
+Epoch zero leaves the package major unchanged because `0 * 1000 + MAJOR = MAJOR`.
+The first stable public generation is called Epoch 1 and starts at `1000.0.0`, not `1.0.0`
+
+| Example release | Package version |
+| --- | --- |
+| Initial development | `0.1.0-alpha.1` |
+| First public release preview | `1000.0.0-beta.1` |
+| First release candidate | `1000.0.0-rc.1` |
+| First stable release | `1000.0.0` |
+| Compatible bug fix | `1000.0.1` |
+| Compatible feature | `1000.1.0` |
+| Breaking API change within Epoch 1 | `1001.0.0` |
+| Next major project generation | `2000.0.0` |
+
+These are policy examples, not published releases.
+The private development manifest remains at `0.0.0` for local package checks, as described under [build and package optimization](/docs/TECHNOLOGY.md#build-and-package-optimization)
+
 ### Effect and diagnostics
 
 Effect owns internal concurrency, cancellation, resource management and logging.

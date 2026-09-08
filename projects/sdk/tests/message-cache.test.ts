@@ -4,7 +4,7 @@ import { Clock, Effect, Exit, Logger, References, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
 import { createClient, SdkDefect, type Client, type Message, type MessageReference } from "../src/index.js"
-import { createClient as createNative, type Client as NativeClient } from "../src/effect.js"
+import { createClient as createNative, fromEffectLogger, type Client as NativeClient } from "../src/effect.js"
 
 const transport = vi.hoisted(() => ({ url: "" }))
 vi.mock("ws", async (original) => {
@@ -22,6 +22,51 @@ vi.mock("ws", async (original) => {
 
 const realFetch = globalThis.fetch
 const target = { id: "10", channelId: "20" }
+
+test("default cache and handler fallback logs use the same client logger without development output", async () => {
+    const server = await fixture()
+    const logs: unknown[] = []
+    const result = createClient({
+        token: "fixture-only-not-a-credential",
+        logging: {
+            logger: fromEffectLogger(
+                Logger.make((entry) => {
+                    logs.push(entry.message)
+                    throw new Error("private sink")
+                }),
+            ),
+        },
+        cache: {
+            messages: {
+                maxAgeMs: () => {
+                    throw new Error("private policy")
+                },
+            },
+        },
+    })
+    const client = result._unsafeUnwrap()
+    onTestFinished(async () => {
+        await client.shutdown()
+    })
+    expect((await client.messages.fetch(target)).isOk()).toBe(true)
+    expect(logs).toHaveLength(1)
+    expect(client.messages.get(target)._unsafeUnwrap()).toBeUndefined()
+    const sub = client
+        .on("messageCreate", () => {
+            throw new Error("private handler")
+        })
+        ._unsafeUnwrap()
+    await client.connect()
+    server.dispatch("MESSAGE_CREATE", wire("91", "20", "private body"))
+    await vi.waitFor(() => expect(logs).toHaveLength(3))
+    expect(JSON.stringify(logs)).toContain("cache policy failure")
+    expect(JSON.stringify(logs)).toContain("message subscription handler failure")
+    expect(JSON.stringify(logs)).not.toContain("private")
+    expect(client.state).toBe("Connected")
+    sub.unsubscribe()
+    expect((await sub.waitForClose()).isOk()).toBe(true)
+    expect((await client.shutdown()).isOk()).toBe(true)
+})
 
 const wire = (id: string, channelId: string, content = `Message ${id}`) => ({
     id,

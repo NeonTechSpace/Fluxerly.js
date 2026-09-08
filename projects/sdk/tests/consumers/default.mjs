@@ -9,7 +9,8 @@ globalThis.WebSocket = class {
     }
 }
 
-const { createClient, ConfigurationError, MessageOperationError } = await import("@neontechspace/fluxerly")
+const { createClient, ConfigurationError, MessageOperationError, CollectorError } =
+    await import("@neontechspace/fluxerly")
 const cacheReports = []
 let completeCacheReport
 const cacheReported = new Promise((resolve) => {
@@ -32,6 +33,10 @@ const result = createClient({
 })
 assert.equal(result.isOk(), true)
 assert.equal(result.value.state, "Disconnected")
+const collector = result.value.messages.collect("20")
+assert.ok(collector.isErr() && collector.error instanceof CollectorError)
+assert.equal(collector.error.reason, "notConnected")
+assert.equal(result.value.messages.collect("20", { maxMessages: 0 }).error._tag, "ConfigurationError")
 assert.equal(Reflect.set(result.value, "state", "Connected"), false)
 const emptyCache = result.value.messages.get({ id: "10", channelId: "20" })
 assert.ok(emptyCache.isOk())

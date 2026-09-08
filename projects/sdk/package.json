@@ -40,6 +40,7 @@
         "test:live:recovery": "pnpm run build && node tests/live/messages.mjs default --recover && node tests/live/messages.mjs effect --recover",
         "test:live:recovery:cancel": "pnpm run build && node tests/live/sdk.mjs default --cancel-recovery && node tests/live/sdk.mjs effect --cancel-recovery",
         "test:live:cache": "pnpm run build && node tests/live/messages.mjs default --cache && node tests/live/messages.mjs effect --cache",
+        "test:live:collectors": "pnpm run build && node tests/live/messages.mjs default --collectors && node tests/live/messages.mjs effect --collectors",
         "test:cache:memory": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/cache-memory.mjs",
         "test:cache:workload": "pnpm run build && node tests/cache-workload.mjs default && node tests/cache-workload.mjs effect",
         "check": "pnpm run format:check && pnpm run build && pnpm run test:types && pnpm run test && pnpm run test:package"

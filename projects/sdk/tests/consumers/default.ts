@@ -11,10 +11,20 @@ import {
     type CachePolicyErrorReport,
     type MessageCacheOptions,
     type MessageCacheSettings,
+    type Collector,
+    type CollectorOptions,
+    type CollectorResult,
 } from "@neontechspace/fluxerly"
 
 export const cacheSettings: MessageCacheSettings = {
     maxAgeMs: (message) => (message.author.isBot ? 0 : null),
+}
+
+export function configuredLogging(token: string) {
+    const client = createClient({ token, logging: { development: true, minimumLevel: "Warn" } })
+    // @ts-expect-error An Effect adapter is required rather than an untyped logger object
+    createClient({ token, logging: { logger: { log() {} } } })
+    return client
 }
 
 export const cacheAgeModes: readonly MessageCacheSettings[] = [{ maxAgeMs: 30_000 }, { maxAgeMs: null }, cacheSettings]
@@ -106,6 +116,12 @@ export function registerReply(client: Client) {
 }
 
 export function rejectedMessageShapes(client: Client): void {
+    // @ts-expect-error Collector filters must return synchronous booleans
+    client.messages.collect("20", { filter: async () => true })
+    // @ts-expect-error Collector IDs are decimal strings
+    client.messages.collect(20)
+    // @ts-expect-error Collector count is numeric
+    client.messages.collect("20", { maxMessages: "1" })
     const page: readonly Message[] = []
     // @ts-expect-error History arrays cannot be mutated
     page.push(page[0]!)
@@ -125,6 +141,26 @@ export function rejectedMessageShapes(client: Client): void {
     client.messages.edit({ channelId: "20", id: "10" }, {})
     // @ts-expect-error Edit does not accept attachments
     client.messages.edit({ channelId: "20", id: "10" }, { content: "text", attachments: [] })
+}
+
+export async function collectReplies(client: Client) {
+    const options: CollectorOptions = {
+        maxMessages: 2,
+        timeoutMs: 5_000,
+        maxBytes: 1_024,
+        maxPendingMessages: 10,
+        maxPendingBytes: 2_048,
+    }
+    const opened = client.messages.collect("20", options)
+    if (opened.isErr()) return opened.error._tag
+    const collector: Collector = opened.value
+    collector.stop()
+    const result = await collector.waitForClose()
+    if (result.isErr()) return result.error._tag
+    const completed: CollectorResult = result.value
+    // @ts-expect-error Successful collector results are immutable
+    completed.messages.push(completed.messages[0]!)
+    return completed.reason
 }
 
 /** Typechecked page-navigation fragment. The application owns client lifetime and decides when to request another page */

@@ -1,5 +1,6 @@
 import { Cause, Deferred, Effect, Exit, Scope } from "effect"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
+export type { LoggingOptions, DefaultLoggingOptions, DefaultLogger } from "./logging.js"
 export type { CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions } from "./cache.js"
 import type { ClientState, ClientOptions, ConnectionState, OperationOptions } from "./client.js"
 import {
@@ -12,6 +13,22 @@ import {
     type Operation,
 } from "./errors.js"
 import { makeClient } from "#sdk/internal/client"
+import { collect, type MessageCollector } from "#sdk/internal/collector"
+import {
+    type CollectorError,
+    type CollectorFailure,
+    type CollectorRegistrationError,
+    type CollectorResult,
+    type DefaultCollectorOptions,
+} from "./collectors.js"
+export { CollectorError } from "./collectors.js"
+export type {
+    CollectorOptions,
+    DefaultCollectorOptions,
+    CollectorResult,
+    CollectorFailure,
+    CollectorRegistrationError,
+} from "./collectors.js"
 import { replyInput } from "#sdk/internal/message"
 import type { EventSource } from "#sdk/internal/events"
 import {
@@ -87,7 +104,7 @@ export interface EventHandlerOptions extends HandlerOptions {
 }
 
 /**
- * Client-owned text operations. Callable without a gateway connection until Closing or Closed.
+ * Client-owned text operations. REST and local lookup work without a gateway connection. Collection requires Connected.
  * Remote calls share four active HTTP slots and at most 256 queued requests or 4 MiB of queued JSON bodies.
  * Each remote call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
  * Only confirmed rate-limit rejections retry within that deadline, with route-specific and client-global rate waits.
@@ -96,6 +113,48 @@ export interface EventHandlerOptions extends HandlerOptions {
  * Neither failure proves that a dispatched mutation was undone
  */
 export interface Messages {
+    /**
+     * Start a bounded collection of future messageCreate observations in one decimal channel ID.
+     * Returns a ready handle synchronously. Register before sending a prompt. No history, cache reads or implicit connection
+     *
+     * Defaults: One accepted message, 30,000 ms total lifetime, 4 MiB retained Message JSON.
+     * Pending intake is separately bounded to 256 payloads or 4 MiB source JSON, after channel selection and before filtering.
+     * Options are copied at registration. Positive safe integer budgets are required. The timeoutMs maximum is 2,147,483,647.
+     * Timeout starts at registration, never resets, and excludes messages processed at or after the deadline
+     *
+     * Selection is synchronous and counts each accepted ID once. Edits/deletions leave received snapshots unchanged.
+     * Filter failure or either byte/queue overflow ends only this collector, without partial messages in the error.
+     * Recovery fails collection with CollectorError connectionLost even if the client later resumes. No automatic restart or resend
+     *
+     * Non-connected registration fails with CollectorError notConnected. Closing/Closed use ClientClosedError.
+     * Invalid settings use ConfigurationError. The optional signal controls collection and abort returns CancelledError.
+     * An already-aborted signal starts no collection. Unexpected registration defects throw SdkDefect
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     *
+     * export async function askName(client: Client, channelId: string, userId: string) {
+     *     const opened = client.messages.collect(channelId, { filter: message => message.author.id === userId })
+     *     if (opened.isErr()) throw opened.error
+     *     const collector = opened.value
+     *     try {
+     *         const sent = await client.messages.send(channelId, { content: "What should I call you?" })
+     *         if (sent.isErr()) throw sent.error
+     *         const result = await collector.waitForClose()
+     *         if (result.isErr()) throw result.error
+     *         return result.value
+     *     } finally {
+     *         collector.stop()
+     *     }
+     * }
+     * ```
+     * The caller supplies a connected client and handles empty timeout results and client lifetime separately
+     */
+    collect(
+        channelId: string,
+        options?: DefaultCollectorOptions,
+    ): Result<Collector, CollectorRegistrationError | CancelledError>
     /**
      * Read this client's local retained snapshot synchronously, never making a request.
      * Disabled caching, absent/evicted/expired entries and a mismatched channel return Ok(undefined), not server absence.
@@ -188,6 +247,19 @@ export interface Messages {
     ): ResultAsync<void, MessageOperationFailure | CancelledError>
 }
 
+/** One default collection, independent of observers and the client's connection lifetime */
+export interface Collector {
+    /** Stop synchronously, returning accepted partial replies through waitForClose. Repeated stops preserve the first outcome */
+    stop(): void
+    /**
+     * Observe the retained frozen result after timer, queue, filter and listener cleanup.
+     * Multiple and late observers share the same result/error. Cancelling this wait affects only this observer.
+     * Timeout/stop may return empty results. Collection cancellation, filter/overflow/gap failure or client closure returns Err without partial replies.
+     * Unexpected SDK defects reject with SdkDefect. Keeping the handle/result retains successful message snapshots in memory
+     */
+    waitForClose(options?: OperationOptions): ResultAsync<CollectorResult, CollectorFailure | CancelledError>
+}
+
 export type { ClientOptions, ConnectionState, OperationOptions } from "./client.js"
 export {
     AuthenticationError,
@@ -208,7 +280,7 @@ export type { ConnectError, ConnectionFailure, DefectReason } from "./errors.js"
  * Use run for a managed lifetime, or pair connect with waitForClose and shutdown
  */
 export interface Client extends ClientState {
-    /** Message operations sharing this client's credentials, admission and rate-limit state */
+    /** REST, local lookup and live collection owned by this client */
     readonly messages: Messages
     /**
      * Register a callback for one EventMap event before or after connect. No cached history or REST-generated events.
@@ -320,9 +392,40 @@ export interface Client extends ClientState {
     observeState(listener: (state: ConnectionState) => void | Promise<void>): () => void
 }
 
+const executeOperation = <
+    A,
+    E extends ConnectError | EventReadError | MessageError | MessageOperationError | CollectorError,
+>(
+    effect: Effect.Effect<A, E>,
+    operation: Operation,
+    options?: OperationOptions,
+) => {
+    const signal = options?.signal
+    if (signal?.aborted) return new ResultAsync<A, E | CancelledError>(Promise.resolve(err(new CancelledError())))
+    const controller = signal ? new AbortController() : undefined
+    const abort = () => controller?.abort()
+    if (signal?.aborted) abort()
+    else signal?.addEventListener("abort", abort, { once: true })
+    // Interrupt the operation itself rather than discarding a losing race's cleanup cause
+    return new ResultAsync(
+        Effect.runPromiseExit(effect, controller ? { signal: controller.signal } : undefined)
+            .finally(() => signal?.removeEventListener("abort", abort))
+            .then((exit) => fromExit(exit, operation)),
+    )
+}
+
+function defaultCollector(source: MessageCollector): Collector {
+    return Object.freeze({
+        stop: () => source.stop(),
+        waitForClose: (options?: OperationOptions) =>
+            executeOperation(Deferred.await(source.closed), "collector.waitForClose", options),
+    })
+}
+
 function fromExit<
     A,
-    E extends ConnectError | ConfigurationError | EventReadError | MessageError | MessageOperationError,
+    E extends
+        ConnectError | ConfigurationError | EventReadError | MessageError | MessageOperationError | CollectorError,
 >(exit: Exit.Exit<A, E>, operation: Operation): Result<A, E | CancelledError> {
     if (Exit.isSuccess(exit)) return ok(exit.value)
     if (Cause.hasDies(exit.cause)) {
@@ -359,24 +462,14 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         throw new SdkDefect()
     }
     const owner = exit.value
-    const execute = <A, E extends ConnectError | EventReadError | MessageError | MessageOperationError>(
+    const execute = <
+        A,
+        E extends ConnectError | EventReadError | MessageError | MessageOperationError | CollectorError,
+    >(
         effect: Effect.Effect<A, E>,
         operation: Operation,
         options?: OperationOptions,
-    ) => {
-        const signal = options?.signal
-        if (signal?.aborted) return new ResultAsync<A, E | CancelledError>(Promise.resolve(err(new CancelledError())))
-        const controller = signal ? new AbortController() : undefined
-        const abort = () => controller?.abort()
-        if (signal?.aborted) abort()
-        else signal?.addEventListener("abort", abort, { once: true })
-        // Interrupt the operation itself rather than discarding a losing race's cleanup cause
-        return new ResultAsync(
-            Effect.runPromiseExit(effect, controller ? { signal: controller.signal } : undefined)
-                .finally(() => signal?.removeEventListener("abort", abort))
-                .then((exit) => fromExit(exit, operation)),
-        )
-    }
+    ) => executeOperation(owner.logging.provide(effect), operation, options)
     const subscription = (source: Pick<EventSource, "stop" | "closed">): Subscription =>
         Object.freeze({
             unsubscribe: () => source.stop(),
@@ -387,7 +480,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         effect: Effect.Effect<A, RegistrationError>,
         operation: "on" | "events",
     ): Result<A, RegistrationError> => {
-        const exit = Effect.runSyncExit(effect)
+        const exit = Effect.runSyncExit(owner.logging.provide(effect))
         if (Exit.isSuccess(exit)) return ok(exit.value)
         if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause)) throw new SdkDefect(operation)
         const reason = exit.cause.reasons.find((reason) => reason._tag === "Fail")
@@ -397,6 +490,13 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     return ok(
         Object.freeze({
             messages: Object.freeze({
+                collect: (
+                    channelId: string,
+                    options?: DefaultCollectorOptions,
+                ): Result<Collector, CollectorRegistrationError | CancelledError> => {
+                    const opened = fromExit(Effect.runSyncExit(collect(owner, channelId, options, true)), "collect")
+                    return opened.map(defaultCollector)
+                },
                 get: (target: MessageReference): Result<Message | undefined, MessageOperationFailure> => {
                     const exit = Effect.runSyncExit(owner.get(target))
                     if (Exit.isSuccess(exit)) return ok(exit.value)
@@ -442,7 +542,9 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 const reporter = options?.onError
                 let reporting = false
                 const reportFailure = (kind: string) => {
-                    Effect.runSyncExit(Effect.logError(`Fluxerly message subscription ${kind} failure`))
+                    Effect.runSyncExit(
+                        owner.logging.provide(Effect.logError(`Fluxerly message subscription ${kind} failure`)),
+                    )
                 }
                 return register(
                     owner.events
@@ -499,13 +601,13 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             waitForClose: (options?: OperationOptions) => execute(owner.waitForClose(), "waitForClose", options),
             shutdown: () =>
                 new ResultAsync<void, never>(
-                    Effect.runPromiseExit(owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, Exit.void)))).then(
-                        (exit) => {
-                            const result = fromExit(exit, "shutdown")
-                            if (result.isErr()) throw new SdkDefect("shutdown")
-                            return ok(undefined)
-                        },
-                    ),
+                    Effect.runPromiseExit(
+                        owner.logging.provide(owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, Exit.void)))),
+                    ).then((exit) => {
+                        const result = fromExit(exit, "shutdown")
+                        if (result.isErr()) throw new SdkDefect("shutdown")
+                        return ok(undefined)
+                    }),
                 ),
             observeState: (listener: (state: ConnectionState) => void | Promise<void>) => {
                 let active = true
@@ -522,7 +624,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         .then(() => (active ? listener(state) : undefined))
                         .catch(() => {
                             // Diagnostic delivery can fail too; never recurse into the user callback
-                            Effect.runSyncExit(Effect.logError("Fluxerly state observer failed"))
+                            Effect.runSyncExit(owner.logging.provide(Effect.logError("Fluxerly state observer failed")))
                         })
                         .finally(() => {
                             busy = false

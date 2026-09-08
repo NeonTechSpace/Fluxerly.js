@@ -1,4 +1,29 @@
 import { Deferred, Effect, Scope, type Stream } from "effect"
+import type { Logger } from "effect"
+import type { LoggingOptions, DefaultLogger } from "./logging.js"
+import { adaptLogger } from "#sdk/internal/logging"
+export type { LoggingOptions, DefaultLogger } from "./logging.js"
+
+/**
+ * Adapt an Effect logger for the default API without exposing Effect types to default consumers.
+ * Pass the returned value as logging.logger to default createClient.
+ * Delivery is synchronous. Thrown logger failures are swallowed without retry, while a blocking logger can delay SDK work.
+ * No queue, sink flushing or persistence guarantee is added. Native callers use their own Effect logger directly.
+ * The SDK supplies safe messages and empty causes, but caller-owned context and sink behavior remain the caller's responsibility
+ * @throws ConfigurationError with field logger when the value is not an Effect logger
+ * @example
+ * ```ts
+ * import { Logger } from "effect"
+ * import { createClient } from "@neontechspace/fluxerly"
+ * import { fromEffectLogger } from "@neontechspace/fluxerly/effect"
+ * export function loggingExample(token: string, logger: Logger.Logger<unknown, unknown>) {
+ *     return createClient({ token, logging: { development: true, logger: fromEffectLogger(logger) } })
+ * }
+ * ```
+ */
+export function fromEffectLogger(logger: Logger.Logger<unknown, unknown>): DefaultLogger {
+    return adaptLogger(logger)
+}
 import type { ClientState, ClientOptions as SharedClientOptions, ConnectionState } from "./client.js"
 import type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
 export type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
@@ -15,7 +40,14 @@ export interface MessageCacheOptions<E = never, R = never> extends MessageCacheS
 }
 
 /** Creation-time native settings. Reporting services are captured when creation executes */
-export interface ClientOptions<E = never, R = never> extends Omit<SharedClientOptions, "cache"> {
+export interface ClientOptions<E = never, R = never> extends Omit<SharedClientOptions, "cache" | "logging"> {
+    /**
+     * Explicit SDK development-log opt-in. Logger, level and tracing remain owned by the executing Effect context.
+     * Connection work inherits connect/run context, handler work inherits registration context and cache reports inherit creation context.
+     * Shutdown diagnostics use shutdown's execution context. No detached native runtime or logger replacement is installed.
+     * Default-only logger/minimumLevel settings are rejected. A throwing logger cannot fail connection diagnostics
+     */
+    readonly logging?: LoggingOptions
     /** Optional resource retention. Omission retains no resource snapshots */
     readonly cache?: {
         /**
@@ -28,6 +60,10 @@ export interface ClientOptions<E = never, R = never> extends Omit<SharedClientOp
 }
 import type { ConfigurationError, ConnectError, ConnectionFailure } from "./errors.js"
 import { makeClient } from "#sdk/internal/client"
+import { collect, type MessageCollector } from "#sdk/internal/collector"
+import type { CollectorOptions, CollectorResult, CollectorFailure, CollectorRegistrationError } from "./collectors.js"
+export { CollectorError } from "./collectors.js"
+export type { CollectorOptions, CollectorResult, CollectorFailure, CollectorRegistrationError } from "./collectors.js"
 import { replyInput } from "#sdk/internal/message"
 import type { EventSource } from "#sdk/internal/events"
 import {
@@ -85,7 +121,7 @@ export interface EventHandlerOptions<E = never, R = never> extends HandlerOption
 }
 
 /**
- * Lazy message operations that preserve caller context and interruption, callable without a gateway connection.
+ * Lazy message operations preserving caller context and interruption. REST/local lookup work without a gateway. Collection requires Connected.
  * Closing/Closed reject new work. Remote calls share four active HTTP slots and 256 queued requests or 4 MiB of queued JSON bodies.
  * Each remote call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
  * Only confirmed rate-limit rejections retry within that deadline, with route-specific and client-global rate waits.
@@ -93,6 +129,43 @@ export interface EventHandlerOptions<E = never, R = never> extends HandlerOption
  * Interruption or client closure awaits owned cleanup but cannot undo a dispatched mutation
  */
 export interface Messages {
+    /**
+     * Lazily register future messageCreate collection in one decimal channel ID within the execution caller's scope.
+     * Each execution returns a ready handle before subsequent sends. No history, cache reads, implicit connect or prompt correlation
+     *
+     * Defaults: One accepted message, 30,000 ms total lifetime, 4 MiB retained Message JSON.
+     * Pending intake separately allows 256 payloads or 4 MiB source JSON after channel selection, before synchronous filtering.
+     * Options are copied when executed. Budgets are positive safe integers. The timeoutMs maximum is 2,147,483,647
+     *
+     * The deadline starts when registered, never resets, and excludes messages processed at or after it, including slow filter returns.
+     * Count accepted IDs once and retain frozen received snapshots, unaffected by later edits/deletions
+     *
+     * Filter/overflow failures return no partial messages. Recovery fails with CollectorError connectionLost, without auto restart or resend.
+     * Require Connected or fail with CollectorError notConnected. Closing/Closed use ClientClosedError. Invalid settings use ConfigurationError
+     *
+     * The registration scope stops its collector with partial replies. Client shutdown fails it with ClientClosedError.
+     * Interrupting a waiter does not stop collection. Closing its registration scope does. No AbortSignal option or detached runtime.
+     * Defects retain native Cause. Slow synchronous filters block JavaScript and cannot be preempted or have their side effects undone
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     *
+     * export const askName = (client: Client, channelId: string, userId: string) => Effect.scoped(
+     *     Effect.gen(function* () {
+     *         const collector = yield* client.messages.collect(channelId, { filter: message => message.author.id === userId })
+     *         yield* client.messages.send(channelId, { content: "What should I call you?" })
+     *         return yield* collector.waitForClose()
+     *     }),
+     * )
+     * ```
+     * The caller supplies a connected client and handles empty timeout results and client lifetime separately
+     */
+    collect(
+        channelId: string,
+        options?: CollectorOptions,
+    ): Effect.Effect<Collector, CollectorRegistrationError, Scope.Scope>
     /**
      * Lazily read a frozen local observation when executed, never making a request.
      * Disabled, absent, evicted, expired or wrong-channel entries yield undefined, not proof of server absence.
@@ -172,6 +245,19 @@ export interface Messages {
     delete(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
 }
 
+/** A scoped native collection, separate from each caller observing it */
+export interface Collector {
+    /** Lazy idempotent stop, retaining accepted partial replies and releasing collector-owned work */
+    stop(): Effect.Effect<void>
+    /**
+     * Lazily observe the retained frozen result/error after queue, timer, filter and listener cleanup.
+     * Multiple/late callers share the first outcome. Interruption affects only this waiter and defects retain Cause.
+     * Timeout and stop can return empty/partial replies. Failures carry no partial message bodies.
+     * Application-held handles/results retain successful snapshots until released
+     */
+    waitForClose(): Effect.Effect<CollectorResult, CollectorFailure>
+}
+
 export type { ConnectionState } from "./client.js"
 export {
     AuthenticationError,
@@ -190,7 +276,7 @@ export type { ConnectError, ConnectionFailure } from "./errors.js"
  * Expected errors use the typed failure channel, while defects and interruption remain in the native cause
  */
 export interface Client extends ClientState {
-    /** Message operations using this client's credentials, bounded admission and rate-limit state */
+    /** REST, local lookup and live collection owned by this client */
     readonly messages: Messages
     /**
      * Lazily register one EventMap event in the caller's scope and context, before or after connect.
@@ -326,6 +412,25 @@ export function createClient<E = never, R = never>(
         yield* Effect.addFinalizer((exit) => owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, exit))))
         return Object.freeze({
             messages: Object.freeze({
+                collect: (channelId: string, options?: CollectorOptions) =>
+                    Effect.uninterruptible(
+                        Effect.gen(function* () {
+                            const callerScope = yield* Effect.scope
+                            const source = yield* collect(owner, channelId, options)
+                            // A scoped waiter releases its registration when done, rather than retaining every completed collector until scope closure
+                            yield* Effect.forkIn(
+                                Deferred.await(source.closed).pipe(
+                                    Effect.asVoid,
+                                    Effect.interruptible,
+                                    Effect.onExit(() => Effect.sync(() => source.stop())),
+                                    Effect.catchCause(() => Effect.void),
+                                ),
+                                callerScope,
+                                { uninterruptible: true },
+                            )
+                            return nativeCollector(source)
+                        }),
+                    ),
                 get: (target: MessageReference) => owner.get(target),
                 send: (channelId: string, input: MessageInput, options?: SendOptions) =>
                     owner.send(channelId, input, options),
@@ -373,6 +478,13 @@ export function createClient<E = never, R = never>(
 function nativeSubscription(source: Pick<EventSource, "stop" | "closed">): Subscription {
     return Object.freeze({
         unsubscribe: () => Effect.sync(() => source.stop()),
+        waitForClose: () => Deferred.await(source.closed),
+    })
+}
+
+function nativeCollector(source: MessageCollector): Collector {
+    return Object.freeze({
+        stop: () => Effect.sync(() => source.stop()),
         waitForClose: () => Deferred.await(source.closed),
     })
 }

@@ -92,13 +92,28 @@ Bound retained data and conflict metadata, and clear pre-gap observations even a
 [Cache reporting](/projects/sdk/src/internal/cache-reports.ts) owns native context and one active custom report per client.
 Neither retention nor reporting failure may change a successful REST result or event delivery
 
+## Message-collector boundary
+
+The [collector owner](/projects/sdk/src/internal/collector.ts) selects the channel before buffering and runs synchronous filters outside gateway decoding.
+It owns separate pending-input and retained-result budgets, without REST or cache reads
+
+Observe internal lifecycle transitions rather than the coalescing public state stream so a brief gap cannot be missed.
+Terminal cleanup releases intake, state and signal listeners, timers, queued payloads and filter references.
+Application-held successful results may outlive collector cleanup
+
+Do not change existing subscription recovery behavior or imply atomic registration and remote sending
+
 ## Logging
 
 Use the shared Effect logger rather than a second logging implementation.
 Keep explicit SDK development-log opt-in separate from operational handler-error reporting and consumer Debug settings.
 The default runtime owns its logging configuration, while native execution preserves caller logger and tracing context
 
-No customization may bypass private-data exclusion
+No customization may bypass private-data exclusion.
+Keep default public declarations free of Effect types by exposing advanced logger integration through the Effect entry point
+
+Emit safe lifecycle diagnostics at the connection owner, not by reconstructing history from coalescing state observations.
+Logging adds no queue or persistence ownership, and sink failures must not alter operation outcomes or recurse
 
 ## Naming
 

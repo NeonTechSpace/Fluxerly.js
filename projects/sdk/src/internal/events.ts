@@ -154,6 +154,18 @@ export class EventSource<A = Message> {
 }
 
 export class EventBus {
+    #collectors = new Map<string, Set<(message: Message, bytes: number) => void>>()
+
+    /** Channel selection precedes collector queue admission. These callbacks only enqueue, never run user filters */
+    listenMessages(channelId: string, listener: (message: Message, bytes: number) => void) {
+        let listeners = this.#collectors.get(channelId)
+        if (!listeners) this.#collectors.set(channelId, (listeners = new Set()))
+        listeners.add(listener)
+        return () => {
+            listeners.delete(listener)
+            if (!listeners.size) this.#collectors.delete(channelId)
+        }
+    }
     #sources: { [K in EventName]: Set<EventSource<EventMap[K]>> } = {
         messageCreate: new Set(),
         messageUpdate: new Set(),
@@ -181,6 +193,8 @@ export class EventBus {
         })
     }
     offer<K extends EventName>(event: K, message: EventMap[K], bytes: number) {
+        if (event === "messageCreate")
+            for (const offer of this.#collectors.get(message.channelId) ?? []) offer(message as Message, bytes)
         for (const source of this.#sources[event]) source.offer(message, bytes)
     }
     stop() {

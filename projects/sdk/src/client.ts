@@ -1,7 +1,23 @@
 import type { MessageCacheOptions } from "./cache.js"
+import type { DefaultLoggingOptions } from "./logging.js"
 
 /** Options accepted when creating a disconnected client */
 export interface ClientOptions {
+    /**
+     * Client-local logging, copied and validated at creation without invoking a logger.
+     * Development output is off by default, while operational handler/cache/observer errors remain enabled.
+     * SDK messages omit credentials, private payloads and raw upstream errors.
+     * Logging does not consume or replace returned operation failures, and adds no background work or stored history
+     *
+     * @example
+     * ```ts
+     * import { createClient } from "@neontechspace/fluxerly"
+     * export function loggingExample(token: string) {
+     *     return createClient({ token, logging: { development: true } })
+     * }
+     * ```
+     */
+    readonly logging?: DefaultLoggingOptions
     /** Bot credential, checked locally for a non-blank string but not authenticated */
     readonly token: string
     /** Optional resource retention, copied and validated at creation. Omission retains no resource snapshots */
