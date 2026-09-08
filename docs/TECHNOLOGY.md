@@ -14,7 +14,7 @@ Use [the repository guide](/docs/REPOSITORY.md) for setup and file locations
 | Internal implementation | Effect 4 release-candidate line |
 | WebSocket transport | `ws`, kept behind internal SDK boundaries |
 | Public entry points | Default JavaScript/TypeScript and Effect-native, sharing one implementation |
-| Public error results | neverthrow `Result` for default synchronous creation and `ResultAsync` for default async operations, typed Effect failures for the native API |
+| Public error results | neverthrow `Result` for default synchronous operations and `ResultAsync` for default async operations, typed Effect failures for the native API |
 | Initial build | TypeScript 7 compiler-only ESM output, public declarations and source maps |
 | Tests | Vitest runtime tests and separate TypeScript 7 consumer checks |
 | Distribution | npm |

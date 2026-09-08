@@ -12,6 +12,7 @@ import type {
     SendOptions,
 } from "#sdk/messages"
 import { decodeMessage, encodeEdit, encodeHistory, encodeMessage, record, reference } from "./message.js"
+import type { MessageCache } from "./cache.js"
 
 type Pending = {
     route: string
@@ -28,6 +29,7 @@ type Request<A> = {
     body: string | undefined
     status?: number
     decode: (response: Response) => Promise<A>
+    target?: string
 }
 
 class RestFailure extends Error {
@@ -74,6 +76,7 @@ async function readHistory(response: Response, channel: string, query: NonNullab
 
 /** One client's transient REST scheduler, without shared-token coordination or durable delivery */
 export class RestOwner {
+    constructor(private readonly cache?: MessageCache) {}
     #closed = false
     #active = 0
     #pending: Pending[] = []
@@ -164,6 +167,7 @@ export class RestOwner {
         request: Request<A>,
         route: string,
         progress: { outcome: Outcome },
+        generation: number,
     ): Effect.Effect<
         { kind: "success"; value: A } | { kind: "retry"; retry: number; global: boolean },
         RestFailure | ClientClosedError
@@ -173,7 +177,13 @@ export class RestOwner {
             Effect.sync(() => {
                 const controller = new AbortController()
                 owner.#controllers.add(controller)
-                return { controller, settled: Promise.resolve() }
+                const guard = owner.cache?.begin(
+                    request.channel,
+                    request.target,
+                    request.method === "PATCH" || request.method === "DELETE",
+                    generation,
+                )
+                return { controller, settled: Promise.resolve(), guard, success: false }
             }),
             (state) =>
                 Effect.tryPromise({
@@ -228,7 +238,8 @@ export class RestOwner {
                                 }
                                 if (request.status !== undefined && response.status !== request.status)
                                     throw new RestFailure("response", "unknown", response.status)
-                                return { kind: "success" as const, value: await request.decode(response) }
+                                const value = await request.decode(response)
+                                return { kind: "success" as const, value }
                             } finally {
                                 if (!response.bodyUsed) await response.body?.cancel()
                             }
@@ -246,12 +257,36 @@ export class RestOwner {
                             : error instanceof RestFailure || error instanceof ClientClosedError
                               ? error
                               : new RestFailure("network", progress.outcome),
-                }),
+                }).pipe(
+                    Effect.map((result) => {
+                        if (result.kind === "success") {
+                            state.success = true
+                            if (state.guard) {
+                                if (request.method === "DELETE")
+                                    owner.cache!.delete(
+                                        { id: request.target!, channelId: request.channel },
+                                        state.guard,
+                                    )
+                                else
+                                    owner.cache!.complete(
+                                        state.guard,
+                                        Array.isArray(result.value) ? result.value : [result.value as Message],
+                                    )
+                            }
+                        }
+                        return result
+                    }),
+                ),
             (state) =>
                 Effect.promise(async () => {
                     state.controller.abort()
                     await state.settled
                     owner.#controllers.delete(state.controller)
+                    if (state.guard) {
+                        if (!state.success && progress.outcome === "unknown" && state.guard.mutation)
+                            owner.cache!.delete({ id: request.target!, channelId: request.channel }, state.guard)
+                        owner.cache!.end(state.guard)
+                    }
                 }),
         )
     }
@@ -370,6 +405,7 @@ export class RestOwner {
                 {
                     method: operation === "fetch" ? "GET" : operation === "edit" ? "PATCH" : "DELETE",
                     channel: ref.channelId,
+                    target: ref.id,
                     path: `/channels/${ref.channelId}/messages/${ref.id}`,
                     body,
                     status: operation === "delete" ? 204 : 200,
@@ -412,6 +448,7 @@ export class RestOwner {
             const bytes = Buffer.byteLength(request.body ?? "")
             const route = `${request.bucket ?? request.method}:${request.channel}`
             const deadline = performance.now() + timeout
+            const generation = owner.cache?.generation ?? 0
             const progress: { outcome: Outcome } = { outcome: "notDispatched" }
             const operation = Deferred.makeUnsafe<void>()
             owner.#operations.add(operation)
@@ -425,7 +462,7 @@ export class RestOwner {
                                     : error,
                             ),
                         ),
-                        () => owner.#request(token, request, route, progress),
+                        () => owner.#request(token, request, route, progress, generation),
                         (release) => Effect.sync(release),
                     )
                     if (response.kind === "success") return response.value

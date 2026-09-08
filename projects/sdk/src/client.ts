@@ -1,7 +1,19 @@
+import type { MessageCacheOptions } from "./cache.js"
+
 /** Options accepted when creating a disconnected client */
 export interface ClientOptions {
     /** Bot credential, checked locally for a non-blank string but not authenticated */
     readonly token: string
+    /** Optional resource retention, copied and validated at creation. Omission retains no resource snapshots */
+    readonly cache?: {
+        /**
+         * Omitted/false disables message caching. True or an options object enables it.
+         * Memory-only snapshots populate from eligible REST results and gateway events, never automatic history requests.
+         * Updates replace, deletions and uncertain mutations evict, and gateway gaps clear even after successful resume.
+         * Conflicting in-flight observations may cause misses. Shutdown releases this client's retained references
+         */
+        readonly messages?: boolean | MessageCacheOptions
+    }
     /** Client-wide startup settings shared by connect and run, not per-call overrides */
     readonly connection?: {
         /**

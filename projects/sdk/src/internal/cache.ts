@@ -1,0 +1,194 @@
+import type { Message, MessageReference } from "#sdk/messages"
+import type { CachePolicyErrorReport } from "#sdk/cache"
+import { validAge, type CacheConfiguration } from "./configuration.js"
+
+type Entry = { message: Message; bytes: number; storedAt: number; age: number | null }
+export type CacheRequest = {
+    readonly channel: string
+    readonly id: string | undefined
+    readonly mutation: boolean
+    readonly generation: number
+    invalid: boolean
+}
+
+function same(a: Message, b: Message) {
+    return (
+        a.id === b.id &&
+        a.channelId === b.channelId &&
+        a.content === b.content &&
+        a.author.id === b.author.id &&
+        a.author.username === b.author.username &&
+        a.author.isBot === b.author.isBot
+    )
+}
+
+/** One client's retained observations and bounded in-flight guards, never a server-state replica */
+export class MessageCache {
+    #entries = new Map<string, Entry>()
+    #requests = new Set<CacheRequest>()
+    #bytes = 0
+    #generation = 0
+    #timer: ReturnType<typeof setTimeout> | undefined
+    #closed = false
+
+    constructor(
+        private settings: CacheConfiguration | undefined,
+        private report: (report: CachePolicyErrorReport) => void,
+        private readonly now: () => number,
+    ) {}
+
+    get generation() {
+        return this.#generation
+    }
+
+    get(target: MessageReference): Message | undefined {
+        const entry = this.#peek(target)
+        if (!entry) return undefined
+        this.#entries.delete(target.id)
+        this.#entries.set(target.id, entry)
+        return entry.message
+    }
+
+    #peek(target: MessageReference) {
+        const entry = this.#entries.get(target.id)
+        if (!entry || entry.message.channelId !== target.channelId) return undefined
+        if (entry.age !== null && this.now() - entry.storedAt >= entry.age) {
+            this.#remove(target)
+            return undefined
+        }
+        return entry
+    }
+
+    #remove(target: MessageReference) {
+        const entry = this.#entries.get(target.id)
+        if (entry?.message.channelId !== target.channelId) return
+        this.#entries.delete(target.id)
+        this.#bytes -= entry.bytes
+    }
+
+    #invalidate(target: MessageReference, except?: CacheRequest) {
+        for (const request of this.#requests)
+            if (
+                request !== except &&
+                request.channel === target.channelId &&
+                (request.id === undefined || request.id === target.id)
+            )
+                request.invalid = true
+    }
+
+    begin(channel: string, id: string | undefined, mutation: boolean, generation: number): CacheRequest {
+        const request = { channel, id, mutation, generation, invalid: generation !== this.#generation }
+        for (const other of this.#requests) {
+            if (other.channel !== channel || (id !== undefined && other.id !== undefined && id !== other.id)) continue
+            if (mutation) other.invalid = true
+            if (other.mutation) request.invalid = true
+        }
+        this.#requests.add(request)
+        return request
+    }
+
+    end(request: CacheRequest) {
+        this.#requests.delete(request)
+    }
+
+    complete(request: CacheRequest, messages: readonly Message[]) {
+        if (this.#closed || request.generation !== this.#generation) return
+        // Admit a history page oldest first so its newest members survive tight capacity limits
+        for (let index = messages.length - 1; index >= 0; index--) {
+            const message = messages[index]!
+            if (request.invalid) {
+                const entry = this.#peek(message)
+                if (entry && !same(entry.message, message)) {
+                    this.#remove(message)
+                    this.#invalidate(message, request)
+                }
+            } else this.observe(message, request)
+        }
+        this.#schedule()
+    }
+
+    observe(message: Message, request?: CacheRequest) {
+        if (this.#closed || !this.settings) return
+        this.#invalidate(message, request)
+        let age: unknown = this.settings.maxAgeMs ?? null
+        try {
+            if (typeof age === "function") age = age(message)
+        } catch {
+            this.#remove(message)
+            this.report(Object.freeze({ reason: "threw" }))
+            this.#schedule()
+            return
+        }
+        if (this.#closed || !this.settings) return
+        if (!validAge(age)) {
+            // Invalid asynchronous policies are not awaited; consume a native rejection without retaining its reason
+            if (age instanceof Promise) void age.catch(() => undefined)
+            this.#remove(message)
+            this.report(Object.freeze({ reason: "invalidReturn" }))
+            this.#schedule()
+            return
+        }
+        const bytes = age === 0 ? 0 : Buffer.byteLength(JSON.stringify(message))
+        this.#remove(message)
+        if (age !== 0 && bytes <= this.settings.maxBytes) {
+            this.#purge()
+            while (this.#entries.size >= this.settings.maxEntries || this.#bytes > this.settings.maxBytes - bytes) {
+                const oldest = this.#entries.values().next().value!
+                this.#remove(oldest.message)
+            }
+            this.#entries.set(message.id, { message, bytes, storedAt: this.now(), age })
+            this.#bytes += bytes
+        }
+        this.#schedule()
+    }
+
+    delete(target: MessageReference, except?: CacheRequest) {
+        if (this.#closed) return
+        this.#invalidate(target, except)
+        this.#remove(target)
+        this.#schedule()
+    }
+
+    gap() {
+        this.#generation++
+        for (const request of this.#requests) request.invalid = true
+        this.#entries.clear()
+        this.#bytes = 0
+        this.#schedule()
+    }
+
+    #purge() {
+        const now = this.now()
+        for (const entry of this.#entries.values())
+            if (entry.age !== null && now - entry.storedAt >= entry.age) this.#remove(entry.message)
+    }
+
+    #schedule() {
+        if (this.#timer !== undefined) clearTimeout(this.#timer)
+        this.#timer = undefined
+        if (this.#closed) return
+        const now = this.now()
+        let remaining = Infinity
+        for (const entry of this.#entries.values())
+            if (entry.age !== null) remaining = Math.min(remaining, entry.age - (now - entry.storedAt))
+        if (remaining !== Infinity) {
+            this.#timer = setTimeout(
+                () => {
+                    this.#timer = undefined
+                    this.#purge()
+                    this.#schedule()
+                },
+                Math.min(2_147_483_647, Math.max(1, Math.ceil(remaining))),
+            )
+            this.#timer.unref()
+        }
+    }
+
+    close() {
+        this.#closed = true
+        this.gap()
+        this.#requests.clear()
+        this.settings = undefined
+        this.report = () => {}
+    }
+}

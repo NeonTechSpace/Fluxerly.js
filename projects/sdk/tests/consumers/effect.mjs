@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { realpathSync } from "node:fs"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
-import { Effect, Logger, References } from "effect"
+import { Context, Effect, Logger, References } from "effect"
 import { createClient, MessageOperationError } from "@neontechspace/fluxerly/effect"
 
 globalThis.fetch = () => {
@@ -102,6 +102,64 @@ assert.equal(
         ),
     ),
     "token",
+)
+
+const CacheReporter = Context.Service("packed-cache-reporter")
+const creationReports = []
+const executionReports = []
+let completeNativeReport
+const nativeReported = new Promise((resolve) => {
+    completeNativeReport = resolve
+})
+let policyCalls = 0
+globalThis.fetch = async (url, init) => {
+    assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages/10")
+    assert.equal(init.method, "GET")
+    return Response.json({
+        id: "10",
+        channel_id: "20",
+        content: "Native cached snapshot",
+        author: { id: "30", username: "fixture" },
+    })
+}
+await Effect.runPromise(
+    Effect.scoped(
+        Effect.gen(function* () {
+            const client = yield* createClient({
+                token: "fixture-only-not-a-credential",
+                cache: {
+                    messages: {
+                        maxEntries: 1,
+                        maxBytes: 1_024 * 1_024,
+                        maxAgeMs: () => {
+                            policyCalls++
+                            return undefined
+                        },
+                        onError: (report) =>
+                            Effect.gen(function* () {
+                                const reporter = yield* CacheReporter
+                                reporter.reports.push(report)
+                                completeNativeReport()
+                            }),
+                    },
+                },
+            }).pipe(Effect.provideService(CacheReporter, { reports: creationReports }))
+            assert.equal(policyCalls, 0)
+            const lookup = client.messages.get({ id: "10", channelId: "20" })
+            assert.equal(policyCalls, 0)
+            assert.equal(yield* lookup, undefined)
+            assert.equal(policyCalls, 0)
+            const fetched = yield* client.messages
+                .fetch({ id: "10", channelId: "20" })
+                .pipe(Effect.provideService(CacheReporter, { reports: executionReports }))
+            assert.equal(fetched.content, "Native cached snapshot")
+            assert.equal(policyCalls, 1)
+            yield* Effect.promise(() => nativeReported)
+            assert.deepEqual(creationReports, [{ reason: "invalidReturn" }])
+            assert.deepEqual(executionReports, [])
+            assert.equal(yield* client.messages.get(fetched), undefined)
+        }),
+    ),
 )
 
 const fromSdk = createRequire(import.meta.resolve("@neontechspace/fluxerly/effect"))

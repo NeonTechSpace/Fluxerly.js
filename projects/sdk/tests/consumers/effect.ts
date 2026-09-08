@@ -1,4 +1,4 @@
-import { Effect, type Scope } from "effect"
+import { Context, Effect, type Scope } from "effect"
 import {
     createClient,
     type Client,
@@ -9,7 +9,40 @@ import {
     type MessageHistoryQuery,
     type MessageDeletion,
     type MessageBulkDeletion,
+    type CachePolicyErrorReport,
+    type ClientOptions,
+    type MessageCacheOptions,
+    type MessageCacheSettings,
 } from "@neontechspace/fluxerly/effect"
+
+export interface CacheReporter {
+    readonly report: (report: CachePolicyErrorReport) => void
+}
+
+export const CacheReporter = Context.Service<CacheReporter>("packed-cache-reporter")
+
+export const cacheSettings: MessageCacheSettings = {
+    maxAgeMs: (message) => (message.author.isBot ? 0 : null),
+}
+
+export const cacheOptions: MessageCacheOptions<never, CacheReporter> = {
+    maxEntries: 100,
+    maxBytes: 1_048_576,
+    maxAgeMs: (message) => (message.author.isBot ? 0 : null),
+    onError: (report) =>
+        Effect.gen(function* () {
+            const reporter = yield* CacheReporter
+            reporter.report(report)
+        }),
+}
+
+/** The reporter's required service is part of client creation, while local cache reads remain lazy Effects */
+export function createWithCacheReporter(
+    token: string,
+): Effect.Effect<Client, ConfigurationError, Scope.Scope | CacheReporter> {
+    const options: ClientOptions<never, CacheReporter> = { token, cache: { messages: cacheOptions } }
+    return createClient(options)
+}
 
 export function createWithinCallerScope(token: string): Effect.Effect<Client, ConfigurationError, Scope.Scope> {
     return createClient({ token })
@@ -25,6 +58,35 @@ export function rejectedTypeShapes(): void {
     Effect.runSync(createClient({ token: "fixture-only-not-a-credential" }))
     // @ts-expect-error Only declared expected error tags can be handled here
     createClient({ token: "" }).pipe(Effect.catchTag("UnknownError", () => Effect.void))
+    // @ts-expect-error Retention policies are synchronous
+    createClient({ token: "fixture", cache: { messages: { maxAgeMs: async () => null } } })
+    // @ts-expect-error Native reporters return Effects, not Promises
+    createClient({ token: "fixture", cache: { messages: { onError: async () => {} } } })
+    const options: ClientOptions<never, CacheReporter> = {
+        token: "fixture",
+        cache: {
+            messages: {
+                // @ts-expect-error Native cache reporters cannot request an unrelated service through this explicit options type
+                onError: () => Effect.service(Context.Service<{ readonly other: true }>("other")),
+            },
+        },
+    }
+    void options
+}
+
+/** A native local cache read is a lazy Effect and retains the immutable Message snapshot type */
+export function readCachedSnapshot(client: Client): Effect.Effect<Message | undefined, MessageOperationFailure> {
+    const lookup = client.messages.get({ id: "10", channelId: "20" })
+    return Effect.gen(function* () {
+        const snapshot: Message | undefined = yield* lookup
+        if (snapshot) {
+            const content: string = snapshot.content
+            void content
+            // @ts-expect-error Cached snapshots are readonly
+            snapshot.content = "replacement"
+        }
+        return snapshot
+    })
 }
 
 export const managed = Effect.scoped(

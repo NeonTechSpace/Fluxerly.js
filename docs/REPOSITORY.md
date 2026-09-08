@@ -22,6 +22,8 @@ The documentation website remains a scaffold
 | [events.ts](/projects/sdk/src/internal/events.ts) | Subscription scheduling and bounded event intake |
 | [rest.ts](/projects/sdk/src/internal/rest.ts) | REST admission, deadlines and rate state |
 | [message.ts](/projects/sdk/src/internal/message.ts) | Wire-message validation and projection |
+| [cache.ts](/projects/sdk/src/internal/cache.ts) | Cache retention and conflicting observations |
+| [cache-reports.ts](/projects/sdk/src/internal/cache-reports.ts) | Cache reporting lifetime |
 
 Keep public API signatures and caller documentation in source, and user guides/reference in the website.
 Use [SDK tests](/projects/sdk/tests/) for behavior checks and [packed consumers](/projects/sdk/tests/consumers/) for package-boundary checks.
@@ -89,6 +91,10 @@ The website and repository documents are outside these formatting commands
 
 Local networking checks use owned loopback fixtures, not Fluxer credentials or live sessions
 
+Run `pnpm --filter @neontechspace/fluxerly test:cache:memory` for isolated GC-enabled retention checks.
+Run `pnpm --filter @neontechspace/fluxerly test:cache:workload` for local cache workloads.
+Both build first and use controlled responses, not Fluxer credentials or production workloads
+
 ### Opt-in live sandbox check
 
 Run live checks only against the authorized test bot and server, from [projects/](/projects/).
@@ -105,9 +111,11 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:sdk` | Built default/native client connection and shutdown | No server-content changes |
 | `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
 | `test:live:recovery` | Forced socket loss, resume and subsequent receive/reply | Temporary channel/messages and test-socket termination |
+| `test:live:recovery:cancel` | Managed cancellation during recovery and socket cleanup | Test-socket termination, no server-content changes |
 | `test:live:management` | Remote fetch, edit and deletion | Temporary channel/messages and test-message edits/deletions |
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
+| `test:live:cache` | Cache intake, expiry and recovery invalidation | Temporary channel/messages and test-socket termination |
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools.
 After a crash, verify that the recorded process has stopped before removing its stale lock.

@@ -1,5 +1,6 @@
 import { Cause, Deferred, Effect, Exit, Scope } from "effect"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
+export type { CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions } from "./cache.js"
 import type { ClientState, ClientOptions, ConnectionState, OperationOptions } from "./client.js"
 import {
     CancelledError,
@@ -87,18 +88,27 @@ export interface EventHandlerOptions extends HandlerOptions {
 
 /**
  * Client-owned text operations. Callable without a gateway connection until Closing or Closed.
- * Calls share four active HTTP slots and at most 256 queued requests or 4 MiB of queued JSON bodies.
- * Each call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
+ * Remote calls share four active HTTP slots and at most 256 queued requests or 4 MiB of queued JSON bodies.
+ * Each remote call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
  * Only confirmed rate-limit rejections retry within that deadline, with route-specific and client-global rate waits.
- * Expected failures use Err. SDK/cleanup defects reject with SdkDefect.
+ * Expected failures use Err. SDK/cleanup defects reject remote calls with SdkDefect and throw from synchronous get.
  * Cancellation fails this operation with CancelledError. Client closure fails pending/new operations with ClientClosedError.
  * Neither failure proves that a dispatched mutation was undone
  */
 export interface Messages {
     /**
+     * Read this client's local retained snapshot synchronously, never making a request.
+     * Disabled caching, absent/evicted/expired entries and a mismatched channel return Ok(undefined), not server absence.
+     * Hits return frozen observations, not guaranteed current server state, and update LRU recency without renewing age.
+     * Invalid references return MessageOperationError with operation get, reason input and outcome notDispatched.
+     * Closing/Closed return ClientClosedError. Unexpected synchronous defects throw SdkDefect
+     */
+    get(message: MessageReference): Result<Message | undefined, MessageOperationFailure>
+    /**
      * Send text and return the decoded created message after the HTTP response, not gateway delivery or recipient acknowledgement
      *
-     * Mentions are disabled by default. Total budget defaults to 30,000 ms including admission and rate waits
+     * Mentions are disabled by default. Total budget defaults to 30,000 ms including admission and rate waits.
+     * Enabled caching retains eligible created snapshots without changing send completion or delivery
      *
      * One client admits four active HTTP requests and at most 256 pending bodies or 4 MiB of pending JSON.
      * Confirmed rate-limit rejections may retry within that budget. Uncertain sends never retry automatically
@@ -111,7 +121,10 @@ export interface Messages {
         input: MessageInput,
         options?: DefaultSendOptions,
     ): ResultAsync<Message, SendError | CancelledError>
-    /** Reference an existing message through send. Missing targets fail rather than falling back to an unreferenced send */
+    /**
+     * Reference an existing message through send. Missing targets fail rather than falling back to an unreferenced send.
+     * The returned reply is eligible for the same cache intake as send
+     */
     reply(
         message: MessageReference,
         input: ReplyInput,
@@ -121,6 +134,7 @@ export interface Messages {
      * Fetch a frozen message snapshot from Fluxer, never from a cache. Accepts a reference or an existing Message.
      * Returns after the API response is decoded and its message/channel IDs match the requested target.
      * Missing targets fail with MessageOperationError reason notFound rather than returning an empty value.
+     * Enabled caching retains eligible responses, but the returned result does not depend on cache admission.
      * Cancellation releases only this request and awaits its cleanup
      */
     fetch(
@@ -133,7 +147,9 @@ export interface Messages {
      *
      * Returns after HTTP 200 and validation of the entire page as a frozen array of frozen Message snapshots, newest first.
      * Empty and short arrays describe currently accessible results, not complete history. Pages are not a shared point-in-time snapshot.
-     * No prefetch, automatic traversal, gateway notifications or retained history. Use the oldest returned ID as before for an older page
+     * No prefetch, automatic traversal or gateway notifications. Use the oldest returned ID as before for an older page
+     *
+     * Enabled caching admits eligible page members oldest first, so tight limits retain the newest members
      *
      * Invalid input, malformed pages and HTTP rejections use MessageOperationError with operation fetchHistory. HTTP 404 remains notFound.
      * Shares REST admission and the 30,000 ms default total deadline. Only confirmed rate-limit rejections retry within that budget.
@@ -148,7 +164,9 @@ export interface Messages {
      * Replace message text and return the frozen updated snapshot after the API response, without waiting for a gateway event.
      * Required content is sent without trimming. Empty text requests clearing, subject to Fluxer validation.
      * Mentions default off. The SDK omits attachments, embeds and unrelated fields rather than editing them.
-     * Fluxer preserves custom embeds but may regenerate text-derived link previews.
+     * Fluxer preserves custom embeds but may regenerate text-derived link previews
+     *
+     * Enabled caching retains eligible responses. An uncertain dispatched edit evicts the old local copy.
      * A lost response or timeout after dispatch may leave the edit applied. Uncertain edits never retry automatically.
      * Missing targets remain typed notFound failures. Cancellation/closure cannot undo a dispatched edit
      */
@@ -160,6 +178,7 @@ export interface Messages {
     /**
      * Delete the target and complete without a value after HTTP 204, without waiting for a gateway event.
      * Missing targets fail with MessageOperationError reason notFound, including a repeated delete.
+     * Confirmed deletion and uncertain dispatched deletion evict the local cached copy.
      * A lost response or timeout after dispatch may leave the target deleted. Uncertain deletes never retry automatically.
      * Cancellation/closure awaits owned cleanup but cannot undo a dispatched deletion
      */
@@ -193,6 +212,7 @@ export interface Client extends ClientState {
     readonly messages: Messages
     /**
      * Register a callback for one EventMap event before or after connect. No cached history or REST-generated events.
+     * Enabled cache changes happen before user dispatch, independently of subscriptions and their overflow.
      * Each subscription receives only its event type. Bulk deletions do not also invoke messageDelete handlers
      *
      * Default concurrency is 1. Receive-order starts do not imply completion order when concurrency is increased.
@@ -211,7 +231,11 @@ export interface Client extends ClientState {
         handler: (message: EventMap[K], signal: NonNullable<OperationOptions["signal"]>) => void | Promise<void>,
         options?: EventHandlerOptions,
     ): Result<Subscription, RegistrationError>
-    /** Open one event type's bounded pull subscription in receive order without subscription history or bulk fan-out. Local errors use Result and defects throw SdkDefect */
+    /**
+     * Open one event type's bounded pull subscription in receive order without subscription history or bulk fan-out.
+     * Enabled cache changes happen before delivery, independently of this subscription and its overflow.
+     * Local errors use Result and defects throw SdkDefect
+     */
     events<K extends EventName>(event: K, options?: EventBufferOptions): Result<EventSubscription<K>, RegistrationError>
     /**
      * Connect and complete after authentication and the required READY event.
@@ -270,6 +294,7 @@ export interface Client extends ClientState {
     waitForClose(options?: OperationOptions): ResultAsync<void, ConnectionFailure | CancelledError>
     /**
      * Permanently stop startup and recovery, release credentials and await owned-resource cleanup.
+     * Release cached message references and expiry timers, without waiting for application-owned reporter promises.
      * Repeated and concurrent calls wait for the same shutdown outcome.
      * A pending connection call reports ClientClosedError rather than caller cancellation
      *
@@ -315,7 +340,10 @@ function fromExit<
 /**
  * Create a Disconnected client without sockets, timers or process-signal handlers
  *
- * Validate configuration locally without authenticating the token.
+ * Validate configuration locally without authenticating the token
+ *
+ * Cache settings are copied and validated here without invoking retention policies or reporters.
+ * Unknown cache or message-cache option keys fail validation. Caching is disabled by default.
  * Connection settings default to a 30,000 ms overall startup budget and three total attempts
  *
  * @returns The client, or ConfigurationError without the rejected input value
@@ -369,6 +397,14 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     return ok(
         Object.freeze({
             messages: Object.freeze({
+                get: (target: MessageReference): Result<Message | undefined, MessageOperationFailure> => {
+                    const exit = Effect.runSyncExit(owner.get(target))
+                    if (Exit.isSuccess(exit)) return ok(exit.value)
+                    if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause)) throw new SdkDefect("get")
+                    const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
+                    if (failure?._tag === "Fail") return err(failure.error)
+                    throw new SdkDefect("get")
+                },
                 send: (channelId: string, input: MessageInput, options?: DefaultSendOptions) =>
                     execute(owner.send(channelId, input, options), "send", options),
                 reply: (target: MessageReference, input: ReplyInput, options?: DefaultSendOptions) => {

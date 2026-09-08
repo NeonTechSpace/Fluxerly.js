@@ -39,6 +39,7 @@ Coordinate initial state delivery with subscription setup, and keep public state
 
 Use separate startup and established-session retry policies, with one recovery loop rather than nested startup loops.
 Respect server-required waits and stop on permanent failures, cancellation or SDK defects.
+Do not count socket-cleanup time as healthy connected time when resetting recovery backoff.
 Attempt session resumption before fresh identification when the protocol permits it, without treating successful replay as lossless delivery
 
 Shutdown stops startup and recovery, shares cleanup across concurrent callers and awaits actual resource release.
@@ -81,6 +82,15 @@ Repeated deletion or a missing target does not prove a prior operation succeeded
 [REST admission](/projects/sdk/src/internal/rest.ts) owns explicit history pages independently of cache reads and gateway events.
 Keep history's channel rate bucket separate from single-message fetches while sharing global admission.
 Do not introduce background traversal or prefetch through this path
+
+## Message-cache boundary
+
+Fluxer is the source of truth, not the optional client-owned memory cache.
+[Cache intake](/projects/sdk/src/internal/cache.ts) integrates REST and gateway observations before subscriber dispatch.
+Bound retained data and conflict metadata, and clear pre-gap observations even after session resumption
+
+[Cache reporting](/projects/sdk/src/internal/cache-reports.ts) owns native context and one active custom report per client.
+Neither retention nor reporting failure may change a successful REST result or event delivery
 
 ## Logging
 

@@ -3,6 +3,7 @@ export class ConfigurationError extends Error {
     readonly _tag = "ConfigurationError"
 
     constructor(
+        /** The invalid option or containing object, including unsupported cache keys, without its rejected value */
         readonly field:
             | "configuration"
             | "token"
@@ -15,7 +16,12 @@ export class ConfigurationError extends Error {
             | "concurrency"
             | "maxPendingMessages"
             | "maxPendingBytes"
-            | "onError",
+            | "onError"
+            | "cache"
+            | "messages"
+            | "maxEntries"
+            | "maxBytes"
+            | "maxAgeMs",
         message: string,
     ) {
         super(message)
@@ -36,6 +42,7 @@ export type Operation =
     | "send"
     | "reply"
     | "fetch"
+    | "get"
     | "fetchHistory"
     | "edit"
     | "delete"

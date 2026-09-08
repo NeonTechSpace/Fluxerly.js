@@ -1,5 +1,10 @@
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Queue, Random, Redacted, Scope, Stream } from "effect"
-import type { ClientOptions, ConnectionState } from "#sdk/client"
+import type { ConnectionState } from "#sdk/client"
+import type { CachePolicyErrorReport } from "#sdk/cache"
+import { MessageOperationError } from "#sdk/message-errors"
+import { reference } from "./message.js"
+import { MessageCache } from "./cache.js"
+import { makeCacheReports, type CacheReports } from "./cache-reports.js"
 import {
     ClientBusyError,
     ClientClosedError,
@@ -16,6 +21,7 @@ import { AttemptFailure, runGateway, type Session } from "./gateway.js"
 import { EventBus } from "./events.js"
 import { RestOwner } from "./rest.js"
 import type {
+    Message,
     EditMessageInput,
     MessageHistoryQuery,
     MessageInput,
@@ -26,7 +32,8 @@ import type {
 
 export class ClientOwner {
     readonly events = new EventBus()
-    readonly rest = new RestOwner()
+    readonly rest: RestOwner
+    readonly cache: MessageCache | undefined
     #configuration: Configuration | undefined
     #state: ConnectionState = "Disconnected"
     #latency: number | null = null
@@ -42,8 +49,14 @@ export class ClientOwner {
     constructor(
         configuration: Configuration,
         readonly scope: Scope.Scope,
+        private readonly reports: CacheReports | undefined,
+        now: () => number,
     ) {
         this.#configuration = configuration
+        this.cache = configuration.cache
+            ? new MessageCache(configuration.cache, (report) => reports!.offer(report), now)
+            : undefined
+        this.rest = new RestOwner(this.cache)
     }
     get state(): ConnectionState {
         return this.#state
@@ -54,6 +67,8 @@ export class ClientOwner {
 
     #setState(state: ConnectionState) {
         if (this.#state === state) return
+        if (state === "Recovering") this.cache?.gap()
+        if (state === "Closing" || state === "Closed") this.cache?.close()
         this.#state = state
         if (state !== "Connected") this.#latency = null
         for (const listener of this.#listeners) listener(state)
@@ -97,7 +112,9 @@ export class ClientOwner {
     send(channelId: string, input: MessageInput, options?: SendOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.send(this.#configuration.token, channelId, input, options)
+                ? (this.reports?.start() ?? Effect.void).pipe(
+                      Effect.andThen(this.rest.send(this.#configuration.token, channelId, input, options)),
+                  )
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -105,7 +122,9 @@ export class ClientOwner {
     fetch(target: MessageReference, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.fetch(this.#configuration.token, target, options)
+                ? (this.reports?.start() ?? Effect.void).pipe(
+                      Effect.andThen(this.rest.fetch(this.#configuration.token, target, options)),
+                  )
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -113,7 +132,9 @@ export class ClientOwner {
     fetchHistory(channelId: string, query?: MessageHistoryQuery, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.fetchHistory(this.#configuration.token, channelId, query, options)
+                ? (this.reports?.start() ?? Effect.void).pipe(
+                      Effect.andThen(this.rest.fetchHistory(this.#configuration.token, channelId, query, options)),
+                  )
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -121,7 +142,9 @@ export class ClientOwner {
     edit(target: MessageReference, input: EditMessageInput, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.edit(this.#configuration.token, target, input, options)
+                ? (this.reports?.start() ?? Effect.void).pipe(
+                      Effect.andThen(this.rest.edit(this.#configuration.token, target, input, options)),
+                  )
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -129,17 +152,35 @@ export class ClientOwner {
     delete(target: MessageReference, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.delete(this.#configuration.token, target, options)
+                ? (this.reports?.start() ?? Effect.void).pipe(
+                      Effect.andThen(this.rest.delete(this.#configuration.token, target, options)),
+                  )
                 : Effect.fail(new ClientClosedError()),
         )
+    }
+
+    get(target: MessageReference) {
+        return Effect.suspend((): Effect.Effect<Message | undefined, ClientClosedError | MessageOperationError> => {
+            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
+                return Effect.fail(new ClientClosedError())
+            if (!reference(target)) return Effect.fail(new MessageOperationError("get", "input", "notDispatched"))
+            return Effect.succeed(this.cache?.get(target))
+        })
     }
 
     #closeServices() {
         this.events.stop()
         this.rest.stop()
-        return Effect.all([Effect.exit(this.events.shutdown()), Effect.exit(this.rest.shutdown())], {
-            concurrency: "unbounded",
-        }).pipe(
+        return Effect.all(
+            [
+                Effect.exit(this.events.shutdown()),
+                Effect.exit(this.rest.shutdown()),
+                Effect.exit(this.reports?.shutdown() ?? Effect.void),
+            ],
+            {
+                concurrency: "unbounded",
+            },
+        ).pipe(
             Effect.flatMap((exits) => {
                 const reasons = exits.flatMap((exit) => (Exit.isFailure(exit) ? exit.cause.reasons : []))
                 return reasons.length ? Effect.failCause(Cause.fromReasons<never>(reasons)) : Effect.void
@@ -201,7 +242,13 @@ export class ClientOwner {
                             disconnectedAt ??= now()
                             owner.#setState("Recovering")
                         },
-                        (event, message, bytes) => owner.events.offer(event, message, bytes),
+                        (event, message, bytes) => {
+                            if ("author" in message) owner.cache?.observe(message)
+                            else if ("ids" in message) {
+                                for (const id of message.ids) owner.cache?.delete({ id, channelId: message.channelId })
+                            } else owner.cache?.delete(message)
+                            owner.events.offer(event, message, bytes)
+                        },
                     )
                 })
                 const result = yield* Effect.exit(attempt)
@@ -250,6 +297,7 @@ export class ClientOwner {
                     return yield* Effect.fail(new ClientClosedError())
                 if (owner.#state === "Connected") return
                 if (owner.#state !== "Disconnected") return yield* Effect.fail(new ClientBusyError())
+                yield* owner.reports?.start() ?? Effect.void
                 const configuration = owner.#configuration!
                 const startup = Deferred.makeUnsafe<void, ConnectError>()
                 let becameReady = false
@@ -326,7 +374,7 @@ export class ClientOwner {
 
     shutdown(): Effect.Effect<void> {
         return Effect.withFiber((fiber) =>
-            this.events.ownsHandler(fiber.id)
+            this.events.ownsHandler(fiber.id) || this.reports?.owns(fiber.id)
                 ? // A native handler cannot join its own cleanup: The client scope owns shutdown and interrupts this caller
                   Effect.forkIn(this.#performShutdown(), this.scope).pipe(Effect.andThen(Effect.never))
                 : this.#performShutdown(),
@@ -377,6 +425,40 @@ export class ClientOwner {
     }
 }
 
-export function makeClient(options: ClientOptions, scope: Scope.Scope): Effect.Effect<ClientOwner, ConfigurationError> {
-    return Effect.map(validateConfiguration(options), (configuration) => new ClientOwner(configuration, scope))
+export function makeClient(
+    options: unknown,
+    scope: Scope.Scope,
+    native = false,
+): Effect.Effect<ClientOwner, ConfigurationError> {
+    return Effect.gen(function* () {
+        const configuration = yield* validateConfiguration(options)
+        const callback = configuration.cache?.onError
+        const reporter = callback
+            ? (report: CachePolicyErrorReport): Effect.Effect<unknown, unknown> =>
+                  native
+                      ? Effect.suspend(() => {
+                            const result = callback(report)
+                            // The report worker supplies the captured creation context, including the native reporter's services
+                            return Effect.isEffect(result)
+                                ? (result as Effect.Effect<unknown, unknown>)
+                                : Effect.die(new Error("Cache reporter must return an Effect"))
+                        })
+                      : Effect.callback((resume) => {
+                            void Promise.resolve()
+                                .then(() => callback(report))
+                                .then(
+                                    () => resume(Effect.void),
+                                    () => resume(Effect.die(new Error("Cache reporter failed"))),
+                                )
+                        })
+            : undefined
+        const reports = configuration.cache ? yield* makeCacheReports(reporter, scope) : undefined
+        const clock = yield* Clock.Clock
+        return new ClientOwner(
+            configuration,
+            scope,
+            reports,
+            () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000,
+        )
+    })
 }

@@ -1,5 +1,31 @@
 import { Deferred, Effect, Scope, type Stream } from "effect"
-import type { ClientState, ClientOptions, ConnectionState } from "./client.js"
+import type { ClientState, ClientOptions as SharedClientOptions, ConnectionState } from "./client.js"
+import type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
+export type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
+
+/** Native cache controls, with a scoped reporter in the client's creation context */
+export interface MessageCacheOptions<E = never, R = never> extends MessageCacheSettings {
+    /**
+     * Safe policy reporting in the creation context, independent of REST/event delivery.
+     * One custom report at a time. Further failures while busy use the shared operational logger.
+     * Reporter failure attempts one safe fallback log. No recursive hook invocation or policy retry.
+     * Shutdown interrupts report work and awaits finalizers. Uninterruptible user work can delay closure
+     */
+    readonly onError?: (report: CachePolicyErrorReport) => Effect.Effect<unknown, E, R>
+}
+
+/** Creation-time native settings. Reporting services are captured when creation executes */
+export interface ClientOptions<E = never, R = never> extends Omit<SharedClientOptions, "cache"> {
+    /** Optional resource retention. Omission retains no resource snapshots */
+    readonly cache?: {
+        /**
+         * Omitted/false disables caching. True or an options object enables global bounded memory-only message snapshots.
+         * Eligible REST/events populate, deletes/uncertain writes evict, and gateway gaps clear even after successful resume.
+         * Conflicts can produce misses. No automatic history retrieval. Shutdown releases cached references
+         */
+        readonly messages?: boolean | MessageCacheOptions<E, R>
+    }
+}
 import type { ConfigurationError, ConnectError, ConnectionFailure } from "./errors.js"
 import { makeClient } from "#sdk/internal/client"
 import { replyInput } from "#sdk/internal/message"
@@ -60,18 +86,27 @@ export interface EventHandlerOptions<E = never, R = never> extends HandlerOption
 
 /**
  * Lazy message operations that preserve caller context and interruption, callable without a gateway connection.
- * Closing/Closed reject new work. Calls share four active HTTP slots and 256 queued requests or 4 MiB of queued JSON bodies.
- * Each call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
+ * Closing/Closed reject new work. Remote calls share four active HTTP slots and 256 queued requests or 4 MiB of queued JSON bodies.
+ * Each remote call defaults to a 30,000 ms total deadline, including admission and rate waits, with cleanup awaited afterward.
  * Only confirmed rate-limit rejections retry within that deadline, with route-specific and client-global rate waits.
  * Typed failures, defects and interruption retain native channels, including combined cleanup causes.
  * Interruption or client closure awaits owned cleanup but cannot undo a dispatched mutation
  */
 export interface Messages {
     /**
+     * Lazily read a frozen local observation when executed, never making a request.
+     * Disabled, absent, evicted, expired or wrong-channel entries yield undefined, not proof of server absence.
+     * Hits update LRU recency without renewing age and do not guarantee current server state.
+     * Invalid references fail with MessageOperationError operation get, reason input, outcome notDispatched.
+     * Closing/Closed fail with ClientClosedError. Defects and interruption retain native channels
+     */
+    get(message: MessageReference): Effect.Effect<Message | undefined, MessageOperationFailure>
+    /**
      * Send text without requiring a connected gateway. Closing/Closed reject new work
      *
      * Returns the created snapshot after an API response, not gateway delivery or recipient acknowledgement.
      * Notifications default off. Deadline defaults to 30,000 ms across admission, rate waits and HTTP.
+     * Enabled caching retains eligible created snapshots without changing send completion or delivery.
      * Shared admission allows four active requests and 256 pending bodies or 4 MiB of pending JSON.
      * Only confirmed rate-limit rejections retry within the deadline. Ambiguous sends never retry automatically
      *
@@ -79,12 +114,16 @@ export interface Messages {
      * Typed failures, defects and interruption retain native channels, including cleanup causes
      */
     send(channelId: string, input: MessageInput, options?: SendOptions): Effect.Effect<Message, SendError>
-    /** Lazy reply helper over send. Missing references fail, without unreferenced fallback or default author notification */
+    /**
+     * Lazy reply helper over send. Missing references fail, without unreferenced fallback or default author notification.
+     * The returned reply is eligible for the same cache intake as send
+     */
     reply(message: MessageReference, input: ReplyInput, options?: SendOptions): Effect.Effect<Message, SendError>
     /**
      * Fetch a frozen message snapshot from Fluxer, never from a cache. Accepts a reference or an existing Message.
      * Returns after decoding the API response and checking its message/channel IDs against the requested target.
      * Missing targets fail with MessageOperationError reason notFound rather than returning an empty value.
+     * Enabled caching retains eligible responses, but the returned result does not depend on cache admission.
      * Interrupting the Effect releases only this request and awaits its cleanup
      */
     fetch(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<Message, MessageOperationFailure>
@@ -94,7 +133,9 @@ export interface Messages {
      *
      * Each execution returns after HTTP 200 and whole-page validation as a frozen array of frozen Message snapshots, newest first.
      * Empty and short arrays describe currently accessible results, not complete history. Pages are not a shared point-in-time snapshot.
-     * No prefetch, automatic traversal, gateway notifications or retained history. Use the oldest returned ID as before for an older page
+     * No prefetch, automatic traversal or gateway notifications. Use the oldest returned ID as before for an older page
+     *
+     * Enabled caching admits eligible page members oldest first, so tight limits retain the newest members
      *
      * Invalid input, malformed pages and HTTP rejections are typed MessageOperationError failures with operation fetchHistory. HTTP 404 remains notFound.
      * Shares REST admission and the 30,000 ms default total deadline. Only confirmed rate-limit rejections retry within that budget.
@@ -110,7 +151,9 @@ export interface Messages {
      * Replace text and return the frozen updated snapshot after the API response, without waiting for a gateway event.
      * Required content is sent without trimming. Empty text requests clearing, subject to Fluxer validation.
      * Mentions default off. The SDK omits attachments, embeds and unrelated fields rather than editing them.
-     * Fluxer preserves custom embeds but may regenerate text-derived link previews.
+     * Fluxer preserves custom embeds but may regenerate text-derived link previews
+     *
+     * Enabled caching retains eligible responses. An uncertain dispatched edit evicts the old local copy.
      * Missing targets are typed notFound failures. A lost response or timeout after dispatch may leave the edit applied.
      * Uncertain edits never retry automatically. Native interruption cannot undo a dispatched edit
      */
@@ -122,13 +165,14 @@ export interface Messages {
     /**
      * Delete the target and complete without a value after HTTP 204, without waiting for a gateway event.
      * Missing targets fail with MessageOperationError reason notFound, including a repeated delete.
+     * Confirmed deletion and uncertain dispatched deletion evict the local cached copy.
      * A lost response or timeout after dispatch may leave the target deleted. Uncertain deletes never retry automatically.
      * Native interruption awaits owned cleanup but cannot undo a dispatched deletion
      */
     delete(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
 }
 
-export type { ClientOptions, ConnectionState } from "./client.js"
+export type { ConnectionState } from "./client.js"
 export {
     AuthenticationError,
     ClientBusyError,
@@ -151,6 +195,7 @@ export interface Client extends ClientState {
     /**
      * Lazily register one EventMap event in the caller's scope and context, before or after connect.
      * No cache or REST-generated events. Bulk deletions do not also invoke messageDelete handlers.
+     * Enabled cache changes happen before user dispatch, independently of subscriptions and their overflow.
      * Defaults: One active invocation, 256 queued payloads, 4 MiB queued source JSON per registration.
      * A bulk payload counts once, including its full bytes. Ordering is per subscription, not across event types.
      * Explicit concurrency permits out-of-order completion. No history or exactly-once delivery is promised
@@ -168,6 +213,7 @@ export interface Client extends ClientState {
     ): Effect.Effect<Subscription, RegistrationError, R | R2 | Scope.Scope>
     /**
      * Lazy bounded stream for one event type in receive order. Each execution owns a subscription without history or bulk fan-out.
+     * Enabled cache changes happen before delivery, independently of this subscription and its overflow.
      * Stream scope releases its subscription. Overflow fails this stream rather than silently dropping events.
      * Consumers choose stream concurrency and supervision. Options govern source buffers only
      */
@@ -229,8 +275,10 @@ export interface Client extends ClientState {
     /**
      * Permanently stop startup and recovery and await owned-resource cleanup.
      * This lazy Effect is uninterruptible once shutdown starts, so callers cannot abandon cleanup.
-     * When invoked inside an owned message handler, the client scope performs shutdown and interrupts that handler.
-     * Such a handler does not resume after shutdown. This avoids waiting on its own cleanup.
+     * Release cached references and expiry timers, interrupt the cache reporter and await its finalizers.
+     * Uninterruptible reporter work can delay closure.
+     * Inside an owned message handler or cache reporter, the client scope performs shutdown and interrupts that invocation.
+     * Such an invocation does not resume after shutdown. This avoids waiting on its own cleanup.
      * Repeated and concurrent calls observe the same shutdown outcome.
      * Explicit shutdown makes pending connect fail with ClientClosedError rather than interruption
      *
@@ -258,20 +306,27 @@ export interface Client extends ClientState {
  *
  * Validate configuration locally without authenticating the token
  *
+ * Cache settings are copied and validated here without invoking retention policies or reporters.
+ * Unknown cache or message-cache option keys fail validation. Caching is disabled by default
+ *
  * Each execution creates a separate client in the caller's owning scope.
+ * Cache reporters capture this creation context, including their required services.
  * Closing that scope permanently shuts down the client and releases its credential reference
  *
  * @returns A scoped, lazy creation Effect with ConfigurationError for invalid input.
  * Unexpected creation defects retain their native cause
  */
-export function createClient(options: ClientOptions): Effect.Effect<Client, ConfigurationError, Scope.Scope> {
+export function createClient<E = never, R = never>(
+    options: ClientOptions<E, R>,
+): Effect.Effect<Client, ConfigurationError, Scope.Scope | R> {
     return Effect.gen(function* () {
         // One client-owned scope lets shutdown mark Closing before interrupting its worker
         const scope = Scope.makeUnsafe()
-        const owner = yield* makeClient(options, scope)
+        const owner = yield* makeClient(options, scope, true)
         yield* Effect.addFinalizer((exit) => owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, exit))))
         return Object.freeze({
             messages: Object.freeze({
+                get: (target: MessageReference) => owner.get(target),
                 send: (channelId: string, input: MessageInput, options?: SendOptions) =>
                     owner.send(channelId, input, options),
                 reply: (target: MessageReference, input: ReplyInput, options?: SendOptions) =>

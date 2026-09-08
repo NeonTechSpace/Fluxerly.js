@@ -37,7 +37,7 @@ try {
     const tarball = join(temporary, "sdk.tgz")
     const packed = JSON.parse(packageManager(["pack", "--out", tarball, "--json"], sdk))
     const files = packed.files.map((file) => file.path)
-    for (const entry of ["index", "effect"]) {
+    for (const entry of ["index", "effect", "cache"]) {
         for (const extension of ["js", "js.map", "d.ts", "d.ts.map"]) {
             assert.ok(files.includes(`dist/${entry}.${extension}`))
         }
@@ -65,7 +65,7 @@ try {
             installed,
             10_000,
         )
-        for (const entry of ["index", "effect", "client", "errors", "messages", "events", "message-errors"]) {
+        for (const entry of ["index", "effect", "cache", "client", "errors", "messages", "events", "message-errors"]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
                 readFileSync(join(installed, declaration), "utf8"),
@@ -86,6 +86,13 @@ try {
                 )
             }
         }
+        const defaultDeclarations = readFileSync(join(installed, "dist/index.d.ts"), "utf8")
+        assert.match(
+            defaultDeclarations,
+            /export type \{ CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions \} from "\.\/cache\.js"/,
+        )
+        const nativeDeclarations = readFileSync(join(installed, "dist/effect.d.ts"), "utf8")
+        assert.match(nativeDeclarations, /export interface MessageCacheOptions<E = never, R = never>/)
         for (const file of files.filter((file) => file.endsWith(".map"))) {
             const sourceMap = JSON.parse(readFileSync(join(installed, file), "utf8"))
             assert.ok(sourceMap.sources.length > 0)

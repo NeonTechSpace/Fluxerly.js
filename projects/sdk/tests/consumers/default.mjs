@@ -10,10 +10,32 @@ globalThis.WebSocket = class {
 }
 
 const { createClient, ConfigurationError, MessageOperationError } = await import("@neontechspace/fluxerly")
-const result = createClient({ token: "fixture-only-not-a-credential" })
+const cacheReports = []
+let completeCacheReport
+const cacheReported = new Promise((resolve) => {
+    completeCacheReport = resolve
+})
+const result = createClient({
+    token: "fixture-only-not-a-credential",
+    cache: {
+        messages: {
+            maxEntries: 2,
+            maxBytes: 1_024 * 1_024,
+            maxAgeMs: (message) => (message.id === "11" ? undefined : null),
+            onError: async (report) => {
+                await Promise.resolve()
+                cacheReports.push(report)
+                completeCacheReport()
+            },
+        },
+    },
+})
 assert.equal(result.isOk(), true)
 assert.equal(result.value.state, "Disconnected")
 assert.equal(Reflect.set(result.value, "state", "Connected"), false)
+const emptyCache = result.value.messages.get({ id: "10", channelId: "20" })
+assert.ok(emptyCache.isOk())
+assert.equal(emptyCache.value, undefined)
 
 const invalid = createClient({ token: "" })
 assert.equal(invalid.isErr(), true)
@@ -67,6 +89,11 @@ assert.ok(fetched.isOk())
 const edited = await result.value.messages.edit(fetched.value, { content: "Updated" })
 assert.equal(edited.value.content, "Updated")
 assert.ok(Object.isFrozen(edited.value.author))
+const cached = result.value.messages.get(edited.value)
+assert.ok(cached.isOk())
+assert.equal(cached.value?.content, "Updated")
+assert.ok(Object.isFrozen(cached.value))
+assert.equal(Reflect.set(cached.value, "content", "overwritten"), false)
 const deleted = await result.value.messages.delete(edited.value)
 assert.ok(deleted.isOk())
 assert.equal(deleted.value, undefined)
@@ -85,6 +112,23 @@ assert.ok(Object.isFrozen(history.value) && Object.isFrozen(history.value[0].aut
 const invalidHistory = await result.value.messages.fetchHistory("20", { limit: 101 })
 assert.ok(invalidHistory.error instanceof MessageOperationError)
 assert.equal(invalidHistory.error.operation, "fetchHistory")
+globalThis.fetch = async (url, init) => {
+    assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages/11")
+    assert.equal(init.method, "GET")
+    return Response.json({
+        id: "11",
+        channel_id: "20",
+        content: "Policy failure retains no snapshot",
+        author: { id: "30", username: "fixture" },
+    })
+}
+const policyFailure = await result.value.messages.fetch({ id: "11", channelId: "20" })
+assert.ok(policyFailure.isOk())
+await cacheReported
+assert.deepEqual(cacheReports, [{ reason: "invalidReturn" }])
+const uncached = result.value.messages.get(policyFailure.value)
+assert.ok(uncached.isOk())
+assert.equal(uncached.value, undefined)
 assert.equal((await result.value.shutdown()).isOk(), true)
 assert.equal(result.value.state, "Closed")
 assert.equal((await result.value.waitForClose()).isOk(), true)

@@ -5,11 +5,14 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { parseEnv } from "node:util"
 import WebSocket from "ws"
 
+const rawFetch = globalThis.fetch
 const mode = process.argv[2]
 const recover = process.argv[3] === "--recover"
 const manage = process.argv[3] === "--manage"
 const changes = process.argv[3] === "--events"
 const history = process.argv[3] === "--history"
+const cache = process.argv[3] === "--cache"
+const forceRecovery = recover || cache
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const journalPath = new URL("../../.env.test.messages.local", import.meta.url)
 const report = (check, passed) => console.log(JSON.stringify({ mode, check, passed }))
@@ -96,7 +99,8 @@ function observeGateway() {
 
 async function api(method, path, body) {
     for (let attempt = 0; attempt < 3; attempt++) {
-        const response = await fetch(`https://api.fluxer.app/v1${path}`, {
+        // Direct sandbox readback must not share the SDK's temporary fetch observation in cache mode
+        const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
             method,
             redirect: "error",
             signal: AbortSignal.timeout(10_000),
@@ -115,6 +119,38 @@ async function api(method, path, body) {
         return { status: response.status, data }
     }
     throw new Error("Sandbox request budget exhausted")
+}
+
+function cacheOptions() {
+    return {
+        messages: {
+            maxEntries: 1_000,
+            maxBytes: 8 * 1024 * 1024,
+            // Keep default live fixtures indefinitely while proving active expiry with one explicitly marked snapshot
+            maxAgeMs: (message) => (message.content.startsWith("cache-expire-") ? 100 : null),
+        },
+    }
+}
+
+async function waitForCache(get, target, matches) {
+    const deadline = performance.now() + 10_000
+    while (true) {
+        const snapshot = await get(target)
+        if (matches(snapshot)) return snapshot
+        assert.ok(performance.now() < deadline)
+        await sleep(20)
+    }
+}
+
+async function verifyCacheExpiry(send, get, channelId) {
+    stage = "cache_active_expiry"
+    const sent = await send(channelId, { content: `cache-expire-${randomUUID()}` })
+    assert.equal((await get(sent)).id, sent.id)
+    await waitForCache(get, sent, (snapshot) => snapshot === undefined)
+    const actual = await api("GET", `/channels/${channelId}/messages/${sent.id}`)
+    assert.equal(actual.status, 200)
+    assert.equal(actual.data?.content, sent.content)
+    report(stage, true)
 }
 
 async function cleanup() {
@@ -207,7 +243,7 @@ function observeMessageChanges(channelId) {
             assert.ok(Object.isFrozen(payload))
             received[event].push(payload)
         },
-        async exercise(botId) {
+        async exercise(botId, get) {
             stage = "create_change_event_seeds"
             const content = `event-${randomUUID()}`
             const seeds = []
@@ -222,6 +258,17 @@ function observeMessageChanges(channelId) {
                 assert.equal(seed.channel_id, channelId)
                 assert.equal(seed.author?.id, botId)
                 seeds.push(seed)
+            }
+            if (get) {
+                for (const seed of seeds) {
+                    const snapshot = await waitForCache(
+                        get,
+                        { id: seed.id, channelId },
+                        (current) => current?.content === seed.content,
+                    )
+                    assert.equal(snapshot.author.id, botId)
+                }
+                report("cache_gateway_create", true)
             }
             const waitFor = async (event, matches) => {
                 const until = performance.now() + 15_000
@@ -248,6 +295,11 @@ function observeMessageChanges(channelId) {
                 (await api("GET", `/channels/${channelId}/messages/${updated.id}`)).data?.content,
                 updated.content,
             )
+            if (get) {
+                const cached = await waitForCache(get, updated, (current) => current?.content === updated.content)
+                assert.equal(cached.author.id, botId)
+                report("cache_gateway_update", true)
+            }
             report(stage, true)
             stage = "live_message_delete_event"
             await api("DELETE", `/channels/${channelId}/messages/${seeds[0].id}`)
@@ -255,6 +307,10 @@ function observeMessageChanges(channelId) {
             if ("content" in deleted) assert.equal(deleted.content, updated.content)
             if ("authorId" in deleted) assert.equal(deleted.authorId, botId)
             assert.equal((await api("GET", `/channels/${channelId}/messages/${deleted.id}`)).status, 404)
+            if (get) {
+                await waitForCache(get, deleted, (current) => current === undefined)
+                report("cache_gateway_delete", true)
+            }
             report(stage, true)
             stage = "live_message_delete_bulk_event"
             const ids = seeds.slice(1).map((seed) => seed.id)
@@ -265,6 +321,10 @@ function observeMessageChanges(channelId) {
             assert.ok(Object.isFrozen(batch.ids))
             for (const id of ids) assert.equal((await api("GET", `/channels/${channelId}/messages/${id}`)).status, 404)
             assert.ok(!received.messageDelete.some((message) => ids.includes(message.id)))
+            if (get) {
+                for (const id of ids) await waitForCache(get, { id, channelId }, (current) => current === undefined)
+                report("cache_gateway_bulk_delete", true)
+            }
             report(stage, true)
         },
     }
@@ -332,7 +392,9 @@ setTimeout(() => {
 
 try {
     assert.ok(mode === "default" || mode === "effect")
-    assert.ok(process.argv.length === 3 || (process.argv.length === 4 && (recover || manage || changes || history)))
+    assert.ok(
+        process.argv.length === 3 || (process.argv.length === 4 && (recover || manage || changes || history || cache)),
+    )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
     writeSync(lock, String(process.pid))
@@ -369,26 +431,45 @@ try {
     writeFileSync(journalPath, JSON.stringify(journal))
     const ping = `ping-${randomUUID()}`
     const pong = `pong-${randomUUID()}`
+    const sdkRequests = []
+    if (cache) {
+        // Sandbox setup and independent readback keep using rawFetch. This observes only the SDK's own REST behavior
+        globalThis.fetch = async (...args) => {
+            sdkRequests.push(new URL(args[0]).pathname)
+            return rawFetch(...args)
+        }
+    }
     let client
     let seed
     let reply
     const states = []
-    if (recover) gatewayProbe = observeGateway()
+    if (forceRecovery) gatewayProbe = observeGateway()
     stage = "sdk_receive_and_reply"
     if (mode === "default") {
         const { createClient } = await import("@neontechspace/fluxerly")
-        const created = createClient({ token })
+        const created = createClient(cache ? { token, cache: cacheOptions() } : { token })
         assert.ok(created.isOk())
         client = created.value
+        const cacheGet = async (target) => {
+            if (!cache) return undefined
+            const cached = client.messages.get(target)
+            assert.ok(cached.isOk())
+            return cached.value
+        }
+        const cacheSend = async (channelId, input) => {
+            const sent = await client.messages.send(channelId, input)
+            assert.ok(sent.isOk())
+            return sent.value
+        }
         const done = Promise.withResolvers()
-        const stopState = recover
+        const stopState = forceRecovery
             ? client.observeState((state) => {
                   states.push(state)
               })
             : undefined
         let timer
         try {
-            if (history) {
+            if (history || cache) {
                 const probe = await prepareHistory(channel.id, user.id)
                 assert.equal(client.state, "Disconnected")
                 for (const check of probe.cases) {
@@ -396,22 +477,36 @@ try {
                     const page = await client.messages.fetchHistory(channel.id, check.query)
                     assert.ok(page.isOk())
                     await probe.verify(page.value, check)
+                    if (cache)
+                        for (const message of page.value) {
+                            const cached = await cacheGet(message)
+                            assert.equal(cached?.content, message.content)
+                        }
                 }
+                if (cache) report("cache_rest_history", true)
                 stage = "sdk_receive_and_reply"
             }
-            if (manage) {
+            if (manage || cache) {
                 const managed = await prepareManagement(channel.id, user.id)
                 assert.equal(client.state, "Disconnected")
                 stage = "sdk_fetch_disconnected"
                 const fetched = await client.messages.fetch(managed.target)
                 assert.ok(fetched.isOk())
                 await verifyManaged(fetched.value, managed.content, managed)
+                if (cache) {
+                    assert.equal((await cacheGet(managed.target))?.content, managed.content)
+                    report("cache_rest_fetch", true)
+                }
                 stage = "sdk_edit_and_preserve_embed"
                 const edited = await client.messages.edit(fetched.value, {
                     content: `${managed.content}-edited @everyone`,
                 })
                 assert.ok(edited.isOk())
                 await verifyManaged(edited.value, `${managed.content}-edited @everyone`, managed)
+                if (cache) {
+                    assert.equal((await cacheGet(edited.value))?.content, edited.value.content)
+                    report("cache_rest_edit", true)
+                }
                 stage = "sdk_empty_edit_rejected_without_change"
                 const cleared = await client.messages.edit(edited.value, { content: "" })
                 assert.ok(cleared.isErr())
@@ -422,11 +517,23 @@ try {
                 assert.ok(deleted.isOk())
                 assert.equal(deleted.value, undefined)
                 assert.equal((await api("GET", `/channels/${channel.id}/messages/${managed.target.id}`)).status, 404)
+                if (cache) {
+                    assert.equal(await cacheGet(managed.target), undefined)
+                    report("cache_rest_delete", true)
+                }
                 report(stage, true)
                 stage = "sdk_missing_target_errors"
                 verifyMissing((await client.messages.fetch(managed.target)).error, "fetch")
                 verifyMissing((await client.messages.edit(managed.target, { content: "gone" })).error, "edit")
                 verifyMissing((await client.messages.delete(managed.target)).error, "delete")
+                report(stage, true)
+                stage = "sdk_receive_and_reply"
+            }
+            let beforeRecovery
+            if (cache) {
+                stage = "cache_pre_recovery_rest_intake"
+                beforeRecovery = await cacheSend(channel.id, { content: `cache-before-recovery-${randomUUID()}` })
+                assert.equal((await cacheGet(beforeRecovery))?.content, beforeRecovery.content)
                 report(stage, true)
                 stage = "sdk_receive_and_reply"
             }
@@ -445,7 +552,18 @@ try {
                 () => done.resolve(null),
             )
             assert.ok((await client.connect()).isOk())
-            if (recover) await gatewayProbe.interruptAndWait(client, states)
+            if (forceRecovery) {
+                if (cache) sdkRequests.length = 0
+                await gatewayProbe.interruptAndWait(client, states)
+                if (cache) {
+                    assert.equal(await cacheGet(beforeRecovery), undefined)
+                    assert.deepEqual(sdkRequests, [])
+                    const remote = await api("GET", `/channels/${channel.id}/messages/${beforeRecovery.id}`)
+                    assert.equal(remote.status, 200)
+                    assert.equal(remote.data?.content, beforeRecovery.content)
+                    report("cache_recovery_gap_clears_without_autofetch", true)
+                }
+            }
             const sent = await client.messages.send(channel.id, { content: ping })
             assert.ok(sent.isOk())
             seed = sent.value
@@ -456,7 +574,14 @@ try {
             registered.value.unsubscribe()
             assert.ok((await registered.value.waitForClose()).isOk())
             await terminal
-            if (changes) {
+            if (cache) {
+                assert.equal((await cacheGet(seed))?.content, seed.content)
+                assert.equal((await cacheGet(reply))?.content, reply.content)
+                report("cache_rest_send_and_reply", true)
+                if (forceRecovery) report("cache_rebuilt_after_recovery", true)
+                await verifyCacheExpiry(cacheSend, cacheGet, channel.id)
+            }
+            if (changes || cache) {
                 const probe = observeMessageChanges(channel.id)
                 const updates = client.on("messageUpdate", (message) => probe.receive("messageUpdate", message))
                 assert.ok(updates.isOk())
@@ -474,7 +599,7 @@ try {
                 const readers = [consume("messageDelete", deletion.value), consume("messageDeleteBulk", bulk.value)]
                 const readsDone = Promise.allSettled(readers)
                 try {
-                    await probe.exercise(user.id)
+                    await probe.exercise(user.id, cache ? cacheGet : undefined)
                 } finally {
                     updates.value.unsubscribe()
                     deletion.value.unsubscribe()
@@ -494,23 +619,43 @@ try {
         const exit = await Effect.runPromiseExit(
             Effect.scoped(
                 Effect.gen(function* () {
-                    client = yield* createClient({ token })
-                    if (history) {
+                    client = yield* createClient(cache ? { token, cache: cacheOptions() } : { token })
+                    const cacheGet = async (target) => {
+                        if (!cache) return undefined
+                        const cached = await Effect.runPromiseExit(client.messages.get(target))
+                        assert.ok(Exit.isSuccess(cached))
+                        return cached.value
+                    }
+                    const cacheSend = (channelId, input) => Effect.runPromise(client.messages.send(channelId, input))
+                    if (history || cache) {
                         const probe = yield* Effect.promise(() => prepareHistory(channel.id, user.id))
                         assert.equal(client.state, "Disconnected")
                         for (const check of probe.cases) {
                             stage = check.name
                             const page = yield* client.messages.fetchHistory(channel.id, check.query)
                             yield* Effect.promise(() => probe.verify(page, check))
+                            if (cache)
+                                for (const message of page) {
+                                    const cached = yield* Effect.promise(() => cacheGet(message))
+                                    assert.equal(cached?.content, message.content)
+                                }
                         }
+                        if (cache) report("cache_rest_history", true)
                         stage = "sdk_receive_and_reply"
                     }
-                    if (manage) {
+                    if (manage || cache) {
                         const managed = yield* Effect.promise(() => prepareManagement(channel.id, user.id))
                         assert.equal(client.state, "Disconnected")
                         stage = "sdk_fetch_disconnected"
                         const fetched = yield* client.messages.fetch(managed.target)
                         yield* Effect.promise(() => verifyManaged(fetched, managed.content, managed))
+                        if (cache) {
+                            assert.equal(
+                                (yield* Effect.promise(() => cacheGet(managed.target)))?.content,
+                                managed.content,
+                            )
+                            report("cache_rest_fetch", true)
+                        }
                         stage = "sdk_edit_and_preserve_embed"
                         const edited = yield* client.messages.edit(fetched, {
                             content: `${managed.content}-edited @everyone`,
@@ -518,6 +663,10 @@ try {
                         yield* Effect.promise(() =>
                             verifyManaged(edited, `${managed.content}-edited @everyone`, managed),
                         )
+                        if (cache) {
+                            assert.equal((yield* Effect.promise(() => cacheGet(edited)))?.content, edited.content)
+                            report("cache_rest_edit", true)
+                        }
                         stage = "sdk_empty_edit_rejected_without_change"
                         const cleared = yield* client.messages.edit(edited, { content: "" }).pipe(Effect.flip)
                         verifyClearRejection(cleared)
@@ -530,6 +679,10 @@ try {
                             api("GET", `/channels/${channel.id}/messages/${managed.target.id}`),
                         )
                         assert.equal(absent.status, 404)
+                        if (cache) {
+                            assert.equal(yield* Effect.promise(() => cacheGet(managed.target)), undefined)
+                            report("cache_rest_delete", true)
+                        }
                         report(stage, true)
                         stage = "sdk_missing_target_errors"
                         verifyMissing(yield* client.messages.fetch(managed.target).pipe(Effect.flip), "fetch")
@@ -541,7 +694,20 @@ try {
                         report(stage, true)
                         stage = "sdk_receive_and_reply"
                     }
-                    if (recover)
+                    let beforeRecovery
+                    if (cache) {
+                        stage = "cache_pre_recovery_rest_intake"
+                        beforeRecovery = yield* Effect.promise(() =>
+                            cacheSend(channel.id, { content: `cache-before-recovery-${randomUUID()}` }),
+                        )
+                        assert.equal(
+                            (yield* Effect.promise(() => cacheGet(beforeRecovery)))?.content,
+                            beforeRecovery.content,
+                        )
+                        report(stage, true)
+                        stage = "sdk_receive_and_reply"
+                    }
+                    if (forceRecovery)
                         yield* Effect.forkScoped(
                             Stream.runForEach(client.observeState(), (state) =>
                                 Effect.sync(() => {
@@ -563,12 +729,32 @@ try {
                         }),
                     )
                     yield* client.connect()
-                    if (recover) yield* Effect.promise(() => gatewayProbe.interruptAndWait(client, states))
+                    if (forceRecovery) {
+                        if (cache) sdkRequests.length = 0
+                        yield* Effect.promise(() => gatewayProbe.interruptAndWait(client, states))
+                        if (cache) {
+                            assert.equal(yield* Effect.promise(() => cacheGet(beforeRecovery)), undefined)
+                            assert.deepEqual(sdkRequests, [])
+                            const remote = yield* Effect.promise(() =>
+                                api("GET", `/channels/${channel.id}/messages/${beforeRecovery.id}`),
+                            )
+                            assert.equal(remote.status, 200)
+                            assert.equal(remote.data?.content, beforeRecovery.content)
+                            report("cache_recovery_gap_clears_without_autofetch", true)
+                        }
+                    }
                     seed = yield* client.messages.send(channel.id, { content: ping })
                     reply = yield* Deferred.await(done).pipe(Effect.timeout(20_000))
                     yield* subscription.unsubscribe()
                     yield* subscription.waitForClose()
-                    if (changes) {
+                    if (cache) {
+                        assert.equal((yield* Effect.promise(() => cacheGet(seed)))?.content, seed.content)
+                        assert.equal((yield* Effect.promise(() => cacheGet(reply)))?.content, reply.content)
+                        report("cache_rest_send_and_reply", true)
+                        if (forceRecovery) report("cache_rebuilt_after_recovery", true)
+                        yield* Effect.promise(() => verifyCacheExpiry(cacheSend, cacheGet, channel.id))
+                    }
+                    if (changes || cache) {
                         const probe = observeMessageChanges(channel.id)
                         yield* Effect.scoped(
                             Effect.gen(function* () {
@@ -582,7 +768,7 @@ try {
                                         ),
                                     )
                                 }
-                                yield* Effect.promise(() => probe.exercise(user.id))
+                                yield* Effect.promise(() => probe.exercise(user.id, cache ? cacheGet : undefined))
                             }),
                         )
                     }
@@ -601,7 +787,7 @@ try {
     assert.equal(actual?.mention_everyone, false)
     assert.deepEqual(actual?.mentions, [])
     report("sdk_receive_and_reply", true)
-    if (recover) report("post_resume_receive_and_reply", true)
+    if (forceRecovery) report("post_resume_receive_and_reply", true)
     report("reply_reference_and_mentions_verified", true)
     report("sdk_closed", true)
 } catch {
@@ -610,6 +796,7 @@ try {
     process.exitCode = 1
 } finally {
     gatewayProbe?.restore()
+    globalThis.fetch = rawFetch
     if (verified && journal) {
         try {
             await cleanup()
