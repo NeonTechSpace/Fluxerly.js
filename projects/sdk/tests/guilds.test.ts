@@ -413,6 +413,175 @@ test.each(modes)("%s rejects a malformed bulk role event without partial deliver
     expect(handler).not.toHaveBeenCalled()
 })
 
+test.each(modes)("%s delivers provider-shaped guild lifecycle observations after cache updates", async (mode) => {
+    const dispatch = await gateway()
+    cacheRest()
+    const api = await setup(mode, resourceCache)
+    const seen: { event: EventName; value: unknown; cached: unknown }[] = []
+    const cachedGuild = () =>
+        api.defaultApi ? unwrap(api.defaultApi.guilds.get("20")) : Effect.runSync(api.native!.guilds.get("20"))
+    for (const event of ["guildCreate", "guildUpdate", "guildDelete"] as const)
+        await api.on(event, (value) => {
+            seen.push({ event, value, cached: cachedGuild() })
+        })
+    await api.connect()
+    dispatch("GUILD_CREATE", {
+        id: "20",
+        properties: guild,
+        roles: [],
+        channels: [],
+        emojis: [],
+        members: [],
+        member_count: 1,
+        joined_at: null,
+    })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen[0]).toEqual({
+        event: "guildCreate",
+        value: expect.objectContaining({ id: "20", name: "fixture" }),
+        cached: expect.objectContaining({ id: "20", name: "fixture" }),
+    })
+    expect(Object.isFrozen(seen[0]!.value)).toBe(true)
+    dispatch("GUILD_UPDATE", { ...guild, guild_id: "20", name: "changed" })
+    await vi.waitFor(() => expect(seen).toHaveLength(2))
+    expect(seen[1]).toEqual({
+        event: "guildUpdate",
+        value: expect.objectContaining({ id: "20", name: "changed" }),
+        cached: expect.objectContaining({ id: "20", name: "changed" }),
+    })
+    dispatch("GUILD_DELETE", { id: "20", guild_id: "20", unavailable: true, unavailable_hidden: true })
+    await vi.waitFor(() => expect(seen).toHaveLength(3))
+    expect(seen[2]).toEqual({
+        event: "guildDelete",
+        value: { id: "20", unavailable: true, unavailableHidden: true },
+        cached: undefined,
+    })
+    expect(Object.isFrozen(seen[2]!.value)).toBe(true)
+})
+
+test.each(modes)("%s defaults omitted guild deletion availability flags without inferring a cause", async (mode) => {
+    const dispatch = await gateway()
+    rest(async () => Response.json(guild))
+    const api = await setup(mode)
+    let seen: unknown
+    await api.on("guildDelete", (value) => {
+        seen = value
+    })
+    await api.connect()
+    dispatch("GUILD_DELETE", { id: "20" })
+    await vi.waitFor(() => expect(seen).toBeDefined())
+    expect(seen).toEqual({ id: "20", unavailable: false, unavailableHidden: false })
+})
+
+test.each(modes)("%s rejects incomplete guild updates and mismatched guild lifecycle IDs", async (mode) => {
+    const dispatch = await gateway()
+    rest(async () => Response.json(guild))
+    const api = await setup(mode)
+    const update = vi.fn()
+    await api.on("guildUpdate", update)
+    await api.connect()
+    dispatch("GUILD_UPDATE", { id: "20" })
+    const closed = api.defaultApi
+        ? (async () => unwrap(await api.defaultApi!.waitForClose()))()
+        : run(api.native!.waitForClose())
+    await expect(closed).rejects.toMatchObject({ reason: "protocol" })
+    expect(update).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s rejects a guild deletion with unequal duplicate IDs", async (mode) => {
+    const dispatch = await gateway()
+    rest(async () => Response.json(guild))
+    const api = await setup(mode)
+    const deleted = vi.fn()
+    await api.on("guildDelete", deleted)
+    await api.connect()
+    dispatch("GUILD_DELETE", { id: "20", guild_id: "21" })
+    const closed = api.defaultApi
+        ? (async () => unwrap(await api.defaultApi!.waitForClose()))()
+        : run(api.native!.waitForClose())
+    await expect(closed).rejects.toMatchObject({ reason: "protocol" })
+    expect(deleted).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s rejects a hidden guild deletion without unavailable", async (mode) => {
+    const dispatch = await gateway()
+    rest(async () => Response.json(guild))
+    const api = await setup(mode)
+    const deleted = vi.fn()
+    await api.on("guildDelete", deleted)
+    await api.connect()
+    dispatch("GUILD_DELETE", { id: "20", unavailable_hidden: true })
+    const closed = api.defaultApi
+        ? (async () => unwrap(await api.defaultApi!.waitForClose()))()
+        : run(api.native!.waitForClose())
+    await expect(closed).rejects.toMatchObject({ reason: "protocol" })
+    expect(deleted).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s rejects a guild update with unequal duplicate IDs", async (mode) => {
+    const dispatch = await gateway()
+    rest(async () => Response.json(guild))
+    const api = await setup(mode)
+    const updated = vi.fn()
+    await api.on("guildUpdate", updated)
+    await api.connect()
+    dispatch("GUILD_UPDATE", { ...guild, guild_id: "21" })
+    const closed = api.defaultApi
+        ? (async () => unwrap(await api.defaultApi!.waitForClose()))()
+        : run(api.native!.waitForClose())
+    await expect(closed).rejects.toMatchObject({ reason: "protocol" })
+    expect(updated).not.toHaveBeenCalled()
+})
+
+test.each(modes)(
+    "%s clears retained and pending message observations on guild deletion without a guild index",
+    async (mode) => {
+        const dispatch = await gateway()
+        let release!: () => void
+        let pendingStarted = false
+        const pendingResponse = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        rest(async (url) => {
+            const id = url.split("/").at(-1)!
+            if (id === "12") {
+                pendingStarted = true
+                await pendingResponse
+            }
+            return Response.json({
+                id,
+                channel_id: "21",
+                ...(id === "10" ? { guild_id: "20" } : {}),
+                content: "fixture",
+                author: { id: "30", username: "fixture" },
+            })
+        })
+        const api = await setup(mode, { messages: { maxEntries: 10 } })
+        const first = { id: "10", channelId: "21" }
+        const second = { id: "11", channelId: "21" }
+        const pending = { id: "12", channelId: "21" }
+        const fetch = async (reference: typeof first) =>
+            api.defaultApi
+                ? unwrap(await api.defaultApi.messages.fetch(reference))
+                : await run(api.native!.messages.fetch(reference))
+        const get = (reference: typeof first) =>
+            api.defaultApi
+                ? unwrap(api.defaultApi.messages.get(reference))
+                : Effect.runSync(api.native!.messages.get(reference))
+        await api.connect()
+        await fetch(first)
+        await fetch(second)
+        const delayed = fetch(pending)
+        await vi.waitFor(() => expect(pendingStarted).toBe(true))
+        dispatch("GUILD_DELETE", { id: "20", unavailable: true })
+        await vi.waitFor(() => expect(get(first)).toBeUndefined())
+        expect(get(second)).toBeUndefined()
+        release()
+        await delayed
+        expect(get(pending)).toBeUndefined()
+    },
+)
+
 const target = { guildId: "20", userId: "30" }
 
 const resourceCache = { guilds: true, members: true, roles: true }

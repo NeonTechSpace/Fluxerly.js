@@ -4,9 +4,11 @@ import { decodeMessage, decodeDeletion, decodeBulkDeletion, record, identifier }
 import { decodeUser, decodeDirectMessage } from "./users.js"
 import { decodeReaction, reactionEvents } from "./reactions.js"
 import { decodePinsUpdate } from "./pins.js"
-import { decodeGuildEvent, guildEvents } from "./guilds.js"
+import { decodeGuildEvent, decodeGuildLifecycleEvent, guildEvents, guildLifecycleEvents } from "./guilds.js"
 import { decodeChannelEvent, channelEvents } from "./channels.js"
 import { decodeExpressionUpdate } from "./expressions.js"
+import { decodeInviteDelete, decodeInviteMetadata } from "./invites.js"
+import { decodeAuditLogEntry } from "./audit-logs.js"
 import type { GatewayPresenceUpdate, PresenceGatewayOwner } from "./presence.js"
 import { Clock, Deferred, Effect, Redacted } from "effect"
 import WebSocket from "ws"
@@ -21,6 +23,25 @@ import {
 export interface Session {
     id: string | undefined
     sequence: number | null
+}
+
+function decodeTypingStart(value: unknown): EventMap["typingStart"] | undefined {
+    if (
+        !record(value) ||
+        !identifier(value.channel_id) ||
+        !identifier(value.user_id) ||
+        typeof value.timestamp !== "number" ||
+        !Number.isSafeInteger(value.timestamp) ||
+        value.timestamp < 0 ||
+        (value.guild_id !== undefined && value.guild_id !== null && !identifier(value.guild_id))
+    )
+        return undefined
+    return Object.freeze({
+        channelId: value.channel_id,
+        userId: value.user_id,
+        timestamp: value.timestamp,
+        ...(typeof value.guild_id === "string" ? { guildId: value.guild_id } : {}),
+    })
 }
 
 /** Retry metadata is internal, not a promise that arbitrary consumer actions are repeatable */
@@ -238,6 +259,14 @@ export const runGateway = (
                                         return
                                     }
                                     onDispatch("userUpdate", user, Buffer.byteLength(data.toString()))
+                                } else if (Object.hasOwn(guildLifecycleEvents, payload.t)) {
+                                    const event = payload.t as keyof typeof guildLifecycleEvents
+                                    const update = decodeGuildLifecycleEvent(event, body)
+                                    if (!update) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch(guildLifecycleEvents[event], update, Buffer.byteLength(data.toString()))
                                 } else if (
                                     payload.t === "GUILD_EMOJIS_UPDATE" ||
                                     payload.t === "GUILD_STICKERS_UPDATE"
@@ -277,6 +306,52 @@ export const runGateway = (
                                         Object.freeze({ channelId: body.channel_id, userId: body.user.id }),
                                         Buffer.byteLength(data.toString()),
                                     )
+                                } else if (payload.t === "WEBHOOKS_UPDATE") {
+                                    if (!record(body) || !identifier(body.guild_id) || !identifier(body.channel_id)) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch(
+                                        "webhooksUpdate",
+                                        Object.freeze({ guildId: body.guild_id, channelId: body.channel_id }),
+                                        Buffer.byteLength(data.toString()),
+                                    )
+                                } else if (payload.t === "INVITE_CREATE") {
+                                    const invite = decodeInviteMetadata(body)
+                                    if (!invite) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("inviteCreate", invite, Buffer.byteLength(data.toString()))
+                                } else if (payload.t === "INVITE_DELETE") {
+                                    const invite = decodeInviteDelete(body)
+                                    if (!invite) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("inviteDelete", invite, Buffer.byteLength(data.toString()))
+                                } else if (payload.t === "GUILD_AUDIT_LOG_ENTRY_CREATE") {
+                                    const audit = decodeAuditLogEntry(body)
+                                    if (
+                                        !audit ||
+                                        !record(body) ||
+                                        !identifier(body.guild_id) ||
+                                        !identifier(body.user_id) ||
+                                        (body.target_id !== null && typeof body.target_id !== "string")
+                                    ) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch(
+                                        "guildAuditLogEntryCreate",
+                                        Object.freeze({
+                                            ...audit,
+                                            guildId: body.guild_id,
+                                            userId: body.user_id,
+                                            targetId: body.target_id,
+                                        }),
+                                        Buffer.byteLength(data.toString()),
+                                    )
                                 } else if (payload.t === "MESSAGE_CREATE" || payload.t === "MESSAGE_UPDATE") {
                                     const message = decodeMessage(body)
                                     if (!message) {
@@ -288,6 +363,13 @@ export const runGateway = (
                                         message,
                                         Buffer.byteLength(data.toString()),
                                     )
+                                } else if (payload.t === "TYPING_START") {
+                                    const typing = decodeTypingStart(body)
+                                    if (!typing) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("typingStart", typing, Buffer.byteLength(data.toString()))
                                 } else if (Object.hasOwn(guildEvents, payload.t)) {
                                     const event = payload.t as keyof typeof guildEvents
                                     const update = decodeGuildEvent(event, body)

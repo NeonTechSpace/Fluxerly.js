@@ -111,11 +111,74 @@ try {
         originalName: original.name,
     }
     save()
+    const auditEvents = []
+    const guildUpdates = []
+    let observationOverflow
+    const observeAudit = (entry) => {
+        const nameChange = entry.changes?.find((change) => change.key === "name" && change.newValue === journal.marker)
+        if (
+            entry.guildId !== journal.guildId ||
+            entry.userId !== journal.botId ||
+            entry.reason !== journal.marker ||
+            !nameChange
+        )
+            return
+        if (auditEvents.length === 1) {
+            observationOverflow ??= "Audit entry observation overflow"
+            return
+        }
+        auditEvents.push(nameChange.newValue)
+    }
+    const observeGuildUpdate = (guild) => {
+        if (guild.id !== journal.guildId || guild.name !== journal.marker) return
+        if (guildUpdates.length === 1) {
+            observationOverflow ??= "Guild update observation overflow"
+            return
+        }
+        guildUpdates.push({ id: guild.id, name: guild.name })
+    }
+    if (mode === "default") client.on("guildAuditLogEntryCreate", observeAudit)._unsafeUnwrap()
+    else
+        await Effect.runPromise(
+            client
+                .on("guildAuditLogEntryCreate", (entry) => Effect.sync(() => observeAudit(entry)))
+                .pipe(Effect.provideService(Scope.Scope, scope)),
+        )
+    if (mode === "default") client.on("guildUpdate", observeGuildUpdate)._unsafeUnwrap()
+    else
+        await Effect.runPromise(
+            client
+                .on("guildUpdate", (guild) => Effect.sync(() => observeGuildUpdate(guild)))
+                .pipe(Effect.provideService(Scope.Scope, scope)),
+        )
+    await value(client.connect())
+    const waitAuditEvent = async () => {
+        const until = Date.now() + 10_000
+        while (!auditEvents.includes(journal.marker) && !observationOverflow && Date.now() < until)
+            await new Promise((resolve) => setTimeout(resolve, 25))
+        assert.equal(observationOverflow, undefined, observationOverflow)
+        assert.ok(auditEvents.includes(journal.marker))
+    }
+    const waitGuildUpdate = async () => {
+        const until = Date.now() + 10_000
+        while (
+            !guildUpdates.some((guild) => guild.name === journal.marker) &&
+            !observationOverflow &&
+            Date.now() < until
+        )
+            await new Promise((resolve) => setTimeout(resolve, 25))
+        assert.equal(observationOverflow, undefined, observationOverflow)
+        return guildUpdates.find((guild) => guild.name === journal.marker)
+    }
     stage = "server_rename_and_independent_readback"
     const renamed = await value(client.guilds.edit(guildId, { name: journal.marker }, { auditReason: journal.marker }))
     assert.equal(renamed.name, journal.marker)
-    assert.equal((await api("GET", `/guilds/${guildId}`)).data.name, journal.marker)
-    assert.equal((await value(client.guilds.fetch(guildId))).name, journal.marker)
+    await waitAuditEvent()
+    const observedGuild = await waitGuildUpdate()
+    const remoteGuild = (await api("GET", `/guilds/${guildId}`)).data
+    assert.deepEqual(observedGuild, { id: guildId, name: renamed.name })
+    assert.equal(remoteGuild.name, observedGuild.name)
+    assert.equal((await value(client.guilds.fetch(guildId))).name, observedGuild.name)
     report(stage)
     stage = "lost_server_edit_response_reconciliation"
     let attempts = 0
@@ -139,7 +202,10 @@ try {
     }
     assert.equal(attempts, 1)
     const cached = client.guilds.get(guildId)
-    assert.equal(Effect.isEffect(cached) ? await Effect.runPromise(cached) : cached._unsafeUnwrap(), undefined)
+    const observed = Effect.isEffect(cached) ? await Effect.runPromise(cached) : cached._unsafeUnwrap()
+    // A later GUILD_UPDATE can legitimately replace the invalidated observation while this client is connected
+    // The pre-write name must not survive the uncertain result
+    if (observed !== undefined) assert.equal(observed.name, `${journal.marker}_lost`)
     assert.equal((await api("GET", `/guilds/${guildId}`)).data.name, `${journal.marker}_lost`)
     assert.equal((await value(client.guilds.fetch(guildId))).name, `${journal.marker}_lost`)
     report(stage)
@@ -186,6 +252,7 @@ try {
     stage = "sdk_name_restore_and_readback"
     await value(client.guilds.edit(guildId, { name: journal.originalName }, { auditReason: journal.marker }))
     assert.equal((await api("GET", `/guilds/${guildId}`)).data.name, journal.originalName)
+    assert.equal(observationOverflow, undefined, observationOverflow)
     report(stage)
 } catch (error) {
     console.error(

@@ -1,8 +1,64 @@
 import type { Message, MessageDeletion, MessageBulkDeletion } from "./messages.js"
 import type { ChannelPinsUpdate } from "./pins.js"
-import type { MemberReference } from "./guilds.js"
+import type { Guild, GuildDeletion, MemberReference } from "./guilds.js"
 import type { GuildEmoji, GuildSticker } from "./expressions.js"
 import type { MessageReaction, MessageReactionBatch, MessageReactionEmojiRemoval, ReactionTarget } from "./reactions.js"
+import type { InviteMetadata } from "./invites.js"
+import type { AuditLogEntry } from "./audit-logs.js"
+
+/** One webhook-set change notice with no webhook metadata or credential.
+ * Fetch the current set when needed; this does not populate or invalidate an SDK cache
+ */
+export interface WebhooksUpdate {
+    /** Owning guild ID */
+    readonly guildId: string
+    /** Channel whose webhook set changed */
+    readonly channelId: string
+}
+
+/** One deleted invite notice, without a snapshot of its former settings.
+ * The code grants access to its destination and must not be added to diagnostics or public logs
+ */
+export interface InviteDeleteEvent {
+    /** Provider invite code, retained as the only stable deleted-invite identity */
+    readonly code: string
+    /** Destination channel when Fluxer supplied one */
+    readonly channelId?: string
+    /** Owning guild when this was a guild invite */
+    readonly guildId?: string
+}
+
+/** Frozen audit entry written in one guild, including all context supplied by Fluxer.
+ * Reason, options, and changes are intentional domain data, not safe diagnostic content.
+ * Gateway string metadata is projected into the same numeric/boolean option fields as audit-log reads
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * export function administrativeEventsExample(client: Client) {
+ *     return client.events("guildAuditLogEntryCreate", { maxPendingMessages: 10 })
+ * }
+ * ```
+ */
+export interface GuildAuditLogEntryCreate extends AuditLogEntry {
+    /** Guild that wrote this entry */
+    readonly guildId: string
+    /** Acting user ID supplied by the gateway */
+    readonly userId: string
+    /** Affected entity ID or invite code, null when Fluxer recorded no target */
+    readonly targetId: string | null
+}
+
+/** One live typing notice from Fluxer. It is not durable state and does not populate a cache or trigger a lookup */
+export interface TypingStart {
+    /** Channel where the user began typing */
+    readonly channelId: string
+    /** User who began typing */
+    readonly userId: string
+    /** Provider Unix timestamp in whole seconds */
+    readonly timestamp: number
+    /** Guild context when Fluxer supplied it. Its absence does not establish that the channel is not in a guild */
+    readonly guildId?: string
+}
 
 /** Full frozen custom-emoji collection observed through the gateway, without creator accounts or image data
  * @example
@@ -28,8 +84,27 @@ export interface GuildStickersUpdate {
     readonly items: readonly GuildSticker[]
 }
 
+/** A bounded guild event subscription
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ *
+ * export function guildEventsExample(client: Client) {
+ *     return client.events("guildDelete", { maxPendingMessages: 10 })
+ * }
+ * ```
+ */
+export interface GuildLifecycleEvents {
+    /** A complete current guild snapshot became available and updates its enabled guild-cache observation without hydrating nested members, roles or channels */
+    readonly guildCreate: Guild
+    /** A complete current guild configuration snapshot, not an old/new pair or a partial patch */
+    readonly guildUpdate: Guild
+    /** Guild visibility ended or became temporarily unavailable without an inferred deletion cause or membership result; enabled guild-resource and channel observations invalidate before delivery, while message-cache observations and pending admissions clear globally because no complete guild index exists */
+    readonly guildDelete: GuildDeletion
+}
+
 /** Implemented gateway events and their frozen payloads. No subscription history, cache reconstruction or REST-generated notifications */
-export interface EventMap {
+export interface EventMap extends GuildLifecycleEvents {
     /** Complete public account update, never private account settings */
     readonly userUpdate: import("./users.js").User
     /** Private conversation became visible, not proof it was newly created */
@@ -42,6 +117,14 @@ export interface EventMap {
     readonly directMessageRecipientAdd: import("./users.js").DirectMessageRecipientChange
     /** Recipient removed; invalidates private-channel cache without claiming channel deletion */
     readonly directMessageRecipientRemove: import("./users.js").DirectMessageRecipientChange
+    /** Webhook set changed for one visible guild channel. No webhook metadata, token, cache write, or automatic refetch follows */
+    readonly webhooksUpdate: WebhooksUpdate
+    /** Complete frozen invite metadata. Its code and URL grant destination access, so keep this intentional result out of diagnostics and public logs */
+    readonly inviteCreate: InviteMetadata
+    /** Deleted invite identity and the optional destination context Fluxer still supplied. No local invite retention or deletion inference occurs */
+    readonly inviteDelete: InviteDeleteEvent
+    /** One frozen audit entry from a guild where the bot holds `VIEW_AUDIT_LOG`. `reason`, `options`, and `changes` are provider domain data, not diagnostic-safe content */
+    readonly guildAuditLogEntryCreate: GuildAuditLogEntryCreate
     /** Full emoji collection projection, not an initial enumeration or cache hydration. Connection gaps can miss changes; fetch when current state matters. An enabled expression cache is invalidated before delivery */
     readonly guildEmojisUpdate: GuildEmojisUpdate
     /** Full sticker collection projection, not an initial enumeration or cache hydration. Connection gaps can miss changes; fetch when current state matters. An enabled expression cache is invalidated before delivery */
@@ -74,6 +157,8 @@ export interface EventMap {
     readonly guildMemberRemove: import("./guilds.js").MemberReference
     /** Channel pin-list change notice. No target message ID or automatic fetch; its timestamp can stay unchanged after unpin */
     readonly channelPinsUpdate: ChannelPinsUpdate
+    /** Ephemeral typing notice. Delivery can be filtered by Fluxer and is not a presence snapshot, cache entry or member lookup */
+    readonly typingStart: TypingStart
     /** Newly created message with text, deeply frozen embeds and attachment metadata, never file bytes. Malformed known message data fails the connection as a protocol error */
     readonly messageCreate: Message
     /** Current message projection, not an old/new pair or partial patch. Non-text changes may repeat the same projected values */

@@ -18,6 +18,7 @@ import {
     type MessageSearchIterationLimits,
     type MessageDeletion,
     type MessageBulkDeletion,
+    type TypingStart,
     type CachePolicyErrorReport,
     type ClientOptions,
     type MessageCacheOptions,
@@ -176,6 +177,23 @@ export function registerReply(client: Client) {
     )
 }
 
+/** Typechecked typing calls and ephemeral gateway delivery through the packed native package. */
+export function typingOperations(client: Client, channelId: string) {
+    return Effect.gen(function* () {
+        yield* client.messages.typing(channelId, { timeoutMs: 5_000 })
+        const work = yield* client.messages.keepTyping(channelId, Effect.succeed("prepared"))
+        yield* client.on("typingStart", (event) =>
+            Effect.sync(() => {
+                const typing: TypingStart = event
+                void typing.timestamp
+                // @ts-expect-error Typing notices are frozen observations
+                event.channelId = "21"
+            }),
+        )
+        return work
+    })
+}
+
 export function rejectedMessageShapes(client: Client): void {
     const reactionTarget = { id: "10", channelId: "20" }
     // @ts-expect-error Named removal requires an explicit user ID
@@ -203,6 +221,10 @@ export function rejectedMessageShapes(client: Client): void {
     client.messages.send("20", { content: "hello" }, { signal: new AbortController().signal })
     // @ts-expect-error Native message management also uses interruption rather than AbortSignal options
     client.messages.fetch({ channelId: "20", id: "10" }, { signal: new AbortController().signal })
+    // @ts-expect-error Native typing uses Effect interruption rather than AbortSignal options
+    client.messages.typing("20", { signal: new AbortController().signal })
+    // @ts-expect-error Native typing work is an Effect, not a Promise
+    client.messages.keepTyping("20", Promise.resolve("prepared"))
     // @ts-expect-error Edit requires content
     client.messages.edit({ channelId: "20", id: "10" }, {})
 }

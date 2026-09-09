@@ -439,6 +439,42 @@ export class RestOwner {
         )
     }
 
+    typing(
+        token: Redacted.Redacted<string>,
+        channel: string,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            if (
+                !identifier(channel) ||
+                (options !== undefined &&
+                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
+            )
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    method: "POST",
+                    channel,
+                    bucket: "typing",
+                    cache: false,
+                    path: `/channels/${channel}/typing`,
+                    body: undefined,
+                    status: 204,
+                    decode: async () => {},
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new MessageOperationError("typing", error.reason, error.outcome, error.status, error.retryAfterMs)
+                    : error,
+            ),
+        )
+    }
+
     fetchHistory(
         token: Redacted.Redacted<string>,
         channel: string,

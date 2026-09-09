@@ -3,7 +3,7 @@ import type { Guild, GuildMember, GuildRole } from "#sdk/guilds"
 import type { GuildEmoji, GuildSticker } from "#sdk/expressions"
 import type { EventMap, EventName } from "#sdk/events"
 import type { ResourceCacheSettings } from "#sdk/cache"
-import { decodeGuild } from "./guilds.js"
+import { decodeGuild, decodeGuildSnapshot } from "./guilds.js"
 import { identifier, record } from "./message.js"
 
 export type ResourceKind = "guilds" | "members" | "roles" | "emojis" | "stickers"
@@ -210,7 +210,7 @@ export class GuildCache {
         if (event === "GUILD_DELETE") {
             for (const kind of kinds) this.#evict({ kind, guildId: value.id })
         } else {
-            const guild = decodeGuild(value)
+            const guild = event === "GUILD_CREATE" ? decodeGuildSnapshot(value) : decodeGuild(value)
             if (guild) this.#observe("guilds", guild)
             else this.#evict({ kind: "guilds", guildId: value.id })
         }

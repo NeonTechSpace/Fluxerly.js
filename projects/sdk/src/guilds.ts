@@ -45,6 +45,20 @@ export interface Guild {
     readonly messageHistoryCutoff?: string | null
 }
 
+/** Frozen guild visibility-loss observation, not a deletion-cause or membership inference
+ *
+ * `unavailable` is true when Fluxer temporarily withholds the guild and false when its field is absent.
+ * `unavailableHidden` is true when Fluxer marks that unavailable guild hidden and false when its field is absent
+ */
+export interface GuildDeletion {
+    /** Decimal guild ID */
+    readonly id: string
+    /** Whether Fluxer reports a temporary unavailable placeholder */
+    readonly unavailable: boolean
+    /** Whether Fluxer reports that temporary placeholder as hidden */
+    readonly unavailableHidden: boolean
+}
+
 /** Fluxer's currently supported system-channel flag bits */
 export const GuildSystemChannelFlags = Object.freeze({
     SuppressJoinNotifications: 1,

@@ -40,6 +40,8 @@ const channels = process.argv[3] === "--channels"
 const batchDelete = process.argv[3] === "--batch-delete"
 const moderation = process.argv[3] === "--moderation"
 const search = process.argv[3] === "--search"
+// This probe verifies outbound REST lifetime through both APIs, not delivery of the bot's own typing notices
+const typing = process.argv[3] === "--typing"
 let moderationUserId = process.env.FLUXER_TEST_MODERATION_USER_ID
 const forceRecovery = recover || cache || collectors || attachments || reactions || pins || guilds || channels
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
@@ -53,6 +55,20 @@ let verified = false
 let journal
 let gatewayProbe
 const reportFailure = (error) => console.log(JSON.stringify({ mode, check: stage, ...safeFailure(error) }))
+
+async function waitForTypingRequests(requests, minimum) {
+    const deadline = performance.now() + 15_000
+    while (requests.length < minimum) {
+        assert.ok(performance.now() < deadline, "Typing refresh deadline")
+        await sleep(20)
+    }
+}
+
+async function assertTypingStopped(requests) {
+    const count = requests.length
+    await sleep(8_250)
+    assert.equal(requests.length, count)
+}
 
 function observeGateway() {
     const descriptor = Object.getOwnPropertyDescriptor(WebSocket.prototype, "emit")
@@ -2408,7 +2424,7 @@ setTimeout(
         report("process_timeout", false)
         process.exit(1)
     },
-    attachments || moderation || search ? 240_000 : 120_000,
+    attachments || moderation || search ? 240_000 : typing ? 60_000 : 120_000,
 ).unref()
 
 try {
@@ -2431,7 +2447,8 @@ try {
                     channels ||
                     batchDelete ||
                     moderation ||
-                    search)),
+                    search ||
+                    typing)),
     )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
@@ -2469,14 +2486,32 @@ try {
     assert.equal(channel.name, journal.name)
     journal.channelId = channel.id
     writeFileSync(journalPath, JSON.stringify(journal))
+    let typingCacheTarget
+    if (typing) {
+        stage = "typing_cache_seed"
+        const seeded = (await api("POST", `/channels/${channel.id}/messages`, { content: `typing-${randomUUID()}` }))
+            .data
+        assert.match(seeded?.id ?? "", /^\d+$/)
+        typingCacheTarget = { id: seeded.id, channelId: channel.id }
+    }
     const ping = `ping-${randomUUID()}`
     const pong = `pong-${randomUUID()}`
     const sdkRequests = []
-    if (cache || search) {
+    const typingRequests = []
+    if (cache || search || typing) {
         // Sandbox setup and independent readback keep using rawFetch. This observes only the SDK's own REST behavior
         globalThis.fetch = async (...args) => {
-            sdkRequests.push(new URL(args[0]).pathname)
-            return rawFetch(...args)
+            const url = new URL(args[0])
+            if (cache || search) sdkRequests.push(url.pathname)
+            const response = await rawFetch(...args)
+            if (typing && url.pathname === `/v1/channels/${channel.id}/typing`)
+                typingRequests.push({
+                    at: performance.now(),
+                    body: args[1]?.body,
+                    method: args[1]?.method,
+                    status: response.status,
+                })
+            return response
         }
     }
     if (attachments)
@@ -2493,7 +2528,7 @@ try {
         const { createClient } = await import("@neontechspace/fluxerly")
         const created = createClient({
             token,
-            ...(cache || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
+            ...(cache || typing || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
             ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
             ...(channels ? { cache: { channels: true } } : {}),
             ...(moderation ? { cache: { members: true } } : {}),
@@ -2502,7 +2537,7 @@ try {
         assert.ok(created.isOk())
         client = created.value
         const cacheGet = async (target) => {
-            if (!cache && !search) return undefined
+            if (!cache && !typing && !search) return undefined
             const cached = client.messages.get(target)
             assert.ok(cached.isOk())
             return cached.value
@@ -2520,6 +2555,66 @@ try {
             : undefined
         let timer
         try {
+            if (typing) {
+                stage = "typing_one_shot"
+                const oneShot = await client.messages.typing(channel.id)
+                assert.ok(oneShot.isOk())
+                assert.deepEqual(typingRequests, [
+                    { at: typingRequests[0]?.at, body: undefined, method: "POST", status: 204 },
+                ])
+                // This message was created before the SDK client existed. A typing request cannot hydrate or admit it.
+                assert.equal(await cacheGet(typingCacheTarget), undefined)
+                report("typing_one_shot_no_cache_admission", true)
+
+                stage = "typing_scoped_refresh"
+                const scopedStart = typingRequests.length
+                const complete = Promise.withResolvers()
+                const scoped = client.messages.keepTyping(channel.id, () => complete.promise)
+                let completed
+                try {
+                    await waitForTypingRequests(typingRequests, scopedStart + 2)
+                } finally {
+                    complete.resolve("completed")
+                    completed = await scoped
+                }
+                assert.ok(completed.isOk())
+                assert.equal(completed.value, "completed")
+                const refreshes = typingRequests.slice(scopedStart)
+                assert.equal(refreshes.length, 2)
+                assert.ok(
+                    refreshes.every(
+                        (request) => request.method === "POST" && request.body === undefined && request.status === 204,
+                    ),
+                )
+                assert.ok(refreshes[1].at - refreshes[0].at >= 7_900)
+                report(stage, true)
+
+                stage = "typing_completion_cleanup"
+                await assertTypingStopped(typingRequests)
+                report(stage, true)
+
+                stage = "typing_cancellation_cleanup"
+                const cancellation = new AbortController()
+                const entered = Promise.withResolvers()
+                const pending = client.messages.keepTyping(
+                    channel.id,
+                    (signal) =>
+                        new Promise((resolve) => {
+                            entered.resolve()
+                            if (signal.aborted) resolve()
+                            else signal.addEventListener("abort", resolve, { once: true })
+                        }),
+                    { signal: cancellation.signal },
+                )
+                await entered.promise
+                cancellation.abort()
+                const cancelled = await pending
+                assert.ok(cancelled.isErr())
+                assert.equal(cancelled.error._tag, "CancelledError")
+                await assertTypingStopped(typingRequests)
+                report(stage, true)
+                stage = "sdk_receive_and_reply"
+            }
             if (search) {
                 await verifyMessageSearch(
                     {
@@ -3068,14 +3163,16 @@ try {
             stopState?.()
         }
     } else {
-        const { Deferred, Effect, Exit, Scope, Stream } = await import("effect")
+        const { Deferred, Effect, Exit, Fiber, Scope, Stream } = await import("effect")
         const { createClient } = await import("@neontechspace/fluxerly/effect")
         const exit = await Effect.runPromiseExit(
             Effect.scoped(
                 Effect.gen(function* () {
                     client = yield* createClient({
                         token,
-                        ...(cache || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
+                        ...(cache || typing || embeds || attachments || batchDelete || search
+                            ? { cache: cacheOptions() }
+                            : {}),
                         ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
                         ...(channels ? { cache: { channels: true } } : {}),
                         ...(moderation ? { cache: { members: true } } : {}),
@@ -3103,6 +3200,58 @@ try {
                                 channel.id,
                             ),
                         )
+                        stage = "sdk_receive_and_reply"
+                    }
+                    if (typing) {
+                        stage = "typing_one_shot"
+                        yield* client.messages.typing(channel.id)
+                        assert.deepEqual(typingRequests, [
+                            { at: typingRequests[0]?.at, body: undefined, method: "POST", status: 204 },
+                        ])
+                        // This message was created before the SDK client existed. A typing request cannot hydrate or admit it.
+                        assert.equal(yield* client.messages.get(typingCacheTarget), undefined)
+                        report("typing_one_shot_no_cache_admission", true)
+
+                        stage = "typing_scoped_refresh"
+                        const scopedStart = typingRequests.length
+                        const complete = Deferred.makeUnsafe()
+                        const scoped = yield* Effect.forkChild(
+                            client.messages.keepTyping(channel.id, Deferred.await(complete)),
+                        )
+                        yield* Effect.promise(() => waitForTypingRequests(typingRequests, scopedStart + 2))
+                        Deferred.doneUnsafe(complete, Effect.succeed("completed"))
+                        assert.equal(yield* Fiber.join(scoped), "completed")
+                        const refreshes = typingRequests.slice(scopedStart)
+                        assert.equal(refreshes.length, 2)
+                        assert.ok(
+                            refreshes.every(
+                                (request) =>
+                                    request.method === "POST" && request.body === undefined && request.status === 204,
+                            ),
+                        )
+                        assert.ok(refreshes[1].at - refreshes[0].at >= 7_900)
+                        report(stage, true)
+
+                        stage = "typing_completion_cleanup"
+                        yield* Effect.promise(() => assertTypingStopped(typingRequests))
+                        report(stage, true)
+
+                        stage = "typing_cancellation_cleanup"
+                        const entered = Deferred.makeUnsafe()
+                        const pending = yield* Effect.forkChild(
+                            client.messages.keepTyping(
+                                channel.id,
+                                Effect.sync(() => Deferred.doneUnsafe(entered, Effect.void)).pipe(
+                                    Effect.andThen(Effect.never),
+                                ),
+                            ),
+                        )
+                        yield* Deferred.await(entered)
+                        yield* Fiber.interrupt(pending)
+                        const cancelled = yield* Fiber.await(pending)
+                        assert.ok(Exit.isFailure(cancelled) && Cause.hasInterruptsOnly(cancelled.cause))
+                        yield* Effect.promise(() => assertTypingStopped(typingRequests))
+                        report(stage, true)
                         stage = "sdk_receive_and_reply"
                     }
                     if (pagination)

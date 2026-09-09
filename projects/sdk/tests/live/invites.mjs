@@ -120,10 +120,82 @@ try {
     const channel = await value(client.channels.create(guildId, { type: 0, name: journal.marker }))
     journal.channelId = channel.id
     save()
+    const created = []
+    const deleted = []
+    const knownCodes = new Set()
+    let observationOverflow
+    const retain = (events, event, limit, name) => {
+        if (events.length === limit) {
+            observationOverflow ??= name
+            return
+        }
+        events.push(event)
+    }
+    const observeCreate = (invite) => {
+        if (
+            invite.guild?.id !== journal.guildId ||
+            invite.channel.id !== journal.channelId ||
+            invite.inviterId !== journal.botId
+        )
+            return
+        retain(
+            created,
+            {
+                code: invite.code,
+                channelId: invite.channel.id,
+                guildId: invite.guild.id,
+                url: invite.url,
+            },
+            3,
+            "Invite create observation overflow",
+        )
+    }
+    const observeDelete = (invite) => {
+        if (
+            invite.guildId !== journal.guildId ||
+            invite.channelId !== journal.channelId ||
+            !knownCodes.has(invite.code)
+        )
+            return
+        retain(
+            deleted,
+            { code: invite.code, guildId: invite.guildId, channelId: invite.channelId },
+            1,
+            "Invite delete observation overflow",
+        )
+    }
+    for (const [event, observe] of [
+        ["inviteCreate", observeCreate],
+        ["inviteDelete", observeDelete],
+    ]) {
+        if (mode === "default") client.on(event, observe)._unsafeUnwrap()
+        else
+            await Effect.runPromise(
+                client
+                    .on(event, (invite) => Effect.sync(() => observe(invite)))
+                    .pipe(Effect.provideService(Scope.Scope, scope)),
+            )
+    }
+    await value(client.connect())
+    const waitForInvite = async (events, code) => {
+        const until = Date.now() + 10_000
+        while (!events.some((event) => event.code === code) && !observationOverflow && Date.now() < until)
+            await new Promise((resolve) => setTimeout(resolve, 25))
+        assert.equal(observationOverflow, undefined, observationOverflow)
+        return events.find((event) => event.code === code)
+    }
     stage = "separate_one_day_defaults_and_readback"
     const first = await value(client.invites.create(channel.id, undefined, { auditReason: "SDK invite check" }))
+    knownCodes.add(first.code)
     const second = await value(client.invites.create(channel.id))
+    knownCodes.add(second.code)
     assert.notEqual(first.code, second.code)
+    for (const expected of [first, second]) {
+        const observed = await waitForInvite(created, expected.code)
+        assert.equal(observed?.channelId, channel.id)
+        assert.equal(observed?.guildId, guildId)
+        assert.equal(observed?.url, expected.url)
+    }
     for (const invite of [first, second]) {
         assert.equal(invite.maxAgeSeconds, 86400)
         const link = new URL(invite.url)
@@ -171,10 +243,13 @@ try {
     report(stage)
     stage = "revocation_and_missing_code"
     await value(client.invites.delete(first.code))
+    const revoked = await waitForInvite(deleted, first.code)
+    assert.deepEqual(revoked, { code: first.code, guildId, channelId: channel.id })
     assert.equal((await api("GET", `/invites/${encodeURIComponent(first.code)}`)).status, 404)
     await assert.rejects(value(client.invites.fetch(first.code)), (error) => error.status === 404)
     await assert.rejects(value(client.invites.delete(first.code)), (error) => error.status === 404)
     assert.equal((await value(client.invites.fetchChannel(channel.id))).length, 2)
+    assert.equal(observationOverflow, undefined, observationOverflow)
     report(stage)
 } catch (error) {
     console.error(

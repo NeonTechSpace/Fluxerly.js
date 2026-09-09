@@ -73,6 +73,8 @@ export type Operation =
     | "next"
     | "send"
     | "reply"
+    | "typing"
+    | "keepTyping"
     | "fetch"
     | "get"
     | "fetchHistory"

@@ -224,7 +224,14 @@ export { DiscoveryCategories } from "./discovery.js"
 import { discoveryStatus, discoveryCategories, discoveryWrite, discoveryWithdraw } from "#sdk/internal/guild-discovery"
 export type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 import { auditLogPage } from "#sdk/internal/audit-logs"
-export type { GuildEmojisUpdate, GuildStickersUpdate } from "./events.js"
+export type {
+    GuildEmojisUpdate,
+    GuildStickersUpdate,
+    GuildLifecycleEvents,
+    WebhooksUpdate,
+    InviteDeleteEvent,
+    GuildAuditLogEntryCreate,
+} from "./events.js"
 export { AuditLogActions } from "./audit-logs.js"
 export type {
     AuditLogActionType,
@@ -493,6 +500,7 @@ import type {
 export { GuildOperationError, Permissions } from "./guilds.js"
 export type {
     Guild,
+    GuildDeletion,
     GuildRole,
     GuildRoleUpdateBulk,
     RoleReference,
@@ -712,7 +720,14 @@ export type {
     EditMessageInput,
     MessageOperationOptions,
 } from "./messages.js"
-export type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
+export type {
+    EventBufferOptions,
+    HandlerOptions,
+    HandlerErrorReport,
+    EventMap,
+    EventName,
+    TypingStart,
+} from "./events.js"
 
 /** Scoped subscription controls, separate from client ownership */
 export interface Subscription {
@@ -1172,6 +1187,37 @@ export interface Messages {
      * Typed failures, defects and interruption retain native channels, including cleanup causes
      */
     send(channelId: string, input: MessageInput, options?: SendOptions): Effect.Effect<Message, SendError>
+    /**
+     * Lazily tell Fluxer that this bot is typing in one decimal channel ID, completing only after HTTP 204.
+     * No gateway connection, event confirmation, cache change or local typing state is required or created.
+     * Fluxer can restrict delivery to other clients and expires its own ephemeral indicator independently.
+     * Uses shared REST admission and a dedicated per-channel typing bucket. The default request deadline is 30,000 ms.
+     * Only confirmed rate-limit rejections retry; a lost response or interruption cannot prove whether Fluxer showed the notice.
+     * Input, admission and HTTP failures use MessageOperationError operation typing. Closing/Closed uses ClientClosedError.
+     * Each execution preserves caller context and interruption, awaiting HTTP cleanup. Defects retain their native Cause
+     */
+    typing(channelId: string, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Lazily send one typing notice, run task in this caller's context, then stop the helper and await its refresh cleanup.
+     * While task is running, refreshes no sooner than every 8,000 ms, below Fluxer's documented 20 requests per 10 seconds per channel limit
+     *
+     * The first typing request completes before task starts. Its failure prevents task execution. There is no detached repeating work.
+     * A later typing or client-close failure stops refreshing but does not interrupt task; after task settles, the retained failure combines with its Cause.
+     * Interruption stops and awaits the helper; task's scope, services and errors remain owned by this Effect caller.
+     * Client shutdown stops and awaits refresh work, but cannot forcibly cancel arbitrary caller task work. No cache, presence or gateway state is changed
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const typingExample = (client: Client, channelId: string) =>
+     *     client.messages.keepTyping(channelId, Effect.sleep(2_000).pipe(Effect.as("prepared")))
+     * ```
+     */
+    keepTyping<A, E, R>(
+        channelId: string,
+        task: Effect.Effect<A, E, R>,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<A, E | MessageOperationFailure, R>
     /**
      * Lazy reply helper over send. Missing references fail, without unreferenced fallback or default author notification.
      * The returned reply is eligible for the same cache intake as send.
@@ -2655,6 +2701,12 @@ export function createClient<E = never, R = never>(
                     ),
                 send: (channelId: string, input: MessageInput, options?: SendOptions) =>
                     owner.send(channelId, input, options),
+                typing: (channelId: string, options?: MessageOperationOptions) => owner.typing(channelId, options),
+                keepTyping: <A, E, R>(
+                    channelId: string,
+                    task: Effect.Effect<A, E, R>,
+                    options?: MessageOperationOptions,
+                ) => owner.keepTyping(channelId, task, options),
                 reply: (target: MessageReference, input: ReplyInput, options?: SendOptions) =>
                     Effect.suspend(() => {
                         const data = replyInput(target, input)

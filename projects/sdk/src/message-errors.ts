@@ -56,6 +56,7 @@ export class MessageOperationError extends Error {
         /** The requested operation, independent of the gateway connection state */
         readonly operation:
             | "get"
+            | "typing"
             | "fetch"
             | "fetchHistory"
             | "search"

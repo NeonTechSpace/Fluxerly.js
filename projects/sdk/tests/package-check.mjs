@@ -268,6 +268,16 @@ try {
             .filter((example) => /(?:function|const) cleanupExample/.test(example))
         assert.equal(cleanupExamples.length, 1)
         writeFileSync(join(consumer, "cleanup-example.ts"), cleanupExamples[0])
+        const typingExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) typingExample/.test(example))
+        assert.equal(typingExamples.length, 1)
+        writeFileSync(join(consumer, "typing-example.ts"), typingExamples[0])
         const moderationExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]
@@ -352,17 +362,29 @@ try {
                         .join("\n"),
                 )
                 .filter((example) =>
-                    /function (expression|expressionEvents|sticker|invite|audit|guildSettings|discovery|permissions|memberSearch|helpers|assets)Example/.test(
+                    /function (expression|expressionEvents|sticker|invite|audit|guildSettings|administrativeEvents|discovery|permissions|memberSearch|helpers|assets)Example/.test(
                         example,
                     ),
                 )
-            assert.equal(examples.length, 1)
-            const example =
-                kind === "default"
-                    ? examples[0]
-                    : examples[0].replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"')
-            writeFileSync(join(consumer, `${entry}-example.ts`), example)
+            assert.equal(examples.length, entry === "events" ? 2 : 1)
+            for (const [index, authored] of examples.entries()) {
+                const example =
+                    kind === "default"
+                        ? authored
+                        : authored.replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"')
+                writeFileSync(join(consumer, `${entry}-example-${index}.ts`), example)
+            }
         }
+        const guildEventExamples = examples(readFileSync(join(sdk, "src/events.ts"), "utf8")).filter((example) =>
+            /function guildEventsExample/.test(example),
+        )
+        assert.equal(guildEventExamples.length, 1)
+        writeFileSync(
+            join(consumer, "guild-events-example.ts"),
+            kind === "default"
+                ? guildEventExamples[0]
+                : guildEventExamples[0].replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"'),
+        )
         if (kind === "effect") {
             const nativeHelperSource = readFileSync(join(sdk, "src/effect.ts"), "utf8")
             const nativeHelperExamples = [...nativeHelperSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]

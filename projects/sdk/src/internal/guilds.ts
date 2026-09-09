@@ -1,5 +1,6 @@
 import type {
     Guild,
+    GuildDeletion,
     GuildContentWarningLevel,
     GuildDefaultMessageNotification,
     GuildExplicitContentFilter,
@@ -72,6 +73,12 @@ export const guildEvents = {
     GUILD_ROLE_UPDATE_BULK: "guildRoleUpdateBulk",
 } as const
 
+export const guildLifecycleEvents = {
+    GUILD_CREATE: "guildCreate",
+    GUILD_UPDATE: "guildUpdate",
+    GUILD_DELETE: "guildDelete",
+} as const
+
 export function decodeGuildEvent(event: keyof typeof guildEvents, value: unknown) {
     if (!record(value) || !identifier(value.guild_id)) return undefined
     if (event === "GUILD_ROLE_CREATE" || event === "GUILD_ROLE_UPDATE") return decodeRole(value.role, value.guild_id)
@@ -88,6 +95,40 @@ export function decodeGuildEvent(event: keyof typeof guildEvents, value: unknown
         return Object.freeze({ guildId: value.guild_id, userId: value.user.id })
     }
     return decodeMember(value, value.guild_id)
+}
+
+/** Decodes the documented complete snapshot/update forms without retaining gateway collections */
+export function decodeGuildLifecycleEvent(event: keyof typeof guildLifecycleEvents, value: unknown) {
+    if (event === "GUILD_DELETE") {
+        if (
+            !record(value) ||
+            !identifier(value.id) ||
+            (value.guild_id !== undefined && (!identifier(value.guild_id) || value.guild_id !== value.id)) ||
+            (value.unavailable !== undefined && typeof value.unavailable !== "boolean") ||
+            (value.unavailable_hidden !== undefined && typeof value.unavailable_hidden !== "boolean") ||
+            (value.unavailable_hidden === true && value.unavailable !== true)
+        )
+            return undefined
+        return Object.freeze({
+            id: value.id,
+            unavailable: value.unavailable ?? false,
+            unavailableHidden: value.unavailable_hidden ?? false,
+        } satisfies GuildDeletion)
+    }
+    if (
+        event === "GUILD_UPDATE" &&
+        (!record(value) ||
+            (value.guild_id !== undefined && (!identifier(value.guild_id) || value.guild_id !== value.id)))
+    )
+        return undefined
+    return event === "GUILD_CREATE" ? decodeGuildSnapshot(value) : decodeGuild(value)
+}
+
+/** Decodes a complete nested GUILD_CREATE snapshot while leaving its collections unretained */
+export function decodeGuildSnapshot(value: unknown): Guild | undefined {
+    if (!record(value) || !identifier(value.id) || !record(value.properties) || value.properties.id !== value.id)
+        return undefined
+    return decodeGuild(value.properties)
 }
 
 export function decodeGuild(value: unknown): Guild | undefined {

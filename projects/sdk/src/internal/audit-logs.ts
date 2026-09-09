@@ -124,6 +124,26 @@ function entry(value: unknown): AuditLogEntry | undefined {
     })
 }
 
+/** Gateway metadata is a string map, unlike the REST response's numeric/boolean options */
+export function decodeAuditLogEntry(value: unknown): AuditLogEntry | undefined {
+    if (!record(value) || value.options === undefined) return entry(value)
+    if (!record(value.options)) return undefined
+    const normalized: Record<string, unknown> = { ...value.options }
+    for (const key of ["count", "integration_type", "members_removed", "type", "max_age", "max_uses", "uses"]) {
+        const item = normalized[key]
+        if (typeof item !== "string") continue
+        const parsed = Number(item)
+        if (Number.isNaN(parsed)) delete normalized[key]
+        else normalized[key] = parsed
+    }
+    if (typeof normalized.temporary === "string") {
+        normalized.temporary = normalized.temporary === "true" || normalized.temporary === "1"
+    }
+    if (!normalized.delete_member_days && typeof normalized.delete_message_days === "string")
+        normalized.delete_member_days = normalized.delete_message_days
+    return entry({ ...value, options: normalized })
+}
+
 function webhook(value: unknown): AuditLogWebhook | undefined {
     if (
         !record(value) ||

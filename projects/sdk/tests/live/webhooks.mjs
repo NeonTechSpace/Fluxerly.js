@@ -137,6 +137,32 @@ try {
             ? operation._unsafeUnwrap()
             : Effect.runPromise(operation.pipe(Effect.provideService(Scope.Scope, scope)))
     bot = await create(sdk.createClient({ token, cache: { messages: true } }))
+    const webhookUpdates = []
+    let observationOverflow
+    const observeWebhookUpdate = (update) => {
+        if (update.guildId !== journal.guildId || !journal.channels.some((channel) => channel.id === update.channelId))
+            return
+        if (webhookUpdates.length === 4) {
+            observationOverflow ??= "Webhook update observation overflow"
+            return
+        }
+        webhookUpdates.push(update.channelId)
+    }
+    if (mode === "default") bot.on("webhooksUpdate", observeWebhookUpdate)._unsafeUnwrap()
+    else
+        await Effect.runPromise(
+            bot
+                .on("webhooksUpdate", (update) => Effect.sync(() => observeWebhookUpdate(update)))
+                .pipe(Effect.provideService(Scope.Scope, scope)),
+        )
+    await value(bot.connect())
+    const waitWebhookUpdate = async (channelId) => {
+        const until = Date.now() + 10_000
+        while (!webhookUpdates.includes(channelId) && !observationOverflow && Date.now() < until)
+            await new Promise((resolve) => setTimeout(resolve, 25))
+        assert.equal(observationOverflow, undefined, observationOverflow)
+        assert.ok(webhookUpdates.includes(channelId))
+    }
     stage = "webhook_create"
     journal.webhookPending = true
     save()
@@ -152,6 +178,7 @@ try {
     save()
     assert.equal(created.webhook.guildId, guildId)
     assert.equal(created.webhook.channelId, journal.channels[0].id)
+    await waitWebhookUpdate(journal.channels[0].id)
     const credential = created.credentials.revealToken()
     assert.ok(!JSON.stringify(created).includes(credential) && !inspect(created).includes(credential))
     hook = await create(sdk.createWebhookClient(created.credentials))
@@ -188,7 +215,6 @@ try {
                     .pipe(Effect.provideService(Scope.Scope, scope)),
             )
     }
-    await value(bot.connect())
     const waitObserved = async (id, content) => {
         const until = Date.now() + 10_000
         while (seen.get(id)?.content !== content && Date.now() < until)
@@ -263,6 +289,7 @@ try {
     await value(hook.deleteMessage(sent.id))
     assert.equal((await api("GET", `/channels/${sent.channelId}/messages/${sent.id}`)).status, 404)
     await value(bot.webhooks.delete(created.webhook.id))
+    assert.equal(observationOverflow, undefined, observationOverflow)
     assert.equal((await api("GET", `/webhooks/${created.webhook.id}`)).status, 404)
     await assert.rejects(
         () => value(hook.send({ content: "Must not appear" })),

@@ -1,7 +1,7 @@
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Queue, Random, Redacted, Scope, Stream } from "effect"
 import type { ConnectionState } from "#sdk/client"
 import type { CachePolicyErrorReport } from "#sdk/cache"
-import { MessageError, MessageOperationError, type SendError } from "#sdk/message-errors"
+import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import { identifier, record, reference } from "./message.js"
 import { MessageCache } from "./cache.js"
 import { GuildCache, type ResourceKind, type Resources } from "./guild-cache.js"
@@ -66,6 +66,8 @@ import type {
     SendOptions,
 } from "#sdk/messages"
 
+const typingRefreshMs = 8_000
+
 export class ClientOwner {
     readonly presence = new PresenceOwner()
 
@@ -99,6 +101,8 @@ export class ClientOwner {
     #workerExit: Exit.Exit<never, ConnectionFailure> | undefined
     #terminal = Deferred.makeUnsafe<void, ConnectionFailure>()
     #shutdown = Deferred.makeUnsafe<void>()
+    #typingClosed = Deferred.makeUnsafe<void>()
+    #typing = new Map<symbol, Fiber.Fiber<never, MessageOperationFailure>>()
     #listeners = new Set<(state: ConnectionState) => void>()
     #session: Session = { id: undefined, sequence: null }
     #managed = false
@@ -178,6 +182,7 @@ export class ClientOwner {
     }
 
     #finish() {
+        Deferred.doneUnsafe(this.#typingClosed, Effect.void)
         this.events.stop()
         this.rest.stop()
         if (this.#configuration) Redacted.wipeUnsafe(this.#configuration.token)
@@ -378,6 +383,67 @@ export class ClientOwner {
         )
     }
 
+    typing(channelId: string, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.typing(this.#configuration.token, channelId, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    keepTyping<A, E, R>(
+        channelId: string,
+        task: Effect.Effect<A, E, R>,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<A, E | MessageOperationFailure, R> {
+        const owner = this
+        return Effect.uninterruptibleMask((restore) =>
+            restore(owner.typing(channelId, options)).pipe(
+                Effect.flatMap(() =>
+                    Effect.gen(function* () {
+                        const id = Symbol("typing")
+                        const started = Deferred.makeUnsafe<void>()
+                        const refresh = yield* Effect.forkChild(
+                            Deferred.await(started).pipe(
+                                Effect.andThen(owner.#refreshTyping(channelId, options)),
+                                Effect.ensuring(Effect.sync(() => owner.#typing.delete(id))),
+                            ),
+                        )
+                        owner.#typing.set(id, refresh)
+                        Deferred.doneUnsafe(started, Effect.void)
+                        return yield* restore(task).pipe(Effect.onExit(() => owner.#stopTyping(refresh)))
+                    }),
+                ),
+            ),
+        )
+    }
+
+    #refreshTyping(
+        channelId: string,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<never, MessageOperationFailure> {
+        const owner = this
+        return Effect.forever(
+            Effect.raceFirst(
+                Effect.sleep(typingRefreshMs),
+                Deferred.await(owner.#typingClosed).pipe(Effect.andThen(Effect.fail(new ClientClosedError()))),
+            ).pipe(Effect.andThen(owner.typing(channelId, options))),
+        )
+    }
+
+    #stopTyping(fiber: Fiber.Fiber<never, MessageOperationFailure>): Effect.Effect<void, MessageOperationFailure> {
+        return Effect.uninterruptible(
+            Fiber.interrupt(fiber).pipe(
+                Effect.andThen(Fiber.await(fiber)),
+                Effect.flatMap((exit) =>
+                    Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+                        ? Effect.failCause(exit.cause)
+                        : Effect.void,
+                ),
+            ),
+        )
+    }
+
     pin(operation: "pin" | "unpin", target: MessageReference, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
@@ -450,6 +516,7 @@ export class ClientOwner {
     }
 
     #closeServices() {
+        Deferred.doneUnsafe(this.#typingClosed, Effect.void)
         this.events.stop()
         this.rest.stop()
         return Effect.all(
@@ -490,6 +557,20 @@ export class ClientOwner {
         ).pipe(
             Effect.flatMap((exits) => {
                 const reasons = exits.flatMap((exit) => (Exit.isFailure(exit) ? exit.cause.reasons : []))
+                return reasons.length ? Effect.failCause(Cause.fromReasons<never>(reasons)) : Effect.void
+            }),
+            Effect.onExit(() => this.#awaitTyping()),
+        )
+    }
+
+    #awaitTyping(): Effect.Effect<void> {
+        return Effect.forEach([...this.#typing.values()], (fiber) => Fiber.await(fiber), {
+            concurrency: "unbounded",
+        }).pipe(
+            Effect.flatMap((exits) => {
+                const reasons = exits.flatMap((exit) =>
+                    Exit.isFailure(exit) ? exit.cause.reasons.filter((reason) => reason._tag === "Die") : [],
+                )
                 return reasons.length ? Effect.failCause(Cause.fromReasons<never>(reasons)) : Effect.void
             }),
         )
@@ -588,11 +669,12 @@ export class ClientOwner {
                                 owner.cache?.delete(message)
                             owner.events.offer(event, message, bytes)
                         },
-                        owner.resources || owner.channelCache
+                        owner.resources || owner.channelCache || owner.cache
                             ? (event, value) => {
                                   owner.resources?.guildEvent(event, value)
                                   if (event !== "GUILD_EMOJIS_UPDATE" && event !== "GUILD_STICKERS_UPDATE")
                                       owner.channelCache?.guildEvent(event, value)
+                                  if (event === "GUILD_DELETE") owner.cache?.gap()
                               }
                             : undefined,
                         owner.presence,

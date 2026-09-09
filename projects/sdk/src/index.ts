@@ -99,7 +99,14 @@ export { DiscoveryCategories } from "./discovery.js"
 import { discoveryStatus, discoveryCategories, discoveryWrite, discoveryWithdraw } from "#sdk/internal/guild-discovery"
 export type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 import { auditLogPage } from "#sdk/internal/audit-logs"
-export type { GuildEmojisUpdate, GuildStickersUpdate } from "./events.js"
+export type {
+    GuildEmojisUpdate,
+    GuildStickersUpdate,
+    GuildLifecycleEvents,
+    WebhooksUpdate,
+    InviteDeleteEvent,
+    GuildAuditLogEntryCreate,
+} from "./events.js"
 export { AuditLogActions } from "./audit-logs.js"
 export type {
     AuditLogActionType,
@@ -360,6 +367,7 @@ import {
 export { GuildOperationError, Permissions } from "./guilds.js"
 export type {
     Guild,
+    GuildDeletion,
     GuildRole,
     GuildRoleUpdateBulk,
     RoleReference,
@@ -473,7 +481,14 @@ export type {
     MessageOperationOptions,
     DefaultMessageOperationOptions,
 } from "./messages.js"
-export type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
+export type {
+    EventBufferOptions,
+    HandlerOptions,
+    HandlerErrorReport,
+    EventMap,
+    EventName,
+    TypingStart,
+} from "./events.js"
 
 /** Subscription-local controls. Closing a subscription does not close the client */
 export interface Subscription {
@@ -982,6 +997,42 @@ export interface Messages {
         input: MessageInput,
         options?: DefaultSendOptions,
     ): ResultAsync<Message, SendError | CancelledError>
+    /**
+     * Tell Fluxer that this bot is typing in one decimal channel ID, completing after HTTP 204.
+     * No gateway connection, event confirmation, cache entry, presence update or retained local typing state is created.
+     * Fluxer may limit delivery to other clients and expires this ephemeral indicator independently.
+     * Shares REST admission with other work and uses a dedicated per-channel typing bucket. timeoutMs defaults to 30,000 ms.
+     * Confirmed rate-limit rejections retry; cancellation, a lost response or timeout cannot prove Fluxer did not show the notice.
+     * Invalid input, admission and HTTP failures return MessageOperationError operation typing. Closing/Closed returns ClientClosedError.
+     * Cancellation affects only this request and waits for cleanup. Unexpected defects reject with SdkDefect
+     */
+    typing(
+        channelId: string,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    /**
+     * Start one typing request, run task, and refresh typing no sooner than every 8,000 ms until task settles.
+     * The first request completes before task starts; an initial typing failure returns Err and never calls task.
+     * Later typing or client-close failure stops refreshes but does not claim to cancel application work. It is returned after task settlement.
+     * task receives a signal aborted on caller cancellation or helper cleanup. Its promise remains application-owned, so non-cooperative work can delay cancellation.
+     * A rejected or thrown task is an unexpected application defect. If it and refresh cleanup fail, SdkDefect retains both safe causes.
+     * Client shutdown stops and awaits only helper refresh work, never a detached loop. No cache, presence or gateway state is changed
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function typingExample(client: Client, channelId: string) {
+     *     return await client.messages.keepTyping(channelId, async signal => {
+     *         if (signal.aborted) throw new Error("work cancelled")
+     *         return "prepared"
+     *     })
+     * }
+     * ```
+     */
+    keepTyping<A>(
+        channelId: string,
+        task: (signal: NonNullable<OperationOptions["signal"]>) => PromiseLike<A>,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<A, MessageOperationFailure | CancelledError>
     /**
      * Reference an existing message through send. Missing targets fail rather than falling back to an unreferenced send.
      * The returned reply is eligible for the same cache intake as send.
@@ -2245,6 +2296,30 @@ function collectorHandler<A>(
         })
 }
 
+function defaultTypingTask<A>(task: (signal: NonNullable<OperationOptions["signal"]>) => PromiseLike<A>) {
+    return Effect.suspend(() => {
+        const controller = new AbortController()
+        let settled: Promise<A> = Promise.resolve(undefined as A)
+        return Effect.callback<A>((resume) => {
+            settled = Promise.resolve().then(() => task(controller.signal))
+            void settled.then(
+                (value) => resume(Effect.succeed(value)),
+                (error) => resume(Effect.die(error)),
+            )
+        }).pipe(
+            Effect.onExit((exit) =>
+                Effect.promise(async () => {
+                    controller.abort()
+                    // The callback already delivered a settled task rejection as this exit's defect
+                    // Only a rejection that arrives while cancellation is cleaning up needs another Cause reason
+                    if (Exit.isFailure(exit) && Cause.hasDies(exit.cause)) return
+                    await settled
+                }),
+            ),
+        )
+    })
+}
+
 function fromExit<
     A,
     E extends
@@ -3197,6 +3272,20 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 },
                 send: (channelId: string, input: MessageInput, options?: DefaultSendOptions) =>
                     execute(owner.send(channelId, input, options), "send", options),
+                typing: (channelId: string, options?: DefaultMessageOperationOptions) =>
+                    execute(owner.typing(channelId, options), "typing", options),
+                keepTyping: <A>(
+                    channelId: string,
+                    task: (signal: NonNullable<OperationOptions["signal"]>) => PromiseLike<A>,
+                    options?: DefaultMessageOperationOptions,
+                ) =>
+                    execute(
+                        typeof task === "function"
+                            ? owner.keepTyping(channelId, defaultTypingTask(task), options)
+                            : Effect.fail(new MessageOperationError("typing", "input", "notDispatched")),
+                        "keepTyping",
+                        options,
+                    ),
                 reply: (target: MessageReference, input: ReplyInput, options?: DefaultSendOptions) =>
                     execute(
                         Effect.suspend(() => {

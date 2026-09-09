@@ -17,6 +17,7 @@ import {
     type MessageOperationFailure,
     type MessageDeletion,
     type MessageBulkDeletion,
+    type TypingStart,
     type CachePolicyErrorReport,
     type MessageCacheOptions,
     type MessageCacheSettings,
@@ -192,6 +193,23 @@ export function registerReply(client: Client) {
     )
 }
 
+/** Typechecked typing calls and ephemeral gateway delivery through the packed default package. */
+export async function typingOperations(client: Client, channelId: string) {
+    const notice = await client.messages.typing(channelId, { timeoutMs: 5_000 })
+    if (notice.isErr()) return notice.error
+    const work = await client.messages.keepTyping(channelId, async (signal) => {
+        if (signal.aborted) throw new Error("work cancelled")
+        return "prepared"
+    })
+    const subscription = client.on("typingStart", (event) => {
+        const typing: TypingStart = event
+        void typing.timestamp
+        // @ts-expect-error Typing notices are frozen observations
+        event.channelId = "21"
+    })
+    return work.isErr() ? work.error : subscription
+}
+
 export function rejectedMessageShapes(client: Client): void {
     const reactionTarget = { id: "10", channelId: "20" }
     // @ts-expect-error Named removal requires an explicit user ID
@@ -217,8 +235,8 @@ export function rejectedMessageShapes(client: Client): void {
     client.messages.send(123, { content: "hello" })
     // @ts-expect-error File lists must be arrays
     client.messages.send("20", { content: "hello", attachments: "file" })
-    // @ts-expect-error Only implemented event names are public
-    client.on("typingStart", () => {})
+    // @ts-expect-error Default typing work returns a promise, not an Effect
+    client.messages.keepTyping("20", () => ({ pipe: () => undefined }))
     // @ts-expect-error Fetch takes a reference, not two positional IDs
     client.messages.fetch("20", "10")
     // @ts-expect-error Edit requires replacement content

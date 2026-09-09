@@ -1,4 +1,5 @@
 import type { Invite, InviteCreate, InviteMetadata } from "#sdk/invites"
+import type { InviteDeleteEvent } from "#sdk/events"
 import type { ModerationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
@@ -85,6 +86,27 @@ function metadata(value: unknown): InviteMetadata | undefined {
         uses: value.uses,
         maxUses: value.max_uses,
         ...(base.type === "guild" ? { maxAgeSeconds: value.max_age as number } : {}),
+    })
+}
+
+/** Decode the complete metadata emitted by INVITE_CREATE without retaining it */
+export function decodeInviteMetadata(value: unknown): InviteMetadata | undefined {
+    return metadata(value)
+}
+
+/** Decode INVITE_DELETE's intentionally smaller terminal identity without retaining it */
+export function decodeInviteDelete(value: unknown): InviteDeleteEvent | undefined {
+    if (
+        !record(value) ||
+        !codeValue(value.code) ||
+        (value.channel_id !== undefined && !identifier(value.channel_id)) ||
+        (value.guild_id !== undefined && !identifier(value.guild_id))
+    )
+        return undefined
+    return Object.freeze({
+        code: value.code,
+        ...(value.channel_id === undefined ? {} : { channelId: value.channel_id }),
+        ...(value.guild_id === undefined ? {} : { guildId: value.guild_id }),
     })
 }
 
