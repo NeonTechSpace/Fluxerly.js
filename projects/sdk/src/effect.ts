@@ -115,6 +115,26 @@ export type {
     MemberSearchIterationLimits,
 } from "./member-search.js"
 import { searchMembers, searchMemberPagination } from "#sdk/internal/member-search-workflow"
+import { searchMessagePagination } from "#sdk/internal/message-search-workflow"
+import type {
+    MessageSearchContext,
+    MessageSearchIterationLimits,
+    MessageSearchPage,
+    MessageSearchQuery,
+} from "./message-search.js"
+export type {
+    MessageSearchAuthorType,
+    MessageSearchChannel,
+    MessageSearchContentType,
+    MessageSearchContext,
+    MessageSearchEmbedType,
+    MessageSearchIndexingPage,
+    MessageSearchIterationLimits,
+    MessageSearchOptions,
+    MessageSearchPage,
+    MessageSearchQuery,
+    MessageSearchResultsPage,
+} from "./message-search.js"
 import type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 import type {
     DiscoveryApplication,
@@ -611,6 +631,42 @@ export interface Messages {
     iterateHistory(
         channelId: string,
         query: HistoryIterationQuery,
+        options?: MessageOperationOptions,
+    ): Stream.Stream<Message, MessageOperationFailure | PaginationError>
+    /** Lazily search one current-scope indexed page in an explicit guild or channel context, without gateway readiness, cache lookup or cache admission.
+     * Fluxerly always sends scope current. Completion is either an immutable indexing state or an immutable observed result page.
+     * Indexing never polls: the caller chooses whether to run another explicit search. Cursor is opaque and only belongs in a later search call.
+     * Invalid input, malformed success and POST failure use MessageOperationError operation search. This POST has no transient-read retry.
+     * Confirmed rate limits retain shared REST handling. Interruption retains the native Cause and releases only this request
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const messageSearchPageExample = (client: Client, channelId: string) => Effect.gen(function* () {
+     *     return yield* client.messages.search({ channelId }, { content: "release notes" })
+     * })
+     * ```
+     */
+    search(
+        context: MessageSearchContext,
+        query?: MessageSearchQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<MessageSearchPage, MessageOperationFailure>
+    /** Lazily traverse current-scope indexed messages through opaque provider cursors, without polling, prefetching or cache hydration.
+     * maxItems is required. pageSize is 1–25 and maxPages defaults to 100. Each execution owns input copies and one bounded page.
+     * An indexing page ends with PaginationError indexing. Repeated opaque cursors end with cursorStalled rather than snowflake comparison.
+     * Delivered snapshots remain caller-owned after a later failure. Interruption and stream-scope closure await owned request cleanup
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const messageSearchTraversalExample = (client: Client, guildId: string) =>
+     *     client.messages.iterateSearch({ guildId }, { content: "todo" }, { maxItems: 100 })
+     * ```
+     */
+    iterateSearch(
+        context: MessageSearchContext,
+        filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+        limits: MessageSearchIterationLimits,
         options?: MessageOperationOptions,
     ): Stream.Stream<Message, MessageOperationFailure | PaginationError>
     /** Traverse ascending remote user IDs for one message and the selected literal Unicode or custom emoji.
@@ -2335,6 +2391,17 @@ export function createClient<E = never, R = never>(
             messages: Object.freeze({
                 iterateHistory: (id: string, query: HistoryIterationQuery, options?: MessageOperationOptions) =>
                     paginationStream(historyPagination(owner, id, query, options)),
+                search: (
+                    context: MessageSearchContext,
+                    query?: MessageSearchQuery,
+                    options?: MessageOperationOptions,
+                ) => owner.searchMessages(context, query, options),
+                iterateSearch: (
+                    context: MessageSearchContext,
+                    filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+                    limits: MessageSearchIterationLimits,
+                    options?: MessageOperationOptions,
+                ) => paginationStream(searchMessagePagination(owner, context, filters, limits, options)),
                 iterateReactionUsers: (
                     target: MessageReference,
                     emoji: ReactionEmojiInput,

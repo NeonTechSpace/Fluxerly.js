@@ -7,6 +7,10 @@ import {
     type ConnectionState,
     type Message,
     type MessageHistoryQuery,
+    type MessageSearchContext,
+    type MessageSearchPage,
+    type MessageSearchQuery,
+    type MessageSearchIterationLimits,
     type MessageReference,
     type MessageOperationFailure,
     type MessageDeletion,
@@ -266,6 +270,29 @@ export async function readOlderMessages(client: Client): Promise<void> {
     const page: readonly Message[] = result.value
     const oldest = page.at(-1)
     if (oldest) await client.messages.fetchHistory("20", { before: oldest.id })
+}
+
+/** Packed-declaration usage for explicit indexed search and its independently bounded lazy traversal */
+export async function searchIndexedMessages(
+    client: Client,
+    context: MessageSearchContext,
+): Promise<MessageSearchPage | undefined> {
+    const page = await client.messages.search(context, { content: "todo", has: ["link"] })
+    if (page.isErr()) return undefined
+    const observed: MessageSearchPage = page.value
+    if (observed.indexing) return observed
+    const filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor"> = { content: "todo" }
+    const limits: MessageSearchIterationLimits = { maxItems: 100, pageSize: 25 }
+    for await (const result of client.messages.iterateSearch(context, filters, limits)) {
+        if (result.isErr()) break
+        const message: Message = result.value
+        void message.id
+    }
+    // @ts-expect-error Search context requires a decimal guild or channel ID
+    client.messages.search({})
+    // @ts-expect-error Iterator filters cannot replay a provider cursor
+    client.messages.iterateSearch(context, { cursor: ["opaque"] }, { maxItems: 1 })
+    return observed
 }
 
 /** Typechecked message-management fragment with expected failures retained as default results */

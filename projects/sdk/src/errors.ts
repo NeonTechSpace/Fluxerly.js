@@ -76,6 +76,7 @@ export type Operation =
     | "fetch"
     | "get"
     | "fetchHistory"
+    | "search"
     | "fetchReactionUsers"
     | "pin"
     | "unpin"

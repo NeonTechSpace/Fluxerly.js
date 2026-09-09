@@ -10,6 +10,10 @@ import {
     type MessageOperationFailure,
     type Message,
     type MessageHistoryQuery,
+    type MessageSearchContext,
+    type MessageSearchPage,
+    type MessageSearchQuery,
+    type MessageSearchIterationLimits,
     type MessageDeletion,
     type MessageBulkDeletion,
     type CachePolicyErrorReport,
@@ -243,6 +247,22 @@ export function readOlderMessages(client: Client): Effect.Effect<readonly Messag
         const oldest = page.at(-1)
         return oldest ? yield* client.messages.fetchHistory("20", { before: oldest.id }) : page
     })
+}
+
+/** Packed-declaration usage for explicit indexed search; indexing stays caller-visible and streams own their bounded cursor progress */
+export function searchIndexedMessages(
+    client: Client,
+    context: MessageSearchContext,
+): Effect.Effect<MessageSearchPage, MessageOperationFailure> {
+    const filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor"> = { content: "todo" }
+    const limits: MessageSearchIterationLimits = { maxItems: 100, pageSize: 25 }
+    const stream = client.messages.iterateSearch(context, filters, limits)
+    void stream
+    // @ts-expect-error Search context requires a decimal guild or channel ID
+    client.messages.search({})
+    // @ts-expect-error Native message search options do not accept AbortSignal
+    client.messages.search(context, {}, { signal: new AbortController().signal })
+    return client.messages.search(context, { content: "todo", has: ["link"] })
 }
 
 /** Typechecked message-management fragment in the application's Effect context */

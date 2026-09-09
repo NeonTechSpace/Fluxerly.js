@@ -58,6 +58,7 @@ export class MessageOperationError extends Error {
             | "get"
             | "fetch"
             | "fetchHistory"
+            | "search"
             | "fetchReactionUsers"
             | "pin"
             | "unpin"

@@ -60,6 +60,7 @@
         "test:live:guilds": "pnpm run build && node tests/live/messages.mjs default --guilds && node tests/live/messages.mjs effect --guilds",
         "test:live:channels": "pnpm run build && node tests/live/messages.mjs default --channels && node tests/live/messages.mjs effect --channels",
         "test:live:history": "pnpm run build && node tests/live/messages.mjs default --history && node tests/live/messages.mjs effect --history",
+        "test:live:search": "pnpm run build && node tests/live/messages.mjs default --search && node tests/live/messages.mjs effect --search",
         "test:live:pagination": "pnpm run build && node tests/live/messages.mjs default --pagination && node tests/live/messages.mjs effect --pagination",
         "test:live:recovery": "pnpm run build && node tests/live/messages.mjs default --recover && node tests/live/messages.mjs effect --recover",
         "test:live:recovery:cancel": "pnpm run build && node tests/live/sdk.mjs default --cancel-recovery && node tests/live/sdk.mjs effect --cancel-recovery",

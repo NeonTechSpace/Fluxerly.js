@@ -54,6 +54,7 @@ import type { GuildRequest } from "./guilds.js"
 import { RestOwner } from "./rest.js"
 import type { ReactionEmojiInput, ReactionUsersQuery } from "#sdk/reactions"
 import type { MessagePinsQuery } from "#sdk/pins"
+import type { MessageSearchContext, MessageSearchQuery } from "#sdk/message-search"
 import type { ClientLogging } from "./logging.js"
 import type {
     Message,
@@ -399,6 +400,14 @@ export class ClientOwner {
                 ? (this.reports?.start() ?? Effect.void).pipe(
                       Effect.andThen(this.rest.fetchHistory(this.#configuration.token, channelId, query, options)),
                   )
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    searchMessages(context: MessageSearchContext, query?: MessageSearchQuery, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.search(this.#configuration.token, context, query, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }

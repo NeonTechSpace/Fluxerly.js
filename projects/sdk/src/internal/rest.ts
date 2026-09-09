@@ -19,6 +19,8 @@ import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "
 import { encodeReactionEmoji, encodeReactionUsersQuery, decodeReactionUsersPage } from "./reactions.js"
 import type { MessagePinsPage, MessagePinsQuery } from "#sdk/pins"
 import { decodePinsPage, encodePinsQuery } from "./pins.js"
+import type { MessageSearchContext, MessageSearchPage, MessageSearchQuery } from "#sdk/message-search"
+import { decodeMessageSearchPage, encodeMessageSearch } from "./message-search.js"
 import { GuildOperationError, type GuildOperation, type GuildOperationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
 import type { GuildCache, ResourceGuard, ResourceRequest } from "./guild-cache.js"
@@ -470,6 +472,43 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                       )
+                    : error,
+            ),
+        )
+    }
+
+    search(
+        token: Redacted.Redacted<string>,
+        context: MessageSearchContext,
+        query?: MessageSearchQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<MessageSearchPage, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<MessageSearchPage, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const encoded = encodeMessageSearch(context, query)
+            if (!encoded) return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    method: "POST",
+                    channel: context.channelId ?? context.guildId!,
+                    bucket: "search",
+                    cache: false,
+                    path: "/search/messages",
+                    body: { json: encoded.json, files: [] },
+                    status: 200,
+                    decode: async (response) => {
+                        const decoded = decodeMessageSearchPage(await response.json().catch(() => null))
+                        if (!decoded) throw new RestFailure("response", "unknown", response.status)
+                        return decoded
+                    },
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new MessageOperationError("search", error.reason, error.outcome, error.status, error.retryAfterMs)
                     : error,
             ),
         )

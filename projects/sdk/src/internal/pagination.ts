@@ -24,6 +24,8 @@ interface Settings {
 interface Source<A, E> {
     readonly load: (cursor: string | undefined, limit: number) => Effect.Effect<Page<A>, E>
     readonly identity?: (item: A) => string
+    /** Opaque cursor sources provide their own progress relation instead of being coerced into a snowflake or timestamp */
+    readonly advances?: (previous: string, next: string) => boolean
 }
 const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
@@ -121,12 +123,13 @@ export class Pagination<A, E> {
                 this.#items = [...page.items]
                 this.#exhausted = page.next === null
                 if (page.next !== null && this.#cursor !== undefined) {
-                    const advances =
-                        this.operation === "iteratePins"
-                            ? Date.parse(page.next) < Date.parse(this.#cursor)
-                            : this.operation === "iterateHistory" || this.operation === "auditLogs.iterate"
-                              ? BigInt(page.next) < BigInt(this.#cursor)
-                              : BigInt(page.next) > BigInt(this.#cursor)
+                    const advances = this.source.advances
+                        ? this.source.advances(this.#cursor, page.next)
+                        : this.operation === "iteratePins"
+                          ? Date.parse(page.next) < Date.parse(this.#cursor)
+                          : this.operation === "iterateHistory" || this.operation === "auditLogs.iterate"
+                            ? BigInt(page.next) < BigInt(this.#cursor)
+                            : BigInt(page.next) > BigInt(this.#cursor)
                     if (!advances) this.#failure = new PaginationError(this.operation, "cursorStalled")
                 }
                 this.#cursor = page.next ?? undefined

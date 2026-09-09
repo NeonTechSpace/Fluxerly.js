@@ -96,6 +96,7 @@ try {
             "member-search",
             "messages",
             "helpers",
+            "message-search",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -201,6 +202,17 @@ try {
             .filter((example) => /(?:function|const) readExample/.test(example))
         assert.equal(readExamples.length, 1)
         writeFileSync(join(consumer, "read-example.ts"), readExamples[0])
+        const messageSearchExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:(?:async )?function|const) messageSearch(?:Page|Traversal)Example/.test(example))
+        assert.equal(messageSearchExamples.length, 2)
+        for (const [index, example] of messageSearchExamples.entries())
+            writeFileSync(join(consumer, `message-search-example-${index}.ts`), example)
         const guildExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]

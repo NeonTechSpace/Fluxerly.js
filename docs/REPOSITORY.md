@@ -36,6 +36,8 @@ The documentation website remains a scaffold
 | [guild-discovery.ts](/projects/sdk/src/internal/guild-discovery.ts) | Public server-directory eligibility, categories and application lifecycle; distinct from hosted service discovery |
 | [member-search.ts](/projects/sdk/src/internal/member-search.ts) | Indexed member-search validation and projection, separate from full member observations |
 | [member-search-workflow.ts](/projects/sdk/src/internal/member-search-workflow.ts) | Invite-sensitive permission preflight and bounded offset search traversal |
+| [message-search.ts](/projects/sdk/src/internal/message-search.ts) | Contextual indexed message-search validation and immutable page projection without cache admission |
+| [message-search-workflow.ts](/projects/sdk/src/internal/message-search-workflow.ts) | Bounded opaque-cursor message-search traversal, including explicit indexing and progress failures |
 | [permissions.ts](/projects/sdk/src/internal/permissions.ts) | Local permission-bit calculation and explicit fresh-resource composition, not action authorization |
 | [user-cache.ts](/projects/sdk/src/internal/user-cache.ts) | Optional account/private-conversation retention, conflicting reads and lifecycle invalidation |
 | [presence.ts](/projects/sdk/src/internal/presence.ts) | Process-local bot presence intent, coalescing and gateway reconnect restoration |
@@ -170,6 +172,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:guilds` | Guild/member reads, reaction-driven role assignment, role management/events, optional caches and recovery | Temporary channel/messages, two zero-permission test roles with assignment only to the designated bot, plus test-socket termination and test-owned response loss |
 | `test:live:channels` | Guild channel management, permission overwrites, inheritance, events/cache and recovery | Temporary channels/categories, overwrites targeting only the bot and test guild's everyone role, test-socket termination and test-owned response loss |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
+| `test:live:search` | Bounded contextual indexed-message search, explicit indexing and cache exclusion | Temporary channel/messages; may report a hosted indexing timeout |
 | `test:live:pagination` | History/member/reactor/pin traversal, early exit, read recovery and cancellation cleanup | Temporary channel/messages, reactions and pins, plus test-owned transient read failure and delayed response delivery |
 | `test:live:cache` | Cache intake, expiry and recovery invalidation | Temporary channel/messages and test-socket termination |
 | `test:live:collectors` | Collector completion, gap failure and use after recovery | Temporary channel/messages and test-socket termination |

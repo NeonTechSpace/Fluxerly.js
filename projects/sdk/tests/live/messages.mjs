@@ -39,6 +39,7 @@ const guilds = process.argv[3] === "--guilds"
 const channels = process.argv[3] === "--channels"
 const batchDelete = process.argv[3] === "--batch-delete"
 const moderation = process.argv[3] === "--moderation"
+const search = process.argv[3] === "--search"
 let moderationUserId = process.env.FLUXER_TEST_MODERATION_USER_ID
 const forceRecovery = recover || cache || collectors || attachments || reactions || pins || guilds || channels
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
@@ -1819,6 +1820,61 @@ function verifyClearRejection(error) {
     assert.equal(error.status, 400)
 }
 
+/** Search only the journaled test channel. Each later attempt is explicit application retry after an indexing page, never SDK polling */
+async function verifyMessageSearch(ops, channelId) {
+    stage = "message_search_seed"
+    const content = `search-${randomUUID()}`
+    const created = await api("POST", `/channels/${channelId}/messages`, {
+        content,
+        allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+    })
+    assert.equal(created.status, 200)
+    assert.match(created.data?.id ?? "", /^\d+$/)
+    assert.equal(created.data?.channel_id, channelId)
+    const target = { id: created.data.id, channelId }
+    // The raw test-owned seed was created while disconnected, so only an indexed hit could incorrectly hydrate it
+    assert.equal(await ops.get(target), undefined)
+
+    const attempts = 12
+    let sawIndexing = false
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        stage = "message_search_page"
+        const requests = ops.searchRequests()
+        const page = await ops.search({ channelId }, { content })
+        if (page.indexing) {
+            sawIndexing = true
+            // Returning this union before our next explicit call establishes no hidden indexing poll
+            assert.equal(ops.searchRequests(), requests + 1)
+            report("message_search_indexing_visible", true)
+            if (attempt < attempts) await sleep(1_000)
+            continue
+        }
+        const found = page.messages.some((message) => message.id === target.id && message.channelId === channelId)
+        if (!found) {
+            if (attempt < attempts) {
+                await sleep(1_000)
+                continue
+            }
+            stage = "message_search_owned_hit_timeout"
+            assert.fail("Hosted search returned ready pages without the journaled test message")
+        }
+        stage = "message_search_cache_exclusion"
+        assert.equal(await ops.get(target), undefined)
+        stage = "message_search_traversal"
+        const seen = []
+        for await (const message of ops.iterate({ channelId }, { content }, { maxItems: 25, maxPages: 2 })) {
+            assert.ok(seen.length < 25)
+            seen.push(message)
+        }
+        assert.ok(seen.some((message) => message.id === target.id && message.channelId === channelId))
+        assert.equal(await ops.get(target), undefined)
+        report("message_search_page_and_traversal", true)
+        return
+    }
+    stage = sawIndexing ? "message_search_indexing_timeout" : "message_search_owned_hit_timeout"
+    assert.fail("Hosted search did not return the journaled test message within the bounded caller retry budget")
+}
+
 function observeMessageChanges(channelId) {
     const received = { messageUpdate: [], messageDelete: [], messageDeleteBulk: [] }
     return {
@@ -2352,7 +2408,7 @@ setTimeout(
         report("process_timeout", false)
         process.exit(1)
     },
-    attachments || moderation ? 240_000 : 120_000,
+    attachments || moderation || search ? 240_000 : 120_000,
 ).unref()
 
 try {
@@ -2374,7 +2430,8 @@ try {
                     guilds ||
                     channels ||
                     batchDelete ||
-                    moderation)),
+                    moderation ||
+                    search)),
     )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
@@ -2415,7 +2472,7 @@ try {
     const ping = `ping-${randomUUID()}`
     const pong = `pong-${randomUUID()}`
     const sdkRequests = []
-    if (cache) {
+    if (cache || search) {
         // Sandbox setup and independent readback keep using rawFetch. This observes only the SDK's own REST behavior
         globalThis.fetch = async (...args) => {
             sdkRequests.push(new URL(args[0]).pathname)
@@ -2436,7 +2493,7 @@ try {
         const { createClient } = await import("@neontechspace/fluxerly")
         const created = createClient({
             token,
-            ...(cache || embeds || attachments || batchDelete ? { cache: cacheOptions() } : {}),
+            ...(cache || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
             ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
             ...(channels ? { cache: { channels: true } } : {}),
             ...(moderation ? { cache: { members: true } } : {}),
@@ -2445,7 +2502,7 @@ try {
         assert.ok(created.isOk())
         client = created.value
         const cacheGet = async (target) => {
-            if (!cache) return undefined
+            if (!cache && !search) return undefined
             const cached = client.messages.get(target)
             assert.ok(cached.isOk())
             return cached.value
@@ -2463,6 +2520,27 @@ try {
             : undefined
         let timer
         try {
+            if (search) {
+                await verifyMessageSearch(
+                    {
+                        search: async (context, query) => {
+                            const result = await client.messages.search(context, query)
+                            if (result.isErr()) throw result.error
+                            return result.value
+                        },
+                        iterate: async function* (context, filters, limits) {
+                            for await (const result of client.messages.iterateSearch(context, filters, limits)) {
+                                if (result.isErr()) throw result.error
+                                yield result.value
+                            }
+                        },
+                        get: cacheGet,
+                        searchRequests: () => sdkRequests.filter((path) => path === "/v1/search/messages").length,
+                    },
+                    channel.id,
+                )
+                stage = "sdk_receive_and_reply"
+            }
             if (pagination) {
                 const value = async (operation) => {
                     const result = await operation
@@ -2997,19 +3075,36 @@ try {
                 Effect.gen(function* () {
                     client = yield* createClient({
                         token,
-                        ...(cache || embeds || attachments || batchDelete ? { cache: cacheOptions() } : {}),
+                        ...(cache || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
                         ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
                         ...(channels ? { cache: { channels: true } } : {}),
                         ...(moderation ? { cache: { members: true } } : {}),
                         ...(recover ? { logging: { development: true } } : {}),
                     })
                     const cacheGet = async (target) => {
-                        if (!cache) return undefined
+                        if (!cache && !search) return undefined
                         const cached = await Effect.runPromiseExit(client.messages.get(target))
                         assert.ok(Exit.isSuccess(cached))
                         return cached.value
                     }
                     const cacheSend = (channelId, input) => Effect.runPromise(client.messages.send(channelId, input))
+                    if (search) {
+                        yield* Effect.promise(() =>
+                            verifyMessageSearch(
+                                {
+                                    search: (context, query) =>
+                                        Effect.runPromise(client.messages.search(context, query)),
+                                    iterate: (context, filters, limits) =>
+                                        Stream.toAsyncIterable(client.messages.iterateSearch(context, filters, limits)),
+                                    get: cacheGet,
+                                    searchRequests: () =>
+                                        sdkRequests.filter((path) => path === "/v1/search/messages").length,
+                                },
+                                channel.id,
+                            ),
+                        )
+                        stage = "sdk_receive_and_reply"
+                    }
                     if (pagination)
                         yield* Effect.promise(() =>
                             verifyPagination(

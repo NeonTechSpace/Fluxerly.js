@@ -41,6 +41,7 @@ export interface PinIterationQuery extends PaginationQuery {
 /** Traversal identified by a pagination failure or a default SDK defect */
 export type PaginationOperation =
     | "iterateHistory"
+    | "messages.iterateSearch"
     | "members.iterate"
     | "members.iterateSearch"
     | "iterateReactionUsers"

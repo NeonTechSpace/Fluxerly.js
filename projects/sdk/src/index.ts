@@ -50,6 +50,28 @@ export type {
     MemberSearchIterationLimits,
 } from "./member-search.js"
 import { searchMembers, searchMemberPagination } from "#sdk/internal/member-search-workflow"
+import { searchMessagePagination } from "#sdk/internal/message-search-workflow"
+import type {
+    MessageSearchContext,
+    MessageSearchIterationLimits,
+    MessageSearchPage,
+    MessageSearchQuery,
+    DefaultMessageSearchOptions,
+} from "./message-search.js"
+export type {
+    MessageSearchAuthorType,
+    MessageSearchChannel,
+    MessageSearchContentType,
+    MessageSearchContext,
+    MessageSearchEmbedType,
+    MessageSearchIndexingPage,
+    MessageSearchIterationLimits,
+    MessageSearchOptions,
+    MessageSearchPage,
+    MessageSearchQuery,
+    MessageSearchResultsPage,
+    DefaultMessageSearchOptions,
+} from "./message-search.js"
 import type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 import type {
     DiscoveryApplication,
@@ -521,6 +543,47 @@ export interface Messages {
         channelId: string,
         query: HistoryIterationQuery,
         options?: DefaultMessageOperationOptions,
+    ): AsyncIterable<Result<Message, MessageOperationFailure | PaginationError | CancelledError>>
+    /** Search one current-scope indexed page in an explicit guild or channel context, without gateway readiness, cache lookup or cache admission.
+     * Starts immediately and completes with a frozen indexing state or frozen result page. Fluxerly always sends scope current.
+     * Indexing means Fluxer accepted the request but is not ready; retry is caller-controlled and never happens automatically.
+     * Cursor is opaque and only belongs in a later explicit search call. Results and channel context are observations, not a stable snapshot.
+     * POST failures, malformed success and invalid input use MessageOperationError operation search. Cancellation uses CancelledError.
+     * Search does not use Messages' transient-read retries; confirmed rate limits retain shared REST handling within the supplied deadline
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function messageSearchPageExample(client: Client, channelId: string) {
+     *     const page = await client.messages.search({ channelId }, { content: "release notes" })
+     *     return page.isOk() && !page.value.indexing ? page.value.messages : page
+     * }
+     * ```
+     */
+    search(
+        context: MessageSearchContext,
+        query?: MessageSearchQuery,
+        options?: DefaultMessageSearchOptions,
+    ): ResultAsync<MessageSearchPage, MessageOperationFailure | CancelledError>
+    /** Lazily traverse indexed messages from the first contextual page through opaque provider cursors, without polling or prefetching.
+     * Each consumption copies inputs and retains one bounded page. maxItems is required; pageSize is 1–25 and maxPages defaults to 100.
+     * An indexing page ends traversal with PaginationError indexing so the caller decides whether and when to retry.
+     * Opaque cursor progress is checked as opaque text, never as a history snowflake. Indexed hits never hydrate or admit message cache entries.
+     * Expected operation, pagination and cancellation failures yield one Err after delivered items. Defects reject with SdkDefect
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function messageSearchTraversalExample(client: Client, guildId: string) {
+     *     for await (const hit of client.messages.iterateSearch({ guildId }, { content: "todo" }, { maxItems: 100 })) {
+     *         if (hit.isErr()) return hit
+     *     }
+     * }
+     * ```
+     */
+    iterateSearch(
+        context: MessageSearchContext,
+        filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+        limits: MessageSearchIterationLimits,
+        options?: DefaultMessageSearchOptions,
     ): AsyncIterable<Result<Message, MessageOperationFailure | PaginationError | CancelledError>>
     /** Traverse ascending remote user IDs for one message and the selected literal Unicode or custom emoji.
      * Uses iterateHistory's lazy Result, cancellation, deadline, failure and release rules, with fetchReactionUsers remote errors.
@@ -2961,6 +3024,22 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             messages: Object.freeze({
                 iterateHistory: (id: string, query: HistoryIterationQuery, options?: DefaultMessageOperationOptions) =>
                     iterate((request) => historyPagination(owner, id, query, request), "iterateHistory", options),
+                search: (
+                    context: MessageSearchContext,
+                    query?: MessageSearchQuery,
+                    options?: DefaultMessageSearchOptions,
+                ) => execute(owner.searchMessages(context, query, options), "search", options),
+                iterateSearch: (
+                    context: MessageSearchContext,
+                    filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+                    limits: MessageSearchIterationLimits,
+                    options?: DefaultMessageSearchOptions,
+                ) =>
+                    iterate(
+                        (request) => searchMessagePagination(owner, context, filters, limits, request),
+                        "messages.iterateSearch",
+                        options,
+                    ),
                 iterateReactionUsers: (
                     target: MessageReference,
                     emoji: ReactionEmojiInput,
