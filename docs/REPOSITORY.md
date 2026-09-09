@@ -164,6 +164,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:vanity:mutate:default`, `test:live:vanity:mutate:effect` | Manual custom-invite lifecycle and lost-response reconciliation | Opt-in temporary custom codes on an eligible sandbox with no existing code |
 | `test:live:discovery` | Directory categories, eligibility/status and read recovery through both APIs | Read-only, never submits an application |
 | `test:live:member-search` | Indexed member search and local/remote permission calculation through both APIs | Resource reads and search requests, which can trigger provider lazy indexing; no member moderation or role/channel edits |
+| `test:live:members` | Authorized target-member nickname set, independent readback and restoration through both APIs | Temporary nickname change for one currently authorized non-owner member |
 | `test:live:discovery:mutate:default`, `test:live:discovery:mutate:effect` | Manual directory application lifecycle and lost-response reconciliation | Real review-queue submission or immediate public listing, then test-owned withdrawal |
 | `test:live:users:default`, `test:live:users:effect` | Public user reads, private conversations, bot server-profile edits and message failure reconciliation | Test DMs, authorized group messages/renaming, bot profile changes and test-owned response loss |
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
@@ -232,6 +233,15 @@ An explicitly authorized additional account can be supplied through `FLUXER_TEST
 The harness preserves membership, restores the original group name and deletes only test-owned messages
 
 Without a selected group, or with `--without-group`, the script reports group checks as skipped. That run is not group verification
+
+Member nickname checks are manual, excluded from `pnpm check`, CI, schedules and unattended runs.
+Supply the currently authorized non-bot, non-owner target through `FLUXER_TEST_MEMBER_ID` in the process environment; the ignored env file is never read for this ID
+
+The ignored `.env.test.members.local` journal contains only sandbox/bot/authorized-member identity, a test marker and that member's original nickname for restoration, never credentials.
+It is written before the mutation; recovery requires the same currently supplied member ID, restores only the exact test marker and refuses an unexpected observed concurrent nickname change
+
+The harness rereads the nickname immediately before the write, but Fluxer's PATCH has no conditional precondition, so it cannot make the read-and-write sequence atomic.
+It deliberately loses one response after the marker write, verifies the SDK reports an unknown outcome and evicts its member cache, then reconciles raw state before restoration
 
 Member-moderation scripts are manual opt-in checks, never part of `pnpm check`, CI, schedules or unattended reruns
 

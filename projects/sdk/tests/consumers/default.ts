@@ -1,5 +1,7 @@
 import {
     createClient,
+    canManageHierarchy,
+    compareHierarchy,
     ChannelType,
     Permissions,
     type GuildChannel,
@@ -22,6 +24,8 @@ import {
     type CollectorOptions,
     type DefaultCollectorOptions,
     type CollectorResult,
+    type MemberReference,
+    type RoleHierarchyInput,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
 
@@ -367,4 +371,15 @@ export function watchMessageChanges(client: Client) {
     const pull = client.events("messageDeleteBulk")
     if (pull.isOk()) pull.value.next().map((batch) => batch?.ids)
     return [updates, deleted, batches]
+}
+
+/** Typechecked targeted nickname and local hierarchy usage against the packed default entry point */
+export function manageMemberHierarchy(client: Client, target: MemberReference, snapshot: RoleHierarchyInput) {
+    const renamed = client.members.setNickname(target, null)
+    const canTarget = canManageHierarchy(snapshot)
+    const first = snapshot.roles[0]
+    const order = first ? compareHierarchy(first, first) : undefined
+    // @ts-expect-error Nicknames use explicit null to clear, not an omitted argument
+    client.members.setNickname(target)
+    return { renamed, canTarget, order }
 }

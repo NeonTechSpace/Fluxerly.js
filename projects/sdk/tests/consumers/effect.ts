@@ -1,6 +1,8 @@
 import { Context, Effect, type Scope } from "effect"
 import {
     createClient,
+    canManageHierarchy,
+    compareHierarchy,
     ChannelType,
     Permissions,
     type GuildChannel,
@@ -24,6 +26,8 @@ import {
     type CollectorOptions,
     type CollectorResult,
     type CollectorRegistrationError,
+    type MemberReference,
+    type RoleHierarchyInput,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
 
@@ -345,5 +349,18 @@ export function useAttachments(client: Client, channelId: string) {
         // @ts-expect-error Received arrays are immutable
         sent.attachments.push(attachment)
         return attachment.url
+    })
+}
+
+/** Typechecked targeted nickname and local hierarchy usage against the packed Effect entry point */
+export function manageMemberHierarchy(client: Client, target: MemberReference, snapshot: RoleHierarchyInput) {
+    return Effect.gen(function* () {
+        const renamed = yield* client.members.setNickname(target, null)
+        const canTarget = yield* canManageHierarchy(snapshot)
+        const first = snapshot.roles[0]
+        const order = first ? yield* compareHierarchy(first, first) : undefined
+        // @ts-expect-error Nicknames use explicit null to clear, not an omitted argument
+        client.members.setNickname(target)
+        return { renamed, canTarget, order }
     })
 }

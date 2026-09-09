@@ -306,6 +306,34 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
     }
 }
 
+/** Build the one-field member PATCH used for a moderator-controlled nickname change. */
+export function memberNicknameEdit(
+    target: MemberReference,
+    nickname: string | null,
+): GuildRequest<GuildMember> | undefined {
+    if (
+        !record(target) ||
+        !identifier(target.guildId) ||
+        !identifier(target.userId) ||
+        (nickname !== null && !text(nickname, 1, 32))
+    )
+        return undefined
+    const { guildId, userId } = target
+    return {
+        guildId,
+        bucket: "guild:member:nickname:update",
+        cache: { selection: { kind: "members", guildId, id: userId }, mutation: true },
+        path: `/guilds/${guildId}/members/${userId}`,
+        method: "PATCH",
+        status: 200,
+        json: JSON.stringify({ nick: nickname }),
+        decode: (value) => {
+            const member = decodeMember(value, guildId)
+            return member?.userId === userId ? member : undefined
+        },
+    }
+}
+
 export function memberPage(guildId: string, query?: MemberQuery): GuildRequest<readonly GuildMember[]> | undefined {
     const input = query === undefined ? {} : query
     if (!identifier(guildId) || !record(input) || Object.keys(input).some((key) => key !== "limit" && key !== "after"))

@@ -1,4 +1,5 @@
 import type { PermissionInput, PermissionTarget } from "./permissions.js"
+import { assets as sharedAssets } from "./assets.js"
 import {
     display as sharedDisplay,
     format as sharedFormat,
@@ -6,6 +7,8 @@ import {
     permissionBits as sharedPermissionBits,
     snowflakes as sharedSnowflakes,
 } from "./helpers.js"
+export { AssetFormats, AssetUrlError } from "./assets.js"
+export type { AssetFormat, AssetUrlOptions, StickerAssetUrlOptions } from "./assets.js"
 export { HelperError, TimestampStyles } from "./helpers.js"
 export type {
     ChannelLinkTarget,
@@ -18,6 +21,8 @@ export type {
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
 export type { PermissionInput, PermissionTarget } from "./permissions.js"
+export { canManageHierarchy, compareHierarchy, isAboveInHierarchy } from "./role-hierarchy.js"
+export type { RoleHierarchyInput } from "./role-hierarchy.js"
 import { calculatePermissions, fetchPermissions } from "#sdk/internal/permissions"
 
 /**
@@ -37,6 +42,9 @@ export const permissionBits = sharedPermissionBits
 
 /** Pure hosted Fluxer guild-channel, direct-message, and message link helpers. Fallible route validation returns `Result` */
 export const links = sharedLinks
+
+/** Pure hosted Fluxer avatar, member, guild, emoji, and sticker URL helpers. Fallible calls return `Result` without a client, network, cache, or arbitrary origin */
+export const assets = sharedAssets
 import type {
     MemberSearchQuery,
     MemberSearchPage,
@@ -173,7 +181,7 @@ export type {
 import type { MemberProfileEdit } from "./guilds.js"
 export type { MemberProfileEdit, MemberMentionPreference } from "./guilds.js"
 export { GuildMemberProfileFlags, MemberMentionPreferences } from "./guilds.js"
-import { memberEditSelf } from "#sdk/internal/guilds"
+import { memberEditSelf, memberNicknameEdit } from "#sdk/internal/guilds"
 import {
     UserOperationError,
     type User,
@@ -1622,6 +1630,26 @@ export interface Members {
         input: MemberProfileEdit,
         options?: DefaultGuildOperationOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    /** Set or clear one member nickname without replacing that member's roles or profile fields.
+     * nickname is 1–32 Unicode code points; null clears it. Fluxer decides whether the bot may target this member,
+     * including ManageNicknames, hierarchy and self rules. The returned frozen member is the HTTP observation, not an
+     * event acknowledgement. This starts immediately, shares guild write retries/deadlines and cannot undo a dispatched write.
+     * An uncertain result evicts the targeted member cache; a definite rejection preserves its prior snapshot
+     * @example
+     * ```ts
+     * import type { Client, MemberReference } from "@neontechspace/fluxerly"
+     * export async function nicknameExample(client: Client, target: MemberReference) {
+     *     const set = await client.members.setNickname(target, "Renamed")
+     *     if (set.isErr()) return set
+     *     return await client.members.setNickname(target, null)
+     * }
+     * ```
+     */
+    setNickname(
+        member: MemberReference,
+        nickname: string | null,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
     /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts
      *
      * Requires ModerateMembers and provider hierarchy rules. The provider rejects self and administrator targets.
@@ -2913,6 +2941,16 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     execute(
                         owner.guild("members.editSelf", () => memberEditSelf(guildId, input), options),
                         "members.editSelf",
+                        options,
+                    ),
+                setNickname: (
+                    target: MemberReference,
+                    nickname: string | null,
+                    options?: DefaultGuildOperationOptions,
+                ) =>
+                    execute(
+                        owner.guild("members.setNickname", () => memberNicknameEdit(target, nickname), options),
+                        "members.setNickname",
                         options,
                     ),
                 timeout: (target: MemberReference, durationMs: number, options?: DefaultModerationOptions) =>

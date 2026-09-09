@@ -32,6 +32,15 @@ function packageManager(args, cwd) {
     return /\.[cm]?js$/.test(pnpm) ? run(process.execPath, [pnpm, ...args], cwd) : run(pnpm, args, cwd)
 }
 
+function examples(source) {
+    return [...source.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)].map((match) =>
+        match[1]
+            .split(/\r?\n/)
+            .map((line) => line.replace(/^\s*\* ?/, ""))
+            .join("\n"),
+    )
+}
+
 const temporaryRoot = realpathSync(tmpdir())
 const temporary = mkdtempSync(join(temporaryRoot, "fluxerly-package-check-"))
 try {
@@ -97,6 +106,8 @@ try {
             "messages",
             "helpers",
             "message-search",
+            "role-hierarchy",
+            "assets",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -142,6 +153,17 @@ try {
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
         const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
+        const publicExamples = examples(publicSource)
+        const nicknameExamples = publicExamples.filter((example) => /function nicknameExample/.test(example))
+        assert.equal(nicknameExamples.length, 1)
+        writeFileSync(join(consumer, "nickname-example.ts"), nicknameExamples[0])
+        const hierarchySource =
+            kind === "default" ? readFileSync(join(sdk, "src/role-hierarchy.ts"), "utf8") : publicSource
+        const hierarchyExamples = examples(hierarchySource).filter((example) =>
+            /function hierarchyExample/.test(example),
+        )
+        assert.equal(hierarchyExamples.length, 1)
+        writeFileSync(join(consumer, "hierarchy-example.ts"), hierarchyExamples[0])
         const userExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]
@@ -319,6 +341,7 @@ try {
             "permissions",
             "member-search",
             "helpers",
+            "assets",
         ]) {
             const source = readFileSync(join(sdk, `src/${entry}.ts`), "utf8")
             const examples = [...source.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
@@ -329,7 +352,7 @@ try {
                         .join("\n"),
                 )
                 .filter((example) =>
-                    /function (expression|expressionEvents|sticker|invite|audit|guildSettings|discovery|permissions|memberSearch|helpers)Example/.test(
+                    /function (expression|expressionEvents|sticker|invite|audit|guildSettings|discovery|permissions|memberSearch|helpers|assets)Example/.test(
                         example,
                     ),
                 )
@@ -352,6 +375,16 @@ try {
                 .filter((example) => /const helpersEffectExample/.test(example))
             assert.equal(nativeHelperExamples.length, 1)
             writeFileSync(join(consumer, "helpers-effect-example.ts"), nativeHelperExamples[0])
+            const nativeAssetExamples = [...nativeHelperSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+                .map((match) =>
+                    match[1]
+                        .split(/\r?\n/)
+                        .map((line) => line.replace(/^\s*\* ?/, ""))
+                        .join("\n"),
+                )
+                .filter((example) => /const assetsEffectExample/.test(example))
+            assert.equal(nativeAssetExamples.length, 1)
+            writeFileSync(join(consumer, "assets-effect-example.ts"), nativeAssetExamples[0])
         }
         const embedExamples = [...embedSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)].map((match) =>
             match[1]

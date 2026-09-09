@@ -4,3 +4,4 @@ dist/
 .env.test.local.lock
 .env.test.messages.local
 .env.test.webhooks.local
+.env.test.members.local

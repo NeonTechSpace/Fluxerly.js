@@ -472,6 +472,7 @@ export interface RoleHoistPosition {
 export type GuildOperation =
     | "permissions.calculate"
     | "permissions.fetch"
+    | `hierarchy.${"compare" | "isAbove" | "canManage"}`
     | "members.search"
     | `discovery.${"fetchStatus" | "fetchCategories" | "apply" | "edit" | "withdraw"}`
     | `invites.${"fetch" | "create" | "fetchChannel" | "fetchGuild" | "delete"}`
@@ -494,6 +495,7 @@ export type GuildOperation =
     | "members.fetchSelf"
     | "members.fetchPage"
     | "members.editSelf"
+    | "members.setNickname"
     | "members.addRole"
     | "members.removeRole"
     | "roles.fetchAll"

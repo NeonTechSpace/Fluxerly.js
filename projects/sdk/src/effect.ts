@@ -1,5 +1,6 @@
 import type { PermissionInput, PermissionTarget } from "./permissions.js"
 import type { Result } from "neverthrow"
+import { assets as sharedAssets } from "./assets.js"
 import {
     display as sharedDisplay,
     format as sharedFormat,
@@ -7,6 +8,9 @@ import {
     permissionBits as sharedPermissionBits,
     snowflakes as sharedSnowflakes,
 } from "./helpers.js"
+import type { AssetUrlError } from "./assets.js"
+export { AssetFormats, AssetUrlError } from "./assets.js"
+export type { AssetFormat, AssetUrlOptions, StickerAssetUrlOptions } from "./assets.js"
 import type { HelperError } from "./helpers.js"
 export { HelperError, TimestampStyles } from "./helpers.js"
 export type {
@@ -19,11 +23,22 @@ export type {
 } from "./helpers.js"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
-import type { GuildOperationError } from "./guilds.js"
+import { GuildOperationError } from "./guilds.js"
 export type { PermissionInput, PermissionTarget } from "./permissions.js"
+import type { RoleHierarchyInput } from "./role-hierarchy.js"
+export type { RoleHierarchyInput } from "./role-hierarchy.js"
+import type { GuildRole } from "./guilds.js"
+import { compareRoleHierarchy, evaluateMemberHierarchy, isRoleAboveInHierarchy } from "#sdk/internal/role-hierarchy"
 import { calculatePermissions, fetchPermissions } from "#sdk/internal/permissions"
 
 function helperEffect<A>(create: () => Result<A, HelperError>): Effect.Effect<A, HelperError> {
+    return Effect.suspend(() => {
+        const result = create()
+        return result.isOk() ? Effect.succeed(result.value) : Effect.fail(result.error)
+    })
+}
+
+function assetEffect<A>(create: () => Result<A, AssetUrlError>): Effect.Effect<A, AssetUrlError> {
     return Effect.suspend(() => {
         const result = create()
         return result.isOk() ? Effect.succeed(result.value) : Effect.fail(result.error)
@@ -101,6 +116,61 @@ export const links = Object.freeze({
     channel: (...args: Parameters<typeof sharedLinks.channel>) => helperEffect(() => sharedLinks.channel(...args)),
     /** Lazily create an official hosted message route from a matching message and actual channel context. It never infers context, checks existence, or checks access */
     message: (...args: Parameters<typeof sharedLinks.message>) => helperEffect(() => sharedLinks.message(...args)),
+})
+
+/**
+ * Pure hosted Fluxer asset URL helpers. Every fallible call is a lazy Effect that constructs a URL using fixed hosted origins.
+ * It never fetches profiles, mutates caches, downloads bytes, refreshes URLs, changes attachment/embed URLs, or accepts an origin.
+ * Omitted optional source hashes become `undefined`; known absent hashes become `null`. A returned URL does not prove the asset exists
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { assets, AssetFormats, type Guild, type GuildEmoji, type GuildMember, type User } from "@neontechspace/fluxerly/effect"
+ *
+ * export const assetsEffectExample = (user: Pick<User, "id" | "avatar">, member: Pick<GuildMember, "guildId" | "userId" | "avatar" | "profileFlags">, guild: Pick<Guild, "id" | "icon">, emoji: Pick<GuildEmoji, "id" | "animated">) =>
+ *     Effect.gen(function* () {
+ *         const avatar = yield* assets.displayAvatar(user, { size: 256, format: AssetFormats.Webp })
+ *         const memberAvatar = yield* assets.displayMemberAvatar(user, member, { size: 256 })
+ *         const icon = yield* assets.guildIcon(guild, { format: AssetFormats.Png })
+ *         const emojiUrl = yield* assets.emoji(emoji, { animated: emoji.animated })
+ *         return { avatar, memberAvatar, icon, emojiUrl }
+ *     })
+ * ```
+ */
+export const assets = Object.freeze({
+    /** Lazily build a user avatar URL, or `null` for a known missing avatar. It only reads the supplied `id` and `avatar` fields and performs no profile lookup */
+    avatar: (...args: Parameters<typeof sharedAssets.avatar>) => assetEffect(() => sharedAssets.avatar(...args)),
+    /** Lazily build Fluxer's static default-avatar URL from a canonical user ID. It has no media transform query and does not depend on profile availability */
+    defaultAvatar: (userId: string) => assetEffect(() => sharedAssets.defaultAvatar(userId)),
+    /** Lazily build a display avatar from the known user avatar or Fluxer's static default. It always resolves to a URL, never `null` */
+    displayAvatar: (...args: Parameters<typeof sharedAssets.displayAvatar>) =>
+        assetEffect(() => sharedAssets.displayAvatar(...args)),
+    /** Lazily build a guild-member avatar URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash; it does not choose a fallback */
+    memberAvatar: (...args: Parameters<typeof sharedAssets.memberAvatar>) =>
+        assetEffect(() => sharedAssets.memberAvatar(...args)),
+    /** Lazily build a guild-member banner URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
+    memberBanner: (...args: Parameters<typeof sharedAssets.memberBanner>) =>
+        assetEffect(() => sharedAssets.memberBanner(...args)),
+    /** Lazily build the member display avatar when its profile state is known: member avatar, then user avatar, then static default. `AvatarUnset` selects the static default; omitted profile flags or an omitted non-unset member avatar resolve `undefined` */
+    displayMemberAvatar: (...args: Parameters<typeof sharedAssets.displayMemberAvatar>) =>
+        assetEffect(() => sharedAssets.displayMemberAvatar(...args)),
+    /** Lazily build a guild icon URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
+    guildIcon: (...args: Parameters<typeof sharedAssets.guildIcon>) =>
+        assetEffect(() => sharedAssets.guildIcon(...args)),
+    /** Lazily build a guild banner URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
+    guildBanner: (...args: Parameters<typeof sharedAssets.guildBanner>) =>
+        assetEffect(() => sharedAssets.guildBanner(...args)),
+    /** Lazily build a guild invite-splash URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
+    guildSplash: (...args: Parameters<typeof sharedAssets.guildSplash>) =>
+        assetEffect(() => sharedAssets.guildSplash(...args)),
+    /** Lazily build a guild embedded-invite-splash URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
+    guildEmbedSplash: (...args: Parameters<typeof sharedAssets.guildEmbedSplash>) =>
+        assetEffect(() => sharedAssets.guildEmbedSplash(...args)),
+    /** Lazily build a custom-emoji URL from only its ID and animation metadata. Animated emoji require WebP, GIF, or APNG to retain animation */
+    emoji: (...args: Parameters<typeof sharedAssets.emoji>) => assetEffect(() => sharedAssets.emoji(...args)),
+    /** Lazily build a custom-sticker URL from only its ID and animation metadata. Stickers do not expose format because Fluxer returns WebP except an animated sticker's GIF source */
+    sticker: (...args: Parameters<typeof sharedAssets.sticker>) => assetEffect(() => sharedAssets.sticker(...args)),
 })
 import type {
     MemberSearchQuery,
@@ -236,7 +306,7 @@ export type {
 import type { MemberProfileEdit } from "./guilds.js"
 export type { MemberProfileEdit, MemberMentionPreference } from "./guilds.js"
 export { GuildMemberProfileFlags, MemberMentionPreferences } from "./guilds.js"
-import { memberEditSelf } from "#sdk/internal/guilds"
+import { memberEditSelf, memberNicknameEdit } from "#sdk/internal/guilds"
 import type {
     User,
     DirectMessageChannel,
@@ -409,7 +479,6 @@ import {
 } from "#sdk/internal/channels"
 import type {
     Guild,
-    GuildRole,
     RoleReference,
     RolePosition,
     RoleHoistPosition,
@@ -458,6 +527,77 @@ export type { BanInput, GuildBan, ModerationOptions } from "./guilds.js"
 import type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
 export type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"
+
+type HierarchyOperation = "hierarchy.compare" | "hierarchy.isAbove" | "hierarchy.canManage"
+
+const hierarchyInputFailure = (operation: HierarchyOperation) =>
+    new GuildOperationError(operation, "input", "notDispatched")
+
+/**
+ * Lazily compares two role snapshots in Fluxer's local hierarchy order
+ *
+ * `1` means left is higher, `-1` means right is higher, and `0` means the same role. A larger position is higher;
+ * tied positions use the smaller numeric role ID as higher. Malformed or cross-guild snapshots fail with
+ * GuildOperationError hierarchy.compare/input without retaining the input. This reports local ordering only; it does
+ * not evaluate permissions, MFA, membership visibility, or whether a provider endpoint accepts an action
+ */
+export function compareHierarchy(left: GuildRole, right: GuildRole): Effect.Effect<-1 | 0 | 1, GuildOperationError> {
+    return Effect.suspend(() => {
+        const comparison = compareRoleHierarchy(left, right)
+        return comparison === undefined
+            ? Effect.fail(hierarchyInputFailure("hierarchy.compare"))
+            : Effect.succeed(comparison)
+    })
+}
+
+/**
+ * Lazily reports whether left is strictly higher than right in supplied role snapshots
+ *
+ * Malformed or cross-guild snapshots fail with GuildOperationError hierarchy.isAbove/input without retaining the input.
+ * This is a local ordering helper, not a permission or endpoint-authorization check
+ */
+export function isAboveInHierarchy(left: GuildRole, right: GuildRole): Effect.Effect<boolean, GuildOperationError> {
+    return Effect.suspend(() => {
+        const above = isRoleAboveInHierarchy(left, right)
+        return above === undefined ? Effect.fail(hierarchyInputFailure("hierarchy.isAbove")) : Effect.succeed(above)
+    })
+}
+
+/**
+ * Lazily evaluates Fluxer's local member-target hierarchy rule from explicit snapshots without fetching or retaining anything
+ *
+ * The guild owner and a member targeting itself pass. A non-owner cannot manage the owner. Other members need a
+ * strictly higher explicit role; no explicit roles rank below any supplied explicit role. `roles` must include one
+ * same-guild observation for every actor and target role ID. `roles.fetchAll` output may include the implicit everyone
+ * role; it is ignored for rank comparison. Members must not list everyone as an explicit role. Malformed, incomplete,
+ * duplicate, cross-guild, or inconsistent snapshots fail with GuildOperationError hierarchy.canManage/input without retaining the input. This
+ * deliberately excludes permissions, MFA, endpoint-specific checks, provider membership state, and concurrent remote
+ * changes, so a successful true result is not action authorization
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { canManageHierarchy, type Client } from "@neontechspace/fluxerly/effect"
+ * export function hierarchyExample(client: Client, guildId: string, actorUserId: string, targetUserId: string) {
+ *     return Effect.gen(function* () {
+ *         const [guild, actor, target, roles] = yield* Effect.all([
+ *             client.guilds.fetch(guildId),
+ *             client.members.fetch({ guildId, userId: actorUserId }),
+ *             client.members.fetch({ guildId, userId: targetUserId }),
+ *             client.roles.fetchAll(guildId),
+ *         ])
+ *         return yield* canManageHierarchy({ guild, actor, target, roles })
+ *     })
+ * }
+ * ```
+ */
+export function canManageHierarchy(input: RoleHierarchyInput): Effect.Effect<boolean, GuildOperationError> {
+    return Effect.suspend(() => {
+        const manageable = evaluateMemberHierarchy(input)
+        return manageable === undefined
+            ? Effect.fail(hierarchyInputFailure("hierarchy.canManage"))
+            : Effect.succeed(manageable)
+    })
+}
 
 /** Native cache controls, with a scoped reporter in the client's creation context */
 export interface MessageCacheOptions<E = never, R = never> extends MessageCacheSettings {
@@ -1618,6 +1758,27 @@ export interface Members {
         input: MemberProfileEdit,
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
+    /** Lazily set or clear one member nickname without replacing that member's roles or profile fields.
+     * nickname is 1–32 Unicode code points; null clears it. Fluxer decides ManageNicknames, hierarchy and self rules.
+     * The frozen HTTP response is not an event acknowledgement. Interruption awaits request cleanup but cannot undo dispatch.
+     * An uncertain result evicts the targeted member cache; a definite rejection preserves its prior snapshot
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MemberReference } from "@neontechspace/fluxerly/effect"
+     * export function nicknameExample(client: Client, target: MemberReference) {
+     *     return Effect.gen(function* () {
+     *         yield* client.members.setNickname(target, "Renamed")
+     *         return yield* client.members.setNickname(target, null)
+     *     })
+     * }
+     * ```
+     */
+    setNickname(
+        member: MemberReference,
+        nickname: string | null,
+        options?: GuildOperationOptions,
+    ): Effect.Effect<GuildMember, GuildOperationFailure>
     /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts
      *
      * Requires ModerateMembers and provider hierarchy rules. The provider rejects self and administrator targets.
@@ -2343,6 +2504,8 @@ export function createClient<E = never, R = never>(
                 ) => paginationStream(searchMemberPagination(owner, id, filters, limits, options)),
                 editSelf: (guildId: string, input: MemberProfileEdit, options?: GuildOperationOptions) =>
                     owner.guild("members.editSelf", () => memberEditSelf(guildId, input), options),
+                setNickname: (target: MemberReference, nickname: string | null, options?: GuildOperationOptions) =>
+                    owner.guild("members.setNickname", () => memberNicknameEdit(target, nickname), options),
                 timeout: (target: MemberReference, durationMs: number, options?: ModerationOptions) =>
                     owner.guild("members.timeout", () => memberTimeout(target, durationMs, options), options),
                 clearTimeout: (target: MemberReference, options?: ModerationOptions) =>
