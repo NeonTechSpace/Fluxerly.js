@@ -1,3 +1,21 @@
+import type { PermissionInput, PermissionTarget } from "./permissions.js"
+export { GuildMemberJoinSourceTypes } from "./member-search.js"
+export type { GuildMemberJoinSourceType } from "./member-search.js"
+export type { PermissionInput, PermissionTarget } from "./permissions.js"
+import { calculatePermissions, fetchPermissions } from "#sdk/internal/permissions"
+import type {
+    MemberSearchQuery,
+    MemberSearchPage,
+    MemberSearchHit,
+    MemberSearchIterationLimits,
+} from "./member-search.js"
+export type {
+    MemberSearchQuery,
+    MemberSearchPage,
+    MemberSearchHit,
+    MemberSearchIterationLimits,
+} from "./member-search.js"
+import { searchMembers, searchMemberPagination } from "#sdk/internal/member-search-workflow"
 import type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 import type {
     DiscoveryApplication,
@@ -266,6 +284,7 @@ import {
     type GuildRole,
     type RoleReference,
     type RolePosition,
+    type RoleHoistPosition,
     type RoleCreate,
     type RoleEdit,
     type GuildMember,
@@ -281,6 +300,7 @@ export type {
     GuildRoleUpdateBulk,
     RoleReference,
     RolePosition,
+    RoleHoistPosition,
     RoleCreate,
     RoleEdit,
     GuildMember,
@@ -302,6 +322,8 @@ import {
     roleEdit,
     roleDelete,
     roleReorder,
+    roleSetHoistPositions,
+    roleResetHoistPositions,
 } from "#sdk/internal/guilds"
 import { memberTimeout, memberKick, guildBan, guildUnban, guildBans } from "#sdk/internal/moderation"
 import type { BanInput, GuildBan, DefaultModerationOptions } from "./guilds.js"
@@ -1446,6 +1468,46 @@ export interface Channels {
  * Writes retry only confirmed 429 rejections, never uncertain outcomes. Cancellation cannot undo a dispatched write
  */
 export interface Members {
+    /** Search indexed member observations remotely, not the local member cache.
+     * Starts immediately. query defaults to an unfiltered page of 25, ordered by join time descending
+     *
+     * Results may lag membership changes. indexing=true is not an empty completed search; even indexing=false with
+     * no hits can mean Fluxer's search service is unavailable. Counts are observations, not completeness guarantees
+     *
+     * Join-source/invite filters first fetch the bot's guild permissions and require ManageGuild, failing rather
+     * than knowingly sending ignored filters. This preflight is not atomic with the search and permissions can change.
+     * Other queries have no hidden reads. Search hits never populate the member cache or fetch full members
+     *
+     * The whole call shares timeoutMs (default 30,000), rate admission and abort cleanup. Preflight GETs use read retries,
+     * but search POST retries only confirmed 429 rejection, since it may enqueue provider indexing
+     *
+     * Expected failures use GuildOperationError/ClientClosedError, cancellation uses CancelledError and defects reject
+     * with SdkDefect. Local permission denial is members.search/rejected with outcome notDispatched and no HTTP status
+     */
+    search(
+        guildId: string,
+        filters?: MemberSearchQuery,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<MemberSearchPage, GuildOperationFailure | CancelledError>
+    /** Demand-driven best-effort search traversal, not a consistent or complete member snapshot.
+     * Reusable lazy AsyncIterable with independent state per consumption. Copies filters at consumption, never prefetches
+     *
+     * maxItems is required; pageSize defaults to 100 (1–100), maxPages to 100. Offset advances by received hit count.
+     * Emits each user at most once per consumption, retaining at most maxItems IDs. Concurrent index changes can skip users
+     *
+     * A provider indexing response fails with PaginationError indexing rather than claiming exhaustion.
+     * An empty page before the observed total fails cursorStalled. Reaching maxItems is normal bounded completion
+     *
+     * Each page uses search's timeout, permission preflight, retry and cache rules. break/return releases retained state.
+     * Abort interrupts a pending pull and awaits cleanup. One terminal Err follows any delivered hits on failure.
+     * Failures also include PaginationError input/pageLimit/cursorStalled. Closing the client releases the page
+     */
+    iterateSearch(
+        guildId: string,
+        filters: Omit<MemberSearchQuery, "limit">,
+        limits: MemberSearchIterationLimits,
+        options?: DefaultGuildOperationOptions,
+    ): AsyncIterable<Result<MemberSearchHit, GuildOperationFailure | PaginationError | CancelledError>>
     /** Edit this bot's server profile, not its global account or another member.
      * Omitted fields remain unchanged and null clears an override. Fluxer enforces permissions and field-specific rate limits.
      * Empty or unknown-key input fails locally.
@@ -1605,6 +1667,29 @@ export interface Members {
     ): ResultAsync<void, GuildOperationFailure | CancelledError>
 }
 
+/** Explicit permission-bit calculations, not channel visibility, role hierarchy, timeout or action-authorization checks */
+export interface PermissionHelpers {
+    /** Synchronous local calculation from supplied snapshots, without requests or cache reads.
+     * Works independently of connection state, including after shutdown. Missing/inconsistent required data produces
+     * GuildOperationError permissions.calculate/input. Returns unsigned 64-bit bigint, preserving unknown bits.
+     * Owner/base Administrator grants all bits; otherwise applies everyone, aggregated roles, then member overrides.
+     * Uses only the target channel's stored overrides, never a parent category. Defects throw SdkDefect
+     */
+    calculate(input: PermissionInput): Result<bigint, GuildOperationError>
+    /** Fetch guild/member/roles and optional target channel, then calculate the same permission bits.
+     * Starts immediately with no gateway requirement or cache-first lookup. Existing resource caches may admit the reads.
+     * Sequential observations are not atomic. No permission result is retained and no later action is guaranteed.
+     * timeoutMs defaults to 30,000 across the workflow, using shared read retries and awaited abort cleanup.
+     * Invalid target/deadline uses GuildOperationError permissions.fetch/input; resource failures retain their original
+     * GuildOperationError or ChannelOperationError. Closing uses ClientClosedError, cancellation CancelledError,
+     * and defects reject with SdkDefect. A channel from another guild fails rather than calculating across guilds
+     */
+    fetch(
+        target: PermissionTarget,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<bigint, GuildOperationFailure | ChannelOperationFailure | CancelledError>
+}
+
 /** Immediate role operations sharing Guilds' admission, deadlines and read retries.
  * Writes retry only confirmed 429 rejections. Server permissions/hierarchy apply; no local permission prediction.
  * Abort waits for owned cleanup but cannot undo dispatched writes. Success is not a gateway acknowledgement.
@@ -1659,6 +1744,32 @@ export interface Roles {
     reorder(
         guildId: string,
         positions: readonly RolePosition[],
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    /** Set display positions for distinct roles without changing permission hierarchy or enabling hoist.
+     * Requires a nonempty list of signed 32-bit positions, excluding everyone. Fluxer enforces ManageRoles and hierarchy.
+     * HTTP 204 returns no roles. Successful or uncertain writes invalidate retained guild roles, including pending reads.
+     * Failures or cancellation can leave partial changes; refetch before reconciliation rather than replaying blindly
+     * @example
+     * ```ts
+     * import { type Client } from "@neontechspace/fluxerly"
+     * export function orderRoleDisplay(client: Client, guildId: string, roleId: string) {
+     *     return client.roles.setHoistPositions(guildId, [{ id: roleId, hoistPosition: 0 }])
+     * }
+     * ```
+     */
+    setHoistPositions(
+        guildId: string,
+        positions: readonly RoleHoistPosition[],
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    /** Clear display-position assignments for every role in the guild, not just roles below the bot.
+     * Fluxer enforces ManageRoles. Permission hierarchy and hoist flags remain unchanged.
+     * HTTP 204 has no role list. This is not transactional; a failure can leave partial changes.
+     * Successful or uncertain writes invalidate retained guild roles. Refetch to reconcile an unknown outcome
+     */
+    resetHoistPositions(
+        guildId: string,
         options?: DefaultGuildOperationOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError>
 }
@@ -1762,6 +1873,8 @@ export interface Client extends ClientState {
     readonly webhooks: Webhooks
     /** Remote role management and explicitly enabled local role lookup */
     readonly roles: Roles
+    /** Explicit local and remote permission-bit helpers, without cached decisions */
+    readonly permissions: PermissionHelpers
     /** Remote guild reads and ban management, with explicitly enabled local guild lookup */
     readonly guilds: Guilds
     /** Remote invite inspection and management, without accepting invites or retaining codes */
@@ -2227,7 +2340,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         operation: Operation,
         options?: OperationOptions,
     ) => executeOperation(owner.logging.provide(effect), operation, options)
-    const iterate = <A, E extends MessageOperationFailure | GuildOperationFailure>(
+    const iterate = <A, E extends MessageOperationFailure | GuildOperationFailure | PaginationError>(
         create: (
             options: import("./messages.js").MessageOperationOptions,
         ) => Effect.Effect<Pagination<A, E>, PaginationError>,
@@ -2681,6 +2794,19 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     ),
             }),
             members: Object.freeze({
+                search: (id: string, query?: MemberSearchQuery, options?: DefaultGuildOperationOptions) =>
+                    execute(searchMembers(owner, id, query, options), "members.search", options),
+                iterateSearch: (
+                    id: string,
+                    filters: Omit<MemberSearchQuery, "limit">,
+                    limits: MemberSearchIterationLimits,
+                    options?: DefaultGuildOperationOptions,
+                ) =>
+                    iterate(
+                        (request) => searchMemberPagination(owner, id, filters, limits, request),
+                        "members.iterateSearch",
+                        options,
+                    ),
                 editSelf: (guildId: string, input: MemberProfileEdit, options?: DefaultGuildOperationOptions) =>
                     execute(
                         owner.guild("members.editSelf", () => memberEditSelf(guildId, input), options),
@@ -2739,7 +2865,28 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         options,
                     ),
             }),
+            permissions: Object.freeze({
+                calculate: (input: PermissionInput) => lookup(calculatePermissions(input), "permissions.calculate"),
+                fetch: (target: PermissionTarget, options?: DefaultGuildOperationOptions) =>
+                    execute(fetchPermissions(owner, target, options), "permissions.fetch", options),
+            }),
             roles: Object.freeze({
+                setHoistPositions: (
+                    id: string,
+                    positions: readonly RoleHoistPosition[],
+                    options?: DefaultGuildOperationOptions,
+                ) =>
+                    execute(
+                        owner.guild("roles.setHoistPositions", () => roleSetHoistPositions(id, positions), options),
+                        "roles.setHoistPositions",
+                        options,
+                    ),
+                resetHoistPositions: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("roles.resetHoistPositions", () => roleResetHoistPositions(id), options),
+                        "roles.resetHoistPositions",
+                        options,
+                    ),
                 get: (target: RoleReference) => lookup(owner.getResource("roles", target), "roles.get"),
                 fetchAll: (id: string, options?: DefaultGuildOperationOptions) =>
                     execute(

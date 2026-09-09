@@ -8,6 +8,7 @@ import {
     type RoleCreate,
     type RoleEdit,
     type RolePosition,
+    type RoleHoistPosition,
     type EventMap,
     type EventName,
     type MemberQuery,
@@ -831,6 +832,94 @@ test.each(modes)("%s rejects invalid resource settings without running policies"
         }
 })
 
+test.each(modes)("%s keeps hoist display writes separate and invalidates late role reads", async (mode) => {
+    const api = await setup(mode, { roles: true })
+    const calls: { path: string; method: string; body: unknown }[] = []
+    let block = false
+    let release!: () => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+        entered = resolve
+    })
+    rest(async (url, init) => {
+        calls.push({
+            path: new URL(url).pathname,
+            method: init.method!,
+            body: init.body ? JSON.parse(String(init.body)) : undefined,
+        })
+        if (init.method === "GET") {
+            if (block) {
+                entered()
+                await new Promise<void>((resolve) => {
+                    release = resolve
+                })
+            }
+            return Response.json([wireRole()])
+        }
+        return new Response(null, { status: 204 })
+    })
+    await api.roles.list()
+    expect(await api.getRole()).toBeDefined()
+    block = true
+    const late = api.roles.list()
+    await started
+    await api.roles.setHoist([{ id: "50", hoistPosition: -1 }])
+    expect(await api.getRole()).toBeUndefined()
+    release()
+    await late
+    expect(await api.getRole()).toBeUndefined()
+    expect(calls.at(-1)).toEqual({
+        path: "/v1/guilds/20/roles/hoist-positions",
+        method: "PATCH",
+        body: [{ id: "50", hoist_position: -1 }],
+    })
+    block = false
+    await api.roles.list()
+    await api.roles.resetHoist()
+    expect(await api.getRole()).toBeUndefined()
+    expect(calls.at(-1)).toEqual({ path: "/v1/guilds/20/roles/hoist-positions", method: "DELETE", body: undefined })
+})
+
+test.each(modes)(
+    "%s rejects malformed hoist assignments before dispatch and does not replay uncertain writes",
+    async (mode) => {
+        const api = await setup(mode, { roles: true })
+        let calls = 0
+        rest(async () => {
+            calls++
+            return new Response(null, { status: 204 })
+        })
+        for (const positions of [
+            [],
+            [{ id: "20", hoistPosition: 0 }],
+            [{ id: "bad", hoistPosition: 0 }],
+            [
+                { id: "50", hoistPosition: 0 },
+                { id: "50", hoistPosition: 1 },
+            ],
+            [{ id: "50", position: 0 }],
+            [{ id: "50", hoistPosition: 0, extra: true }],
+            ...[NaN, Infinity, 0.5, 2_147_483_648, -2_147_483_649, null].map((hoistPosition) => [
+                { id: "50", hoistPosition },
+            ]),
+        ]) {
+            await expect(api.roles.setHoist(positions as readonly RoleHoistPosition[])).rejects.toMatchObject({
+                reason: "input",
+                outcome: "notDispatched",
+            })
+        }
+        expect(calls).toBe(0)
+        rest(async () => {
+            calls++
+            return new Response(null, { status: 503 })
+        })
+        await expect(api.roles.setHoist([{ id: "50", hoistPosition: 0 }])).rejects.toMatchObject({ outcome: "unknown" })
+        expect(calls).toBe(1)
+        await expect(api.roles.resetHoist()).rejects.toMatchObject({ outcome: "unknown" })
+        expect(calls).toBe(2)
+    },
+)
+
 const member = (id = "30", roles = ["40"]) => ({
     user: { id, username: "fixture", bot: true },
     roles,
@@ -906,6 +995,14 @@ async function setup(
         fetchRoles: async (id: string) =>
             defaultApi ? unwrap(await defaultApi.roles.fetchAll(id)) : run(native!.roles.fetchAll(id)),
         roles: {
+            setHoist: async (positions: readonly RoleHoistPosition[], options?: DefaultGuildOperationOptions) =>
+                defaultApi
+                    ? unwrap(await defaultApi.roles.setHoistPositions("20", positions, options))
+                    : run(native!.roles.setHoistPositions("20", positions, options), options?.signal as AbortSignal),
+            resetHoist: async () =>
+                defaultApi
+                    ? unwrap(await defaultApi.roles.resetHoistPositions("20"))
+                    : run(native!.roles.resetHoistPositions("20")),
             list: async () =>
                 defaultApi ? unwrap(await defaultApi.roles.fetchAll("20")) : run(native!.roles.fetchAll("20")),
             create: async (input: RoleCreate) =>

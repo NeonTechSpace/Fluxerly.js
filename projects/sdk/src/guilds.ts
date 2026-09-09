@@ -460,8 +460,19 @@ export interface RolePosition {
     readonly position: number
 }
 
+/** One display-order assignment, independent of permission hierarchy and the role's hoist flag */
+export interface RoleHoistPosition {
+    /** Decimal role ID, excluding everyone */
+    readonly id: string
+    /** Signed 32-bit display ordering value, not the permission-hierarchy position */
+    readonly hoistPosition: number
+}
+
 /** Guild-area operation identified by expected failures and default defects */
 export type GuildOperation =
+    | "permissions.calculate"
+    | "permissions.fetch"
+    | "members.search"
     | `discovery.${"fetchStatus" | "fetchCategories" | "apply" | "edit" | "withdraw"}`
     | `invites.${"fetch" | "create" | "fetchChannel" | "fetchGuild" | "delete"}`
     | `${"emojis" | "stickers"}.${"get" | "fetchAll" | "fetchMetadata" | "create" | "createMany" | "clone" | "edit" | "delete"}`
@@ -490,6 +501,8 @@ export type GuildOperation =
     | "roles.edit"
     | "roles.delete"
     | "roles.reorder"
+    | "roles.setHoistPositions"
+    | "roles.resetHoistPositions"
 
 /** Expected guild-area failure with safe metadata, never a token, input value or upstream response body.
  * HTTP completion is not gateway delivery. Cancellation and client closure use separate error types

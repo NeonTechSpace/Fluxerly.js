@@ -7,7 +7,7 @@ export interface PaginationQuery {
     readonly maxItems: number
     /** Maximum items requested per page, reduced to the remaining item allowance.
      * Defaults/ranges match the underlying endpoint: History 50/1–100, members 100/1–1000,
-     * reaction users 25/1–100, pins 50/1–50 and audit logs 50/1–100
+     * reaction users 25/1–100, pins 50/1–50, audit logs 50/1–100 and member search 100/1–100
      */
     readonly pageSize?: number
     /** Maximum logical page requests, a positive safe integer, default 100.
@@ -40,7 +40,12 @@ export interface PinIterationQuery extends PaginationQuery {
 
 /** Traversal identified by a pagination failure or a default SDK defect */
 export type PaginationOperation =
-    "iterateHistory" | "members.iterate" | "iterateReactionUsers" | "iteratePins" | "auditLogs.iterate"
+    | "iterateHistory"
+    | "members.iterate"
+    | "members.iterateSearch"
+    | "iterateReactionUsers"
+    | "iteratePins"
+    | "auditLogs.iterate"
 
 /** Local traversal failure without identifiers, response bodies or partial results.
  * Items already delivered remain caller-owned. Remote failures retain their underlying page-operation error
@@ -51,8 +56,8 @@ export class PaginationError extends Error {
     constructor(
         /** The traversal that failed, not proof that a page request was dispatched */
         readonly operation: PaginationOperation,
-        /** Invalid input, no forward cursor progress, or a further page exceeding maxPages */
-        readonly reason: "input" | "cursorStalled" | "pageLimit",
+        /** Invalid input, no forward cursor progress, a further page exceeding maxPages, or a search index not ready */
+        readonly reason: "input" | "cursorStalled" | "pageLimit" | "indexing",
     ) {
         super(`Pagination failed (${operation}, ${reason})`)
         this.name = this._tag

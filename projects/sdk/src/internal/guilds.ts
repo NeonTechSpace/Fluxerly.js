@@ -13,6 +13,7 @@ import type {
     MemberQuery,
     MemberReference,
     RolePosition,
+    RoleHoistPosition,
     RoleReference,
 } from "#sdk/guilds"
 import { identifier, record } from "./message.js"
@@ -540,6 +541,55 @@ export function roleReorder(guildId: string, positions: readonly RolePosition[])
         method: "PATCH",
         status: 204,
         json: JSON.stringify(updates),
+        decode: () => undefined,
+    }
+}
+
+export function roleSetHoistPositions(
+    guildId: string,
+    positions: readonly RoleHoistPosition[],
+): GuildRequest<void> | undefined {
+    if (!identifier(guildId) || !Array.isArray(positions) || positions.length === 0) return undefined
+    const ids = new Set<string>()
+    const updates: { id: string; hoist_position: number }[] = []
+    let bytes = 2
+    for (const item of positions) {
+        if (
+            !record(item) ||
+            Object.keys(item).some((key) => key !== "id" && key !== "hoistPosition") ||
+            !identifier(item.id) ||
+            item.id === guildId ||
+            ids.has(item.id) ||
+            !int32(item.hoistPosition)
+        )
+            return undefined
+        const copy = { id: item.id, hoist_position: item.hoistPosition }
+        bytes += Buffer.byteLength(JSON.stringify(copy)) + (updates.length ? 1 : 0)
+        if (bytes > 4_194_304) return undefined
+        ids.add(item.id)
+        updates.push(copy)
+    }
+    return {
+        guildId,
+        bucket: "guild:role:hoist-positions",
+        cache: { selection: { kind: "roles", guildId }, mutation: true },
+        path: `/guilds/${guildId}/roles/hoist-positions`,
+        method: "PATCH",
+        status: 204,
+        json: JSON.stringify(updates),
+        decode: () => undefined,
+    }
+}
+
+export function roleResetHoistPositions(guildId: string): GuildRequest<void> | undefined {
+    if (!identifier(guildId)) return undefined
+    return {
+        guildId,
+        bucket: "guild:role:hoist-positions",
+        cache: { selection: { kind: "roles", guildId }, mutation: true },
+        path: `/guilds/${guildId}/roles/hoist-positions`,
+        method: "DELETE",
+        status: 204,
         decode: () => undefined,
     }
 }

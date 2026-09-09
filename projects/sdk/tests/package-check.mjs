@@ -92,6 +92,8 @@ try {
             "invites",
             "audit-logs",
             "discovery",
+            "permissions",
+            "member-search",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -205,9 +207,11 @@ try {
                     .join("\n"),
             )
             .filter((example) =>
-                /(?:function|const) (?:(?:assign|create)RoleExample|cachedRoleNamesExample)/.test(example),
+                /(?:function|const) (?:(?:assign|create)RoleExample|cachedRoleNamesExample|orderRoleDisplay)/.test(
+                    example,
+                ),
             )
-        assert.equal(guildExamples.length, 3)
+        assert.equal(guildExamples.length, 4)
         const channelExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]
@@ -290,7 +294,17 @@ try {
         assert.equal(loggingExamples.length, 1)
         writeFileSync(join(consumer, "logging-example.ts"), loggingExamples[0])
         const embedSource = readFileSync(join(sdk, "src/embeds.ts"), "utf8")
-        for (const entry of ["expressions", "messages", "invites", "audit-logs", "guilds", "events", "discovery"]) {
+        for (const entry of [
+            "expressions",
+            "messages",
+            "invites",
+            "audit-logs",
+            "guilds",
+            "events",
+            "discovery",
+            "permissions",
+            "member-search",
+        ]) {
             const source = readFileSync(join(sdk, `src/${entry}.ts`), "utf8")
             const examples = [...source.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
                 .map((match) =>
@@ -300,7 +314,7 @@ try {
                         .join("\n"),
                 )
                 .filter((example) =>
-                    /function (expression|expressionEvents|sticker|invite|audit|guildSettings|discovery)Example/.test(
+                    /function (expression|expressionEvents|sticker|invite|audit|guildSettings|discovery|permissions|memberSearch)Example/.test(
                         example,
                     ),
                 )

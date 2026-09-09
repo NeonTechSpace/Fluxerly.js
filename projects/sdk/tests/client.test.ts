@@ -91,6 +91,7 @@ describe("client creation through both public entry points", () => {
                 "guilds",
                 "channels",
                 "members",
+                "permissions",
                 "roles",
                 "messages",
                 "on",

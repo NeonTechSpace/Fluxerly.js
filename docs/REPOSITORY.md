@@ -34,6 +34,9 @@ The documentation website remains a scaffold
 | [guild-settings.ts](/projects/sdk/src/internal/guild-settings.ts) | Bot-permitted server-setting validation and patch encoding, using shared REST and resource-cache guards |
 | [vanity-url.ts](/projects/sdk/src/internal/vanity-url.ts) | Custom-invite reads and explicit replacement, without retained codes or hidden use-count reads |
 | [guild-discovery.ts](/projects/sdk/src/internal/guild-discovery.ts) | Public server-directory eligibility, categories and application lifecycle; distinct from hosted service discovery |
+| [member-search.ts](/projects/sdk/src/internal/member-search.ts) | Indexed member-search validation and projection, separate from full member observations |
+| [member-search-workflow.ts](/projects/sdk/src/internal/member-search-workflow.ts) | Invite-sensitive permission preflight and bounded offset search traversal |
+| [permissions.ts](/projects/sdk/src/internal/permissions.ts) | Local permission-bit calculation and explicit fresh-resource composition, not action authorization |
 | [user-cache.ts](/projects/sdk/src/internal/user-cache.ts) | Optional account/private-conversation retention, conflicting reads and lifecycle invalidation |
 | [presence.ts](/projects/sdk/src/internal/presence.ts) | Process-local bot presence intent, coalescing and gateway reconnect restoration |
 | [multipart.ts](/projects/sdk/src/internal/multipart.ts) | Bounded webhook multipart body streaming over admitted file snapshots |
@@ -158,6 +161,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:vanity` | Custom-invite reads, read recovery and disabled-feature rejection through both APIs | No intended successful mutation, uses a reserved code for rejection checks |
 | `test:live:vanity:mutate:default`, `test:live:vanity:mutate:effect` | Manual custom-invite lifecycle and lost-response reconciliation | Opt-in temporary custom codes on an eligible sandbox with no existing code |
 | `test:live:discovery` | Directory categories, eligibility/status and read recovery through both APIs | Read-only, never submits an application |
+| `test:live:member-search` | Indexed member search and local/remote permission calculation through both APIs | Resource reads and search requests, which can trigger provider lazy indexing; no member moderation or role/channel edits |
 | `test:live:discovery:mutate:default`, `test:live:discovery:mutate:effect` | Manual directory application lifecycle and lost-response reconciliation | Real review-queue submission or immediate public listing, then test-owned withdrawal |
 | `test:live:users:default`, `test:live:users:effect` | Public user reads, private conversations, bot server-profile edits and message failure reconciliation | Test DMs, authorized group messages/renaming, bot profile changes and test-owned response loss |
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |

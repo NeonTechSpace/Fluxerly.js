@@ -408,6 +408,65 @@ async function verifyGuildRoles(ops, roleId) {
                         role.position !== second.position),
             ),
         )
+        stage = "role_hoist_positions"
+        await ops.setHoistPositions([
+            { id: roleId, hoistPosition: 1 },
+            { id: secondId, hoistPosition: 0 },
+        ])
+        const hoisted = (await api("GET", `/guilds/${guildId}/roles`)).data
+        assert.equal(hoisted.find((role) => role.id === roleId).hoist_position, 1)
+        assert.equal(hoisted.find((role) => role.id === secondId).hoist_position, 0)
+        assert.deepEqual(
+            hoisted.map((role) => [role.id, role.position, role.hoist]),
+            readback.map((role) => [role.id, role.position, role.hoist]),
+        )
+        assert.deepEqual(
+            hoisted
+                .filter((role) => role.id !== roleId && role.id !== secondId)
+                .map((role) => [role.id, role.hoist_position]),
+            readback
+                .filter((role) => role.id !== roleId && role.id !== secondId)
+                .map((role) => [role.id, role.hoist_position]),
+        )
+        await waitEvent("guildRoleUpdateBulk", (value) =>
+            value.roles.some((role) => role.id === roleId && role.hoistPosition === 1),
+        )
+        report(stage, true)
+        stage = "role_hoist_uncertain_write"
+        const beforeLoss = globalThis.fetch
+        let hoistDispatches = 0
+        globalThis.fetch = async (...args) => {
+            const response = await beforeLoss(...args)
+            if (
+                args[1]?.method === "PATCH" &&
+                new URL(args[0]).pathname === `/v1/guilds/${guildId}/roles/hoist-positions`
+            ) {
+                hoistDispatches++
+                assert.equal(response.status, 204)
+                await response.arrayBuffer()
+                await waitEvent("guildRoleUpdateBulk", (value) =>
+                    value.roles.some((role) => role.id === roleId && role.hoistPosition === 2),
+                )
+                throw new Error("Test-owned response loss")
+            }
+            return response
+        }
+        try {
+            await assert.rejects(
+                ops.setHoistPositions([{ id: roleId, hoistPosition: 2 }]),
+                (error) => error.outcome === "unknown",
+            )
+            assert.equal(hoistDispatches, 1)
+            assert.equal(await ops.getRole(roleId), undefined)
+        } finally {
+            globalThis.fetch = beforeLoss
+        }
+        assert.equal(
+            (await api("GET", `/guilds/${guildId}/roles`)).data.find((role) => role.id === roleId).hoist_position,
+            2,
+        )
+        assert.equal((await ops.roles()).find((role) => role.id === roleId).hoistPosition, 2)
+        report(stage, true)
         for (const id of [roleId, secondId]) {
             stage = "role_delete"
             await ops.deleteRole(id)
@@ -2525,6 +2584,7 @@ try {
                         editRole: (id, input) => run(client.roles.edit({ guildId, id }, input)),
                         deleteRole: (id) => run(client.roles.delete({ guildId, id })),
                         reorderRoles: (positions) => run(client.roles.reorder(guildId, positions)),
+                        setHoistPositions: (positions) => run(client.roles.setHoistPositions(guildId, positions)),
                         member: (target) => run(client.members.fetch(target)),
                         self: () => run(client.members.fetchSelf(guildId)),
                         page: () => run(client.members.fetchPage(guildId, { limit: 2 })),
@@ -3098,6 +3158,8 @@ try {
                                     editRole: (id, input) => run(client.roles.edit({ guildId, id }, input)),
                                     deleteRole: (id) => run(client.roles.delete({ guildId, id })),
                                     reorderRoles: (positions) => run(client.roles.reorder(guildId, positions)),
+                                    setHoistPositions: (positions) =>
+                                        run(client.roles.setHoistPositions(guildId, positions)),
                                     member: (target) => run(client.members.fetch(target)),
                                     self: () => run(client.members.fetchSelf(guildId)),
                                     page: () => run(client.members.fetchPage(guildId, { limit: 2 })),

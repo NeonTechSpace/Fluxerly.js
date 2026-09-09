@@ -47,6 +47,7 @@
         "test:live:administration": "pnpm run build && node tests/live/administration.mjs default && node tests/live/administration.mjs effect",
         "test:live:vanity": "pnpm run build && node tests/live/vanity-url.mjs default && node tests/live/vanity-url.mjs effect",
         "test:live:discovery": "pnpm run build && node tests/live/discovery.mjs default && node tests/live/discovery.mjs effect",
+        "test:live:member-search": "pnpm run build && node tests/live/member-search.mjs default && node tests/live/member-search.mjs effect",
         "test:live:discovery:mutate:default": "pnpm run build && node tests/live/discovery.mjs default --mutate",
         "test:live:discovery:mutate:effect": "pnpm run build && node tests/live/discovery.mjs effect --mutate",
         "test:live:vanity:mutate:default": "pnpm run build && node tests/live/vanity-url.mjs default --mutate",
