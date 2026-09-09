@@ -844,7 +844,7 @@ test("an unexpected accounting defect stays outside default typed message failur
 })
 
 test.each(["default", "native"] as const)(
-    "%s cache conflicts include embeds, attachments and pin state",
+    "%s cache conflicts include embeds, attachments, pin state and webhook identity",
     async (mode) => {
         const server = await fixture()
         const scope = Scope.makeUnsafe()
@@ -867,6 +867,7 @@ test.each(["default", "native"] as const)(
             { embeds: [{ type: "rich", description: "different embed" }] },
             { attachments: [{ id: "40", filename: "different.txt", size: 1, flags: 0 }] },
             { pinned: true },
+            { webhook_id: "99" },
         ]) {
             let reply!: () => void
             server.control.respond = (request) => {
@@ -879,6 +880,7 @@ test.each(["default", "native"] as const)(
             await vi.waitFor(() => expect(server.requests).toHaveLength(before + 1))
             server.dispatch("MESSAGE_UPDATE", { ...wire("10", "20", "same text"), ...extra })
             await vi.waitFor(async () => expect(await get()).toBeDefined())
+            if ("webhook_id" in extra) expect((await get())?.webhookId).toBe("99")
             reply()
             expect((await pending).content).toBe("same text")
             expect(await get()).toBeUndefined()

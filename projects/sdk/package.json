@@ -41,6 +41,7 @@
         "test:live:batch-delete": "pnpm run build && node tests/live/messages.mjs default --batch-delete && node tests/live/messages.mjs effect --batch-delete",
         "test:live:moderation:default": "pnpm run build && node tests/live/messages.mjs default --moderation",
         "test:live:moderation:effect": "pnpm run build && node tests/live/messages.mjs effect --moderation",
+        "test:live:webhooks": "pnpm run build && node tests/live/webhooks.mjs default && node tests/live/webhooks.mjs effect",
         "test:live:events": "pnpm run build && node tests/live/messages.mjs default --events && node tests/live/messages.mjs effect --events",
         "test:live:reactions": "pnpm run build && node tests/live/messages.mjs default --reactions && node tests/live/messages.mjs effect --reactions",
         "test:live:pins": "pnpm run build && node tests/live/messages.mjs default --pins && node tests/live/messages.mjs effect --pins",

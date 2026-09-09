@@ -1,4 +1,11 @@
 import assert from "node:assert/strict"
+import { createWebhookClient } from "@neontechspace/fluxerly"
+
+const webhookClient = createWebhookClient({ id: "100", token: "fixture_only" })
+assert.ok(webhookClient.isOk())
+assert.equal((await webhookClient.value.send({ content: "x" }, { timeoutMs: 0 })).error._tag, "WebhookOperationError")
+await webhookClient.value.shutdown()
+assert.equal((await webhookClient.value.fetchMessage("400")).error._tag, "ClientClosedError")
 
 globalThis.fetch = () => {
     throw new Error("Creation must not make HTTP requests")

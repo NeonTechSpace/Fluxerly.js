@@ -51,6 +51,8 @@ export class ConfigurationError extends Error {
 
 /** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
 export type Operation =
+    | import("./webhooks.js").WebhookOperation
+    | "createWebhookClient"
     | import("./channels.js").ChannelOperation
     | import("./guilds.js").GuildOperation
     | import("./pagination.js").PaginationOperation
@@ -180,6 +182,7 @@ export type DefectReason =
               | import("./message-errors.js").MessageOperationError
               | import("./guilds.js").GuildOperationError
               | import("./channels.js").ChannelOperationError
+              | import("./webhooks.js").WebhookOperationError
               | import("./pagination.js").PaginationError
               | import("./collectors.js").CollectorError
       }

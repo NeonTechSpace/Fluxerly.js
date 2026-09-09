@@ -1,4 +1,18 @@
 import assert from "node:assert/strict"
+import { createWebhookClient } from "@neontechspace/fluxerly/effect"
+
+await Effect.runPromise(
+    Effect.scoped(
+        Effect.gen(function* () {
+            const webhook = yield* createWebhookClient({ id: "100", token: "fixture_only" })
+            const invalid = yield* Effect.result(webhook.send({ content: "x" }, { timeoutMs: 0 }))
+            assert.equal(invalid.failure._tag, "WebhookOperationError")
+            yield* webhook.shutdown()
+            const closed = yield* Effect.result(webhook.fetchMessage("400"))
+            assert.equal(closed.failure._tag, "ClientClosedError")
+        }),
+    ),
+)
 import { realpathSync } from "node:fs"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"

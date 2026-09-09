@@ -1,0 +1,435 @@
+import { inspect } from "node:util"
+import { createServer } from "node:http"
+import { once } from "node:events"
+import { Effect, Exit, Scope } from "effect"
+import type { ResultAsync } from "neverthrow"
+import { afterEach, expect, onTestFinished, test, vi } from "vitest"
+import { createClient, createWebhookClient, type WebhookClientOptions } from "../src/index.js"
+import { createClient as createNative, createWebhookClient as createNativeWebhook } from "../src/effect.js"
+
+const modes = ["default", "native"] as const
+const secret = "test_only_secret"
+const metadata = (extra = {}) => ({
+    id: "100",
+    guild_id: "200",
+    channel_id: "300",
+    name: "Deployments",
+    avatar: null,
+    token: secret,
+    ...extra,
+})
+const message = (extra = {}) => ({
+    id: "400",
+    channel_id: "300",
+    webhook_id: "100",
+    content: "Deploying",
+    author: { id: "100", username: "Deployments", bot: true },
+    ...extra,
+})
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
+
+async function settle<A>(value: ResultAsync<A, unknown> | Effect.Effect<A, unknown>): Promise<A> {
+    if (Effect.isEffect(value)) {
+        const result = await Effect.runPromise(Effect.result(value))
+        if (result._tag === "Failure") throw result.failure
+        return result.success
+    }
+    const result = await value
+    if (result.isErr()) throw result.error
+    return result.value
+}
+
+async function setup(mode: (typeof modes)[number], options: WebhookClientOptions = { id: "100", token: secret }) {
+    const scope = Scope.makeUnsafe()
+    const bot =
+        mode === "native"
+            ? await Effect.runPromise(
+                  createNative({ token: "test_bot" }).pipe(Effect.provideService(Scope.Scope, scope)),
+              )
+            : createClient({ token: "test_bot" })._unsafeUnwrap()
+    const webhook =
+        mode === "native"
+            ? await Effect.runPromise(createNativeWebhook(options).pipe(Effect.provideService(Scope.Scope, scope)))
+            : createWebhookClient(options)._unsafeUnwrap()
+    const shutdown = async () => {
+        const a = webhook.shutdown(),
+            b = bot.shutdown()
+        await Promise.all([
+            Effect.isEffect(a) ? Effect.runPromise(a) : a,
+            Effect.isEffect(b) ? Effect.runPromise(b) : b,
+        ])
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+    }
+    onTestFinished(shutdown)
+    return { bot, webhook, shutdown }
+}
+
+test.each(modes)("%s manages webhooks with token-free snapshots and explicit credential access", async (mode) => {
+    const requests: { path: string; method: string; body: unknown }[] = []
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+            expect(new Headers(init.headers).get("authorization")).toBe("Bot test_bot")
+            const path = new URL(url).pathname
+            requests.push({ path, method: init.method!, body: init.body ? JSON.parse(String(init.body)) : undefined })
+            if (init.method === "DELETE") return new Response(null, { status: 204 })
+            if (init.method === "GET" && path.endsWith("/webhooks")) return Response.json([metadata()])
+            return Response.json(metadata())
+        }),
+    )
+    const { bot } = await setup(mode)
+    const created = await settle(
+        bot.webhooks.create("300", { name: "Deployments" }, { auditReason: "Created for deployment" }),
+    )
+    expect(created.webhook).toEqual({ id: "100", guildId: "200", channelId: "300", name: "Deployments", avatar: null })
+    expect(Object.isFrozen(created.webhook)).toBe(true)
+    expect(created.credentials.revealToken()).toBe(secret)
+    expect(JSON.stringify(created)).not.toContain(secret)
+    expect(inspect(created, { showHidden: true, depth: 8 })).not.toContain(secret)
+    const standalone = createWebhookClient(created.credentials)._unsafeUnwrap()
+    await standalone.shutdown()
+    expect(await settle(bot.webhooks.fetch("100"))).toEqual(created.webhook)
+    expect(await settle(bot.webhooks.fetchChannel("300"))).toEqual([created.webhook])
+    expect(await settle(bot.webhooks.fetchGuild("200"))).toEqual([created.webhook])
+    await settle(bot.webhooks.edit("100", { name: "Renamed", avatar: null, channelId: "301" }))
+    await settle(bot.webhooks.delete("100"))
+    expect(requests.map((x) => [x.path, x.method])).toEqual([
+        ["/v1/channels/300/webhooks", "POST"],
+        ["/v1/webhooks/100", "GET"],
+        ["/v1/channels/300/webhooks", "GET"],
+        ["/v1/guilds/200/webhooks", "GET"],
+        ["/v1/webhooks/100", "PATCH"],
+        ["/v1/webhooks/100", "DELETE"],
+    ])
+    expect(requests[4]!.body).toEqual({ name: "Renamed", avatar: null, channel_id: "301" })
+})
+
+test.each(modes)("%s sends and manages owned messages without bot auth or discovery", async (mode) => {
+    const calls: { url: string; body: unknown }[] = []
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+            expect(new Headers(init.headers).has("authorization")).toBe(false)
+            expect(init.redirect).toBe("error")
+            calls.push({ url, body: init.body ? JSON.parse(String(init.body)) : undefined })
+            return init.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json(message())
+        }),
+    )
+    const { webhook } = await setup(mode)
+    await settle(
+        webhook.send({
+            content: "@everyone Deploying",
+            username: "Build",
+            avatarUrl: "https://example.com/avatar.png",
+        }),
+    )
+    await settle(webhook.fetchMessage("400"))
+    await settle(webhook.editMessage("400", { content: "Deployed", embeds: [] }))
+    await settle(webhook.deleteMessage("400"))
+    expect(calls[0]!.url).toBe(`https://api.fluxer.app/v1/webhooks/100/${secret}?wait=true`)
+    expect(calls[0]!.body).toMatchObject({
+        username: "Build",
+        avatar_url: "https://example.com/avatar.png",
+        allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+    })
+    expect(calls[0]!.body).not.toHaveProperty("nonce")
+    expect(calls.slice(1).every((call) => call.url.endsWith("/messages/400"))).toBe(true)
+})
+
+test.each(modes)("%s rejects invalid input before any dispatch", async (mode) => {
+    const fetch = vi.fn()
+    vi.stubGlobal("fetch", fetch)
+    const { bot, webhook } = await setup(mode)
+    for (const operation of [
+        () => bot.webhooks.create("bad", { name: "x" }),
+        () => bot.webhooks.create("300", { name: " " }),
+        () => bot.webhooks.edit("100", {}),
+        () => bot.webhooks.delete("100", { auditReason: "line\nbreak" }),
+        () => webhook.send({ content: "x", avatarUrl: "file:///private" }),
+        () => webhook.send({ content: "x", username: " " }),
+        () => webhook.fetchMessage("../400"),
+        () => webhook.editMessage("400", { attachments: [] } as never),
+        () => webhook.send({ content: "x" }, { timeoutMs: 0 }),
+        () => webhook.send({ content: "x" }, { auditReason: "unsupported" } as never),
+    ])
+        await expect(settle<unknown>(operation())).rejects.toMatchObject({
+            _tag: "WebhookOperationError",
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    expect(fetch).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s rejects mismatched identities and malformed lists without exposing secrets", async (mode) => {
+    let response: unknown = message({ webhook_id: "101", private: secret })
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(response)),
+    )
+    const { bot, webhook } = await setup(mode)
+    await expect(settle(webhook.send({ content: "x" }))).rejects.toMatchObject({
+        reason: "response",
+        outcome: "unknown",
+    })
+    response = [metadata(), metadata()]
+    await expect(settle(bot.webhooks.fetchGuild("200"))).rejects.toMatchObject({ reason: "response" })
+    response = metadata({ channel_id: "301" })
+    await expect(settle(bot.webhooks.create("300", { name: "x" }))).rejects.toMatchObject({ reason: "response" })
+})
+
+test.each(modes)("%s does not replay unknown sends, but retries confirmed rate limits", async (mode) => {
+    let attempts = 0,
+        rate = false
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+            attempts++
+            if (!rate) throw new Error(`private upstream ${secret}`)
+            if (attempts === 1) return Response.json({ retry_after: 0.005 }, { status: 429 })
+            return Response.json(message())
+        }),
+    )
+    const { webhook } = await setup(mode)
+    try {
+        await settle(webhook.send({ content: "x" }))
+    } catch (error) {
+        expect(error).toMatchObject({ reason: "network", outcome: "unknown" })
+        expect(inspect(error)).not.toContain(secret)
+        expect(JSON.stringify(error)).not.toContain(secret)
+    }
+    expect(attempts).toBe(1)
+    rate = true
+    attempts = 0
+    await settle(webhook.send({ content: "x" }))
+    expect(attempts).toBe(2)
+})
+
+test.each(modes)("%s snapshots binary uploads and replays identical multipart after 429", async (mode) => {
+    let calls = 0
+    const bytes = new Uint8Array([1, 2, 3])
+    const observed: Uint8Array[] = []
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+            const headers = new Headers(init.headers)
+            expect(headers.has("authorization")).toBe(false)
+            const body = await new Response(init.body).arrayBuffer()
+            expect(body.byteLength).toBe(Number(headers.get("content-length")))
+            const form = await new Response(body, { headers }).formData()
+            const file = form.get("files[0]") as File
+            observed.push(new Uint8Array(await file.arrayBuffer()))
+            const payload = JSON.parse(String(form.get("payload_json")))
+            expect(payload.attachments[0]).toMatchObject({ id: 0, filename: "report.txt", description: "Build log" })
+            bytes.fill(9)
+            return ++calls === 1 ? Response.json({ retry_after: 0.005 }, { status: 429 }) : Response.json(message())
+        }),
+    )
+    const { webhook } = await setup(mode)
+    await settle(webhook.send({ attachments: [{ data: bytes, filename: "report.txt", description: "Build log" }] }))
+    expect(observed).toEqual([new Uint8Array([1, 2, 3]), new Uint8Array([1, 2, 3])])
+})
+
+test.each(modes)("%s shutdown awaits active body cleanup and rejects new requests", async (mode) => {
+    let started!: () => void, release!: () => void
+    const ready = new Promise<void>((resolve) => {
+        started = resolve
+    })
+    const cleanup = new Promise<void>((resolve) => {
+        release = resolve
+    })
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+            started()
+            await new Promise<void>((resolve) =>
+                init.signal!.addEventListener("abort", () => resolve(), { once: true }),
+            )
+            await cleanup
+            throw new Error("aborted")
+        }),
+    )
+    const { webhook, shutdown } = await setup(mode)
+    const sent = settle(webhook.send({ content: "x" })).catch((error) => error)
+    await ready
+    let done = false
+    const stopped = shutdown().then(() => {
+        done = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(done).toBe(false)
+    release()
+    await stopped
+    expect(await sent).toMatchObject({ _tag: "ClientClosedError" })
+    await expect(settle(webhook.fetchMessage("400"))).rejects.toMatchObject({ _tag: "ClientClosedError" })
+})
+
+test.each(modes)("%s bounds retained upload bytes and releases reservations after failure", async (mode) => {
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(message())),
+    )
+    const { webhook } = await setup(mode, { id: "100", token: secret, uploadMaxBytes: 2 })
+    await expect(
+        settle(webhook.send({ attachments: [{ data: new Uint8Array(3), filename: "a" }] })),
+    ).rejects.toMatchObject({ reason: "busy", outcome: "notDispatched" })
+    await settle(webhook.send({ content: "x" }))
+    expect(fetch).toHaveBeenCalledTimes(1)
+})
+
+test("native creation and operations are lazy, independently scoped and release credentials on closure", async () => {
+    const request = vi.fn(async () => Response.json(message()))
+    vi.stubGlobal("fetch", request)
+    const scope = Scope.makeUnsafe()
+    const creation = createNativeWebhook({ id: "100", token: secret })
+    expect(request).not.toHaveBeenCalled()
+    const webhook = await Effect.runPromise(creation.pipe(Effect.provideService(Scope.Scope, scope)))
+    const operation = webhook.send({ content: "x" })
+    expect(request).not.toHaveBeenCalled()
+    await Effect.runPromise(operation)
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+    await expect(settle(operation)).rejects.toMatchObject({ _tag: "ClientClosedError" })
+})
+
+test("invalid client configuration contains no rejected values", () => {
+    for (const value of [
+        { id: "../100", token: secret },
+        { id: "100", token: "x/y" },
+        { id: "100", token: secret, uploadMaxBytes: 0 },
+    ]) {
+        const result = createWebhookClient(value)
+        expect(result.isErr()).toBe(true)
+        expect(JSON.stringify(result)).not.toContain(secret)
+    }
+})
+
+test.each(modes)("%s retries transient reads but never retries rejected or server-failed writes", async (mode) => {
+    let calls = 0,
+        status = 503
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+            calls++
+            if (init.method === "GET" && calls === 3) return Response.json(message())
+            return Response.json({ private: secret }, { status })
+        }),
+    )
+    const { webhook } = await setup(mode)
+    await settle(webhook.fetchMessage("400"))
+    expect(calls).toBe(3)
+    for (const code of [400, 403, 404, 500, 503]) {
+        calls = 0
+        status = code
+        await expect(settle(webhook.send({ content: "x" }))).rejects.toMatchObject({
+            status: code,
+            outcome: code < 500 ? "rejected" : "unknown",
+        })
+        expect(calls).toBe(1)
+    }
+})
+
+test.each(modes)("%s cancellation waits for owned cleanup without stopping the client", async (mode) => {
+    let started!: () => void, release!: () => void
+    const ready = new Promise<void>((resolve) => {
+        started = resolve
+    })
+    const cleanup = new Promise<void>((resolve) => {
+        release = resolve
+    })
+    const controller = new AbortController()
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+            started()
+            await new Promise<void>((resolve) =>
+                init.signal!.addEventListener("abort", () => resolve(), { once: true }),
+            )
+            await cleanup
+            throw new Error("aborted")
+        }),
+    )
+    const { webhook } = await setup(mode)
+    const operation =
+        mode === "default"
+            ? (webhook as import("../src/index.js").WebhookClient).send({ content: "x" }, { signal: controller.signal })
+            : (webhook as import("../src/effect.js").WebhookClient).send({ content: "x" })
+    let done = false
+    const result = Effect.isEffect(operation)
+        ? Effect.runPromiseExit(operation, { signal: controller.signal }).then((exit) => {
+              expect(Exit.isFailure(exit)).toBe(true)
+              done = true
+          })
+        : operation.then((value) => {
+              expect(value.isErr() && value.error._tag).toBe("CancelledError")
+              done = true
+          })
+    await ready
+    controller.abort()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(done).toBe(false)
+    release()
+    await result
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(message())),
+    )
+    await settle(webhook.send({ content: "After cancellation" }))
+})
+
+test.each(modes)("%s validates explicit null upload budgets and bounds response bytes", async (mode) => {
+    expect(createWebhookClient({ id: "100", token: secret, uploadMaxBytes: null } as never).isErr()).toBe(true)
+    const { webhook } = await setup(mode)
+    let cancelled = false
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(
+            async () =>
+                new Response(
+                    new ReadableStream({
+                        start(controller) {
+                            controller.enqueue(new Uint8Array(1_048_577))
+                        },
+                        cancel() {
+                            cancelled = true
+                        },
+                    }),
+                    { status: 200 },
+                ),
+        ),
+    )
+    await expect(settle(webhook.fetchMessage("400"))).rejects.toMatchObject({ reason: "response" })
+    expect(cancelled).toBe(true)
+})
+
+test("multipart bytes cross a real HTTP transport with correct framing", async () => {
+    const fetch = globalThis.fetch
+    let received = false
+    const server = createServer(async (req, res) => {
+        const chunks: Buffer[] = []
+        for await (const chunk of req) chunks.push(Buffer.from(chunk))
+        const data = Buffer.concat(chunks)
+        const form = await new Response(data, { headers: { "content-type": req.headers["content-type"]! } }).formData()
+        expect(new Uint8Array(await (form.get("files[0]") as File).arrayBuffer())).toEqual(new Uint8Array([5, 6]))
+        expect(req.headers.authorization).toBeUndefined()
+        received = true
+        res.setHeader("content-type", "application/json")
+        res.end(JSON.stringify(message()))
+    })
+    server.listen(0, "127.0.0.1")
+    await once(server, "listening")
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("Missing fixture address")
+    onTestFinished(
+        () =>
+            new Promise<void>((resolve, reject) => {
+                server.close((error) => (error ? reject(error) : resolve()))
+                server.closeAllConnections()
+            }),
+    )
+    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => fetch(`http://127.0.0.1:${address.port}`, init))
+    const { webhook } = await setup("default")
+    await settle(webhook.send({ attachments: [{ filename: "a.txt", data: new Uint8Array([5, 6]) }] }))
+    expect(received).toBe(true)
+})

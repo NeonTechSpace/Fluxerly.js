@@ -13,6 +13,8 @@ import {
     type GuildChannel,
 } from "#sdk/channels"
 import type { ChannelRequest } from "./channels.js"
+import type { WebhookRequest } from "./webhooks.js"
+import type { WebhookOperation, WebhookOperationOptions } from "#sdk/webhooks"
 import { makeCacheReports, type CacheReports } from "./cache-reports.js"
 import {
     ClientBusyError,
@@ -151,6 +153,18 @@ export class ClientOwner {
         this.#configuration = undefined
         this.#session = { id: undefined, sequence: null }
         this.#setState("Closed")
+    }
+
+    webhook<A>(
+        operation: WebhookOperation,
+        build: () => WebhookRequest<A> | undefined,
+        options?: WebhookOperationOptions,
+    ) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.webhook(this.#configuration.token, operation, build, options)
+                : Effect.fail(new ClientClosedError()),
+        )
     }
 
     guild<A>(operation: GuildOperation, build: () => GuildRequest<A> | undefined, options?: GuildOperationOptions) {

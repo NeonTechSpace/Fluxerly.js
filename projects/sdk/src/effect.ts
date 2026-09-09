@@ -1,3 +1,40 @@
+import {
+    type Webhook,
+    type CreatedWebhook,
+    type WebhookCreate,
+    type WebhookEdit,
+    type WebhookMessageInput,
+    type WebhookMessageEdit,
+    type WebhookClientOptions,
+    type WebhookOperationFailure,
+    type WebhookOperationOptions,
+} from "./webhooks.js"
+export { WebhookOperationError } from "./webhooks.js"
+export type {
+    Webhook,
+    WebhookCredentials,
+    CreatedWebhook,
+    WebhookCreate,
+    WebhookEdit,
+    WebhookMessageInput,
+    WebhookMessageEdit,
+    WebhookClientOptions,
+    WebhookOperation,
+    WebhookOperationOptions,
+    DefaultWebhookOperationOptions,
+    WebhookOperationFailure,
+} from "./webhooks.js"
+import {
+    makeWebhookClient,
+    webhookCreate,
+    webhookFetch,
+    webhookList,
+    webhookEdit,
+    webhookDelete,
+    webhookSend,
+    webhookMessage,
+    webhookMessageDelete,
+} from "#sdk/internal/webhooks"
 import { Deferred, Effect, Scope, type Stream } from "effect"
 import type { PaginationError, HistoryIterationQuery, UserIterationQuery, PinIterationQuery } from "./pagination.js"
 export { PaginationError } from "./pagination.js"
@@ -1143,12 +1180,80 @@ export interface Roles {
     ): Effect.Effect<void, GuildOperationFailure>
 }
 
+/** Bot-authenticated remote webhook management, available before connect.
+ * No webhook cache, hidden credential persistence or synthesized events.
+ * JSON responses are bounded to 1 MiB and malformed or larger responses fail with reason response.
+ * Each Effect is lazy, with native interruption and defects.
+ * Requests default to a 30-second total deadline, allow bounded read retries and retry writes only after confirmed rate-limit rejection.
+ * Shutdown rejects new work and awaits admitted request cleanup. Separate clients do not coordinate rate limits
+ */
+export interface Webhooks {
+    /** Create one webhook using bot permissions. Returns redacted credentials separately from metadata. An uncertain result may have created it */
+    create(
+        channelId: string,
+        input: WebhookCreate,
+        options?: WebhookOperationOptions,
+    ): Effect.Effect<CreatedWebhook, WebhookOperationFailure>
+    /** Fetch metadata remotely by decimal ID, discarding the returned token. HTTP 404 reports notFound */
+    fetch(id: string, options?: WebhookOperationOptions): Effect.Effect<Webhook, WebhookOperationFailure>
+    /** Read the channel's complete accessible webhook list remotely, without caching, token retention or pagination */
+    fetchChannel(
+        channelId: string,
+        options?: WebhookOperationOptions,
+    ): Effect.Effect<readonly Webhook[], WebhookOperationFailure>
+    /** Read the guild's accessible webhook list remotely. Server permissions determine visibility, and concurrent changes prevent snapshot guarantees */
+    fetchGuild(
+        guildId: string,
+        options?: WebhookOperationOptions,
+    ): Effect.Effect<readonly Webhook[], WebhookOperationFailure>
+    /** Update explicit settings, including destination moves. Returned metadata omits credentials. Failure does not guarantee rollback */
+    edit(
+        id: string,
+        input: WebhookEdit,
+        options?: WebhookOperationOptions,
+    ): Effect.Effect<Webhook, WebhookOperationFailure>
+    /** Delete the webhook and revoke its credential. Does not delete its old messages or restore the credential after a failure */
+    delete(id: string, options?: WebhookOperationOptions): Effect.Effect<void, WebhookOperationFailure>
+}
+
+/** Token-only HTTP client, without a bot token, gateway, caches or persistent storage.
+ * Operations are lazy and preserve native defects/interruption.
+ * Requests default to a 30-second total deadline across admission, rate waits, retries and HTTP.
+ * Cancellation interrupts only that operation and awaits request/body cleanup, without rolling back remote effects
+ *
+ * Errors contain only safe categories and status, never credential-bearing paths or upstream bodies.
+ * JSON responses exceeding 1 MiB fail with reason response. Other client caches are not updated by this token-only client
+ */
+export interface WebhookClient {
+    /** Credential identity, never a token-bearing URL */
+    readonly id: string
+    /** Send with wait=true and return the created message. Mentions default off. Files use bounded multipart streaming, with 50 MiB maximum per file.
+     * Snapshot inputs at execution, including admitted file bytes. Never retry an uncertain send, which may already have posted */
+    send(input: WebhookMessageInput, options?: MessageOperationOptions): Effect.Effect<Message, WebhookOperationFailure>
+    /** Fetch a decimal message ID authored by this webhook in its current channel, with bounded transient read retries */
+    fetchMessage(messageId: string, options?: MessageOperationOptions): Effect.Effect<Message, WebhookOperationFailure>
+    /** Edit this webhook's message and return its snapshot. Omitted fields remain unchanged, mentions default off, and attachments cannot be replaced */
+    editMessage(
+        messageId: string,
+        input: WebhookMessageEdit,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<Message, WebhookOperationFailure>
+    /** Delete this webhook's message. 204 is success without proving earlier existence, and uncertain failures may follow deletion */
+    deleteMessage(messageId: string, options?: MessageOperationOptions): Effect.Effect<void, WebhookOperationFailure>
+    /** Permanently reject new work, cancel admitted work, await transport cleanup and release the owned token reference.
+     * Does not delete the remote webhook or invalidate caller-held credentials. Concurrent calls share the same pending cleanup
+     */
+    shutdown(): Effect.Effect<void>
+}
+
 /**
  * Native client with lazy operations in the caller's Effect context.
  * The scope that creates the client owns its connection work and permanent cleanup.
  * Expected errors use the typed failure channel, while defects and interruption remain in the native cause
  */
 export interface Client extends ClientState {
+    /** Bot-authenticated webhook management with token-free metadata */
+    readonly webhooks: Webhooks
     /** Remote role management and explicitly enabled local role lookup */
     readonly roles: Roles
     /** Remote guild reads and ban management, with explicitly enabled local guild lookup */
@@ -1270,6 +1375,44 @@ export interface Client extends ClientState {
 }
 
 /**
+ * Create a webhook-only client for hosted Fluxer, from { id, token } or redacted creation credentials.
+ * Validate locally without requests, copying the credential into an independently owned redacted reference.
+ * Creation is lazy and scope closure shuts down the client.
+ * No token storage, gateway or bot authentication. Keep one client per credential for shared admission and rate waits.
+ * Invalid configuration fails with ConfigurationError, while defects retain their native cause
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { createWebhookClient } from "@neontechspace/fluxerly/effect"
+ * export const webhookExample = (id: string, token: string) => Effect.scoped(Effect.gen(function* () {
+ *     const webhook = yield* createWebhookClient({ id, token })
+ *     const message = yield* webhook.send({ content: "Deploying…" })
+ *     return yield* webhook.editMessage(message.id, { content: "Deployed" })
+ * }))
+ * ```
+ */
+export function createWebhookClient(
+    options: WebhookClientOptions,
+): Effect.Effect<WebhookClient, ConfigurationError, Scope.Scope> {
+    return Effect.gen(function* () {
+        const owner = yield* makeWebhookClient(options)
+        yield* Effect.addFinalizer(() => owner.shutdown())
+        return Object.freeze({
+            id: owner.id,
+            send: (input: WebhookMessageInput, options?: MessageOperationOptions) =>
+                owner.run("webhooks.send", () => webhookSend(owner.id, input), options),
+            fetchMessage: (id: string, options?: MessageOperationOptions) =>
+                owner.run("webhooks.fetchMessage", () => webhookMessage(owner.id, id, "GET"), options),
+            editMessage: (id: string, input: WebhookMessageEdit, options?: MessageOperationOptions) =>
+                owner.run("webhooks.editMessage", () => webhookMessage(owner.id, id, "PATCH", input), options),
+            deleteMessage: (id: string, options?: MessageOperationOptions) =>
+                owner.run("webhooks.deleteMessage", () => webhookMessageDelete(owner.id, id), options),
+            shutdown: () => owner.shutdown(),
+        })
+    })
+}
+
+/**
  * Create a Disconnected client when this Effect executes, without networking or background activity
  *
  * Validate configuration locally without authenticating the token
@@ -1295,6 +1438,20 @@ export function createClient<E = never, R = never>(
         const owner = yield* makeClient(options, scope, true)
         yield* Effect.addFinalizer((exit) => owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, exit))))
         return Object.freeze({
+            webhooks: Object.freeze({
+                create: (id: string, input: WebhookCreate, options?: WebhookOperationOptions) =>
+                    owner.webhook("webhooks.create", () => webhookCreate(id, input, options), options),
+                fetch: (id: string, options?: WebhookOperationOptions) =>
+                    owner.webhook("webhooks.fetch", () => webhookFetch(id), options),
+                fetchChannel: (id: string, options?: WebhookOperationOptions) =>
+                    owner.webhook("webhooks.fetchChannel", () => webhookList(id, "channels"), options),
+                fetchGuild: (id: string, options?: WebhookOperationOptions) =>
+                    owner.webhook("webhooks.fetchGuild", () => webhookList(id, "guilds"), options),
+                edit: (id: string, input: WebhookEdit, options?: WebhookOperationOptions) =>
+                    owner.webhook("webhooks.edit", () => webhookEdit(id, input, options), options),
+                delete: (id: string, options?: WebhookOperationOptions) =>
+                    owner.webhook("webhooks.delete", () => webhookDelete(id, options), options),
+            }),
             guilds: Object.freeze({
                 ban: (target: MemberReference, input?: BanInput, options?: ModerationOptions) =>
                     owner.guild("guilds.ban", () => guildBan(target, input, options), options),

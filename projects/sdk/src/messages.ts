@@ -12,6 +12,8 @@ export interface MessageReference {
 
 /** Frozen message projection shared by REST responses and messageCreate/messageUpdate events, not a complete wire object */
 export interface Message extends MessageReference {
+    /** Webhook ID when supplied by Fluxer. Missing/null wire values omit this field, without inferring identity from the author */
+    readonly webhookId?: string
     /** Pin status supplied by Fluxer. Omitted means unknown, not false. Snapshots do not update in place */
     readonly pinned?: boolean
     /** Text exactly as returned by Fluxer, including empty text for non-text messages */
@@ -22,7 +24,7 @@ export interface Message extends MessageReference {
     readonly attachments: readonly Attachment[]
     /** Frozen author projection. No client-bound methods or cached live state */
     readonly author: {
-        /** Decimal string user ID */
+        /** Decimal author ID supplied by Fluxer. Use webhookId to identify webhook-authored messages */
         readonly id: string
         /** Account username supplied by Fluxer */
         readonly username: string

@@ -12,6 +12,7 @@ export function decodeMessage(value: unknown): Message | undefined {
     if (!record(value) || !identifier(value.id) || !identifier(value.channel_id) || typeof value.content !== "string")
         return undefined
     if (value.pinned !== undefined && typeof value.pinned !== "boolean") return undefined
+    if (value.webhook_id != null && !identifier(value.webhook_id)) return undefined
     const author = value.author
     if (
         !record(author) ||
@@ -27,6 +28,7 @@ export function decodeMessage(value: unknown): Message | undefined {
         id: value.id,
         channelId: value.channel_id,
         content: value.content,
+        ...(value.webhook_id == null ? {} : { webhookId: value.webhook_id }),
         ...(value.pinned === undefined ? {} : { pinned: value.pinned }),
         embeds,
         attachments,

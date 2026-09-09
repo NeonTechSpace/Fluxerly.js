@@ -85,6 +85,7 @@ try {
             "pins",
             "guilds",
             "channels",
+            "webhooks",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -130,6 +131,16 @@ try {
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
         const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
+        const webhookExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) webhookExample/.test(example))
+        assert.equal(webhookExamples.length, 1)
+        writeFileSync(join(consumer, "webhook-example.ts"), webhookExamples[0])
         const collectorExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]

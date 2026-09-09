@@ -25,6 +25,9 @@ import type { GuildCache, ResourceGuard, ResourceRequest } from "./guild-cache.j
 import { ChannelOperationError, type ChannelOperation, type ChannelOperationOptions } from "#sdk/channels"
 import type { ChannelRequest } from "./channels.js"
 import type { ChannelCache, ChannelCacheGuard, ChannelCacheRequest } from "./channel-cache.js"
+import { WebhookOperationError, type WebhookOperation, type WebhookOperationOptions } from "#sdk/webhooks"
+import type { WebhookRequest } from "./webhooks.js"
+import { multipart } from "./multipart.js"
 
 type Pending = {
     route: string
@@ -38,6 +41,7 @@ type Outcome = MessageOperationError["outcome"]
 type Request<A> = {
     method: "POST" | "GET" | "PATCH" | "DELETE" | "PUT"
     channel: string
+    webhookId?: string
     bucket?: string
     cache?: false
     deleteIds?: readonly string[]
@@ -230,8 +234,14 @@ export class RestOwner {
                           )
                 const upload = request.put
                     ? uploadBody(request.put.data, request.put.offset, request.put.size)
-                    : undefined
-                return { controller, settled: Promise.resolve(), guard, success: false, upload }
+                    : request.webhookId && request.body?.files.length
+                      ? multipart(request.body)
+                      : undefined
+                const multipartHeaders =
+                    upload && "contentType" in upload && "size" in upload
+                        ? { "Content-Type": String(upload.contentType), "Content-Length": String(upload.size) }
+                        : undefined
+                return { controller, settled: Promise.resolve(), guard, success: false, upload, multipartHeaders }
             }),
             (state) =>
                 Effect.tryPromise({
@@ -240,7 +250,8 @@ export class RestOwner {
                             if (owner.#closed) throw new ClientClosedError()
                             if (!request.preparation) progress.outcome = "unknown"
                             const response = await fetch(
-                                request.put?.url ?? `https://api.fluxer.app/v1${request.path}`,
+                                request.put?.url ??
+                                    `https://api.fluxer.app/v1${request.webhookId ? `/webhooks/${request.webhookId}/${encodeURIComponent(Redacted.value(token))}` : ""}${request.path}`,
                                 {
                                     method: request.method,
                                     redirect: "error",
@@ -253,13 +264,17 @@ export class RestOwner {
                                                   : {}),
                                           }
                                         : {
-                                              Authorization: `Bot ${Redacted.value(token)}`,
+                                              ...(request.webhookId
+                                                  ? {}
+                                                  : { Authorization: `Bot ${Redacted.value(token)}` }),
                                               ...(request.auditReason === undefined
                                                   ? {}
                                                   : { "X-Audit-Log-Reason": request.auditReason }),
-                                              ...(request.body === undefined
-                                                  ? {}
-                                                  : { "Content-Type": "application/json" }),
+                                              ...(state.multipartHeaders
+                                                  ? state.multipartHeaders
+                                                  : request.body === undefined
+                                                    ? {}
+                                                    : { "Content-Type": "application/json" }),
                                           },
                                     ...(state.upload
                                         ? { body: state.upload.body }
@@ -1010,6 +1025,63 @@ export class RestOwner {
         )
     }
 
+    webhook<A>(
+        token: Redacted.Redacted<string>,
+        operation: WebhookOperation,
+        build: () => WebhookRequest<A> | undefined,
+        options?: WebhookOperationOptions,
+    ) {
+        return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const input = build()
+            if (
+                !input ||
+                (options !== undefined &&
+                    (!record(options) ||
+                        Object.keys(options).some(
+                            (key) =>
+                                key !== "timeoutMs" &&
+                                key !== "signal" &&
+                                !(input.method !== "GET" && !input.tokenAuth && key === "auditReason"),
+                        )))
+            )
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    channel: input.majorId,
+                    bucket: `webhook:${input.tokenAuth ? "token" : operation}`,
+                    cache: false,
+                    ...(input.tokenAuth ? { webhookId: input.majorId } : {}),
+                    ...(input.auditReason === undefined ? {} : { auditReason: input.auditReason }),
+                    path: input.path,
+                    method: input.method,
+                    status: input.status,
+                    body: input.body,
+                    decode: async (response) => {
+                        if (input.status === 204) return undefined as A
+                        const value = input.decode(await readUploadJson(response))
+                        if (value === undefined) throw new RestFailure("response", "unknown", response.status)
+                        return value
+                    },
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new WebhookOperationError(
+                          operation,
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                      )
+                    : error,
+            ),
+        )
+    }
+
     #execute<A>(
         token: Redacted.Redacted<string>,
         request: Request<A>,
@@ -1057,7 +1129,7 @@ export class RestOwner {
             const operation = Deferred.makeUnsafe<void>()
             owner.#operations.add(operation)
             return Effect.gen(function* () {
-                if (request.body?.files.length)
+                if (request.body?.files.length && !request.webhookId)
                     yield* owner.#prepareUploads(token, request.channel, request.body, progress, generation, deadline)
                 return yield* owner.#exchange(token, request, progress, generation, deadline)
             }).pipe(

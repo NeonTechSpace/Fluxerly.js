@@ -1,3 +1,41 @@
+import {
+    type WebhookOperationError,
+    type Webhook,
+    type CreatedWebhook,
+    type WebhookCreate,
+    type WebhookEdit,
+    type WebhookMessageInput,
+    type WebhookMessageEdit,
+    type WebhookClientOptions,
+    type WebhookOperationFailure,
+    type DefaultWebhookOperationOptions,
+} from "./webhooks.js"
+export { WebhookOperationError } from "./webhooks.js"
+export type {
+    Webhook,
+    WebhookCredentials,
+    CreatedWebhook,
+    WebhookCreate,
+    WebhookEdit,
+    WebhookMessageInput,
+    WebhookMessageEdit,
+    WebhookClientOptions,
+    WebhookOperation,
+    WebhookOperationOptions,
+    DefaultWebhookOperationOptions,
+    WebhookOperationFailure,
+} from "./webhooks.js"
+import {
+    makeWebhookClient,
+    webhookCreate,
+    webhookFetch,
+    webhookList,
+    webhookEdit,
+    webhookDelete,
+    webhookSend,
+    webhookMessage,
+    webhookMessageDelete,
+} from "#sdk/internal/webhooks"
 import { Cause, Deferred, Effect, Exit, Scope } from "effect"
 import {
     PaginationError,
@@ -1196,12 +1234,95 @@ export interface Roles {
     ): ResultAsync<void, GuildOperationFailure | CancelledError>
 }
 
+/** Bot-authenticated remote webhook management, available before connect.
+ * No webhook cache, hidden credential persistence or synthesized events.
+ * JSON responses are bounded to 1 MiB and malformed or larger responses fail with reason response.
+ * Calls start immediately, with cancellation returning CancelledError and unexpected defects rejecting with SdkDefect.
+ * Requests default to a 30-second total deadline, allow bounded read retries and retry writes only after confirmed rate-limit rejection.
+ * Shutdown rejects new work and awaits admitted request cleanup. Separate clients do not coordinate rate limits
+ */
+export interface Webhooks {
+    /** Create one webhook using bot permissions. Returns redacted credentials separately from metadata. An uncertain result may have created it */
+    create(
+        channelId: string,
+        input: WebhookCreate,
+        options?: DefaultWebhookOperationOptions,
+    ): ResultAsync<CreatedWebhook, WebhookOperationFailure | CancelledError>
+    /** Fetch metadata remotely by decimal ID, discarding the returned token. HTTP 404 reports notFound */
+    fetch(
+        id: string,
+        options?: DefaultWebhookOperationOptions,
+    ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError>
+    /** Read the channel's complete accessible webhook list remotely, without caching, token retention or pagination */
+    fetchChannel(
+        channelId: string,
+        options?: DefaultWebhookOperationOptions,
+    ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError>
+    /** Read the guild's accessible webhook list remotely. Server permissions determine visibility, and concurrent changes prevent snapshot guarantees */
+    fetchGuild(
+        guildId: string,
+        options?: DefaultWebhookOperationOptions,
+    ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError>
+    /** Update explicit settings, including destination moves. Returned metadata omits credentials. Failure does not guarantee rollback */
+    edit(
+        id: string,
+        input: WebhookEdit,
+        options?: DefaultWebhookOperationOptions,
+    ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError>
+    /** Delete the webhook and revoke its credential. Does not delete its old messages or restore the credential after a failure */
+    delete(
+        id: string,
+        options?: DefaultWebhookOperationOptions,
+    ): ResultAsync<void, WebhookOperationFailure | CancelledError>
+}
+
+/** Token-only HTTP client, without a bot token, gateway, caches or persistent storage.
+ * Operations start immediately and return expected failures, while unexpected defects reject with SdkDefect.
+ * Requests default to a 30-second total deadline across admission, rate waits, retries and HTTP.
+ * Cancellation interrupts only that operation and awaits request/body cleanup, without rolling back remote effects
+ *
+ * Errors contain only safe categories and status, never credential-bearing paths or upstream bodies.
+ * JSON responses exceeding 1 MiB fail with reason response. Other client caches are not updated by this token-only client
+ */
+export interface WebhookClient {
+    /** Credential identity, never a token-bearing URL */
+    readonly id: string
+    /** Send with wait=true and return the created message. Mentions default off. Files use bounded multipart streaming, with 50 MiB maximum per file.
+     * Snapshot inputs at execution, including admitted file bytes. Never retry an uncertain send, which may already have posted */
+    send(
+        input: WebhookMessageInput,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<Message, WebhookOperationFailure | CancelledError>
+    /** Fetch a decimal message ID authored by this webhook in its current channel, with bounded transient read retries */
+    fetchMessage(
+        messageId: string,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<Message, WebhookOperationFailure | CancelledError>
+    /** Edit this webhook's message and return its snapshot. Omitted fields remain unchanged, mentions default off, and attachments cannot be replaced */
+    editMessage(
+        messageId: string,
+        input: WebhookMessageEdit,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<Message, WebhookOperationFailure | CancelledError>
+    /** Delete this webhook's message. 204 is success without proving earlier existence, and uncertain failures may follow deletion */
+    deleteMessage(
+        messageId: string,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, WebhookOperationFailure | CancelledError>
+    /** Permanently reject new work, cancel admitted work, await transport cleanup and release the owned token reference.
+     * Does not delete the remote webhook or invalidate caller-held credentials. Concurrent calls share the same pending cleanup
+     */
+    shutdown(): Promise<void>
+}
+
 /**
  * Default client with SDK-owned execution of asynchronous operations.
  * Expected failures use ResultAsync Err values, while SDK defects reject with SdkDefect.
  * Use run for a managed lifetime, or pair connect with waitForClose and shutdown
  */
 export interface Client extends ClientState {
+    /** Bot-authenticated webhook management with token-free metadata */
+    readonly webhooks: Webhooks
     /** Remote role management and explicitly enabled local role lookup */
     readonly roles: Roles
     /** Remote guild reads and ban management, with explicitly enabled local guild lookup */
@@ -1333,6 +1454,7 @@ const executeOperation = <
         | CollectorError
         | GuildOperationError
         | ChannelOperationError
+        | WebhookOperationError
         | PaginationError,
 >(
     effect: Effect.Effect<A, E>,
@@ -1444,6 +1566,7 @@ function fromExit<
         | CollectorError
         | GuildOperationError
         | ChannelOperationError
+        | WebhookOperationError
         | PaginationError,
 >(exit: Exit.Exit<A, E>, operation: Operation): Result<A, E | CancelledError> {
     if (Exit.isSuccess(exit)) return ok(exit.value)
@@ -1457,6 +1580,69 @@ function fromExit<
     }
     const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
     return failure?._tag === "Fail" ? err(failure.error) : err(new CancelledError())
+}
+
+/**
+ * Create a webhook-only client for hosted Fluxer, from { id, token } or redacted creation credentials.
+ * Validate locally without requests, copying the credential into an independently owned redacted reference.
+ * Creation is synchronous and callers must await shutdown in finally.
+ * No token storage, gateway or bot authentication. Keep one client per credential for shared admission and rate waits.
+ * Returns ConfigurationError for invalid configuration, while unexpected creation defects throw SdkDefect
+ * @example
+ * ```ts
+ * import { createWebhookClient } from "@neontechspace/fluxerly"
+ * export async function webhookExample(id: string, token: string) {
+ *     const created = createWebhookClient({ id, token })
+ *     if (created.isErr()) return created
+ *     const webhook = created.value
+ *     try {
+ *         const message = await webhook.send({ content: "Deploying…" })
+ *         return message.isErr() ? message : await webhook.editMessage(message.value.id, { content: "Deployed" })
+ *     } finally { await webhook.shutdown() }
+ * }
+ * ```
+ */
+export function createWebhookClient(options: WebhookClientOptions): Result<WebhookClient, ConfigurationError> {
+    const result = fromExit(Effect.runSyncExit(makeWebhookClient(options)), "createWebhookClient")
+    if (result.isErr()) {
+        if (result.error instanceof ConfigurationError) return err(result.error)
+        throw new SdkDefect("createWebhookClient")
+    }
+    const owner = result.value
+    const execute = executeOperation
+    return ok(
+        Object.freeze({
+            id: owner.id,
+            send: (input: WebhookMessageInput, options?: DefaultMessageOperationOptions) =>
+                execute(
+                    owner.run("webhooks.send", () => webhookSend(owner.id, input), options),
+                    "webhooks.send",
+                    options,
+                ),
+            fetchMessage: (id: string, options?: DefaultMessageOperationOptions) =>
+                execute(
+                    owner.run("webhooks.fetchMessage", () => webhookMessage(owner.id, id, "GET"), options),
+                    "webhooks.fetchMessage",
+                    options,
+                ),
+            editMessage: (id: string, input: WebhookMessageEdit, options?: DefaultMessageOperationOptions) =>
+                execute(
+                    owner.run("webhooks.editMessage", () => webhookMessage(owner.id, id, "PATCH", input), options),
+                    "webhooks.editMessage",
+                    options,
+                ),
+            deleteMessage: (id: string, options?: DefaultMessageOperationOptions) =>
+                execute(
+                    owner.run("webhooks.deleteMessage", () => webhookMessageDelete(owner.id, id), options),
+                    "webhooks.deleteMessage",
+                    options,
+                ),
+            shutdown: async () => {
+                const result = fromExit(await Effect.runPromiseExit(owner.shutdown()), "shutdown")
+                if (result.isErr()) throw new SdkDefect("shutdown")
+            },
+        }),
+    )
 }
 
 /**
@@ -1493,6 +1679,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             | CollectorError
             | GuildOperationError
             | ChannelOperationError
+            | WebhookOperationError
             | PaginationError,
     >(
         effect: Effect.Effect<A, E>,
@@ -1572,6 +1759,44 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     }
     return ok(
         Object.freeze({
+            webhooks: Object.freeze({
+                create: (id: string, input: WebhookCreate, options?: DefaultWebhookOperationOptions) =>
+                    execute(
+                        owner.webhook("webhooks.create", () => webhookCreate(id, input, options), options),
+                        "webhooks.create",
+                        options,
+                    ),
+                fetch: (id: string, options?: DefaultWebhookOperationOptions) =>
+                    execute(
+                        owner.webhook("webhooks.fetch", () => webhookFetch(id), options),
+                        "webhooks.fetch",
+                        options,
+                    ),
+                fetchChannel: (id: string, options?: DefaultWebhookOperationOptions) =>
+                    execute(
+                        owner.webhook("webhooks.fetchChannel", () => webhookList(id, "channels"), options),
+                        "webhooks.fetchChannel",
+                        options,
+                    ),
+                fetchGuild: (id: string, options?: DefaultWebhookOperationOptions) =>
+                    execute(
+                        owner.webhook("webhooks.fetchGuild", () => webhookList(id, "guilds"), options),
+                        "webhooks.fetchGuild",
+                        options,
+                    ),
+                edit: (id: string, input: WebhookEdit, options?: DefaultWebhookOperationOptions) =>
+                    execute(
+                        owner.webhook("webhooks.edit", () => webhookEdit(id, input, options), options),
+                        "webhooks.edit",
+                        options,
+                    ),
+                delete: (id: string, options?: DefaultWebhookOperationOptions) =>
+                    execute(
+                        owner.webhook("webhooks.delete", () => webhookDelete(id, options), options),
+                        "webhooks.delete",
+                        options,
+                    ),
+            }),
             guilds: Object.freeze({
                 ban: (target: MemberReference, input?: BanInput, options?: DefaultModerationOptions) =>
                     execute(

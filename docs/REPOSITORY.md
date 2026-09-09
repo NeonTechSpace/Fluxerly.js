@@ -26,6 +26,8 @@ The documentation website remains a scaffold
 | [pins.ts](/projects/sdk/src/internal/pins.ts) | Pin-page query validation and page/event projection, with REST owning mutation and request scheduling |
 | [guilds.ts](/projects/sdk/src/internal/guilds.ts) | Guild/member/role request validation and response/event projection; shared REST owns admission and client-global rate state |
 | [moderation.ts](/projects/sdk/src/internal/moderation.ts) | Timeout, kick and ban request validation and ban-list projection, using shared REST scheduling and resource invalidation |
+| [webhooks.ts](/projects/sdk/src/internal/webhooks.ts) | Webhook request/projection validation and token-only client lifetime, with shared REST admission and no webhook cache |
+| [multipart.ts](/projects/sdk/src/internal/multipart.ts) | Bounded webhook multipart body streaming over admitted file snapshots |
 | [channels.ts](/projects/sdk/src/internal/channels.ts) | Guild channel request validation and REST/event projection, with scheduling owned by shared REST |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
 | [attachments.ts](/projects/sdk/src/internal/attachments.ts) | File validation and metadata projection |
@@ -138,6 +140,7 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:management` | Remote fetch, edit and deletion | Temporary channel/messages and test-message edits/deletions |
 | `test:live:batch-delete` | Explicit message batches, events/cache, missing IDs and lost-response reconciliation | Temporary channel/messages and test-owned response loss |
 | `test:live:moderation:default`, `test:live:moderation:effect` | Timeout/clear, kick, ban expiry/unban, events and lost-response reconciliation | Authorized disposable member moderation, temporary channel/messages, test-owned response loss |
+| `test:live:webhooks` | Webhook management, destination moves, message/file readback, lost-response reconciliation and credential revocation through both APIs | Temporary webhooks, channels/messages, file uploads and test-owned response loss |
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
 | `test:live:reactions` | Unicode/custom reactions, collectors, reactor readback, clear events and recovery | Temporary channel/messages, reactions and guild emoji, plus test-socket termination |
 | `test:live:pins` | Pin/unpin, explicit pages, pin status/events and recovery | Temporary channel/messages and pins, server-created pin notices, plus test-socket termination |
@@ -151,6 +154,9 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:attachments` | Uploads, binary readback, file edits, events/cache/collectors and recovery | Temporary channel/messages, 50 MiB file upload/download, file replacements and test-socket termination |
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools.
+Webhook checks use the same sandbox identity checks and lock, with their own ignored `.env.test.webhooks.local` recovery journal.
+That journal stores test-owned resource IDs and unique names, never webhook tokens.
+Recovery verifies the webhook creator and destination against the designated bot and owned channels before deletion.
 After a crash, verify that the recorded process has stopped before removing its stale lock.
 Do not stop unrelated processes or bypass a live owner's lock
 
