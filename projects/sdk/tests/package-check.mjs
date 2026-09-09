@@ -429,6 +429,24 @@ try {
             assert.equal(nativeAssetExamples.length, 1)
             writeFileSync(join(consumer, "assets-effect-example.ts"), nativeAssetExamples[0])
         }
+        const presenceEventSource = readFileSync(join(sdk, "src/events.ts"), "utf8")
+        const presenceEventExamples = [...presenceEventSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /function presenceEventsExample/.test(example))
+        assert.equal(presenceEventExamples.length, 1)
+        const presenceEventExample =
+            kind === "default"
+                ? presenceEventExamples[0]
+                : presenceEventExamples[0].replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"')
+        writeFileSync(join(consumer, "presence-events-example.ts"), presenceEventExample)
+        const selectedPresenceExamples = examples(publicSource).filter((example) => /watchSelectedMember/.test(example))
+        assert.equal(selectedPresenceExamples.length, 1)
+        writeFileSync(join(consumer, "selected-presence-example.ts"), selectedPresenceExamples[0])
         const embedExamples = [...embedSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)].map((match) =>
             match[1]
                 .split(/\r?\n/)

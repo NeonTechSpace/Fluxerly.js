@@ -19,6 +19,8 @@ import {
     type MessageDeletion,
     type MessageBulkDeletion,
     type TypingStart,
+    type PresenceUpdate,
+    type PresenceUpdateBulk,
     type CachePolicyErrorReport,
     type ClientOptions,
     type MessageCacheOptions,
@@ -373,7 +375,6 @@ export function useAttachments(client: Client, channelId: string) {
         return attachment.url
     })
 }
-
 /** Typechecked targeted nickname and local hierarchy usage against the packed Effect entry point */
 export function manageMemberHierarchy(client: Client, target: MemberReference, snapshot: RoleHierarchyInput) {
     return Effect.gen(function* () {
@@ -385,4 +386,37 @@ export function manageMemberHierarchy(client: Client, target: MemberReference, s
         client.members.setNickname(target)
         return { renamed, canTarget, order }
     })
+}
+
+/** Typechecked delivery-only presence subscription through the packed Effect entry point */
+export function watchPresence(client: Client) {
+    return client.on("presenceUpdate", (presence) =>
+        Effect.sync(() => {
+            const update: PresenceUpdate = presence
+            const status: string = update.status
+            const guildId: string | undefined = update.guildId
+            void status
+            void guildId
+            // @ts-expect-error Presence observations are immutable
+            update.afk = true
+        }),
+    )
+}
+
+/** Typechecked recovery presence batch through the packed Effect entry point */
+export function watchPresenceRecovery(client: Client) {
+    return client.on("presenceUpdateBulk", (batch) =>
+        Effect.sync(() => {
+            const update: PresenceUpdateBulk = batch
+            const first: PresenceUpdate | undefined = update.presences[0]
+            void first
+            // @ts-expect-error Recovery observations and their batch are immutable
+            update.presences.push(batch.presences[0]!)
+        }),
+    )
+}
+
+/** Typechecked explicit selected-member presence intent through the packed Effect entry point */
+export function selectMemberPresence(client: Client, guildId: string, memberId: string) {
+    return client.presence.setMembers(guildId, [memberId])
 }

@@ -3,7 +3,14 @@ import { once } from "node:events"
 import { Effect, Fiber, References, Stream } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
-import { createClient, type Message, type MessageDeletion, type MessageBulkDeletion } from "../src/index.js"
+import {
+    createClient,
+    type Message,
+    type MessageDeletion,
+    type MessageBulkDeletion,
+    type PresenceUpdate,
+    type PresenceUpdateBulk,
+} from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 
 const transport = vi.hoisted(() => ({ url: "" }))
@@ -41,6 +48,35 @@ const metadataWire = (content = "metadata") => ({
     reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
     message_reference: { message_id: "70", channel_id: "71", guild_id: null, type: 1 },
     referenced_message: { id: "70", channel_id: "71", content: "not retained" },
+})
+const presenceWire = (overrides: Record<string, unknown> = {}) => ({
+    guild_id: "40",
+    user: { id: "30", username: "fixture" },
+    status: "idle",
+    mobile: true,
+    afk: false,
+    custom_status: { text: "not part of the public projection" },
+    ...overrides,
+})
+const directPresenceWire = (overrides: Record<string, unknown> = {}) => ({
+    user: { id: "30", username: "fixture" },
+    status: "idle",
+    mobile: true,
+    afk: false,
+    ...overrides,
+})
+const presenceBulkWire = (overrides: Record<string, unknown> = {}) => ({
+    guild_id: "40",
+    presences: [
+        {
+            user: { id: "30", username: "fixture" },
+            status: "online",
+            mobile: false,
+            afk: true,
+            custom_status: { text: "not part of the public projection" },
+        },
+    ],
+    ...overrides,
 })
 
 async function fixture() {
@@ -308,6 +344,172 @@ test("native callbacks preserve caller context and streams route single and bulk
     )
 })
 
+test("default presence callbacks and pull subscriptions project one frozen guild observation without a cache", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const callbacks: PresenceUpdate[] = []
+    value(
+        client.on("presenceUpdate", (presence) => {
+            callbacks.push(presence)
+        }),
+    )
+    const pull = value(client.events("presenceUpdate"))
+    value(await client.connect())
+    server.dispatch("PRESENCE_UPDATE", presenceWire())
+    await vi.waitFor(() => expect(callbacks).toHaveLength(1))
+    const expected = { guildId: "40", userId: "30", status: "idle", mobile: true, afk: false }
+    expect(callbacks[0]).toEqual(expected)
+    expect(value(await pull.next())).toEqual(expected)
+    expect(Object.isFrozen(callbacks[0])).toBe(true)
+    expect(callbacks[0]).not.toHaveProperty("customStatus")
+})
+
+test("default presence subscriptions preserve a valid relationship or group-DM observation without guild scope", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const pull = value(client.events("presenceUpdate"))
+    value(await client.connect())
+    server.dispatch("PRESENCE_UPDATE", directPresenceWire())
+    const presence = value(await pull.next())
+    expect(presence).toEqual({ userId: "30", status: "idle", mobile: true, afk: false })
+    expect(presence).not.toHaveProperty("guildId")
+    expect(Object.isFrozen(presence)).toBe(true)
+})
+
+test("native presence callbacks retain caller context and streams route the same frozen observation", async () => {
+    const server = await fixture()
+    const callbacks: PresenceUpdate[] = []
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createNative({ token: "fixture-only-not-a-credential" })
+                const subscription = yield* client.on("presenceUpdate", (presence) =>
+                    Effect.gen(function* () {
+                        expect((yield* References.CurrentLogAnnotations).fixture).toBe("presence")
+                        callbacks.push(presence)
+                    }),
+                )
+                const stream = yield* Effect.forkScoped(
+                    Stream.runCollect(client.events("presenceUpdate").pipe(Stream.take(1))),
+                )
+                yield* client.connect()
+                server.dispatch("PRESENCE_UPDATE", presenceWire({ status: "online", mobile: false, afk: true }))
+                const expected = { guildId: "40", userId: "30", status: "online", mobile: false, afk: true }
+                expect(yield* Fiber.join(stream)).toEqual([expected])
+                yield* Effect.promise(() => vi.waitFor(() => expect(callbacks).toEqual([expected])))
+                yield* subscription.unsubscribe()
+                yield* subscription.waitForClose()
+            }),
+        ).pipe(Effect.annotateLogs("fixture", "presence")),
+    )
+})
+
+test("presence recovery batches stay frozen and distinct from individual observations through both entry points", async () => {
+    const defaultServer = await fixture()
+    const defaultClient = defaultApi()
+    const individual: PresenceUpdate[] = []
+    const batches: PresenceUpdateBulk[] = []
+    value(
+        defaultClient.on("presenceUpdate", (presence) => {
+            individual.push(presence)
+        }),
+    )
+    value(
+        defaultClient.on("presenceUpdateBulk", (batch) => {
+            batches.push(batch)
+        }),
+    )
+    const pull = value(defaultClient.events("presenceUpdateBulk"))
+    value(await defaultClient.connect())
+    defaultServer.dispatch("PRESENCE_UPDATE_BULK", presenceBulkWire())
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    const expected = {
+        guildId: "40",
+        presences: [{ guildId: "40", userId: "30", status: "online", mobile: false, afk: true }],
+    }
+    expect(batches[0]).toEqual(expected)
+    expect(value(await pull.next())).toEqual(expected)
+    expect(individual).toEqual([])
+    expect(Object.isFrozen(batches[0])).toBe(true)
+    expect(Object.isFrozen(batches[0]!.presences)).toBe(true)
+    expect(Object.isFrozen(batches[0]!.presences[0])).toBe(true)
+
+    const nativeServer = await fixture()
+    const received: PresenceUpdateBulk[] = []
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createNative({ token: "fixture-only-not-a-credential" })
+                yield* client.on("presenceUpdateBulk", (batch) =>
+                    Effect.gen(function* () {
+                        expect((yield* References.CurrentLogAnnotations).presence).toBe("bulk")
+                        received.push(batch)
+                    }),
+                )
+                const stream = yield* Effect.forkScoped(
+                    Stream.runCollect(client.events("presenceUpdateBulk").pipe(Stream.take(1))),
+                )
+                yield* client.connect()
+                nativeServer.dispatch("PRESENCE_UPDATE_BULK", presenceBulkWire())
+                expect(yield* Fiber.join(stream)).toEqual([expected])
+                yield* Effect.promise(() => vi.waitFor(() => expect(received).toEqual([expected])))
+            }),
+        ).pipe(Effect.annotateLogs("presence", "bulk")),
+    )
+})
+
+test("presence subscriptions use the normal source-byte budget without interrupting unrelated subscriptions", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const presence = value(client.events("presenceUpdate", { maxPendingBytes: 256 }))
+    const messages = value(client.events("messageUpdate"))
+    value(await client.connect())
+    server.dispatch("PRESENCE_UPDATE", presenceWire({ custom_status: { text: "ignored".repeat(100) } }))
+    const overflow = await presence.waitForClose()
+    expect(overflow.isErr() && overflow.error).toMatchObject({ _tag: "EventOverflowError", limit: "bytes" })
+    server.dispatch("MESSAGE_UPDATE", wire("unrelated"))
+    expect(value(await messages.next())?.content).toBe("unrelated")
+    expect(client.state).toBe("Connected")
+})
+
+test("presence recovery batches use the normal source-byte budget without flattening into individual intake", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const bulk = value(client.events("presenceUpdateBulk", { maxPendingBytes: 256 }))
+    const individual = value(client.events("presenceUpdate"))
+    value(await client.connect())
+    server.dispatch(
+        "PRESENCE_UPDATE_BULK",
+        presenceBulkWire({
+            presences: [presenceWire({ custom_status: { text: "ignored".repeat(100) } })],
+        }),
+    )
+    const overflow = await bulk.waitForClose()
+    expect(overflow.isErr() && overflow.error).toMatchObject({ _tag: "EventOverflowError", limit: "bytes" })
+    expect(client.state).toBe("Connected")
+    server.dispatch("PRESENCE_UPDATE", presenceWire())
+    expect(value(await individual.next())?.userId).toBe("30")
+})
+
+test("the provider's 500-entry presence batch retains context through the public event boundary", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const pull = value(client.events("presenceUpdateBulk"))
+    value(await client.connect())
+    server.dispatch(
+        "PRESENCE_UPDATE_BULK",
+        presenceBulkWire({
+            presences: Array.from({ length: 500 }, (_, index) =>
+                directPresenceWire({ user: { id: String(index + 1) } }),
+            ),
+        }),
+    )
+    const batch = value(await pull.next())!
+    expect(batch.presences).toHaveLength(500)
+    expect(batch.presences[499]).toMatchObject({ guildId: "40", userId: "500" })
+    expect(Object.isFrozen(batch.presences[499])).toBe(true)
+})
+
 test("REST edit/delete acknowledgements do not synthesize gateway events", async () => {
     const server = await fixture()
     const client = defaultApi()
@@ -396,6 +598,21 @@ test.each([
     ["MESSAGE_DELETE", { id: "10", channel_id: "20", content: 42 }],
     ["MESSAGE_DELETE", { id: "10", channel_id: "20", author_id: null }],
     ["MESSAGE_DELETE_BULK", { channel_id: "20", ids: ["1", 2] }],
+    ["PRESENCE_UPDATE", { guild_id: "40", user: { id: "30" }, status: "online", mobile: true }],
+    ["PRESENCE_UPDATE", { guild_id: null, user: { id: "30" }, status: "online", mobile: true, afk: false }],
+    ["PRESENCE_UPDATE", { guild_id: "40", user: { id: "invalid" }, status: "online", mobile: true, afk: false }],
+    ["PRESENCE_UPDATE", { guild_id: "40", user: { id: "30" }, status: "", mobile: true, afk: false }],
+    ["PRESENCE_UPDATE", { guild_id: "40", user: { id: "30" }, status: "online", mobile: "true", afk: false }],
+    ["PRESENCE_UPDATE_BULK", { guild_id: "40", presences: [] }],
+    ["PRESENCE_UPDATE_BULK", presenceBulkWire({ presences: Array.from({ length: 501 }, () => directPresenceWire()) })],
+    ["PRESENCE_UPDATE_BULK", { guild_id: "40", presences: [{ user: { id: "30" }, status: "online", mobile: true }] }],
+    [
+        "PRESENCE_UPDATE_BULK",
+        {
+            guild_id: "40",
+            presences: [{ guild_id: "41", user: { id: "30" }, status: "online", mobile: true, afk: false }],
+        },
+    ],
 ] as const)(
     "malformed %s closes with a typed protocol failure instead of emitting invented data",
     async (event, body) => {

@@ -103,6 +103,47 @@ export interface GuildLifecycleEvents {
     readonly guildDelete: GuildDeletion
 }
 
+/**
+ * One presence observation from the gateway, without retained presence state or a user snapshot.
+ * Connection gaps can miss changes. The SDK neither caches nor fetches presence, so treat this as a notification rather than current state.
+ * Guild-scoped updates include `guildId`; valid account-scoped wire observations can omit it.
+ * The hosted provider currently delivers bot presence through guild subscriptions, not friends or group DMs.
+ * Registering `on("presenceUpdate")` or `events("presenceUpdate")` does not request guild-member subscriptions or establish delivery.
+ * The provider currently sends online, idle, dnd and offline statuses, but this remains a string for forward compatibility
+ *
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * export function presenceEventsExample(client: Client) {
+ *     return client.events("presenceUpdate", { maxPendingMessages: 10 })
+ * }
+ * ```
+ */
+export interface PresenceUpdate {
+    /** Guild whose visible member presence changed, when the provider supplied guild scope */
+    readonly guildId?: string
+    /** User whose presence changed, without an automatic account lookup */
+    readonly userId: string
+    /** Provider status at the time of this observation, not a freshness guarantee */
+    readonly status: string
+    /** Whether the provider reports a mobile client */
+    readonly mobile: boolean
+    /** Whether the provider reports away-from-keyboard status */
+    readonly afk: boolean
+}
+
+/**
+ * Visible online presences delivered together after a guild becomes available again.
+ * Fluxer supplies the outer guild context, omits the recipient's own presence, and splits batches at 500 entries. The batch can include visible members outside this client's selected member IDs.
+ * This is one frozen recovery observation, not a cache refill, subscription acknowledgement, or synthetic sequence of presenceUpdate events
+ */
+export interface PresenceUpdateBulk {
+    /** Guild context applied to every presence in this provider batch */
+    readonly guildId: string
+    /** Frozen presence observations with the batch guild context */
+    readonly presences: readonly PresenceUpdate[]
+}
+
 /** Implemented gateway events and their frozen payloads. No subscription history, cache reconstruction or REST-generated notifications */
 export interface EventMap extends GuildLifecycleEvents {
     /** Complete public account update, never private account settings */
@@ -111,6 +152,8 @@ export interface EventMap extends GuildLifecycleEvents {
     readonly directMessageCreate: import("./users.js").DirectMessageChannel
     /** Complete private conversation update, not an old/new pair */
     readonly directMessageUpdate: import("./users.js").DirectMessageChannel
+    /** Visible online guild presences after availability recovery, delivered as one batch and never flattened */
+    readonly presenceUpdateBulk: PresenceUpdateBulk
     /** Private conversation closed, left or deleted for this bot, not proof of deletion for others */
     readonly directMessageDelete: { readonly id: string }
     /** Recipient added; invalidates private-channel cache without synthesizing a membership list */
@@ -155,6 +198,8 @@ export interface EventMap extends GuildLifecycleEvents {
     readonly guildMemberUpdate: import("./guilds.js").GuildMember
     /** Membership ended; only IDs are available. No account lookup, cause inference or automatic cache */
     readonly guildMemberRemove: import("./guilds.js").MemberReference
+    /** One delivered presence change, without cache retention, custom-status text, an account snapshot or an automatic guild-member subscription */
+    readonly presenceUpdate: PresenceUpdate
     /** Channel pin-list change notice. No target message ID or automatic fetch; its timestamp can stay unchanged after unpin */
     readonly channelPinsUpdate: ChannelPinsUpdate
     /** Ephemeral typing notice. Delivery can be filtered by Fluxer and is not a presence snapshot, cache entry or member lookup */

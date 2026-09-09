@@ -34,16 +34,16 @@ export interface PresenceInput {
     readonly customStatus?: CustomStatusInput | null
 }
 
-/** Locally invalid presence input. It does not indicate whether Fluxer accepted a previously valid update */
+/** Locally invalid or over-budget presence request. It does not indicate whether Fluxer accepted a previously valid update */
 export class PresenceError extends Error {
     /** Stable discriminant for default Result failures */
     readonly _tag = "PresenceError"
 
     constructor(
         /** The rejected operation phase, without retaining the input value */
-        readonly reason: "input" = "input",
+        readonly reason: "input" | "limit" = "input",
     ) {
-        super("Presence input is invalid")
+        super(reason === "limit" ? "Presence member selection exceeds a local limit" : "Presence input is invalid")
         this.name = this._tag
     }
 }

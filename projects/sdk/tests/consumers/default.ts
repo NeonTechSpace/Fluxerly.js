@@ -18,6 +18,8 @@ import {
     type MessageDeletion,
     type MessageBulkDeletion,
     type TypingStart,
+    type PresenceUpdate,
+    type PresenceUpdateBulk,
     type CachePolicyErrorReport,
     type MessageCacheOptions,
     type MessageCacheSettings,
@@ -390,7 +392,6 @@ export function watchMessageChanges(client: Client) {
     if (pull.isOk()) pull.value.next().map((batch) => batch?.ids)
     return [updates, deleted, batches]
 }
-
 /** Typechecked targeted nickname and local hierarchy usage against the packed default entry point */
 export function manageMemberHierarchy(client: Client, target: MemberReference, snapshot: RoleHierarchyInput) {
     const renamed = client.members.setNickname(target, null)
@@ -400,4 +401,36 @@ export function manageMemberHierarchy(client: Client, target: MemberReference, s
     // @ts-expect-error Nicknames use explicit null to clear, not an omitted argument
     client.members.setNickname(target)
     return { renamed, canTarget, order }
+}
+
+/** Typechecked delivery-only presence subscription through the packed default entry point */
+export function watchPresence(client: Client) {
+    const subscription = client.on("presenceUpdate", (presence) => {
+        const update: PresenceUpdate = presence
+        const status: string = update.status
+        const guildId: string | undefined = update.guildId
+        void status
+        void guildId
+        // @ts-expect-error Presence observations are immutable
+        update.mobile = false
+    })
+    const pull = client.events("presenceUpdate")
+    if (pull.isOk()) pull.value.next().map((presence) => presence?.guildId)
+    return subscription
+}
+
+/** Typechecked recovery presence batch through the packed default entry point */
+export function watchPresenceRecovery(client: Client) {
+    return client.on("presenceUpdateBulk", (batch) => {
+        const update: PresenceUpdateBulk = batch
+        const first: PresenceUpdate | undefined = update.presences[0]
+        void first
+        // @ts-expect-error Recovery observations and their batch are immutable
+        update.presences.push(batch.presences[0]!)
+    })
+}
+
+/** Typechecked explicit selected-member presence intent through the packed default entry point */
+export function selectMemberPresence(client: Client, guildId: string, memberId: string) {
+    return client.presence.setMembers(guildId, [memberId])
 }

@@ -5,3 +5,5 @@ dist/
 .env.test.messages.local
 .env.test.webhooks.local
 .env.test.members.local
+.env.test.role-reset.local
+.env.test.typing.local

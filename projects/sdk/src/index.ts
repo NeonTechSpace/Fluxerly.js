@@ -23,7 +23,7 @@ import type { GuildListQuery } from "./guilds.js"
 import type { GuildIterationQuery } from "./pagination.js"
 export type { GuildListQuery } from "./guilds.js"
 export type { GuildIterationQuery } from "./pagination.js"
-import { guildList, guildLeave } from "#sdk/internal/guild-lifecycle"
+import { guildList } from "#sdk/internal/guild-lifecycle"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
 export type { PermissionInput, PermissionTarget } from "./permissions.js"
@@ -510,6 +510,8 @@ export type {
     EventMap,
     EventName,
     TypingStart,
+    PresenceUpdate,
+    PresenceUpdateBulk,
 } from "./events.js"
 
 /** Subscription-local controls. Closing a subscription does not close the client */
@@ -1495,6 +1497,7 @@ export interface Guilds {
      * Fluxer rejects owners and restricted memberships. Only confirmed 429 rejection is retried; cancellation or a lost
      * response can leave membership removed. Refetch/list to reconcile; rejoining requires external authorization.
      * Successful or uncertain writes invalidate this guild's resource observations and pending reads.
+     * A confirmed successful leave also forgets this client's member-presence selection; an uncertain result preserves it.
      * Any dispatched attempt conservatively clears channel/message caches because messages need not carry guild IDs.
      * Existing caller-held snapshots remain unchanged. This operation never deletes the guild or shuts down the client
      */
@@ -2480,9 +2483,9 @@ export function createWebhookClient(options: WebhookClientOptions): Result<Webho
     )
 }
 
-/** One coalesced presence intent, retained in client memory until shutdown.
- * Updates are spaced by at least four seconds per connection; later requests replace unsent ones.
- * No provider acknowledgement or recipient-delivery guarantee is available
+/** Process-local outgoing bot presence and explicitly selected inbound member-presence intent.
+ * Outgoing status updates are spaced by at least four seconds per connection. Member selections are separate bounded Op14 requests.
+ * No provider acknowledgement or recipient-delivery guarantee is available. The SDK performs no remote membership lookup or self filtering; Fluxer owns access and filtering
  */
 export interface Presence {
     /** Synchronously validate and freeze the latest requested status/custom status, including before connect.
@@ -2500,6 +2503,35 @@ export interface Presence {
      * Unexpected defects throw SdkDefect
      */
     set(input: PresenceInput): Result<void, PresenceFailure>
+    /**
+     * Synchronously validate, copy and retain this guild's selected member IDs. Pass `[]` to clear its selection.
+     * The SDK neither fetches members nor subscribes all guild members. Select accessible non-self members deliberately; Fluxer remains authoritative for access and filtering
+     *
+     * Input accepts at most 1,000 distinct decimal IDs, but the full UTF-8 Op14 frame must be at most 4,096 bytes, so long IDs lower the effective per-guild maximum.
+     * This client retains selections for at most 100 guilds and 10,000 IDs. A cleared selection that was already sent retains one bounded session slot until a fresh identify or a confirmed leave, because a local socket write has no provider acknowledgement. Clearing an unsent selection releases its slot immediately
+     *
+     * After READY or RESUMED, the latest selection or clear is coalesced and attempted at most once per 125 ms. Calling setMembers with the same list deliberately requests a caller-controlled refresh; matching guild creation also reattempts the latest selection or a previously sent clear. This neither establishes that Fluxer applied it nor that `on("presenceUpdate")` will deliver anything.
+     * A subscription can yield an initial visible state or later transitions; recovery gaps can miss both. Presence is never cached or looked up.
+     * Loss of shared channel visibility can drop provider subscriptions; resend the set after access returns
+     *
+     * Listener closure does not clear the selection. Clear explicitly or shut down the client to release its local intent.
+     * Input and limit failures return PresenceError, while a closing client returns ClientClosedError. Unexpected defects throw SdkDefect
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export function watchSelectedMember(client: Client, guildId: string, memberId: string) {
+     *     const subscription = client.on("presenceUpdate", (presence) => {
+     *         if (presence.guildId === guildId && presence.userId === memberId) void presence.status
+     *     })
+     *     if (subscription.isErr()) return subscription
+     *     const selected = client.presence.setMembers(guildId, [memberId])
+     *     if (selected.isOk()) return subscription
+     *     subscription.value.unsubscribe()
+     *     return selected
+     * }
+     * ```
+     */
+    setMembers(guildId: string, memberIds: readonly string[]): Result<void, PresenceFailure>
 }
 
 /** Authenticated current-bot application read through GET `/oauth2/applications/@me`, independent of gateway readiness.
@@ -2714,6 +2746,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         Object.freeze({
             presence: Object.freeze({
                 set: (input: PresenceInput) => lookup(owner.setPresence(input), "presence.set"),
+                setMembers: (guildId: string, memberIds: readonly string[]) =>
+                    lookup(owner.setPresenceMembers(guildId, memberIds), "presence.setMembers"),
             }),
             application: Object.freeze({
                 fetchCurrent: (options?: DefaultBotApplicationOperationOptions) =>
@@ -2999,11 +3033,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 iterate: (query: GuildIterationQuery, options?: DefaultGuildOperationOptions) =>
                     iterate((request) => guildPagination(owner, query, request), "guilds.iterate", options),
                 leave: (id: string, options?: DefaultGuildOperationOptions) =>
-                    execute(
-                        owner.guild("guilds.leave", () => guildLeave(id), options),
-                        "guilds.leave",
-                        options,
-                    ),
+                    execute(owner.leaveGuild(id, options), "guilds.leave", options),
                 fetchVanityUrl: (id: string, options?: DefaultGuildOperationOptions) =>
                     execute(
                         owner.guild("guilds.fetchVanityUrl", () => vanityUrlFetch(id), options),

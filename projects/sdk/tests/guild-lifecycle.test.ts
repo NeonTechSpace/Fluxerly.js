@@ -66,6 +66,10 @@ async function setup(mode: (typeof modes)[number]) {
             }
         },
         state: () => (defaultApi ?? native)!.state,
+        setMembers: (id: string, memberIds: readonly string[]) =>
+            defaultApi
+                ? Promise.resolve(value(defaultApi.presence.setMembers(id, memberIds)))
+                : run(native!.presence.setMembers(id, memberIds)),
     }
 }
 async function gather<A>(values: AsyncIterable<A>) {
@@ -183,6 +187,26 @@ test.each(modes)("%s leave rejects bad IDs locally and never retries an uncertai
     expect(fetch).toHaveBeenCalledTimes(2)
     expect(await api.getGuild("20")).toBeUndefined()
     expect(api.state()).toBe("Disconnected")
+})
+
+test.each(modes)("%s only a successful explicit leave releases member-selection intent", async (mode) => {
+    const api = await setup(mode)
+    for (let id = 20; id < 120; id++) await api.setMembers(String(id), ["1"])
+    await expect(async () => api.setMembers("200", ["1"])).rejects.toMatchObject({
+        _tag: "PresenceError",
+        reason: "limit",
+    })
+    vi.stubGlobal("fetch", async () => {
+        throw new TypeError("Test-owned lost response")
+    })
+    await expect(api.leave("20")).rejects.toMatchObject({ outcome: "unknown" })
+    await expect(async () => api.setMembers("200", ["1"])).rejects.toMatchObject({
+        _tag: "PresenceError",
+        reason: "limit",
+    })
+    vi.stubGlobal("fetch", async () => new Response(null, { status: 204 }))
+    await api.leave("20")
+    await api.setMembers("200", ["1"])
 })
 
 test.each(modes)(

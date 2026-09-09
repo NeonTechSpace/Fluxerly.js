@@ -51,6 +51,7 @@ import {
     type RoleReference,
 } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
+import { guildLeave } from "./guild-lifecycle.js"
 import { RestOwner } from "./rest.js"
 import type { BotApplicationOperation, BotApplicationOperationOptions } from "#sdk/application"
 import type { BotApplicationRequest } from "./application.js"
@@ -77,6 +78,13 @@ export class ClientOwner {
         return Effect.suspend((): Effect.Effect<void, PresenceFailure> => {
             if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
             return this.presence.set(input) ? Effect.void : Effect.fail(new PresenceError())
+        })
+    }
+    setPresenceMembers(guildId: string, memberIds: readonly string[]) {
+        return Effect.suspend((): Effect.Effect<void, PresenceFailure> => {
+            if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
+            const failure = this.presence.setMembers(guildId, memberIds)
+            return failure === undefined ? Effect.void : Effect.fail(new PresenceError(failure))
         })
     }
     #messageCollectors = new Set<MessageCollector>()
@@ -292,6 +300,12 @@ export class ClientOwner {
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.guild(this.#configuration.token, operation, build, options)
                 : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    leaveGuild(guildId: string, options?: GuildOperationOptions) {
+        return this.guild("guilds.leave", () => guildLeave(guildId), options).pipe(
+            Effect.tap(() => Effect.sync(() => this.presence.forgetMembers(guildId))),
         )
     }
 

@@ -117,6 +117,8 @@ interface PublicDriver {
     readonly state: () => string
     set(input: PresenceInput): void
     invalid(input: unknown): void
+    setMembers(guildId: string, memberIds: readonly string[]): void
+    invalidMembers(guildId: unknown, memberIds: unknown, reason: "input" | "limit"): void
     connect(): Promise<void>
     shutdown(): Promise<void>
     closed(): void
@@ -131,6 +133,12 @@ async function publicDriver(mode: PublicMode): Promise<PublicDriver> {
             invalid: (input) => {
                 const result = client.presence.set(input as PresenceInput)
                 expect(result).toMatchObject({ error: { _tag: "PresenceError", reason: "input" } })
+            },
+            setMembers: (guildId, memberIds) =>
+                expect(client.presence.setMembers(guildId, memberIds).isOk()).toBe(true),
+            invalidMembers: (guildId, memberIds, reason) => {
+                const result = client.presence.setMembers(guildId as string, memberIds as readonly string[])
+                expect(result).toMatchObject({ error: { _tag: "PresenceError", reason } })
             },
             connect: async () => expect((await client.connect()).isOk()).toBe(true),
             shutdown: async () => expect((await client.shutdown()).isOk()).toBe(true),
@@ -154,6 +162,23 @@ async function publicDriver(mode: PublicMode): Promise<PublicDriver> {
                     expect.objectContaining({
                         _tag: "Fail",
                         error: expect.objectContaining({ _tag: "PresenceError", reason: "input" }),
+                    }),
+                )
+        },
+        setMembers: (guildId, memberIds) =>
+            expect(Effect.runSyncExit(client.presence.setMembers(guildId, memberIds))).toMatchObject({
+                _tag: "Success",
+            }),
+        invalidMembers: (guildId, memberIds, reason) => {
+            const exit = Effect.runSyncExit(
+                client.presence.setMembers(guildId as string, memberIds as readonly string[]),
+            )
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit))
+                expect(exit.cause.reasons).toContainEqual(
+                    expect.objectContaining({
+                        _tag: "Fail",
+                        error: expect.objectContaining({ _tag: "PresenceError", reason }),
                     }),
                 )
         },
@@ -246,6 +271,127 @@ test("presence owner coalesces one latest intent, spaces writes and cancels deta
     expect(clock.count).toBe(0)
 })
 
+test("member presence selections are frozen, replayed on resume and released on fresh identify", () => {
+    const clock = timers()
+    const memberFrames: unknown[] = []
+    const owner = new PresenceOwner(clock.timer)
+    const selected = ["30"]
+    expect(owner.setMembers("40", selected)).toBeUndefined()
+    selected[0] = "31"
+    owner.attach(
+        () => undefined,
+        (frame) => memberFrames.push(frame),
+    )
+    clock.advance(0)
+    expect(memberFrames).toEqual([{ subscriptions: { "40": { members: ["30"] } } }])
+
+    owner.guildCreate("40")
+    clock.advance(124)
+    expect(memberFrames).toHaveLength(1)
+    clock.advance(1)
+    expect(memberFrames).toEqual([
+        { subscriptions: { "40": { members: ["30"] } } },
+        { subscriptions: { "40": { members: ["30"] } } },
+    ])
+
+    owner.detach()
+    expect(owner.setMembers("40", [])).toBeUndefined()
+    owner.attach(
+        () => undefined,
+        (frame) => memberFrames.push(frame),
+        "resume",
+    )
+    clock.advance(0)
+    expect(memberFrames.at(-1)).toEqual({ subscriptions: { "40": { members: [] } } })
+    owner.guildCreate("40")
+    clock.advance(125)
+    expect(memberFrames.at(-1)).toEqual({ subscriptions: { "40": { members: [] } } })
+    expect(memberFrames).toHaveLength(4)
+    owner.detach()
+    owner.attach(
+        () => undefined,
+        (frame) => memberFrames.push(frame),
+        "resume",
+    )
+    clock.advance(0)
+    expect(memberFrames.at(-1)).toEqual({ subscriptions: { "40": { members: [] } } })
+    owner.detach()
+    owner.attach(
+        () => undefined,
+        (frame) => memberFrames.push(frame),
+        "identify",
+    )
+    clock.advance(0)
+    expect(memberFrames).toHaveLength(5)
+})
+
+test("member presence clear before its first send retains no session tombstone", () => {
+    const clock = timers()
+    const memberFrames: unknown[] = []
+    const owner = new PresenceOwner(clock.timer)
+    expect(owner.setMembers("40", ["30"])).toBeUndefined()
+    expect(owner.setMembers("40", [])).toBeUndefined()
+    owner.attach(
+        () => undefined,
+        (frame) => memberFrames.push(frame),
+        "resume",
+    )
+    clock.advance(0)
+    expect(memberFrames).toEqual([])
+})
+
+test("member presence validates identifier, per-client capacity and the complete Op14 byte budget before changing state", () => {
+    const clock = timers()
+    const sent: unknown[] = []
+    const owner = new PresenceOwner(clock.timer)
+    expect(owner.setMembers("invalid", ["30"])).toBe("input")
+    expect(owner.setMembers("40", ["30", "30"])).toBe("input")
+    expect(
+        owner.setMembers(
+            "40",
+            Array.from({ length: 1_001 }, (_, index) => String(index + 1)),
+        ),
+    ).toBe("limit")
+
+    const id = (index: number) => "900000000000000" + String(index).padStart(5, "0")
+    let largest = 0
+    while (
+        Buffer.byteLength(
+            JSON.stringify({
+                op: 14,
+                d: {
+                    subscriptions: { "40": { members: Array.from({ length: largest + 1 }, (_, index) => id(index)) } },
+                },
+            }),
+        ) <= 4_096
+    )
+        largest += 1
+    const fitting = Array.from({ length: largest }, (_, index) => id(index))
+    const frameBytes = (guildId: string) =>
+        Buffer.byteLength(JSON.stringify({ op: 14, d: { subscriptions: { [guildId]: { members: fitting } } } }))
+    const exactGuildId = "9".repeat(2 + 4_096 - frameBytes("40"))
+    const overLimitGuildId = exactGuildId + "9"
+    expect(frameBytes(exactGuildId)).toBe(4_096)
+    expect(frameBytes(overLimitGuildId)).toBe(4_097)
+    expect(owner.setMembers(exactGuildId, fitting)).toBeUndefined()
+    expect(owner.setMembers(overLimitGuildId, fitting)).toBe("limit")
+    owner.attach(
+        () => undefined,
+        (frame) => sent.push(frame),
+    )
+    clock.advance(0)
+    expect(sent).toEqual([{ subscriptions: { [exactGuildId]: { members: fitting } } }])
+    owner.detach()
+
+    for (let index = 1; index <= 99; index += 1) expect(owner.setMembers(String(index + 100), ["30"])).toBeUndefined()
+    expect(owner.setMembers("200", ["30"])).toBe("limit")
+
+    const totalOwner = new PresenceOwner()
+    const hundred = Array.from({ length: 100 }, (_, index) => String(index + 1))
+    for (let guild = 1; guild <= 100; guild += 1) expect(totalOwner.setMembers(String(guild), hundred)).toBeUndefined()
+    expect(totalOwner.setMembers("100", [...hundred, "101"])).toBe("limit")
+})
+
 test("an expiry that elapsed while disconnected is not restored", () => {
     vi.useFakeTimers({ now: 0 })
     const clock = timers()
@@ -277,6 +423,63 @@ test.each(publicModes)(
             await api.shutdown()
         }
     },
+)
+
+test.each(publicModes)(
+    "%s member selection refreshes unchanged input and reconciles a clear after RESUMED and guild availability",
+    async (mode) => {
+        const fixture = await publicGateway()
+        const api = await publicDriver(mode)
+        try {
+            api.setMembers("40", ["30"])
+            api.invalidMembers("invalid", ["30"], "input")
+            api.invalidMembers(
+                "40",
+                Array.from({ length: 1_001 }, (_, index) => String(index + 1)),
+                "limit",
+            )
+            expect(transport.sockets).toEqual([])
+            await api.connect()
+            await vi.waitFor(() => expect(fixture.commands.filter((command) => command.op === 14)).toHaveLength(1), {
+                interval: 5,
+            })
+            expect(fixture.commands.find((command) => command.op === 14)).toEqual({
+                connection: 0,
+                op: 14,
+                d: { subscriptions: { "40": { members: ["30"] } } },
+            })
+            api.setMembers("40", ["30"])
+            await vi.waitFor(() => expect(fixture.commands.filter((command) => command.op === 14)).toHaveLength(2))
+            expect(fixture.commands.filter((command) => command.op === 14).at(-1)?.d).toEqual({
+                subscriptions: { "40": { members: ["30"] } },
+            })
+            fixture.sockets[0]!.close(4000)
+            api.setMembers("40", [])
+            await vi.waitFor(
+                () =>
+                    expect(fixture.commands.some((command) => command.connection === 1 && command.op === 14)).toBe(
+                        true,
+                    ),
+                { timeout: 5_000 },
+            )
+            const resumed = () => fixture.commands.filter((command) => command.connection === 1 && command.op === 14)
+            expect(resumed().map((command) => command.d)).toEqual([{ subscriptions: { "40": { members: [] } } }])
+            fixture.sockets[1]!.send(
+                JSON.stringify({
+                    op: 0,
+                    t: "GUILD_CREATE",
+                    s: 2,
+                    d: { id: "40", properties: { id: "40", name: "fixture", owner_id: "90", features: [] } },
+                }),
+            )
+            await vi.waitFor(() => expect(resumed()).toHaveLength(2))
+            expect(resumed().at(-1)?.d).toEqual({ subscriptions: { "40": { members: [] } } })
+        } finally {
+            await api.shutdown()
+            await fixture.close()
+        }
+    },
+    10_000,
 )
 
 test.each(publicModes)(

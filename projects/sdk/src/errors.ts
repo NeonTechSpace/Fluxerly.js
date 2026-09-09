@@ -56,6 +56,7 @@ export class ConfigurationError extends Error {
 /** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
 export type Operation =
     | "presence.set"
+    | "presence.setMembers"
     | "directMessages.send"
     | import("./application.js").BotApplicationOperation
     | import("./users.js").UserOperation

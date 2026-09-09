@@ -9,7 +9,13 @@ import { decodeChannelEvent, channelEvents } from "./channels.js"
 import { decodeExpressionUpdate } from "./expressions.js"
 import { decodeInviteDelete, decodeInviteMetadata } from "./invites.js"
 import { decodeAuditLogEntry } from "./audit-logs.js"
-import type { GatewayPresenceUpdate, PresenceGatewayOwner } from "./presence.js"
+import {
+    decodePresenceUpdate,
+    decodePresenceUpdateBulk,
+    type GatewayPresenceMemberSubscriptions,
+    type GatewayPresenceUpdate,
+    type PresenceGatewayOwner,
+} from "./presence.js"
 import { Clock, Deferred, Effect, Redacted } from "effect"
 import WebSocket from "ws"
 import {
@@ -267,6 +273,21 @@ export const runGateway = (
                                         return
                                     }
                                     onDispatch(guildLifecycleEvents[event], update, Buffer.byteLength(data.toString()))
+                                    if (payload.t === "GUILD_CREATE") presence?.guildCreate(update.id)
+                                } else if (payload.t === "PRESENCE_UPDATE") {
+                                    const presence = decodePresenceUpdate(body)
+                                    if (!presence) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("presenceUpdate", presence, Buffer.byteLength(data.toString()))
+                                } else if (payload.t === "PRESENCE_UPDATE_BULK") {
+                                    const presences = decodePresenceUpdateBulk(body)
+                                    if (!presences) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("presenceUpdateBulk", presences, Buffer.byteLength(data.toString()))
                                 } else if (
                                     payload.t === "GUILD_EMOJIS_UPDATE" ||
                                     payload.t === "GUILD_STICKERS_UPDATE"
@@ -486,6 +507,8 @@ export const runGateway = (
                         socket,
                         heartbeat,
                         presence: (update: GatewayPresenceUpdate) => send(3, update),
+                        memberSubscriptions: (subscriptions: GatewayPresenceMemberSubscriptions) =>
+                            send(14, subscriptions),
                         detach: () => {
                             socket.off("message", onMessage)
                             socket.off("error", onError)
@@ -521,7 +544,7 @@ export const runGateway = (
                 }),
             )
             yield* Effect.raceFirst(startup, Deferred.await(ended))
-            presence?.attach(socket.presence)
+            presence?.attach(socket.presence, socket.memberSubscriptions, resuming ? "resume" : "identify")
             onReady(resuming ? "resume" : "identify")
             return yield* Deferred.await(ended)
         }),

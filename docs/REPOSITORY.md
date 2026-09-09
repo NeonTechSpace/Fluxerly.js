@@ -42,7 +42,7 @@ The documentation website remains a scaffold
 | [message-search-workflow.ts](/projects/sdk/src/internal/message-search-workflow.ts) | Bounded opaque-cursor message-search traversal, including explicit indexing and progress failures |
 | [permissions.ts](/projects/sdk/src/internal/permissions.ts) | Local permission-bit calculation and explicit fresh-resource composition, not action authorization |
 | [user-cache.ts](/projects/sdk/src/internal/user-cache.ts) | Optional account/private-conversation retention, conflicting reads and lifecycle invalidation |
-| [presence.ts](/projects/sdk/src/internal/presence.ts) | Process-local bot presence intent, coalescing and gateway reconnect restoration |
+| [presence.ts](/projects/sdk/src/internal/presence.ts) | Bot presence intent, bounded member selections, reconnect restoration and incoming presence projection without a cache |
 | [multipart.ts](/projects/sdk/src/internal/multipart.ts) | Bounded webhook multipart body streaming over admitted file snapshots |
 | [channels.ts](/projects/sdk/src/internal/channels.ts) | Guild channel request validation and REST/event projection, with scheduling owned by shared REST |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
@@ -146,6 +146,23 @@ Never print credentials or private payloads when diagnosing a failure
 Run a table entry as `pnpm --filter @neontechspace/fluxerly <script>`.
 These checks are opt-in and excluded from `pnpm check`
 
+`test:live:presence` requires process-only `FLUXER_TEST_PRESENCE_USER_ID`, an authorized non-bot sandbox guild member.
+It is an interactive check: After a selected guild presence baseline, it reports bounded stages for that participant's visible DND and online transitions, including one test-owned socket interruption and resumed-session observation.
+The harness does not change account state. The authorized participant makes the visible status changes, and the harness sends an unacknowledged empty selection during cleanup.
+For the final invocation, process-only `FLUXER_TEST_PRESENCE_RESTORE_STATUS` can request a verified return to the participant's original observed `online`, `idle`, `dnd` or `offline` status (`offline` means selecting Invisible while connected)
+
+`test:live:typing:interactive` requires process-only `FLUXER_TEST_TYPING_USER_ID` for an authorized non-bot sandbox member.
+Open the reported temporary channel, observe the bot indicator and type without sending a message.
+Enter `visible default` or `visible effect` in the running terminal only after observing that mode's indicator, or `stop` to end the check.
+An authorized browser operator can enter `browser default` or `browser effect` after checking the rendered indicator, recording browser observation separately from human confirmation.
+Each mode waits up to three minutes for both that confirmation and the selected member's SDK typing event.
+Cleanup deletes only the journaled test channel, retaining `.env.test.typing.local` if its removal cannot be verified
+
+`test:live:roles:reset` requires process-only `FLUXER_TEST_ROLE_RESET_GUILD_ID` matching the authorized sandbox and permission to reset guild-wide role display positions.
+It refuses existing non-null display assignments, then uses two journaled zero-permission roles for successful and lost-response resets through both APIs.
+No member assignments are changed.
+Cleanup verifies test-role deletion and retains `.env.test.role-reset.local` on unresolved cleanup
+
 `test:live:expressions` checks emoji/sticker lifecycle, gateway updates, partial batches and sticker messages through both built APIs.
 It creates temporary expressions and a channel, deletes test-owned resources without media purging, and preserves a recovery journal on unresolved outcomes
 
@@ -154,8 +171,11 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live` | Hosted protocol discovery, readiness and heartbeats | No server-content changes |
 | `test:live:sdk` | Built default/native client connection and shutdown | No server-content changes |
 | `test:live:application` | Built default/native current-bot application allowlist and hosted installation-link construction | Read-only; no navigation, authorization, or server-content changes |
+| `test:live:presence` | Interactive selected-guild member presence delivery, Op14 restore after a test-owned socket interruption and cleanup through both built APIs | No account-state changes by the harness; the authorized participant performs visible status transitions and the harness interrupts only its own socket |
 | `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
 | `test:live:typing` | One-shot typing, scoped refresh and completion/cancellation cleanup through both APIs | Temporary channel/messages and ephemeral typing notices; does not prove inbound typing delivery |
+| `test:live:typing:interactive` | Human-visible outgoing typing and selected-member inbound events through both APIs | Temporary channel and typing notices, with awaited refresh shutdown and verified channel removal |
+| `test:live:roles:reset` | Guild-wide role-display reset and lost-response reconciliation through both APIs | Two temporary zero-permission roles and whole-guild display reset, with existing display assignments required to be null |
 | `test:live:recovery` | Forced socket loss, resume, diagnostics and subsequent receive/reply | Temporary channel/messages and test-socket termination |
 | `test:live:recovery:cancel` | Managed cancellation during recovery and socket cleanup | Test-socket termination, no server-content changes |
 | `test:live:management` | Remote fetch, edit and deletion | Temporary channel/messages and test-message edits/deletions |
