@@ -64,6 +64,7 @@ export class MessageOperationError extends Error {
             | "fetchPins"
             | "edit"
             | "delete"
+            | "deleteMany"
             | "addReaction"
             | "removeReaction"
             | "removeUserReaction"

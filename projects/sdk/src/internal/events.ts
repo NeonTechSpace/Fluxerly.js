@@ -19,9 +19,15 @@ function limits(event: unknown, options: unknown): Limits | ConfigurationError {
     if (
         typeof event !== "string" ||
         ![
+            "guildChannelCreate",
+            "guildChannelUpdate",
+            "guildChannelDelete",
+            "guildChannelUpdateBulk",
             "guildMemberAdd",
             "guildMemberUpdate",
             "guildMemberRemove",
+            "guildBanAdd",
+            "guildBanRemove",
             "guildRoleDelete",
             "guildRoleCreate",
             "guildRoleUpdate",
@@ -206,10 +212,16 @@ export class EventBus {
         }
     }
     #sources: { [K in EventName]: Set<EventSource<EventMap[K]>> } = {
+        guildChannelCreate: new Set(),
+        guildChannelUpdate: new Set(),
+        guildChannelDelete: new Set(),
+        guildChannelUpdateBulk: new Set(),
         channelPinsUpdate: new Set(),
         guildMemberAdd: new Set(),
         guildMemberUpdate: new Set(),
         guildMemberRemove: new Set(),
+        guildBanAdd: new Set(),
+        guildBanRemove: new Set(),
         guildRoleDelete: new Set(),
         guildRoleCreate: new Set(),
         guildRoleUpdate: new Set(),

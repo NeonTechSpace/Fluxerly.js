@@ -20,8 +20,11 @@ export interface GuildRequest<A> {
     readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"
     readonly status: 200 | 204
     readonly json?: string
+    readonly moderation?: true
+    readonly auditReason?: string
+    readonly deleteAuthorId?: string
     readonly decode: (value: unknown) => A | undefined
-    readonly cache: ResourceRequest
+    readonly cache?: ResourceRequest
 }
 
 const nullableText = (value: unknown) => value === undefined || value === null || typeof value === "string"
@@ -30,6 +33,8 @@ export const guildEvents = {
     GUILD_MEMBER_ADD: "guildMemberAdd",
     GUILD_MEMBER_UPDATE: "guildMemberUpdate",
     GUILD_MEMBER_REMOVE: "guildMemberRemove",
+    GUILD_BAN_ADD: "guildBanAdd",
+    GUILD_BAN_REMOVE: "guildBanRemove",
     GUILD_ROLE_DELETE: "guildRoleDelete",
     GUILD_ROLE_CREATE: "guildRoleCreate",
     GUILD_ROLE_UPDATE: "guildRoleUpdate",
@@ -47,7 +52,7 @@ export function decodeGuildEvent(event: keyof typeof guildEvents, value: unknown
         if (!identifier(value.role_id)) return undefined
         return Object.freeze({ guildId: value.guild_id, id: value.role_id })
     }
-    if (event === "GUILD_MEMBER_REMOVE") {
+    if (event === "GUILD_MEMBER_REMOVE" || event === "GUILD_BAN_ADD" || event === "GUILD_BAN_REMOVE") {
         if (!record(value.user) || !identifier(value.user.id)) return undefined
         return Object.freeze({ guildId: value.guild_id, userId: value.user.id })
     }
@@ -91,7 +96,12 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         !/^\d{4}-\d\d-\d\dT/.test(value.joined_at) ||
         !Number.isFinite(Date.parse(value.joined_at)) ||
         !nullableText(value.nick) ||
-        !nullableText(value.avatar)
+        !nullableText(value.avatar) ||
+        (value.communication_disabled_until !== undefined &&
+            value.communication_disabled_until !== null &&
+            (typeof value.communication_disabled_until !== "string" ||
+                !/^\d{4}-\d\d-\d\dT/.test(value.communication_disabled_until) ||
+                !Number.isFinite(Date.parse(value.communication_disabled_until))))
     )
         return undefined
     return Object.freeze({
@@ -101,6 +111,9 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         isBot: value.user.bot === true,
         roleIds: Object.freeze([...value.roles] as string[]),
         joinedAt: value.joined_at,
+        ...(value.communication_disabled_until === undefined
+            ? {}
+            : { communicationDisabledUntil: value.communication_disabled_until as string | null }),
         ...(value.nick === undefined ? {} : { nickname: value.nick as string | null }),
         ...(value.avatar === undefined ? {} : { avatar: value.avatar as string | null }),
     })

@@ -1,6 +1,6 @@
 import type { Message } from "./messages.js"
 
-/** Optional guild/member/role retention, independently bounded across the entire client for each enabled resource.
+/** Optional guild/member/role/channel retention, independently bounded across the entire client for each enabled resource.
  * Off by default. True or an options object enables the resource. REST calls and event delivery never require caching.
  * Retains encountered frozen projections, not a complete guild replica. No persistence, preload or background refresh.
  * LRU capacity eviction favors repeated lookups. Expiry, conflicting observations and connection gaps can cause misses.
@@ -11,7 +11,7 @@ export interface ResourceCacheSettings {
     /** Retained entries per resource across all guilds, a positive safe integer. Defaults to 1,000 */
     readonly maxEntries?: number
     /** Accounted UTF-8 JSON bytes per resource, a positive safe integer. Defaults to 4,194,304.
-     * Role permissions are counted as decimal strings. Excludes keys, runtime overhead and caller-held references.
+     * Permission bitfields are counted as decimal strings. Excludes keys, runtime overhead and caller-held references.
      * This is not an exact heap or process-memory limit. Message-cache budgets remain separate
      */
     readonly maxBytes?: number
@@ -39,6 +39,15 @@ export interface CachePolicyErrorReport {
  * An overlapping mutation or observation can invalidate a pending response's cache admission.
  * That response cannot insert or renew age. It evicts a different retained snapshot but may leave an identical one.
  * These guards do not establish a global server revision order or complete channel history
+ *
+ * Channel deletion or visibility loss removes that channel's snapshots and blocks already-started response admission.
+ * Other retained channels remain, although their pending responses may also skip cache admission
+ *
+ * Dispatched batch deletion evicts selected messages even on rejection and blocks already-started response admission.
+ * Other retained messages remain, although overlapping or older responses may skip cache admission
+ *
+ * Banning with message deletion evicts the author's messages across guilds, since projections lack guild IDs.
+ * That server job is asynchronous. Later observations may precede its completion and are not proof a message survived
  */
 export interface MessageCacheSettings {
     /** Global retained snapshot count, a positive safe integer. Defaults to 1,000, not a per-channel allowance */

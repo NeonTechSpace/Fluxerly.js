@@ -37,7 +37,7 @@ export interface ClientOptions {
     /** Optional resource retention, copied and validated at creation. Omission retains no resource snapshots */
     readonly cache?: {
         /** Guild identity snapshots from explicit reads and guild create/update events, never nested member/role preload.
-         * Guild removal/unavailability clears this guild's entries in all three resource caches
+         * Guild removal/unavailability clears this guild's resource entries, including channels
          */
         readonly guilds?: boolean | ResourceCacheSettings
         /** Member snapshots from explicit reads/pages and member add/update events.
@@ -50,6 +50,13 @@ export interface ClientOptions {
          * Full list reads remove absent roles only without overlapping observations. Partial bulk events replace only supplied roles
          */
         readonly roles?: boolean | ResourceCacheSettings
+        /** Guild channel snapshots from explicit reads and channel create/update events, with no initial enumeration.
+         * Dispatched channel mutations conservatively clear the entire channel cache, including pending reads.
+         * Bulk ordering events evict the guild rather than retaining potentially unfinished permission copies.
+         * Category updates/deletions evict the guild because child inheritance can change. Visibility loss evicts the channel.
+         * Full list reads remove absent channels only without overlapping observations. This is not a complete guild replica
+         */
+        readonly channels?: boolean | ResourceCacheSettings
         /**
          * Omitted/false disables message caching. True or an options object enables it.
          * Memory-only snapshots populate from eligible REST results and gateway events, never automatic history requests.

@@ -102,6 +102,22 @@ Connection gaps prevent old requests from repopulating snapshots, while late wri
 Fluxer remains authoritative for membership, permissions and role hierarchy; an earlier observation cannot suppress a targeted role request.
 Multi-step resource workflows are not transactions, and uncertain writes must not be replayed as if they were reads
 
+## Guild channel boundary
+
+[Channel projection](/projects/sdk/src/internal/channels.ts) validates guild-channel requests and maps REST/gateway observations.
+The shared REST owner keeps guild-major and channel-major routes separate while sharing client-global admission and cleanup
+
+The optional [channel cache](/projects/sdk/src/internal/channel-cache.ts) owns ID-keyed observations with client-wide limits, never effective permission decisions
+
+Dispatched mutations invalidate channel snapshots and pending channel reads because category and ordering changes can affect descendants.
+Rejection of a multi-entry reorder does not establish rollback of its earlier entries
+
+Bulk gateway observations invalidate their guild rather than retaining permissions that Fluxer may still be copying.
+Channel create/delete events can represent visibility changes, so they do not prove remote creation/deletion.
+Channel deletion or visibility loss evicts related cached messages without synthesizing message events or changing collector completion contracts
+
+Preserve omitted permission overwrites separately from an explicit empty list throughout input encoding
+
 ## Message-cache boundary
 
 Fluxer is the source of truth, not the optional client-owned memory cache.

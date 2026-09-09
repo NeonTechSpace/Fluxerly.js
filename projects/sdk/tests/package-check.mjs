@@ -84,6 +84,7 @@ try {
             "reactions",
             "pins",
             "guilds",
+            "channels",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -179,6 +180,36 @@ try {
                 /(?:function|const) (?:(?:assign|create)RoleExample|cachedRoleNamesExample)/.test(example),
             )
         assert.equal(guildExamples.length, 3)
+        const channelExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) channelExample/.test(example))
+        assert.equal(channelExamples.length, 1)
+        writeFileSync(join(consumer, "channel-example.ts"), channelExamples[0])
+        const cleanupExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) cleanupExample/.test(example))
+        assert.equal(cleanupExamples.length, 1)
+        writeFileSync(join(consumer, "cleanup-example.ts"), cleanupExamples[0])
+        const moderationExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) moderationExample/.test(example))
+        assert.equal(moderationExamples.length, 1)
+        writeFileSync(join(consumer, "moderation-example.ts"), moderationExamples[0])
         const paginationExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]

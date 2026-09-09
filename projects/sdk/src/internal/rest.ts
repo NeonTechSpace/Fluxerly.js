@@ -22,6 +22,9 @@ import { decodePinsPage, encodePinsQuery } from "./pins.js"
 import { GuildOperationError, type GuildOperation, type GuildOperationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
 import type { GuildCache, ResourceGuard, ResourceRequest } from "./guild-cache.js"
+import { ChannelOperationError, type ChannelOperation, type ChannelOperationOptions } from "#sdk/channels"
+import type { ChannelRequest } from "./channels.js"
+import type { ChannelCache, ChannelCacheGuard, ChannelCacheRequest } from "./channel-cache.js"
 
 type Pending = {
     route: string
@@ -37,8 +40,14 @@ type Request<A> = {
     channel: string
     bucket?: string
     cache?: false
+    deleteIds?: readonly string[]
+    moderation?: true
+    auditReason?: string
+    deleteAuthorId?: string
     resourceCache?: ResourceRequest
     resourceGuard?: ResourceGuard
+    channelCache?: ChannelCacheRequest
+    channelGuard?: ChannelCacheGuard
     path: string
     body: EncodedBody | undefined
     status?: number
@@ -104,6 +113,7 @@ export class RestOwner {
         private readonly cache?: MessageCache,
         private readonly uploadMaxBytes = 104_857_600,
         private readonly resources?: GuildCache,
+        private readonly channels?: ChannelCache,
     ) {}
     #uploadBytes = 0
     #closed = false
@@ -244,6 +254,9 @@ export class RestOwner {
                                           }
                                         : {
                                               Authorization: `Bot ${Redacted.value(token)}`,
+                                              ...(request.auditReason === undefined
+                                                  ? {}
+                                                  : { "X-Audit-Log-Reason": request.auditReason }),
                                               ...(request.body === undefined
                                                   ? {}
                                                   : { "Content-Type": "application/json" }),
@@ -288,6 +301,8 @@ export class RestOwner {
                                 if (!response.ok) {
                                     if (response.status === 404 && request.method === "GET" && request.resourceGuard)
                                         owner.resources!.missing(request.resourceGuard)
+                                    if (response.status === 404 && request.method === "GET" && request.channelGuard)
+                                        owner.channels!.missing(request.channelGuard)
                                     const rejected = response.status >= 400 && response.status < 500
                                     if (rejected && !request.preparation) progress.outcome = "rejected"
                                     const retryableRead =
@@ -326,6 +341,7 @@ export class RestOwner {
                         if (result.kind === "success") {
                             state.success = true
                             if (request.resourceGuard) owner.resources!.complete(request.resourceGuard, result.value)
+                            if (request.channelGuard) owner.channels!.complete(request.channelGuard, result.value)
                             if (state.guard) {
                                 if (request.method === "DELETE" || request.bucket === "pins")
                                     owner.cache!.delete(
@@ -449,6 +465,56 @@ export class RestOwner {
 
     delete(token: Redacted.Redacted<string>, target: MessageReference, options?: MessageOperationOptions) {
         return this.#manage(token, "delete", target, undefined, options, async () => {})
+    }
+
+    deleteMany(
+        token: Redacted.Redacted<string>,
+        channelId: string,
+        ids: readonly string[],
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            if (
+                !identifier(channelId) ||
+                !Array.isArray(ids) ||
+                ids.length < 1 ||
+                ids.length > 100 ||
+                !Array.from(ids).every(identifier) ||
+                new Set(ids).size !== ids.length ||
+                (options !== undefined &&
+                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
+            )
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            const snapshot = [...ids]
+            return this.#execute(
+                token,
+                {
+                    method: "POST",
+                    channel: channelId,
+                    bucket: "bulk-delete",
+                    cache: false,
+                    deleteIds: snapshot,
+                    path: `/channels/${channelId}/messages/bulk-delete`,
+                    body: { json: JSON.stringify({ message_ids: snapshot }), files: [] },
+                    status: 204,
+                    decode: async () => {},
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new MessageOperationError(
+                          "deleteMany",
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                      )
+                    : error,
+            ),
+        )
     }
 
     fetchReactionUsers(
@@ -854,7 +920,11 @@ export class RestOwner {
             if (
                 !input ||
                 (options !== undefined &&
-                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
+                    (!record(options) ||
+                        Object.keys(options).some(
+                            (key) =>
+                                key !== "timeoutMs" && key !== "signal" && !(input.moderation && key === "auditReason"),
+                        )))
             )
                 return Effect.fail(new RestFailure("input", "notDispatched"))
             return this.#execute(
@@ -864,7 +934,10 @@ export class RestOwner {
                     channel: input.guildId,
                     bucket: input.bucket,
                     cache: false,
-                    resourceCache: input.cache,
+                    ...(input.cache === undefined ? {} : { resourceCache: input.cache }),
+                    ...(input.moderation === undefined ? {} : { moderation: input.moderation }),
+                    ...(input.auditReason === undefined ? {} : { auditReason: input.auditReason }),
+                    ...(input.deleteAuthorId === undefined ? {} : { deleteAuthorId: input.deleteAuthorId }),
                     path: input.path,
                     method: input.method,
                     status: input.status,
@@ -882,6 +955,56 @@ export class RestOwner {
             Effect.mapError((error) =>
                 error instanceof RestFailure
                     ? new GuildOperationError(operation, error.reason, error.outcome, error.status, error.retryAfterMs)
+                    : error,
+            ),
+        )
+    }
+
+    channel<A>(
+        token: Redacted.Redacted<string>,
+        operation: ChannelOperation,
+        build: () => ChannelRequest<A> | undefined,
+        options?: ChannelOperationOptions,
+    ) {
+        return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const input = build()
+            if (
+                !input ||
+                (options !== undefined &&
+                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
+            )
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    channel: input.majorId,
+                    bucket: input.bucket,
+                    cache: false,
+                    channelCache: input.cache,
+                    path: input.path,
+                    method: input.method,
+                    status: input.status,
+                    body: input.json === undefined ? undefined : { json: input.json, files: [] },
+                    decode: async (response) => {
+                        if (input.status === 204) return undefined as A
+                        const value = input.decode(await response.json().catch(() => null))
+                        if (value === undefined) throw new RestFailure("response", "unknown", response.status)
+                        return value
+                    },
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new ChannelOperationError(
+                          operation,
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                      )
                     : error,
             ),
         )
@@ -925,9 +1048,12 @@ export class RestOwner {
             const deadline = performance.now() + timeout
             const generation = owner.cache?.generation ?? 0
             const progress: { outcome: Outcome } = { outcome: "notDispatched" }
+            const deletionGuard = request.deleteIds && owner.cache?.begin(request.channel, undefined, true, generation)
             // Register before queue/rate waits so events, writes and gaps invalidate the whole operation, including retries
             const resourceGuard = request.resourceCache && owner.resources?.begin(request.resourceCache)
             if (resourceGuard) request = { ...request, resourceGuard }
+            const channelGuard = request.channelCache && owner.channels?.begin(request.channelCache)
+            if (channelGuard) request = { ...request, channelGuard }
             const operation = Deferred.makeUnsafe<void>()
             owner.#operations.add(operation)
             return Effect.gen(function* () {
@@ -941,7 +1067,27 @@ export class RestOwner {
                 }),
                 Effect.ensuring(
                     Effect.sync(() => {
-                        if (resourceGuard) owner.resources!.end(resourceGuard, progress.outcome === "unknown")
+                        if (request.deleteIds && progress.outcome !== "notDispatched")
+                            owner.cache?.deleteMany(request.channel, request.deleteIds)
+                        if (deletionGuard) owner.cache!.end(deletionGuard)
+                        if (resourceGuard)
+                            owner.resources!.end(
+                                resourceGuard,
+                                request.moderation
+                                    ? progress.outcome !== "notDispatched"
+                                    : progress.outcome === "unknown",
+                            )
+                        if (request.deleteAuthorId && progress.outcome !== "notDispatched")
+                            owner.cache?.deleteAuthor(request.deleteAuthorId)
+                        // A rejected multi-entry reorder can have applied earlier entries before its failure
+                        if (channelGuard) owner.channels!.end(channelGuard, progress.outcome !== "notDispatched")
+                        if (
+                            request.channelCache?.mutation &&
+                            request.method === "DELETE" &&
+                            request.bucket === "channel:delete" &&
+                            progress.outcome === "unknown"
+                        )
+                            owner.cache?.deleteChannel(request.channel)
                         if (request.body) request.body.files.length = 0
                         owner.#uploadBytes -= uploadBytes
                         owner.#operations.delete(operation)

@@ -27,6 +27,7 @@ export class ConfigurationError extends Error {
             | "guilds"
             | "members"
             | "roles"
+            | "channels"
             | "maxEntries"
             | "maxBytes"
             | "maxAgeMs"
@@ -50,6 +51,7 @@ export class ConfigurationError extends Error {
 
 /** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
 export type Operation =
+    | import("./channels.js").ChannelOperation
     | import("./guilds.js").GuildOperation
     | import("./pagination.js").PaginationOperation
     | "createClient"
@@ -76,6 +78,7 @@ export type Operation =
     | "clearReactions"
     | "edit"
     | "delete"
+    | "deleteMany"
     | "subscription.waitForClose"
     | "collect"
     | "collector.waitForClose"
@@ -176,6 +179,7 @@ export type DefectReason =
               | import("./message-errors.js").MessageError
               | import("./message-errors.js").MessageOperationError
               | import("./guilds.js").GuildOperationError
+              | import("./channels.js").ChannelOperationError
               | import("./pagination.js").PaginationError
               | import("./collectors.js").CollectorError
       }

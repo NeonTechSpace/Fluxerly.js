@@ -1,9 +1,10 @@
 import { platform } from "node:os"
 import type { EventMap, EventName } from "#sdk/events"
-import { decodeMessage, decodeDeletion, decodeBulkDeletion } from "./message.js"
+import { decodeMessage, decodeDeletion, decodeBulkDeletion, record } from "./message.js"
 import { decodeReaction, reactionEvents } from "./reactions.js"
 import { decodePinsUpdate } from "./pins.js"
 import { decodeGuildEvent, guildEvents } from "./guilds.js"
+import { decodeChannelEvent, channelEvents } from "./channels.js"
 import { Clock, Deferred, Effect, Redacted } from "effect"
 import WebSocket from "ws"
 import {
@@ -243,6 +244,16 @@ export const runGateway = (
                                         return
                                     }
                                     onDispatch(guildEvents[event], update, Buffer.byteLength(data.toString()))
+                                } else if (Object.hasOwn(channelEvents, payload.t)) {
+                                    // These gateway names also carry private-channel observations outside this API's guild scope
+                                    if (record(body) && (body.guild_id === undefined || body.guild_id === null)) return
+                                    const event = payload.t as keyof typeof channelEvents
+                                    const update = decodeChannelEvent(event, body)
+                                    if (!update) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch(channelEvents[event], update, Buffer.byteLength(data.toString()))
                                 } else if (payload.t === "CHANNEL_PINS_UPDATE") {
                                     const update = decodePinsUpdate(body)
                                     if (!update) {

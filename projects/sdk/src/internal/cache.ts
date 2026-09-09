@@ -139,6 +139,30 @@ export class MessageCache {
         this.#schedule()
     }
 
+    deleteMany(channelId: string, ids: readonly string[]) {
+        if (this.#closed) return
+        // Also block queued reads that have not registered their request guard yet
+        this.#generation++
+        for (const id of ids) this.delete({ channelId, id })
+    }
+
+    deleteAuthor(userId: string) {
+        if (this.#closed) return
+        this.#generation++
+        for (const entry of this.#entries.values()) if (entry.message.author.id === userId) this.delete(entry.message)
+    }
+
+    deleteChannel(channelId: string) {
+        if (this.#closed) return
+        // Queued REST calls have captured this generation but may not have registered a per-request guard yet
+        // Preserve other channel snapshots while conservatively blocking admission of pre-deletion responses
+        this.#generation++
+        for (const request of this.#requests) if (request.channel === channelId) request.invalid = true
+        for (const entry of this.#entries.values())
+            if (entry.message.channelId === channelId) this.#remove(entry.message)
+        this.#schedule()
+    }
+
     gap() {
         this.#generation++
         for (const request of this.#requests) request.invalid = true

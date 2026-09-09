@@ -1,9 +1,22 @@
 import type { Message, MessageDeletion, MessageBulkDeletion } from "./messages.js"
 import type { ChannelPinsUpdate } from "./pins.js"
+import type { MemberReference } from "./guilds.js"
 import type { MessageReaction, MessageReactionBatch, MessageReactionEmojiRemoval, ReactionTarget } from "./reactions.js"
 
 /** Implemented gateway events and their frozen payloads. No subscription history, cache reconstruction or REST-generated notifications */
 export interface EventMap {
+    /** Ban recorded for these guild/user IDs, not a full ban or proof member removal has finished. Evicts the member cache entry */
+    readonly guildBanAdd: MemberReference
+    /** Explicit ban removal notice, not proof of rejoining. Database TTL expiry need not emit this event. Evicts the member cache entry */
+    readonly guildBanRemove: MemberReference
+    /** Channel became visible, including newly created channels. Not proof of remote creation or an initial enumeration */
+    readonly guildChannelCreate: import("./channels.js").GuildChannel
+    /** Frozen guild channel update, not an old/new pair. Current permissions may require an explicit fetch */
+    readonly guildChannelUpdate: import("./channels.js").GuildChannel
+    /** Channel was deleted or became invisible. Evicts cached channel messages without synthesizing message deletion events */
+    readonly guildChannelDelete: import("./channels.js").GuildChannel
+    /** One visibility-filtered batch without fan-out. Not a complete guild list or proof that permission copying has finished */
+    readonly guildChannelUpdateBulk: import("./channels.js").GuildChannelUpdateBulk
     /** Frozen role creation observation, without an initial enumeration */
     readonly guildRoleCreate: import("./guilds.js").GuildRole
     /** Frozen role update, not an old/new pair */

@@ -7,8 +7,10 @@ import WebSocket from "ws"
 import { Cause, Logger } from "effect"
 import { fromEffectLogger } from "@neontechspace/fluxerly/effect"
 import { observeUploads, safeFailure } from "./upload-diagnostics.mjs"
+import { createGuildChannelFixture, cleanupGuildChannelFixtures } from "./channel-fixture.mjs"
 import { createReactionEmoji, cleanupReactionEmoji } from "./reaction-fixture.mjs"
 import { createGuildTestRole, cleanupGuildTestRole } from "./guild-fixture.mjs"
+import { cleanupModeration } from "./moderation-fixture.mjs"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
@@ -34,7 +36,11 @@ const attachments = process.argv[3] === "--attachments" || smallAttachments
 const reactions = process.argv[3] === "--reactions"
 const pins = process.argv[3] === "--pins"
 const guilds = process.argv[3] === "--guilds"
-const forceRecovery = recover || cache || collectors || attachments || reactions || pins || guilds
+const channels = process.argv[3] === "--channels"
+const batchDelete = process.argv[3] === "--batch-delete"
+const moderation = process.argv[3] === "--moderation"
+let moderationUserId = process.env.FLUXER_TEST_MODERATION_USER_ID
+const forceRecovery = recover || cache || collectors || attachments || reactions || pins || guilds || channels
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const journalPath = new URL("../../.env.test.messages.local", import.meta.url)
 const report = (check, passed) => console.log(JSON.stringify({ mode, check, passed }))
@@ -1065,10 +1071,312 @@ async function verifyCacheExpiry(send, get, channelId) {
     report(stage, true)
 }
 
+async function verifyChannels(ops, mainChannelId, botId, interrupt) {
+    const rawChannel = async (id) => {
+        const response = await api("GET", `/channels/${id}`)
+        assert.equal(response.status, 200)
+        assert.equal(response.data?.id, id)
+        assert.equal(response.data?.guild_id, guildId)
+        return response.data
+    }
+    const rawOverwrites = (channel) => channel.permission_overwrites ?? []
+    const normalizeOverwrites = (overwrites) =>
+        [...overwrites]
+            .map((overwrite) => [
+                overwrite.id,
+                overwrite.type === 0 ? "role" : overwrite.type === 1 ? "member" : overwrite.type,
+                String(overwrite.allow),
+                String(overwrite.deny),
+            ])
+            .sort((left, right) => left.join("/").localeCompare(right.join("/")))
+    const assertSnapshot = (snapshot, id, type) => {
+        assert.equal(snapshot?.id, id)
+        assert.equal(snapshot?.guildId, guildId)
+        assert.equal(snapshot?.type, type)
+        assert.ok(Object.isFrozen(snapshot))
+        if (snapshot.permissionOverwrites !== undefined) assert.ok(Object.isFrozen(snapshot.permissionOverwrites))
+    }
+    const seen = {
+        guildChannelCreate: [],
+        guildChannelUpdate: [],
+        guildChannelDelete: [],
+        guildChannelUpdateBulk: [],
+    }
+    const stops = []
+    const waitFor = async (predicate, message) => {
+        const deadline = performance.now() + 15_000
+        while (true) {
+            const value = await predicate()
+            if (value !== undefined) return value
+            assert.ok(performance.now() < deadline, message)
+            await sleep(20)
+        }
+    }
+    const waitForEvent = (event, from, predicate) =>
+        waitFor(() => seen[event].slice(from).find(predicate), `Guild channel ${event} deadline`)
+    const waitForCache = (id, predicate) =>
+        waitFor(async () => {
+            const snapshot = await ops.get(id)
+            return predicate(snapshot) ? snapshot : undefined
+        }, "Guild channel cache deadline")
+    const createFixture = (key, input) =>
+        createGuildChannelFixture(
+            journal,
+            () => writeFileSync(journalPath, JSON.stringify(journal)),
+            key,
+            input,
+            (input) => ops.create(guildId, input),
+        )
+
+    stage = "channel_remote_reads"
+    const initial = await ops.fetch(mainChannelId)
+    assertSnapshot(initial, mainChannelId, 0)
+    const initialRaw = await rawChannel(mainChannelId)
+    assert.equal(initial.name, initialRaw.name)
+    assert.equal((await ops.get(mainChannelId))?.id, mainChannelId)
+    const listed = await ops.fetchAll(guildId)
+    const rawListed = await api("GET", `/guilds/${guildId}/channels`)
+    assert.ok(Array.isArray(rawListed.data))
+    assert.deepEqual(
+        listed.map((channel) => channel.id),
+        rawListed.data.map((channel) => channel.id),
+    )
+    assert.ok(listed.every(Object.isFrozen))
+    report(stage, true)
+
+    try {
+        for (const event of Object.keys(seen)) {
+            stops.push(
+                await ops.on(event, (value) => {
+                    if (event === "guildChannelUpdateBulk") {
+                        if (value.guildId !== guildId) return
+                        assert.ok(seen[event].length < 64)
+                        assert.equal(value.guildId, guildId)
+                        assert.ok(Object.isFrozen(value) && Object.isFrozen(value.channels))
+                        for (const channel of value.channels) assertSnapshot(channel, channel.id, channel.type)
+                    } else {
+                        if (value.guildId !== guildId) return
+                        assert.ok(seen[event].length < 64)
+                        assert.equal(value.guildId, guildId)
+                        assertSnapshot(value, value.id, value.type)
+                        if (value.permissionOverwrites !== undefined)
+                            assert.ok(value.permissionOverwrites.every(Object.isFrozen))
+                    }
+                    seen[event].push(value)
+                }),
+            )
+        }
+
+        stage = "channel_category_create"
+        const categoryA = await createFixture("categoryA", { type: 4 })
+        assertSnapshot(categoryA, categoryA.id, 4)
+        const createdCategoryA = await waitForEvent(
+            "guildChannelCreate",
+            0,
+            (value) => value.id === categoryA.id && value.type === 4,
+        )
+        assert.equal(createdCategoryA.name, categoryA.name)
+        assert.equal((await rawChannel(categoryA.id)).name, categoryA.name)
+        const categoryB = await createFixture("categoryB", { type: 4 })
+        assertSnapshot(categoryB, categoryB.id, 4)
+        const createdCategoryB = await waitForEvent(
+            "guildChannelCreate",
+            0,
+            (value) => value.id === categoryB.id && value.type === 4,
+        )
+        assert.equal(createdCategoryB.name, categoryB.name)
+        assert.equal((await rawChannel(categoryB.id)).name, categoryB.name)
+        report(stage, true)
+
+        stage = "channel_permission_overwrites"
+        let updates = seen.guildChannelUpdate.length
+        await ops.setPermissionOverwrite(categoryA.id, { id: guildId, type: "role", allow: 0n, deny: 0n })
+        await waitForEvent("guildChannelUpdate", updates, (value) => value.id === categoryA.id)
+        updates = seen.guildChannelUpdate.length
+        await ops.setPermissionOverwrite(categoryA.id, { id: botId, type: "member", allow: 0n, deny: 0n })
+        await waitForEvent("guildChannelUpdate", updates, (value) => value.id === categoryA.id)
+        let categoryARaw = await rawChannel(categoryA.id)
+        assert.deepEqual(
+            normalizeOverwrites(rawOverwrites(categoryARaw)),
+            normalizeOverwrites([
+                { id: guildId, type: "role", allow: "0", deny: "0" },
+                { id: botId, type: "member", allow: "0", deny: "0" },
+            ]),
+        )
+        updates = seen.guildChannelUpdate.length
+        await ops.removePermissionOverwrite(categoryA.id, botId)
+        await waitForEvent("guildChannelUpdate", updates, (value) => value.id === categoryA.id)
+        categoryARaw = await rawChannel(categoryA.id)
+        assert.deepEqual(
+            normalizeOverwrites(rawOverwrites(categoryARaw)),
+            normalizeOverwrites([{ id: guildId, type: "role", allow: "0", deny: "0" }]),
+        )
+        updates = seen.guildChannelUpdate.length
+        await ops.setPermissionOverwrite(categoryB.id, { id: botId, type: "member", allow: 0n, deny: 0n })
+        await waitForEvent("guildChannelUpdate", updates, (value) => value.id === categoryB.id)
+        const categoryBRaw = await rawChannel(categoryB.id)
+        assert.deepEqual(
+            normalizeOverwrites(rawOverwrites(categoryBRaw)),
+            normalizeOverwrites([{ id: botId, type: "member", allow: "0", deny: "0" }]),
+        )
+        report(stage, true)
+
+        stage = "channel_inheritance_and_explicit_overwrites"
+        const inherited = await createFixture("inheritedChild", { type: 0, parentId: categoryA.id })
+        assertSnapshot(inherited, inherited.id, 0)
+        await waitForEvent("guildChannelCreate", 0, (value) => value.id === inherited.id)
+        const inheritedRaw = await rawChannel(inherited.id)
+        assert.equal(inheritedRaw.parent_id, categoryA.id)
+        assert.deepEqual(
+            normalizeOverwrites(rawOverwrites(inheritedRaw)),
+            normalizeOverwrites(rawOverwrites(categoryARaw)),
+        )
+        const explicit = await createFixture("explicitChild", {
+            type: 0,
+            parentId: categoryA.id,
+            permissionOverwrites: [],
+        })
+        assertSnapshot(explicit, explicit.id, 0)
+        await waitForEvent("guildChannelCreate", 0, (value) => value.id === explicit.id)
+        const explicitRaw = await rawChannel(explicit.id)
+        assert.equal(explicitRaw.parent_id, categoryA.id)
+        assert.deepEqual(rawOverwrites(explicitRaw), [])
+        report(stage, true)
+
+        stage = "channel_edit_readback"
+        const editedCategoryName = `${journal.channelFixtures.categoryA.marker}-edited`
+        updates = seen.guildChannelUpdate.length
+        const editedCategory = await ops.edit(categoryA.id, { name: editedCategoryName })
+        assertSnapshot(editedCategory, categoryA.id, 4)
+        assert.equal(editedCategory.name, editedCategoryName)
+        await waitForEvent(
+            "guildChannelUpdate",
+            updates,
+            (value) => value.id === categoryA.id && value.name === editedCategoryName,
+        )
+        categoryARaw = await rawChannel(categoryA.id)
+        assert.equal(categoryARaw.name, editedCategoryName)
+        report(stage, true)
+
+        stage = "channel_reorder_keep_permissions"
+        let bulk = seen.guildChannelUpdateBulk.length
+        await ops.reorder(guildId, [{ id: explicit.id, parentId: categoryB.id, syncPermissionsOnMove: false }])
+        await waitForEvent("guildChannelUpdateBulk", bulk, (value) =>
+            value.channels.some((channel) => channel.id === explicit.id && channel.parentId === categoryB.id),
+        )
+        let movedRaw = await rawChannel(explicit.id)
+        assert.equal(movedRaw.parent_id, categoryB.id)
+        assert.deepEqual(rawOverwrites(movedRaw), [])
+        report(stage, true)
+
+        stage = "channel_reorder_copy_permissions"
+        bulk = seen.guildChannelUpdateBulk.length
+        await ops.reorder(guildId, [{ id: explicit.id, parentId: categoryA.id, syncPermissionsOnMove: true }])
+        await waitForEvent("guildChannelUpdateBulk", bulk, (value) =>
+            value.channels.some((channel) => channel.id === explicit.id && channel.parentId === categoryA.id),
+        )
+        movedRaw = await rawChannel(explicit.id)
+        assert.equal(movedRaw.parent_id, categoryA.id)
+        assert.deepEqual(normalizeOverwrites(rawOverwrites(movedRaw)), normalizeOverwrites(rawOverwrites(categoryARaw)))
+        bulk = seen.guildChannelUpdateBulk.length
+        await ops.reorder(guildId, [{ id: explicit.id, parentId: categoryB.id, syncPermissionsOnMove: true }])
+        await waitForEvent("guildChannelUpdateBulk", bulk, (value) =>
+            value.channels.some((channel) => channel.id === explicit.id && channel.parentId === categoryB.id),
+        )
+        movedRaw = await rawChannel(explicit.id)
+        assert.equal(movedRaw.parent_id, categoryB.id)
+        assert.deepEqual(normalizeOverwrites(rawOverwrites(movedRaw)), normalizeOverwrites(rawOverwrites(categoryBRaw)))
+        report(stage, true)
+
+        stage = "channel_cache_unknown_write"
+        await ops.fetch(explicit.id)
+        await waitForCache(explicit.id, (value) => value?.id === explicit.id)
+        const uncertainName = `${journal.channelFixtures.explicitChild.marker}-uncertain`
+        const originalFetch = globalThis.fetch
+        let dispatched = 0
+        updates = seen.guildChannelUpdate.length
+        globalThis.fetch = async (...args) => {
+            const response = await originalFetch(...args)
+            if (args[1]?.method === "PATCH" && new URL(args[0]).pathname === `/v1/channels/${explicit.id}`) {
+                dispatched++
+                assert.equal(response.status, 200)
+                await response.arrayBuffer()
+                await waitForEvent(
+                    "guildChannelUpdate",
+                    updates,
+                    (value) => value.id === explicit.id && value.name === uncertainName,
+                )
+                await waitForCache(explicit.id, (value) => value?.name === uncertainName)
+                throw new Error("Test-owned channel response loss")
+            }
+            return response
+        }
+        try {
+            await assert.rejects(ops.edit(explicit.id, { name: uncertainName }), (error) => {
+                assert.equal(error?._tag, "ChannelOperationError")
+                assert.equal(error.operation, "channels.edit")
+                assert.equal(error.outcome, "unknown")
+                return true
+            })
+            assert.equal(dispatched, 1)
+            assert.equal(await ops.get(explicit.id), undefined)
+        } finally {
+            globalThis.fetch = originalFetch
+        }
+        movedRaw = await rawChannel(explicit.id)
+        assert.equal(movedRaw.name, uncertainName)
+        assert.equal((await ops.fetch(explicit.id)).name, uncertainName)
+        assert.equal((await ops.get(explicit.id))?.name, uncertainName)
+        report(stage, true)
+
+        stage = "channel_cache_recovery_gap"
+        await ops.fetch(categoryA.id)
+        assert.equal((await ops.get(categoryA.id))?.id, categoryA.id)
+        await interrupt()
+        assert.equal(await ops.get(categoryA.id), undefined)
+        report(stage, true)
+
+        stage = "channel_after_resume"
+        const resumedCategory = await ops.fetch(categoryA.id)
+        assert.equal(resumedCategory.name, editedCategoryName)
+        updates = seen.guildChannelUpdate.length
+        const resumedName = `${journal.channelFixtures.categoryA.marker}-resumed`
+        const afterResume = await ops.edit(categoryA.id, { name: resumedName })
+        assert.equal(afterResume.name, resumedName)
+        await waitForEvent(
+            "guildChannelUpdate",
+            updates,
+            (value) => value.id === categoryA.id && value.name === resumedName,
+        )
+        assert.equal((await rawChannel(categoryA.id)).name, resumedName)
+        report(stage, true)
+
+        stage = "channel_delete_readback"
+        const beforeDelete = await ops.fetch(explicit.id)
+        const deletes = seen.guildChannelDelete.length
+        await ops.delete(explicit.id)
+        const deleted = await waitForEvent("guildChannelDelete", deletes, (value) => value.id === explicit.id)
+        assertSnapshot(deleted, explicit.id, 0)
+        assert.equal(deleted.name, beforeDelete.name)
+        assert.equal(deleted.parentId, beforeDelete.parentId)
+        assert.deepEqual(
+            normalizeOverwrites(deleted.permissionOverwrites ?? []),
+            normalizeOverwrites(beforeDelete.permissionOverwrites ?? []),
+        )
+        assert.equal((await api("GET", `/channels/${explicit.id}`)).status, 404)
+        assert.equal(await ops.get(explicit.id), undefined)
+        report(stage, true)
+    } finally {
+        for (const stop of stops) await stop()
+    }
+}
+
 async function cleanup() {
     if (!journal) return
     assert.equal(journal.guildId, guildId)
     assert.match(journal.name, /^fluxerly-sdk-test-[a-f0-9]{32}$/)
+    await cleanupModeration(api, journal, moderationUserId)
+    if (journal.moderation) report("moderation_ban_and_timeout_cleared", true)
     let emojiFailure
     try {
         await cleanupReactionEmoji(api, journal)
@@ -1082,6 +1390,13 @@ async function cleanup() {
         if (journal.roleName !== undefined) report("test_role_removed", true)
     } catch (error) {
         roleFailure = error
+    }
+    let channelFixtureFailure
+    try {
+        await cleanupGuildChannelFixtures(api, journal)
+        if (journal.channelFixtures !== undefined) report("test_owned_channels_removed", true)
+    } catch (error) {
+        channelFixtureFailure = error
     }
     const listed = await api("GET", `/guilds/${guildId}/channels`)
     assert.ok(Array.isArray(listed.data))
@@ -1108,8 +1423,223 @@ async function cleanup() {
     report("test_channel_and_messages_removed", true)
     if (emojiFailure) throw emojiFailure
     if (roleFailure) throw roleFailure
+    if (channelFixtureFailure) throw channelFixtureFailure
     unlinkSync(journalPath)
     journal = undefined
+}
+
+async function verifyModeration(ops, botId) {
+    stage = "moderation_target_verification"
+    assert.match(moderationUserId ?? "", /^[1-9][0-9]*$/)
+    assert.notEqual(moderationUserId, botId)
+    const guild = (await api("GET", `/guilds/${guildId}`)).data
+    assert.equal(guild?.id, guildId)
+    assert.notEqual(guild.owner_id, moderationUserId)
+    const target = { guildId, userId: moderationUserId }
+    const member = await api("GET", `/guilds/${guildId}/members/${moderationUserId}`)
+    assert.equal(member.status, 200)
+    assert.equal(member.data?.user?.id, moderationUserId)
+    assert.equal(member.data.communication_disabled_until ?? null, null)
+    const roles = await api("GET", `/guilds/${guildId}/roles`)
+    assert.equal(roles.status, 200)
+    assert.ok(Array.isArray(roles.data))
+    const assigned = new Set([guildId, ...member.data.roles])
+    assert.ok(!roles.data.some((role) => assigned.has(role.id) && (BigInt(role.permissions) & 8n) !== 0n))
+    assert.ok(!(await ops.bans()).some((ban) => ban.userId === moderationUserId))
+    assert.equal((await api("GET", `/guilds/${guildId}/audit-logs?user_id=${botId}&limit=10`)).status, 200)
+    journal.moderation = { userId: moderationUserId, botId, reason: `${journal.name}-moderation` }
+    const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+    save()
+    const notices = []
+    const stops = []
+    for (const event of ["guildMemberUpdate", "guildMemberRemove", "guildBanAdd", "guildBanRemove"])
+        stops.push(
+            await ops.on(event, (value) => {
+                if (value.guildId === guildId && value.userId === moderationUserId && notices.length < 40)
+                    notices.push({ event, value })
+            }),
+        )
+    const waitFor = async (predicate, timeout = 10_000) => {
+        const deadline = performance.now() + timeout
+        while (!predicate()) {
+            assert.ok(performance.now() < deadline)
+            await sleep(20)
+        }
+    }
+    const memberPath = `https://api.fluxer.app/v1/guilds/${guildId}/members/${moderationUserId}`
+    let loseTimeoutResponse = false
+    let timeoutAttempts = 0
+    globalThis.fetch = async (url, init) => {
+        if (String(url) === memberPath && init.method === "PATCH") {
+            const until = JSON.parse(init.body).communication_disabled_until
+            if (until !== null) {
+                journal.moderation.timeoutUntil = until
+                save()
+            }
+            const response = await rawFetch(url, init)
+            if (loseTimeoutResponse && response.status === 200) {
+                timeoutAttempts++
+                await response.body?.cancel()
+                throw new Error("Test-owned response loss")
+            }
+            return response
+        }
+        return rawFetch(url, init)
+    }
+    try {
+        report(stage, true)
+        stage = "moderation_timeout_and_clear"
+        const timed = await ops.timeout(target, 60_000, { auditReason: journal.moderation.reason })
+        const observed = (await api("GET", `/guilds/${guildId}/members/${moderationUserId}`)).data
+        assert.equal(Date.parse(timed.communicationDisabledUntil), Date.parse(observed.communication_disabled_until))
+        await waitFor(() =>
+            notices.some(
+                (n) =>
+                    n.event === "guildMemberUpdate" &&
+                    Date.parse(n.value.communicationDisabledUntil) === Date.parse(timed.communicationDisabledUntil),
+            ),
+        )
+        assert.equal((await ops.clearTimeout(target)).communicationDisabledUntil, null)
+        assert.equal(
+            (await api("GET", `/guilds/${guildId}/members/${moderationUserId}`)).data?.communication_disabled_until,
+            null,
+        )
+        report(stage, true)
+        stage = "moderation_lost_timeout_response"
+        loseTimeoutResponse = true
+        await assert.rejects(
+            ops.timeout(target, 60_000),
+            (error) => error._tag === "GuildOperationError" && error.outcome === "unknown",
+        )
+        loseTimeoutResponse = false
+        assert.equal(timeoutAttempts, 1)
+        assert.equal(
+            Date.parse((await ops.fetch(target)).communicationDisabledUntil),
+            Date.parse(journal.moderation.timeoutUntil),
+        )
+        await ops.clearTimeout(target)
+        report(stage, true)
+        stage = "moderation_kick"
+        await ops.kick(target, { auditReason: journal.moderation.reason })
+        assert.equal((await api("GET", `/guilds/${guildId}/members/${moderationUserId}`)).status, 404)
+        assert.equal(await ops.get(target), undefined)
+        await waitFor(() => notices.some((n) => n.event === "guildMemberRemove"))
+        report(stage, true)
+        stage = "moderation_temporary_ban_expiry"
+        await ops.ban(target, { reason: journal.moderation.reason, durationSeconds: 60 })
+        const listed = (await ops.bans()).find((ban) => ban.userId === moderationUserId)
+        assert.equal(listed?.reason, journal.moderation.reason)
+        assert.ok(Date.parse(listed?.expiresAt) > Date.now())
+        report("moderation_temporary_ban_recorded", true)
+        stage = "moderation_ban_add_event"
+        await waitFor(() => notices.some((n) => n.event === "guildBanAdd"))
+        report(stage, true)
+        stage = "moderation_temporary_ban_remote_expiry"
+        const expiryDeadline = performance.now() + 130_000
+        while ((await ops.bans()).some((ban) => ban.userId === moderationUserId)) {
+            assert.ok(performance.now() < expiryDeadline)
+            await sleep(5_000)
+        }
+        const expired = await api("GET", `/guilds/${guildId}/bans`)
+        assert.equal(expired.status, 200)
+        assert.ok(Array.isArray(expired.data) && !expired.data.some((ban) => ban.user?.id === moderationUserId))
+        report(stage, true)
+        stage = "moderation_permanent_ban_and_unban"
+        await ops.ban(target, { reason: journal.moderation.reason }, { auditReason: journal.moderation.reason })
+        assert.equal((await ops.bans()).find((ban) => ban.userId === moderationUserId)?.expiresAt, null)
+        const removals = notices.filter((notice) => notice.event === "guildBanRemove").length
+        await ops.unban(target, { auditReason: journal.moderation.reason })
+        assert.ok(!(await ops.bans()).some((ban) => ban.userId === moderationUserId))
+        await waitFor(() => notices.filter((notice) => notice.event === "guildBanRemove").length > removals)
+        assert.equal((await api("GET", `/guilds/${guildId}/members/${moderationUserId}`)).status, 404)
+        report(stage, true)
+        stage = "moderation_audit_reasons"
+        const audit = await api("GET", `/guilds/${guildId}/audit-logs?user_id=${botId}&limit=20`)
+        assert.equal(audit.status, 200)
+        assert.ok(Array.isArray(audit.data?.audit_log_entries))
+        for (const action of [20, 22, 23, 24])
+            assert.ok(
+                audit.data.audit_log_entries.some(
+                    (entry) =>
+                        entry.action_type === action &&
+                        entry.user_id === botId &&
+                        entry.target_id === moderationUserId &&
+                        entry.reason === journal.moderation.reason,
+                ),
+            )
+        report(stage, true)
+        report("moderation_target_needs_manual_rejoin", true)
+    } finally {
+        globalThis.fetch = rawFetch
+        for (const stop of stops) await stop()
+    }
+}
+async function verifyBatchDeletion(ops, channelId, botId) {
+    const notices = []
+    const stop = await ops.on((notice) => {
+        if (notice.channelId === channelId && notices.length < 10) notices.push(notice)
+    })
+    const seed = async () => {
+        const sent = await ops.send({ content: `batch-delete-${randomUUID()}` })
+        const actual = await api("GET", `/channels/${channelId}/messages/${sent.id}`)
+        assert.equal(actual.status, 200)
+        assert.equal(actual.data?.author?.id, botId)
+        assert.equal(actual.data?.content, sent.content)
+        return sent
+    }
+    try {
+        stage = "batch_delete_selected_messages"
+        const first = await seed()
+        const second = await seed()
+        const retained = await seed()
+        assert.equal((await ops.get(first))?.id, first.id)
+        await ops.deleteMany([first.id, second.id])
+        for (const message of [first, second]) {
+            assert.equal((await api("GET", `/channels/${channelId}/messages/${message.id}`)).status, 404)
+            assert.equal(await ops.get(message), undefined)
+        }
+        assert.equal((await api("GET", `/channels/${channelId}/messages/${retained.id}`)).status, 200)
+        assert.equal((await ops.get(retained))?.id, retained.id)
+        const deadline = performance.now() + 10_000
+        while (!notices.some((notice) => notice.ids.includes(first.id) && notice.ids.includes(second.id))) {
+            assert.ok(performance.now() < deadline)
+            await sleep(20)
+        }
+        report(stage, true)
+        stage = "batch_delete_missing_ids"
+        await ops.deleteMany([first.id, second.id])
+        report(stage, true)
+        stage = "batch_delete_lost_response"
+        const uncertain = await seed()
+        let attempts = 0
+        globalThis.fetch = async (url, init) => {
+            if (String(url) === `https://api.fluxer.app/v1/channels/${channelId}/messages/bulk-delete`) {
+                attempts++
+                const response = await rawFetch(url, init)
+                if (response.status === 204) {
+                    await response.body?.cancel()
+                    throw new Error("Test-owned response loss")
+                }
+                return response
+            }
+            return rawFetch(url, init)
+        }
+        try {
+            await assert.rejects(
+                ops.deleteMany([uncertain.id]),
+                (error) =>
+                    error._tag === "MessageOperationError" && error.reason === "network" && error.outcome === "unknown",
+            )
+        } finally {
+            globalThis.fetch = rawFetch
+        }
+        assert.equal(attempts, 1)
+        assert.equal((await api("GET", `/channels/${channelId}/messages/${uncertain.id}`)).status, 404)
+        assert.equal(await ops.get(uncertain), undefined)
+        report(stage, true)
+    } finally {
+        await stop()
+    }
 }
 
 async function prepareManagement(channelId, botId) {
@@ -1695,7 +2225,7 @@ setTimeout(
         report("process_timeout", false)
         process.exit(1)
     },
-    attachments ? 240_000 : 120_000,
+    attachments || moderation ? 240_000 : 120_000,
 ).unref()
 
 try {
@@ -1714,13 +2244,18 @@ try {
                     attachments ||
                     reactions ||
                     pins ||
-                    guilds)),
+                    guilds ||
+                    channels ||
+                    batchDelete ||
+                    moderation)),
     )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
     writeSync(lock, String(process.pid))
     stage = "configuration"
     const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
+    moderationUserId ??= env.FLUXER_TEST_MODERATION_USER_ID
+    if (moderation) assert.match(moderationUserId ?? "", /^[1-9][0-9]*$/)
     token = env.FLUXER_TEST_BOT_TOKEN
     guildId = env.FLUXER_TEST_GUILD_ID
     const applicationId = env.FLUXER_TEST_APPLICATION_ID
@@ -1774,8 +2309,10 @@ try {
         const { createClient } = await import("@neontechspace/fluxerly")
         const created = createClient({
             token,
-            ...(cache || embeds || attachments ? { cache: cacheOptions() } : {}),
+            ...(cache || embeds || attachments || batchDelete ? { cache: cacheOptions() } : {}),
             ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
+            ...(channels ? { cache: { channels: true } } : {}),
+            ...(moderation ? { cache: { members: true } } : {}),
             ...(recover ? { logging: { development: true, logger: fromEffectLogger(diagnosticLogger) } } : {}),
         })
         assert.ok(created.isOk())
@@ -1921,6 +2458,56 @@ try {
                 () => done.resolve(null),
             )
             assert.ok((await client.connect()).isOk())
+            if (moderation) {
+                const run = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) throw result.error
+                    return result.value
+                }
+                await verifyModeration(
+                    {
+                        timeout: (target, duration, options) => run(client.members.timeout(target, duration, options)),
+                        clearTimeout: (target) => run(client.members.clearTimeout(target)),
+                        fetch: (target) => run(client.members.fetch(target)),
+                        get: (target) => run(client.members.get(target)),
+                        kick: (target, options) => run(client.members.kick(target, options)),
+                        ban: (target, input, options) => run(client.guilds.ban(target, input, options)),
+                        unban: (target, options) => run(client.guilds.unban(target, options)),
+                        bans: () => run(client.guilds.fetchBans(guildId)),
+                        on: async (event, handler) => {
+                            const subscription = await run(client.on(event, handler))
+                            return async () => {
+                                subscription.unsubscribe()
+                                await run(subscription.waitForClose())
+                            }
+                        },
+                    },
+                    user.id,
+                )
+            }
+            if (batchDelete) {
+                const run = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) throw result.error
+                    return result.value
+                }
+                await verifyBatchDeletion(
+                    {
+                        send: (input) => run(client.messages.send(channel.id, input)),
+                        get: (target) => run(client.messages.get(target)),
+                        deleteMany: (ids) => run(client.messages.deleteMany(channel.id, ids)),
+                        on: async (handler) => {
+                            const subscription = await run(client.on("messageDeleteBulk", handler))
+                            return async () => {
+                                subscription.unsubscribe()
+                                await run(subscription.waitForClose())
+                            }
+                        },
+                    },
+                    channel.id,
+                    user.id,
+                )
+            }
             if (guilds) {
                 const run = async (operation) => {
                     const result = await operation
@@ -1962,6 +2549,38 @@ try {
                             )
                             return { wait: () => run(collector.waitForClose()), stop: () => collector.stop() }
                         },
+                        on: async (event, handler) => {
+                            const subscription = await run(client.on(event, handler))
+                            return async () => {
+                                subscription.unsubscribe()
+                                await run(subscription.waitForClose())
+                            }
+                        },
+                    },
+                    channel.id,
+                    user.id,
+                    () => gatewayProbe.interruptAndWait(client, states),
+                )
+            }
+            if (channels) {
+                const run = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) throw result.error
+                    return result.value
+                }
+                await verifyChannels(
+                    {
+                        get: (id) => run(client.channels.get(id)),
+                        fetch: (id) => run(client.channels.fetch(id)),
+                        fetchAll: (id) => run(client.channels.fetchAll(id)),
+                        create: (id, input) => run(client.channels.create(id, input)),
+                        edit: (id, input) => run(client.channels.edit(id, input)),
+                        delete: (id) => run(client.channels.delete(id)),
+                        reorder: (id, positions) => run(client.channels.reorder(id, positions)),
+                        setPermissionOverwrite: (id, overwrite) =>
+                            run(client.channels.setPermissionOverwrite(id, overwrite)),
+                        removePermissionOverwrite: (id, targetId) =>
+                            run(client.channels.removePermissionOverwrite(id, targetId)),
                         on: async (event, handler) => {
                             const subscription = await run(client.on(event, handler))
                             return async () => {
@@ -2112,7 +2731,7 @@ try {
                     channel.id,
                 )
             }
-            if (forceRecovery && !reactions && !pins && !guilds) {
+            if (forceRecovery && !reactions && !pins && !guilds && !channels) {
                 if (cache) sdkRequests.length = 0
                 if (collectors)
                     await verifyCollectors(
@@ -2250,8 +2869,10 @@ try {
                 Effect.gen(function* () {
                     client = yield* createClient({
                         token,
-                        ...(cache || embeds || attachments ? { cache: cacheOptions() } : {}),
+                        ...(cache || embeds || attachments || batchDelete ? { cache: cacheOptions() } : {}),
                         ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
+                        ...(channels ? { cache: { channels: true } } : {}),
+                        ...(moderation ? { cache: { members: true } } : {}),
                         ...(recover ? { logging: { development: true } } : {}),
                     })
                     const cacheGet = async (target) => {
@@ -2393,6 +3014,71 @@ try {
                         }),
                     )
                     yield* client.connect()
+                    if (moderation) {
+                        const scope = yield* Effect.scope
+                        const run = async (operation) => {
+                            const result = await Effect.runPromise(Effect.result(operation))
+                            if (result._tag === "Failure") throw result.failure
+                            return result.success
+                        }
+                        yield* Effect.promise(() =>
+                            verifyModeration(
+                                {
+                                    timeout: (target, duration, options) =>
+                                        run(client.members.timeout(target, duration, options)),
+                                    clearTimeout: (target) => run(client.members.clearTimeout(target)),
+                                    fetch: (target) => run(client.members.fetch(target)),
+                                    get: (target) => run(client.members.get(target)),
+                                    kick: (target, options) => run(client.members.kick(target, options)),
+                                    ban: (target, input, options) => run(client.guilds.ban(target, input, options)),
+                                    unban: (target, options) => run(client.guilds.unban(target, options)),
+                                    bans: () => run(client.guilds.fetchBans(guildId)),
+                                    on: async (event, handler) => {
+                                        const subscription = await run(
+                                            client
+                                                .on(event, (value) => Effect.sync(() => handler(value)))
+                                                .pipe(Scope.provide(scope)),
+                                        )
+                                        return async () => {
+                                            await run(subscription.unsubscribe())
+                                            await run(subscription.waitForClose())
+                                        }
+                                    },
+                                },
+                                user.id,
+                            ),
+                        )
+                    }
+                    if (batchDelete) {
+                        const scope = yield* Effect.scope
+                        const run = async (operation) => {
+                            const result = await Effect.runPromise(Effect.result(operation))
+                            if (result._tag === "Failure") throw result.failure
+                            return result.success
+                        }
+                        yield* Effect.promise(() =>
+                            verifyBatchDeletion(
+                                {
+                                    send: (input) => run(client.messages.send(channel.id, input)),
+                                    get: (target) => run(client.messages.get(target)),
+                                    deleteMany: (ids) => run(client.messages.deleteMany(channel.id, ids)),
+                                    on: async (handler) => {
+                                        const subscription = await run(
+                                            client
+                                                .on("messageDeleteBulk", (notice) => Effect.sync(() => handler(notice)))
+                                                .pipe(Scope.provide(scope)),
+                                        )
+                                        return async () => {
+                                            await run(subscription.unsubscribe())
+                                            await run(subscription.waitForClose())
+                                        }
+                                    },
+                                },
+                                channel.id,
+                                user.id,
+                            ),
+                        )
+                    }
                     if (guilds) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
@@ -2446,6 +3132,45 @@ try {
                                             stop: () => run(collector.stop()),
                                         }
                                     },
+                                    on: async (event, handler) => {
+                                        const subscription = await run(
+                                            client
+                                                .on(event, (value) => Effect.sync(() => handler(value)))
+                                                .pipe(Scope.provide(scope)),
+                                        )
+                                        return async () => {
+                                            await run(subscription.unsubscribe())
+                                            await run(subscription.waitForClose())
+                                        }
+                                    },
+                                },
+                                channel.id,
+                                user.id,
+                                () => gatewayProbe.interruptAndWait(client, states),
+                            ),
+                        )
+                    }
+                    if (channels) {
+                        const scope = yield* Effect.scope
+                        const run = async (operation) => {
+                            const result = await Effect.runPromise(Effect.result(operation))
+                            if (result._tag === "Failure") throw result.failure
+                            return result.success
+                        }
+                        yield* Effect.promise(() =>
+                            verifyChannels(
+                                {
+                                    get: (id) => run(client.channels.get(id)),
+                                    fetch: (id) => run(client.channels.fetch(id)),
+                                    fetchAll: (id) => run(client.channels.fetchAll(id)),
+                                    create: (id, input) => run(client.channels.create(id, input)),
+                                    edit: (id, input) => run(client.channels.edit(id, input)),
+                                    delete: (id) => run(client.channels.delete(id)),
+                                    reorder: (id, positions) => run(client.channels.reorder(id, positions)),
+                                    setPermissionOverwrite: (id, overwrite) =>
+                                        run(client.channels.setPermissionOverwrite(id, overwrite)),
+                                    removePermissionOverwrite: (id, targetId) =>
+                                        run(client.channels.removePermissionOverwrite(id, targetId)),
                                     on: async (event, handler) => {
                                         const subscription = await run(
                                             client
@@ -2620,7 +3345,7 @@ try {
                             ),
                         )
                     }
-                    if (forceRecovery && !reactions && !pins && !guilds) {
+                    if (forceRecovery && !reactions && !pins && !guilds && !channels) {
                         if (cache) sdkRequests.length = 0
                         if (collectors) {
                             yield* Effect.promise(() =>
@@ -2824,7 +3549,7 @@ try {
     report("sdk_closed", true)
 } catch (error) {
     // Never print assertions, HTTP bodies, native causes, configured identities or credentials
-    if (attachments || reactions || pins || guilds) reportFailure(error)
+    if (attachments || reactions || pins || guilds || channels || moderation) reportFailure(error)
     report(stage, false)
     process.exitCode = 1
 } finally {

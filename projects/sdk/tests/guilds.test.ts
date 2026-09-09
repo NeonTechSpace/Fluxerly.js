@@ -13,6 +13,8 @@ import {
     type MemberQuery,
     type MemberReference,
     type DefaultGuildOperationOptions,
+    type DefaultModerationOptions,
+    type BanInput,
     type ClientOptions,
 } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
@@ -36,6 +38,158 @@ afterEach(() => {
     transport.sockets = []
 })
 const modes = ["default", "native"] as const
+
+test.each(modes)("%s moderates with explicit defaults, reasons and timeout observations", async (mode) => {
+    const calls: { path: string; method: string; body: unknown; reason: string | null }[] = []
+    rest(async (url, init) => {
+        const body = init.body ? JSON.parse(String(init.body)) : undefined
+        calls.push({
+            path: new URL(url).pathname,
+            method: init.method!,
+            body,
+            reason: new Headers(init.headers).get("X-Audit-Log-Reason"),
+        })
+        if (init.method === "PATCH") return Response.json({ ...member(), ...body })
+        if (init.method === "GET") return Response.json(member())
+        return new Response(null, { status: 204 })
+    })
+    const api = await setup(mode, { members: true })
+    const before = Date.now()
+    const timed = await api.timeout(300_000, { auditReason: "  repeated spam  " })
+    expect(Date.parse(timed.communicationDisabledUntil!)).toBeGreaterThanOrEqual(before + 300_000)
+    expect(Object.isFrozen(timed)).toBe(true)
+    expect(await api.getMember()).toEqual(timed)
+    expect(calls.at(-1)).toMatchObject({ method: "PATCH", path: "/v1/guilds/20/members/30", reason: "repeated spam" })
+    expect((await api.clearTimeout()).communicationDisabledUntil).toBeNull()
+    expect(calls.at(-1)?.body).toEqual({ communication_disabled_until: null })
+    await api.kick()
+    expect(await api.getMember()).toBeUndefined()
+    await api.ban()
+    expect(calls.at(-1)).toMatchObject({
+        method: "PUT",
+        path: "/v1/guilds/20/bans/30",
+        body: { ban_duration_seconds: 0, delete_message_seconds: 0 },
+    })
+    await api.ban({ durationSeconds: 60, deleteMessageSeconds: 604_800, reason: "違反" }, { auditReason: "spam" })
+    expect(calls.at(-1)?.body).toEqual({ ban_duration_seconds: 60, delete_message_seconds: 604_800, reason: "違反" })
+    await api.unban()
+    expect(calls.at(-1)).toMatchObject({ method: "DELETE", path: "/v1/guilds/20/bans/30", body: undefined })
+    expect(api.state()).toBe("Disconnected")
+})
+
+test.each(modes)("%s validates moderation input before dispatch and rejects malformed observations", async (mode) => {
+    let calls = 0
+    rest(async () => {
+        calls++
+        return Response.json(member())
+    })
+    const api = await setup(mode)
+    for (const duration of [0, -1, 0.5, NaN, Infinity, 31_536_000_001, null as unknown as number])
+        await expect(api.timeout(duration)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    for (const input of [
+        { durationSeconds: 1 },
+        { durationSeconds: 63_072_001 },
+        { deleteMessageSeconds: -1 },
+        { deleteMessageSeconds: 604_801 },
+        { reason: "x".repeat(513) },
+        { extra: true },
+    ])
+        await expect(api.ban(input as BanInput)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    for (const reason of ["", "   ", "é", "bad\nheader", "x".repeat(513)])
+        await expect(api.kick({ auditReason: reason })).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    expect(calls).toBe(0)
+    await expect(api.timeout(60_000)).rejects.toMatchObject({ reason: "response", outcome: "unknown" })
+    for (const response of [
+        { ...member(), communication_disabled_until: 0 },
+        { ...member(), communication_disabled_until: "invalid" },
+    ]) {
+        rest(async () => Response.json(response))
+        await expect(api.member()).rejects.toMatchObject({ reason: "response" })
+    }
+})
+
+test.each(modes)("%s ban lists are remote, frozen and fail without partial results", async (mode) => {
+    const ban = {
+        user: { id: "30", username: "fixture" },
+        reason: null,
+        moderator_id: "31",
+        banned_at: "2026-09-09T00:00:00Z",
+        expires_at: null,
+    }
+    let calls = 0
+    let payload: unknown = [ban]
+    rest(async () => {
+        calls++
+        return Response.json(payload)
+    })
+    const api = await setup(mode, { members: true })
+    const bans = await api.bans()
+    expect(Object.isFrozen(bans) && Object.isFrozen(bans[0])).toBe(true)
+    expect(bans[0]).toMatchObject({ guildId: "20", userId: "30", moderatorId: "31", expiresAt: null })
+    await api.bans()
+    expect(calls).toBe(2)
+    expect(await api.getMember()).toBeUndefined()
+    for (payload of [[ban, ban], [ban, { ...ban, user: null }], [{ ...ban, expires_at: "invalid" }]])
+        await expect(api.bans()).rejects.toMatchObject({ reason: "response" })
+    payload = []
+    expect(await api.bans()).toEqual([])
+})
+
+test.each(modes)("%s dispatched moderation rejection blocks delayed cache restoration without replay", async (mode) => {
+    const api = await setup(mode, { members: true })
+    rest(async () => Response.json(member()))
+    await api.member()
+    let release!: () => void
+    let started = false
+    let writes = 0
+    rest(async (_url, init) => {
+        if (init.method === "GET") {
+            started = true
+            await new Promise<void>((resolve) => {
+                release = resolve
+            })
+            return Response.json(member())
+        }
+        writes++
+        return Response.json({ private: "must not escape" }, { status: 400 })
+    })
+    const reading = api.member()
+    await vi.waitFor(() => expect(started).toBe(true))
+    await expect(api.kick()).rejects.toMatchObject({ reason: "rejected", outcome: "rejected" })
+    release()
+    await reading
+    expect(writes).toBe(1)
+    expect(await api.getMember()).toBeUndefined()
+})
+
+test.each(modes)("%s ban events invalidate member observations before delivery and survive recovery", async (mode) => {
+    const dispatch = await gateway()
+    rest(async () => Response.json(member()))
+    const api = await setup(mode, { members: true })
+    await api.connect()
+    const seen: unknown[] = []
+    for (const event of ["guildBanAdd", "guildBanRemove"] as const)
+        await api.on(event, (value) => {
+            const cached = api.defaultApi
+                ? unwrap(api.defaultApi.members.get(value))
+                : Effect.runSync(api.native!.members.get(value))
+            seen.push({ event, value, cached })
+        })
+    await api.member()
+    dispatch("GUILD_BAN_ADD", { guild_id: "20", user: { id: "30" } })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen[0]).toEqual({ event: "guildBanAdd", value: target, cached: undefined })
+    transport.sockets[0]!.terminate()
+    await vi.waitFor(() => expect(transport.sockets).toHaveLength(2), { timeout: 5_000 })
+    await vi.waitFor(() => expect(api.state()).toBe("Connected"))
+    await api.member()
+    dispatch("GUILD_BAN_REMOVE", { guild_id: "20", user: { id: "30" } })
+    await vi.waitFor(() => expect(seen).toHaveLength(2))
+    expect(seen[1]).toEqual({ event: "guildBanRemove", value: target, cached: undefined })
+})
 const wireRole = (id = "50", extra = {}) => ({
     id,
     name: "fixture",
@@ -47,6 +201,35 @@ const wireRole = (id = "50", extra = {}) => ({
     hoist_position: null,
     unicode_emoji: null,
     ...extra,
+})
+
+test.each(modes)("%s only requested ban message deletion evicts the author's retained messages", async (mode) => {
+    const api = await setup(mode, { messages: { maxEntries: 10 } })
+    let status = 204
+    rest(async (url, init) => {
+        if (init.method !== "GET") return new Response(null, { status })
+        const id = url.split("/").at(-1)!
+        return Response.json({
+            id,
+            channel_id: "21",
+            content: "fixture",
+            author: { id: id === "10" ? "30" : "31", username: "fixture" },
+        })
+    })
+    const first = { channelId: "21", id: "10" }
+    const second = { channelId: "21", id: "11" }
+    for (const ref of [first, second]) {
+        if (api.defaultApi) unwrap(await api.defaultApi.messages.fetch(ref))
+        else await run(api.native!.messages.fetch(ref))
+    }
+    const get = async (ref: typeof first) =>
+        api.defaultApi ? unwrap(api.defaultApi.messages.get(ref)) : run(api.native!.messages.get(ref))
+    await api.ban()
+    expect(await get(first)).toBeDefined()
+    status = 400
+    await expect(api.ban({ deleteMessageSeconds: 60 })).rejects.toMatchObject({ reason: "rejected" })
+    expect(await get(first)).toBeUndefined()
+    expect(await get(second)).toBeDefined()
 })
 
 test.each(modes)(
@@ -539,7 +722,13 @@ test.each(modes)(
 test.each(modes)(
     "%s late mutations crossing a gap still invalidate newly cached memberships",
     async (mode) => {
-        const dispatch = await gateway()
+        let resume: (() => void) | undefined
+        const dispatch = await gateway(
+            () =>
+                new Promise<void>((resolve) => {
+                    resume = resolve
+                }),
+        )
         cacheRest()
         const api = await setup(mode, resourceCache)
         await api.connect()
@@ -561,6 +750,10 @@ test.each(modes)(
                 await vi.waitFor(() => expect(started).toBe(true))
                 transport.sockets.at(-1)!.terminate()
                 await vi.waitFor(() => expect(api.state()).toBe("Recovering"))
+                // Hold the fixture's RESUMED response until the recovery assertion has observed the gap
+                await vi.waitFor(() => expect(resume).toBeDefined(), { timeout: 5_000 })
+                resume!()
+                resume = undefined
                 await vi.waitFor(() => expect(api.state()).toBe("Connected"), { timeout: 5_000 })
                 dispatch("GUILD_MEMBER_UPDATE", { guild_id: "20", ...member() })
                 await vi.waitFor(async () => expect(await api.getMember()).toBeDefined())
@@ -568,6 +761,7 @@ test.each(modes)(
                 expect(await writing).toBe(status === 204 ? "success" : "unknown")
                 expect(await api.getMember()).toBeUndefined()
             } finally {
+                resume?.()
                 release?.()
                 await writing
             }
@@ -682,6 +876,26 @@ async function setup(
     return {
         defaultApi,
         native,
+        timeout: async (duration: number, options?: DefaultModerationOptions) =>
+            defaultApi
+                ? unwrap(await defaultApi.members.timeout(target, duration, options))
+                : run(native!.members.timeout(target, duration, options)),
+        clearTimeout: async () =>
+            defaultApi
+                ? unwrap(await defaultApi.members.clearTimeout(target))
+                : run(native!.members.clearTimeout(target)),
+        kick: async (options?: DefaultModerationOptions) =>
+            defaultApi
+                ? unwrap(await defaultApi.members.kick(target, options))
+                : run(native!.members.kick(target, options), options?.signal as AbortSignal),
+        ban: async (input?: BanInput, options?: DefaultModerationOptions) =>
+            defaultApi
+                ? unwrap(await defaultApi.guilds.ban(target, input, options))
+                : run(native!.guilds.ban(target, input, options)),
+        unban: async () =>
+            defaultApi ? unwrap(await defaultApi.guilds.unban(target)) : run(native!.guilds.unban(target)),
+        bans: async () =>
+            defaultApi ? unwrap(await defaultApi.guilds.fetchBans("20")) : run(native!.guilds.fetchBans("20")),
         getGuild: async (id = "20") => (defaultApi ? unwrap(defaultApi.guilds.get(id)) : run(native!.guilds.get(id))),
         getMember: async (ref = target) =>
             defaultApi ? unwrap(defaultApi.members.get(ref)) : run(native!.members.get(ref)),
@@ -741,7 +955,7 @@ async function setup(
                 : run(native!.on(event, (value) => Effect.sync(() => handler(value))).pipe(Scope.provide(scope))),
     }
 }
-async function gateway() {
+async function gateway(beforeResume?: () => Promise<void>) {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 })
     await once(server, "listening")
     const address = server.address()
@@ -750,9 +964,10 @@ async function gateway() {
     let seq = 0
     server.on("connection", (socket) => {
         socket.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 600_000 } }))
-        socket.on("message", (data) => {
+        socket.on("message", async (data) => {
             const frame = JSON.parse(data.toString())
             if (frame.op === 1) socket.send(JSON.stringify({ op: 11 }))
+            if (frame.op === 6) await beforeResume?.()
             if (frame.op === 2 || frame.op === 6)
                 socket.send(
                     JSON.stringify({
@@ -1035,7 +1250,7 @@ test.each(modes)("%s delivers member events across resume without synthesizing R
     await vi.waitFor(() => expect(seen).toHaveLength(3))
     expect(seen[2]).toEqual({ event: "guildMemberRemove", value: target })
     transport.sockets[0]!.terminate()
-    await vi.waitFor(() => expect(transport.sockets).toHaveLength(2))
+    await vi.waitFor(() => expect(transport.sockets).toHaveLength(2), { timeout: 5_000 })
     await vi.waitFor(() => expect(api.state()).toBe("Connected"))
     dispatch("GUILD_MEMBER_UPDATE", { ...member(), guild_id: "20" })
     await vi.waitFor(() => expect(seen).toHaveLength(4))

@@ -34,6 +34,19 @@ const client = await Effect.runPromise(
         Effect.gen(function* () {
             const client = yield* createClient({ token: "fixture-only-not-a-credential" })
             assert.equal(client.state, "Disconnected")
+            assert.equal((yield* client.messages.deleteMany("20", []).pipe(Effect.flip)).operation, "deleteMany")
+            assert.equal(
+                (yield* client.members.timeout({ guildId: "20", userId: "30" }, 0).pipe(Effect.flip)).operation,
+                "members.timeout",
+            )
+            assert.equal(
+                (yield* client.guilds.ban({ guildId: "20", userId: "30" }, { durationSeconds: 1 }).pipe(Effect.flip))
+                    .operation,
+                "guilds.ban",
+            )
+            assert.ok(Object.isFrozen(client.channels))
+            assert.equal(yield* client.channels.get("20"), undefined)
+            assert.equal((yield* client.channels.fetch("invalid").pipe(Effect.flip))._tag, "ChannelOperationError")
             const collector = yield* client.messages.collect("20").pipe(Effect.flip)
             assert.ok(collector instanceof CollectorError)
             assert.equal(collector.reason, "notConnected")
@@ -54,7 +67,15 @@ const client = await Effect.runPromise(
             yield* subscription.waitForClose()
             const rejected = yield* client.messages.send("20", { content: "" }).pipe(Effect.flip)
             assert.equal(rejected._tag, "MessageError")
-            for (const event of ["messageUpdate", "messageDelete", "messageDeleteBulk"]) {
+            for (const event of [
+                "messageUpdate",
+                "messageDelete",
+                "messageDeleteBulk",
+                "guildChannelCreate",
+                "guildChannelUpdate",
+                "guildChannelDelete",
+                "guildChannelUpdateBulk",
+            ]) {
                 const subscription = yield* client.on(event, () => Effect.void)
                 yield* subscription.unsubscribe()
                 yield* subscription.waitForClose()

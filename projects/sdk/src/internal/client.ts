@@ -5,6 +5,14 @@ import { MessageOperationError } from "#sdk/message-errors"
 import { identifier, record, reference } from "./message.js"
 import { MessageCache } from "./cache.js"
 import { GuildCache, type ResourceKind, type Resources } from "./guild-cache.js"
+import { ChannelCache } from "./channel-cache.js"
+import {
+    ChannelOperationError,
+    type ChannelOperation,
+    type ChannelOperationOptions,
+    type GuildChannel,
+} from "#sdk/channels"
+import type { ChannelRequest } from "./channels.js"
 import { makeCacheReports, type CacheReports } from "./cache-reports.js"
 import {
     ClientBusyError,
@@ -60,6 +68,7 @@ export class ClientOwner {
     readonly rest: RestOwner
     readonly cache: MessageCache | undefined
     readonly resources: GuildCache | undefined
+    readonly channelCache: ChannelCache | undefined
     #configuration: Configuration | undefined
     #state: ConnectionState = "Disconnected"
     #latency: number | null = null
@@ -86,7 +95,8 @@ export class ClientOwner {
         this.resources = Object.keys(configuration.resourceCache).length
             ? new GuildCache(configuration.resourceCache, now)
             : undefined
-        this.rest = new RestOwner(this.cache, configuration.uploadMaxBytes, this.resources)
+        this.channelCache = configuration.channelCache ? new ChannelCache(configuration.channelCache, now) : undefined
+        this.rest = new RestOwner(this.cache, configuration.uploadMaxBytes, this.resources, this.channelCache)
     }
     get state(): ConnectionState {
         return this.#state
@@ -101,6 +111,8 @@ export class ClientOwner {
         if (state === "Closing" || state === "Closed") this.cache?.close()
         if (state === "Recovering") this.resources?.gap()
         if (state === "Closing" || state === "Closed") this.resources?.close()
+        if (state === "Recovering") this.channelCache?.gap()
+        if (state === "Closing" || state === "Closed") this.channelCache?.close()
         this.#state = state
         if (state !== "Connected") this.#latency = null
         for (const listener of this.#listeners) listener(state)
@@ -146,6 +158,30 @@ export class ClientOwner {
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.guild(this.#configuration.token, operation, build, options)
                 : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    channel<A>(
+        operation: ChannelOperation,
+        build: () => ChannelRequest<A> | undefined,
+        options?: ChannelOperationOptions,
+    ) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.channel(this.#configuration.token, operation, build, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    getChannel(id: string) {
+        return Effect.suspend(
+            (): Effect.Effect<GuildChannel | undefined, ClientClosedError | ChannelOperationError> => {
+                if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
+                    return Effect.fail(new ClientClosedError())
+                if (!identifier(id))
+                    return Effect.fail(new ChannelOperationError("channels.get", "input", "notDispatched"))
+                return Effect.succeed(this.channelCache?.get(id))
+            },
         )
     }
 
@@ -257,6 +293,14 @@ export class ClientOwner {
                 ? (this.reports?.start() ?? Effect.void).pipe(
                       Effect.andThen(this.rest.delete(this.#configuration.token, target, options)),
                   )
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    deleteMany(channelId: string, ids: readonly string[], options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.deleteMany(this.#configuration.token, channelId, ids, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -379,6 +423,9 @@ export class ClientOwner {
                         },
                         (event, message, bytes) => {
                             owner.resources?.event(event, message)
+                            owner.channelCache?.event(event, message)
+                            if (event === "guildChannelDelete" && "id" in message)
+                                owner.cache?.deleteChannel(message.id)
                             if ("author" in message) owner.cache?.observe(message)
                             else if ("ids" in message) {
                                 for (const id of message.ids) owner.cache?.delete({ id, channelId: message.channelId })
@@ -386,7 +433,12 @@ export class ClientOwner {
                                 owner.cache?.delete(message)
                             owner.events.offer(event, message, bytes)
                         },
-                        owner.resources ? (event, value) => owner.resources!.guildEvent(event, value) : undefined,
+                        owner.resources || owner.channelCache
+                            ? (event, value) => {
+                                  owner.resources?.guildEvent(event, value)
+                                  owner.channelCache?.guildEvent(event, value)
+                              }
+                            : undefined,
                     )
                 })
                 const result = yield* Effect.exit(attempt)

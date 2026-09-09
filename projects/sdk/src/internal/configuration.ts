@@ -1,6 +1,6 @@
 import { Effect, Redacted } from "effect"
 import { ConfigurationError } from "#sdk/errors"
-import type { MessageCacheSettings, CachePolicyErrorReport } from "#sdk/cache"
+import type { MessageCacheSettings, ResourceCacheSettings, CachePolicyErrorReport } from "#sdk/cache"
 import { record } from "./message.js"
 import { loggingConfiguration, type ClientLogging } from "./logging.js"
 import type { ResourceConfiguration } from "./guild-cache.js"
@@ -18,7 +18,10 @@ export function validAge(value: unknown): value is number | null {
 
 function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationError | undefined {
     if (value === undefined) return undefined
-    if (!record(value) || Object.keys(value).some((key) => !["messages", "guilds", "members", "roles"].includes(key)))
+    if (
+        !record(value) ||
+        Object.keys(value).some((key) => !["messages", "guilds", "members", "roles", "channels"].includes(key))
+    )
         return new ConfigurationError("cache", "Cache settings must contain only supported resource settings")
     const messages = value.messages
     if (messages === undefined || messages === false) return undefined
@@ -50,10 +53,12 @@ function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationE
     }
 }
 
-function resourceConfiguration(value: unknown): ResourceConfiguration | ConfigurationError {
-    const result: ResourceConfiguration = {}
+type ResourceSettings = ResourceConfiguration & { channels?: Required<ResourceCacheSettings> }
+
+function resourceConfiguration(value: unknown): ResourceSettings | ConfigurationError {
+    const result: ResourceSettings = {}
     if (!record(value)) return result
-    for (const kind of ["guilds", "members", "roles"] as const) {
+    for (const kind of ["guilds", "members", "roles", "channels"] as const) {
         const input = value[kind]
         if (input === undefined || input === false) continue
         if (input !== true && !record(input))
@@ -83,6 +88,7 @@ export interface Configuration {
     readonly maxStartupAttempts: number
     readonly cache: CacheConfiguration | undefined
     readonly resourceCache: ResourceConfiguration
+    readonly channelCache: Required<ResourceCacheSettings> | undefined
 }
 
 export function validateConfiguration(
@@ -142,13 +148,15 @@ export function validateConfiguration(
         if (cache instanceof ConfigurationError) return Effect.fail(cache)
         const resourceCache = resourceConfiguration("cache" in options ? options.cache : undefined)
         if (resourceCache instanceof ConfigurationError) return Effect.fail(resourceCache)
+        const { channels: channelCache, ...guildResourceCache } = resourceCache
         const logging = loggingConfiguration("logging" in options ? options.logging : undefined, native)
         if (logging instanceof ConfigurationError) return Effect.fail(logging)
         return Effect.succeed({
             uploadMaxBytes,
             logging,
             cache,
-            resourceCache,
+            resourceCache: guildResourceCache,
+            channelCache,
             token: Redacted.make(token),
             startupTimeoutMs: timeout ?? 30_000,
             maxStartupAttempts: attempts ?? 3,

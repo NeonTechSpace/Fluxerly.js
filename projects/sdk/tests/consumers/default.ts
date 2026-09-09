@@ -1,5 +1,8 @@
 import {
     createClient,
+    ChannelType,
+    Permissions,
+    type GuildChannel,
     type Client,
     type ConnectionState,
     type Message,
@@ -17,6 +20,35 @@ import {
     type CollectorResult,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+export async function useChannels(client: Client, guildId: string, channelId: string) {
+    const retained = client.channels.get(channelId)
+    if (retained.isErr()) return retained
+    const snapshot: GuildChannel | undefined = retained.value
+    const created = await client.channels.create(guildId, {
+        type: ChannelType.Text,
+        name: "help",
+        permissionOverwrites: [],
+    })
+    if (created.isErr()) return created
+    await client.channels.fetchAll(guildId)
+    await client.channels.fetch(created.value.id)
+    await client.channels.edit(created.value.id, { topic: "Help desk" })
+    await client.channels.reorder(guildId, [{ id: created.value.id, parentId: null }])
+    await client.channels.setPermissionOverwrite(created.value.id, {
+        id: guildId,
+        type: "role",
+        allow: 0n,
+        deny: Permissions.ViewChannel,
+    })
+    await client.channels.removePermissionOverwrite(created.value.id, guildId)
+    await client.channels.delete(created.value.id)
+    // @ts-expect-error Permission masks must be bigint
+    client.channels.setPermissionOverwrite(channelId, { id: guildId, type: "role", allow: "0", deny: 0n })
+    // @ts-expect-error Received channels are immutable
+    created.value.name = "changed"
+    return snapshot
+}
 
 export async function useAttachments(client: Client, channelId: string) {
     const file = { data: new Uint8Array([1, 2]), filename: "fixture.bin" }
@@ -255,6 +287,30 @@ export async function manageMessage(client: Client, target: MessageReference): P
         const completion: void = deleted.value
         void completion
     }
+}
+
+export function moderationOperations(client: Client, target: import("@neontechspace/fluxerly").MemberReference) {
+    const ban: import("@neontechspace/fluxerly").BanInput = { durationSeconds: 60, reason: "Spam" }
+    const options: import("@neontechspace/fluxerly").DefaultModerationOptions = {
+        auditReason: "Spam",
+    }
+    const clear = client.members.clearTimeout(target, options).map((member) => member.communicationDisabledUntil)
+    const kick = client.members.kick(target, options)
+    const create = client.guilds.ban(target, ban, options)
+    const remove = client.guilds.unban(target, options)
+    const list = client.guilds.fetchBans(target.guildId).map((bans) => {
+        const first: import("@neontechspace/fluxerly").GuildBan | undefined = bans[0]
+        // @ts-expect-error Ban observations are readonly
+        if (first) first.expiresAt = null
+        return first?.userId
+    })
+    const subscription = client.on("guildBanRemove", (notice) => {
+        const id: string = notice.userId
+        void id
+    })
+    // @ts-expect-error A string cannot be passed as a numeric timeout duration
+    client.members.timeout(target, "60")
+    return [clear, kick, create, remove, list, subscription]
 }
 
 /** Typechecked event registration fragments with payload inference for each event name */

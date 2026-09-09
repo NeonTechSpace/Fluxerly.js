@@ -1,6 +1,9 @@
 import { Context, Effect, type Scope } from "effect"
 import {
     createClient,
+    ChannelType,
+    Permissions,
+    type GuildChannel,
     type Client,
     type ConfigurationError,
     type MessageReference,
@@ -19,6 +22,33 @@ import {
     type CollectorRegistrationError,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+export const useChannels = (client: Client, guildId: string, channelId: string) =>
+    Effect.gen(function* () {
+        const retained: GuildChannel | undefined = yield* client.channels.get(channelId)
+        const created = yield* client.channels.create(guildId, {
+            type: ChannelType.Text,
+            name: "help",
+            permissionOverwrites: [],
+        })
+        yield* client.channels.fetchAll(guildId)
+        yield* client.channels.fetch(created.id)
+        yield* client.channels.edit(created.id, { topic: "Help desk" })
+        yield* client.channels.reorder(guildId, [{ id: created.id, parentId: null }])
+        yield* client.channels.setPermissionOverwrite(created.id, {
+            id: guildId,
+            type: "role",
+            allow: 0n,
+            deny: Permissions.ViewChannel,
+        })
+        yield* client.channels.removePermissionOverwrite(created.id, guildId)
+        yield* client.channels.delete(created.id)
+        // @ts-expect-error Permission masks must be bigint
+        client.channels.setPermissionOverwrite(channelId, { id: guildId, type: "role", allow: "0", deny: 0n })
+        // @ts-expect-error Received channels are immutable
+        created.name = "changed"
+        return retained
+    })
 
 export const useEmbeds = (client: Client, channelId: string) =>
     Effect.gen(function* () {
@@ -258,6 +288,30 @@ export function watchMessageChanges(client: Client) {
         )
     })
 }
+export function moderationOperations(client: Client, target: import("@neontechspace/fluxerly/effect").MemberReference) {
+    const ban: import("@neontechspace/fluxerly/effect").BanInput = { durationSeconds: 60, reason: "Spam" }
+    const options: import("@neontechspace/fluxerly/effect").ModerationOptions = { auditReason: "Spam" }
+    return Effect.gen(function* () {
+        const cleared = yield* client.members.clearTimeout(target, options)
+        const expiry: string | null | undefined = cleared.communicationDisabledUntil
+        yield* client.members.kick(target, options)
+        yield* client.guilds.ban(target, ban, options)
+        yield* client.guilds.unban(target, options)
+        const list: readonly import("@neontechspace/fluxerly/effect").GuildBan[] = yield* client.guilds.fetchBans(
+            target.guildId,
+        )
+        yield* client.on("guildBanAdd", (notice) =>
+            Effect.sync(() => {
+                const id: string = notice.userId
+                void id
+            }),
+        )
+        // @ts-expect-error A string cannot be passed as a numeric timeout duration
+        client.members.timeout(target, "60")
+        return { expiry, list }
+    })
+}
+
 export function useAttachments(client: Client, channelId: string) {
     return Effect.gen(function* () {
         const file = { data: new Uint8Array([1, 2]), filename: "fixture.bin" }

@@ -25,11 +25,14 @@ The documentation website remains a scaffold
 | [reactions.ts](/projects/sdk/src/internal/reactions.ts) | Reaction emoji/query encoding and user-page/gateway projection; REST owns request scheduling |
 | [pins.ts](/projects/sdk/src/internal/pins.ts) | Pin-page query validation and page/event projection, with REST owning mutation and request scheduling |
 | [guilds.ts](/projects/sdk/src/internal/guilds.ts) | Guild/member/role request validation and response/event projection; shared REST owns admission and client-global rate state |
+| [moderation.ts](/projects/sdk/src/internal/moderation.ts) | Timeout, kick and ban request validation and ban-list projection, using shared REST scheduling and resource invalidation |
+| [channels.ts](/projects/sdk/src/internal/channels.ts) | Guild channel request validation and REST/event projection, with scheduling owned by shared REST |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
 | [attachments.ts](/projects/sdk/src/internal/attachments.ts) | File validation and metadata projection |
 | [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation, upload destination boundary and bounded file streams; REST owns scheduling and message completion |
 | [cache.ts](/projects/sdk/src/internal/cache.ts) | Cache retention and conflicting observations |
 | [guild-cache.ts](/projects/sdk/src/internal/guild-cache.ts) | Optional guild/member/role retention, related-resource invalidation and request conflicts |
+| [channel-cache.ts](/projects/sdk/src/internal/channel-cache.ts) | Optional guild channel retention, mutation/event invalidation and request conflicts |
 | [pagination.ts](/projects/sdk/src/internal/pagination.ts) | Demand-driven page traversal, cursor progress, limits and per-consumption cleanup |
 | [cache-reports.ts](/projects/sdk/src/internal/cache-reports.ts) | Cache reporting lifetime |
 | [collector.ts](/projects/sdk/src/internal/collector.ts) | Collector budgets, deadlines and cleanup |
@@ -133,10 +136,13 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:recovery` | Forced socket loss, resume, diagnostics and subsequent receive/reply | Temporary channel/messages and test-socket termination |
 | `test:live:recovery:cancel` | Managed cancellation during recovery and socket cleanup | Test-socket termination, no server-content changes |
 | `test:live:management` | Remote fetch, edit and deletion | Temporary channel/messages and test-message edits/deletions |
+| `test:live:batch-delete` | Explicit message batches, events/cache, missing IDs and lost-response reconciliation | Temporary channel/messages and test-owned response loss |
+| `test:live:moderation:default`, `test:live:moderation:effect` | Timeout/clear, kick, ban expiry/unban, events and lost-response reconciliation | Authorized disposable member moderation, temporary channel/messages, test-owned response loss |
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
 | `test:live:reactions` | Unicode/custom reactions, collectors, reactor readback, clear events and recovery | Temporary channel/messages, reactions and guild emoji, plus test-socket termination |
 | `test:live:pins` | Pin/unpin, explicit pages, pin status/events and recovery | Temporary channel/messages and pins, server-created pin notices, plus test-socket termination |
 | `test:live:guilds` | Guild/member reads, reaction-driven role assignment, role management/events, optional caches and recovery | Temporary channel/messages, two zero-permission test roles with assignment only to the designated bot, plus test-socket termination and test-owned response loss |
+| `test:live:channels` | Guild channel management, permission overwrites, inheritance, events/cache and recovery | Temporary channels/categories, overwrites targeting only the bot and test guild's everyone role, test-socket termination and test-owned response loss |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
 | `test:live:pagination` | History/member/reactor/pin traversal, early exit, read recovery and cancellation cleanup | Temporary channel/messages, reactions and pins, plus test-owned transient read failure and delayed response delivery |
 | `test:live:cache` | Cache intake, expiry and recovery invalidation | Temporary channel/messages and test-socket termination |
@@ -147,6 +153,20 @@ These checks are opt-in and excluded from `pnpm check`
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools.
 After a crash, verify that the recorded process has stopped before removing its stale lock.
 Do not stop unrelated processes or bypass a live owner's lock
+
+Member-moderation scripts are manual opt-in checks, never part of `pnpm check`, CI, schedules or unattended reruns.
+Each invocation requires current authorization for its disposable account and a human available to handle rejoining
+
+Supply the account ID through `FLUXER_TEST_MODERATION_USER_ID` in the process environment or ignored `.env.test.local`.
+The process environment takes precedence, and a missing or invalid ID fails before live requests.
+Never hardcode a real account ID or treat a saved ID as authorization to run a test
+
+The account must be a current non-owner, non-administrator member without an existing timeout or ban
+
+Run each moderation mode separately and re-add the account between runs.
+The checks never delete its messages and leave it unbanned, but cannot restore its membership or previous roles
+
+Recovery uses the journaled target and exact test-owned timeout/ban marker, refusing to remove unrelated moderation state
 
 Message checks create a uniquely named test channel and verify deletion of that channel and its messages.
 The ignored `.env.test.messages.local` recovery journal records the server ID, unique channel marker and returned channel ID, never credentials or message bodies.
@@ -162,7 +182,11 @@ Corrupt or unresolved journal state fails closed and must be inspected, not dele
 Guild checks also journal unique role names and returned IDs before assigning a zero-permission role to the test bot.
 Two test roles exercise SDK creation, editing, relative reordering and deletion after recovery.
 Cleanup reconciles only those markers/IDs, verifies remaining roles still have zero permissions and confirms absence after deletion.
-The role check preserves existing bot roles and does not edit human memberships or existing roles.
+The role check preserves existing bot roles and does not edit human memberships or existing roles
+
+Channel checks journal each additional category and child marker before creation and reconcile returned IDs against those markers.
+Cleanup removes test-owned children before categories and verifies absence before releasing the journal.
+Permission checks target only the test bot and the guild's everyone role inside these test-owned channels.
 Keep the journal until test-owned cleanup is verified
 
 Use [live harness source](/projects/sdk/tests/live/) for assertions and bounded execution details.

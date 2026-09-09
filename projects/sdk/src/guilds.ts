@@ -27,6 +27,8 @@ export interface MemberReference {
 
 /** Frozen member projection shared by REST and member-add/update events, not a live permission result */
 export interface GuildMember extends MemberReference {
+    /** ISO 8601 timeout expiry, null when cleared, omitted when unavailable. A past timestamp is not an active timeout */
+    readonly communicationDisabledUntil?: string | null
     /** Account username */
     readonly username: string
     /** Omitted upstream bot flags mean false */
@@ -59,6 +61,49 @@ export interface GuildOperationOptions {
 
 /** Default calls start immediately; abort cancels only this call and awaits owned cleanup */
 export interface DefaultGuildOperationOptions extends GuildOperationOptions, OperationOptions {}
+
+/** Moderation-only request settings, with the same deadline and cleanup ownership as guild operations */
+export interface ModerationOptions extends GuildOperationOptions {
+    /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
+     * Sent as a raw header because Fluxer does not decode URL escapes. Non-ASCII and control characters fail before dispatch.
+     * Omission sends no header. Never included in SDK errors or diagnostics
+     */
+    readonly auditReason?: string
+}
+
+/** Default moderation starts immediately. Aborting waits for owned cleanup but cannot roll back a dispatched action */
+export interface DefaultModerationOptions extends ModerationOptions, OperationOptions {}
+
+/** Explicit ban settings. The server owns expiry and any requested message-deletion job */
+export interface BanInput {
+    /** Stored ban reason, up to 512 Unicode code points. Omit to use auditReason when supplied, otherwise no reason */
+    readonly reason?: string
+    /** Integer seconds, zero/default for permanent or 60–63,072,000 for a provider-managed temporary ban.
+     * Expiry does not rejoin the user. No SDK timer or automatic unban request is created.
+     * Provider database TTL expiry need not emit guildBanRemove. Reconcile with fetchBans rather than waiting for that event
+     */
+    readonly durationSeconds?: number
+    /** Integer seconds of recent messages to remove, 0–604,800, default zero.
+     * Destructive asynchronous server job, separate from ban completion and not undone by unbanning
+     */
+    readonly deleteMessageSeconds?: number
+}
+
+/** Frozen remote ban observation, not a membership or a guarantee that the ban is still active */
+export interface GuildBan extends MemberReference {
+    /** Account username returned with this ban */
+    readonly username: string
+    /** Omitted upstream bot flag means false */
+    readonly isBot: boolean
+    /** Stored reason, preserving absent versus null */
+    readonly reason?: string | null
+    /** Decimal user ID of the moderator */
+    readonly moderatorId: string
+    /** ISO 8601 time the ban was recorded */
+    readonly bannedAt: string
+    /** ISO 8601 expiry, null for permanent, omitted when unavailable. Database expiry need not emit a removal event */
+    readonly expiresAt?: string | null
+}
 
 /** Identifies a role without retaining a client */
 export interface RoleReference {
@@ -180,6 +225,12 @@ export type GuildOperation =
     | "members.get"
     | "roles.get"
     | "guilds.fetch"
+    | "guilds.ban"
+    | "guilds.unban"
+    | "guilds.fetchBans"
+    | "members.timeout"
+    | "members.clearTimeout"
+    | "members.kick"
     | "members.fetch"
     | "members.fetchSelf"
     | "members.fetchPage"

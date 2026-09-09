@@ -33,6 +33,18 @@ const result = createClient({
 })
 assert.equal(result.isOk(), true)
 assert.equal(result.value.state, "Disconnected")
+assert.equal((await result.value.messages.deleteMany("20", [])).error.operation, "deleteMany")
+assert.equal(
+    (await result.value.members.timeout({ guildId: "20", userId: "30" }, 0)).error.operation,
+    "members.timeout",
+)
+assert.equal(
+    (await result.value.guilds.ban({ guildId: "20", userId: "30" }, { durationSeconds: 1 })).error.operation,
+    "guilds.ban",
+)
+assert.ok(Object.isFrozen(result.value.channels))
+assert.equal(result.value.channels.get("20").value, undefined)
+assert.equal((await result.value.channels.fetch("invalid")).error._tag, "ChannelOperationError")
 const collector = result.value.messages.collect("20")
 assert.ok(collector.isErr() && collector.error instanceof CollectorError)
 assert.equal(collector.error.reason, "notConnected")
@@ -63,7 +75,15 @@ events.value.unsubscribe()
 assert.equal((await events.value.next()).value, null)
 const invalidSend = await result.value.messages.send("20", { content: "" })
 assert.equal(invalidSend.error._tag, "MessageError")
-for (const event of ["messageUpdate", "messageDelete", "messageDeleteBulk"]) {
+for (const event of [
+    "messageUpdate",
+    "messageDelete",
+    "messageDeleteBulk",
+    "guildChannelCreate",
+    "guildChannelUpdate",
+    "guildChannelDelete",
+    "guildChannelUpdateBulk",
+]) {
     const subscribed = result.value.on(event, () => {})
     assert.ok(subscribed.isOk())
     subscribed.value.unsubscribe()

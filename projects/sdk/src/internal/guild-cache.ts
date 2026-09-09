@@ -162,7 +162,11 @@ export class GuildCache {
         if (this.#closed || !event.startsWith("guild")) return
         if ((event === "guildMemberAdd" || event === "guildMemberUpdate") && "roleIds" in value)
             this.#observe("members", value)
-        else if (event === "guildMemberRemove" && "guildId" in value && "userId" in value)
+        else if (
+            (event === "guildMemberRemove" || event === "guildBanAdd" || event === "guildBanRemove") &&
+            "guildId" in value &&
+            "userId" in value
+        )
             this.#evict({ kind: "members", guildId: value.guildId, id: value.userId })
         else if ((event === "guildRoleCreate" || event === "guildRoleUpdate") && "permissions" in value)
             this.#observe("roles", value)

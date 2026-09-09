@@ -69,6 +69,42 @@ export function fromEffectLogger(logger: Logger.Logger<unknown, unknown>): Defau
 }
 import type { ClientState, ClientOptions as SharedClientOptions, ConnectionState } from "./client.js"
 import type {
+    PermissionOverwrite,
+    GuildChannel,
+    ChannelCreate,
+    ChannelEdit,
+    ChannelPosition,
+    ChannelOperationFailure,
+    ChannelOperationOptions,
+} from "./channels.js"
+export { ChannelOperationError, ChannelType } from "./channels.js"
+export type {
+    PermissionOverwrite,
+    GuildChannel,
+    ChannelCreateBase,
+    TextChannelCreate,
+    VoiceChannelCreate,
+    CategoryChannelCreate,
+    LinkChannelCreate,
+    ChannelCreate,
+    ChannelEdit,
+    ChannelPosition,
+    GuildChannelUpdateBulk,
+    ChannelOperation,
+    ChannelOperationFailure,
+    ChannelOperationOptions,
+} from "./channels.js"
+import {
+    channelFetch,
+    channelList,
+    channelCreate,
+    channelEdit,
+    channelDelete,
+    channelReorder,
+    permissionSet,
+    permissionRemove,
+} from "#sdk/internal/channels"
+import type {
     Guild,
     GuildRole,
     RoleReference,
@@ -109,6 +145,9 @@ import {
     roleDelete,
     roleReorder,
 } from "#sdk/internal/guilds"
+import { memberTimeout, memberKick, guildBan, guildUnban, guildBans } from "#sdk/internal/moderation"
+import type { BanInput, GuildBan, ModerationOptions } from "./guilds.js"
+export type { BanInput, GuildBan, ModerationOptions } from "./guilds.js"
 import type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
 export type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"
@@ -718,6 +757,26 @@ export interface Messages {
      * Native interruption awaits owned cleanup but cannot undo a dispatched deletion
      */
     delete(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Lazily delete 1–100 distinct decimal message IDs from one guild channel, requiring ManageMessages permission.
+     * No gateway connection, hidden selection, chunking, age filter or audit reason. Each run copies the current IDs.
+     * HTTP 204 completes with no value, not a deletion count or proof that each ID existed. Missing messages are ignored.
+     * Dispatched requests evict selected cached messages even on rejection, since partial deletion is possible.
+     * Only confirmed rate-limit rejections retry. Timeout, lost response, interruption or closure cannot undo deletion.
+     * Input/admission/HTTP failures use MessageOperationError. Interruption awaits owned cleanup and defects retain Cause
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * const cleanupExample = (client: Client, channelId: string, selectedIds: readonly string[]) =>
+     *     client.messages.deleteMany(channelId, selectedIds)
+     * ```
+     */
+    deleteMany(
+        channelId: string,
+        messageIds: readonly string[],
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
 }
 
 /** A scoped native collection, separate from each caller observing it */
@@ -757,7 +816,7 @@ export {
 } from "./errors.js"
 export type { ConnectError, ConnectionFailure } from "./errors.js"
 
-/** Lazy guild reads and optional local lookup in caller context, independent of gateway readiness.
+/** Lazy guild reads, bans and optional local lookup in caller context, independent of gateway readiness.
  * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with message/member/role operations
  *
  * Total deadline defaults to 30,000 ms including waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
@@ -767,6 +826,38 @@ export type { ConnectError, ConnectionFailure } from "./errors.js"
  * Interruption awaits owned cleanup; closing clients use ClientClosedError. Defects retain native causes, including cleanup failures
  */
 export interface Guilds {
+    /** Ban a decimal guild/user target, including a user who is not currently a member.
+     * Requires BanMembers and provider hierarchy/MFA rules. Defaults to permanent with no message deletion
+     *
+     * HTTP 204 returns no value, not event acknowledgement. Writes retry only confirmed 429 rejections.
+     * Failure after dispatch may leave a ban and separately queued message deletion applied
+     *
+     * Dispatched actions invalidate this member's retained snapshot even on rejection.
+     * Requested message cleanup evicts this author's cached messages across guilds, since messages lack guild IDs.
+     * The cleanup job can finish later. A later cache hit does not establish that its message survived the job
+     *
+     * Bans may also block rejoining through provider-side IP/email checks. Unban restores neither messages nor membership.
+     * Lazy, repeatable and caller-owned. Interruption awaits cleanup and defects retain Cause.
+     * Invalid input and HTTP failures use GuildOperationError, while a closed client uses ClientClosedError
+     */
+    ban(
+        target: MemberReference,
+        input?: BanInput,
+        options?: ModerationOptions,
+    ): Effect.Effect<void, GuildOperationFailure>
+    /** Remove a ban after HTTP 204, without rejoining the user or cancelling queued message deletion.
+     * Requires BanMembers. A user who is not banned is an API failure, not a successful no-op.
+     * Uses ban's execution, failure, cleanup and member-cache invalidation rules
+     */
+    unban(target: MemberReference, options?: ModerationOptions): Effect.Effect<void, GuildOperationFailure>
+    /** Fetch the provider's full ban list as frozen observations, requiring BanMembers.
+     * Always remote, without a ban cache, pagination or guaranteed order. Separate reads are not a consistent snapshot.
+     * Lazy and repeatable. Uses shared guild read deadline/retry rules, rejecting malformed responses as a whole
+     */
+    fetchBans(
+        guildId: string,
+        options?: GuildOperationOptions,
+    ): Effect.Effect<readonly GuildBan[], GuildOperationFailure>
     /** Lazy local-only guild lookup, evaluated when run, without HTTP or requiring a connection.
      * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote observation.
      * Invalid decimal IDs fail with GuildOperationError(input). Closing/closed clients fail with ClientClosedError.
@@ -779,11 +870,139 @@ export interface Guilds {
     fetch(guildId: string, options?: GuildOperationOptions): Effect.Effect<Guild, GuildOperationFailure>
 }
 
-/** Lazy membership reads and targeted role writes with Guilds' admission, deadlines and failure rules.
+/** Lazy guild-channel reads and mutations in the caller's Effect context, independent of gateway readiness
+ *
+ * DM operations are outside this API contract. Supply decimal guild-channel IDs. ID-targeted writes do not prefetch or verify their guild type.
+ * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with guild/member/role/message operations.
+ * Total deadline defaults to 30,000 ms, including admission, retry and rate waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
+ * Writes retry only confirmed 429 responses. Permission, input, 404 and malformed-response failures do not retry
+ *
+ * All dispatched channel mutations invalidate the whole enabled channel cache. Pre-dispatch input failures preserve it, and this API never follows a write with an implicit fetch
+ *
+ * Operation inputs are copied when the Effect executes and later caller mutations are not observed. Permission bits are bigint values encoded as decimal JSON strings.
+ * Fluxer enforces channel permissions and grant restrictions. Targeted overwrite operations require ManageRoles for role and member targets.
+ * Expected failures use ChannelOperationError or ClientClosedError. Interruption and defects retain native causes after owned cleanup
+ */
+export interface Channels {
+    /** Lazily read the enabled channel cache without HTTP or requiring a connection.
+     * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote observation.
+     * Invalid decimal IDs fail with ChannelOperationError(input). Closing/closed clients fail with ClientClosedError.
+     * Defects retain their native cause. Lookup updates LRU order but never extends expiry
+     */
+    get(channelId: string): Effect.Effect<GuildChannel | undefined, ChannelOperationFailure>
+    /** Fetch one frozen guild-channel observation by decimal ID, without connecting or populating a complete guild list.
+     * A non-guild response is a typed response failure. The result has explicit overwrites only, not inherited or effective permissions
+     */
+    fetch(channelId: string, options?: ChannelOperationOptions): Effect.Effect<GuildChannel, ChannelOperationFailure>
+    /** Fetch Fluxer's visible guild-channel list for one decimal guild ID, without pagination or a completeness guarantee.
+     * The response is a point-in-time observation, not a subscription. It does not fetch members, roles, DMs or missing permission-overwrite targets
+     */
+    fetchAll(
+        guildId: string,
+        options?: ChannelOperationOptions,
+    ): Effect.Effect<readonly GuildChannel[], ChannelOperationFailure>
+    /** Create one supported guild channel and return Fluxer's frozen observation. Fluxer chooses its initial position.
+     * Omitted permissionOverwrites inherits the selected parent category's overrides. [] creates no explicit overrides, not private visibility
+     * @example
+     * ```ts
+     * import { ChannelType, Permissions, type Client } from "@neontechspace/fluxerly/effect"
+     * export const channelExample = (client: Client, guildId: string, botId: string) =>
+     *     client.channels.create(guildId, {
+     *         type: ChannelType.Text,
+     *         name: "private-support",
+     *         permissionOverwrites: [
+     *             { id: guildId, type: "role", allow: 0n, deny: Permissions.ViewChannel },
+     *             { id: botId, type: "member", allow: Permissions.ViewChannel | Permissions.SendMessages, deny: 0n },
+     *         ],
+     *     })
+     * ```
+     * The caller owns the created channel and executes the returned Effect. On an unknown outcome, reconcile with fetchAll before deciding whether to create again
+     */
+    create(
+        guildId: string,
+        input: ChannelCreate,
+        options?: ChannelOperationOptions,
+    ): Effect.Effect<GuildChannel, ChannelOperationFailure>
+    /** Patch only supplied channel settings and return Fluxer's frozen observation. Empty/unknown-field patches are input errors.
+     * Channel type and parent are intentionally not editable here. Move a channel with reorder. Omitted permissionOverwrites preserves them, while [] clears them
+     */
+    edit(
+        channelId: string,
+        input: ChannelEdit,
+        options?: ChannelOperationOptions,
+    ): Effect.Effect<GuildChannel, ChannelOperationFailure>
+    /** Delete a guild channel and complete after HTTP 204, without waiting for a gateway event or proving a prior channel existed.
+     * The SDK does not prefetch to verify the ID. A lost response or timeout after dispatch may leave deletion applied
+     */
+    delete(channelId: string, options?: ChannelOperationOptions): Effect.Effect<void, ChannelOperationFailure>
+    /** Apply submitted guild-channel moves sequentially and complete after HTTP 204, without fabricating a reordered snapshot.
+     * syncPermissionsOnMove copies the target category's overwrites. A bulk channel event can arrive before that permission copy completes.
+     * Fluxer may normalize positions. This bulk mutation is not a transaction, so failures can leave partial movement. Refetch when final order matters
+     */
+    reorder(
+        guildId: string,
+        positions: readonly ChannelPosition[],
+        options?: ChannelOperationOptions,
+    ): Effect.Effect<void, ChannelOperationFailure>
+    /** Replace one explicit role/member overwrite with its supplied raw bigint allow and deny bits, then complete after HTTP 204.
+     * Fluxer enforces ManageRoles. This does not calculate inherited/effective permissions or prefetch the target
+     */
+    setPermissionOverwrite(
+        channelId: string,
+        input: PermissionOverwrite,
+        options?: ChannelOperationOptions,
+    ): Effect.Effect<void, ChannelOperationFailure>
+    /** Remove one explicit role/member overwrite by decimal target ID and complete after HTTP 204.
+     * Fluxer enforces ManageChannels and ManageRoles. Other overwrites remain unchanged, and an unknown outcome requires an explicit follow-up read
+     */
+    removePermissionOverwrite(
+        channelId: string,
+        targetId: string,
+        options?: ChannelOperationOptions,
+    ): Effect.Effect<void, ChannelOperationFailure>
+}
+
+/** Lazy membership reads, moderation and targeted role writes with Guilds' admission, deadlines and failure rules.
  * Returned members are frozen observations. Optional retention follows ClientOptions.cache.members, without permission prediction or automatic guild download.
  * Writes retry only confirmed 429 rejections, never uncertain outcomes. Interruption cannot undo a dispatched write
  */
 export interface Members {
+    /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts
+     *
+     * Requires ModerateMembers and provider hierarchy rules. The provider rejects self and administrator targets.
+     * Queue/network time consumes this duration. An expiry already past at processing time can clear the timeout
+     *
+     * Returns the frozen HTTP 200 member with communicationDisabledUntil, without waiting for an event.
+     * Uses shared guild deadlines and failures. Writes retry only confirmed 429 rejections.
+     * Lazy, repeatable effects preserve caller context and defects.
+     * Interruption and closure await owned cleanup but cannot undo a dispatched timeout
+     *
+     * Eligible responses update enabled member caching. Dispatched failures evict the member even on rejection
+     * @example
+     * ```ts
+     * import type { Client, MemberReference } from "@neontechspace/fluxerly/effect"
+     * const moderationExample = (client: Client, target: MemberReference) =>
+     *     client.members.timeout(target, 5 * 60_000)
+     * ```
+     */
+    timeout(
+        target: MemberReference,
+        durationMs: number,
+        options?: ModerationOptions,
+    ): Effect.Effect<GuildMember, GuildOperationFailure>
+    /** Clear a timeout with timeout's permissions, execution, cache and failure rules.
+     * Sends null, not a negative duration. Returns the HTTP 200 member without waiting for an event
+     */
+    clearTimeout(
+        target: MemberReference,
+        options?: ModerationOptions,
+    ): Effect.Effect<GuildMember, GuildOperationFailure>
+    /** Kick the selected guild member after HTTP 204, without waiting for a removal event.
+     * Requires KickMembers and provider hierarchy rules. Does not ban the user or automatically restore membership.
+     * Missing membership is a typed API failure. Dispatched actions invalidate the member cache even on rejection.
+     * Uses timeout's execution/deadline/failure rules, with no automatic retry after an uncertain result
+     */
+    kick(target: MemberReference, options?: ModerationOptions): Effect.Effect<void, GuildOperationFailure>
     /** Traverse ascending remote user IDs as a lazy Stream, without connecting or eagerly downloading the guild.
      * Each execution copies inputs and owns independent progress in the caller's context.
      * maxItems is required, pageSize defaults to 100 and maxPages to 100. timeoutMs applies separately to each page.
@@ -932,9 +1151,11 @@ export interface Roles {
 export interface Client extends ClientState {
     /** Remote role management and explicitly enabled local role lookup */
     readonly roles: Roles
-    /** Remote guild identity/configuration reads */
+    /** Remote guild reads and ban management, with explicitly enabled local guild lookup */
     readonly guilds: Guilds
-    /** Remote member reads and targeted role assignment */
+    /** Remote guild-channel reads, mutations and explicitly enabled local lookup */
+    readonly channels: Channels
+    /** Remote member reads, moderation and targeted role assignment */
     readonly members: Members
     /** REST, local lookup and live collection owned by this client */
     readonly messages: Messages
@@ -1075,11 +1296,42 @@ export function createClient<E = never, R = never>(
         yield* Effect.addFinalizer((exit) => owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, exit))))
         return Object.freeze({
             guilds: Object.freeze({
+                ban: (target: MemberReference, input?: BanInput, options?: ModerationOptions) =>
+                    owner.guild("guilds.ban", () => guildBan(target, input, options), options),
+                unban: (target: MemberReference, options?: ModerationOptions) =>
+                    owner.guild("guilds.unban", () => guildUnban(target, options), options),
+                fetchBans: (id: string, options?: GuildOperationOptions) =>
+                    owner.guild("guilds.fetchBans", () => guildBans(id), options),
                 get: (id: string) => owner.getResource("guilds", id),
                 fetch: (id: string, options?: GuildOperationOptions) =>
                     owner.guild("guilds.fetch", () => guildFetch(id), options),
             }),
+            channels: Object.freeze({
+                get: (id: string) => owner.getChannel(id),
+                fetch: (id: string, options?: ChannelOperationOptions) =>
+                    owner.channel("channels.fetch", () => channelFetch(id), options),
+                fetchAll: (id: string, options?: ChannelOperationOptions) =>
+                    owner.channel("channels.fetchAll", () => channelList(id), options),
+                create: (id: string, input: ChannelCreate, options?: ChannelOperationOptions) =>
+                    owner.channel("channels.create", () => channelCreate(id, input), options),
+                edit: (id: string, input: ChannelEdit, options?: ChannelOperationOptions) =>
+                    owner.channel("channels.edit", () => channelEdit(id, input), options),
+                delete: (id: string, options?: ChannelOperationOptions) =>
+                    owner.channel("channels.delete", () => channelDelete(id), options),
+                reorder: (id: string, positions: readonly ChannelPosition[], options?: ChannelOperationOptions) =>
+                    owner.channel("channels.reorder", () => channelReorder(id, positions), options),
+                setPermissionOverwrite: (id: string, input: PermissionOverwrite, options?: ChannelOperationOptions) =>
+                    owner.channel("channels.setPermissionOverwrite", () => permissionSet(id, input), options),
+                removePermissionOverwrite: (id: string, targetId: string, options?: ChannelOperationOptions) =>
+                    owner.channel("channels.removePermissionOverwrite", () => permissionRemove(id, targetId), options),
+            }),
             members: Object.freeze({
+                timeout: (target: MemberReference, durationMs: number, options?: ModerationOptions) =>
+                    owner.guild("members.timeout", () => memberTimeout(target, durationMs, options), options),
+                clearTimeout: (target: MemberReference, options?: ModerationOptions) =>
+                    owner.guild("members.clearTimeout", () => memberTimeout(target, null, options, true), options),
+                kick: (target: MemberReference, options?: ModerationOptions) =>
+                    owner.guild("members.kick", () => memberKick(target, options), options),
                 iterate: (id: string, query: UserIterationQuery, options?: GuildOperationOptions) =>
                     paginationStream(memberPagination(owner, id, query, options)),
                 get: (target: MemberReference) => owner.getResource("members", target),
@@ -1213,6 +1465,8 @@ export function createClient<E = never, R = never>(
                 edit: (target: MessageReference, input: EditMessageInput, options?: MessageOperationOptions) =>
                     owner.edit(target, input, options),
                 delete: (target: MessageReference, options?: MessageOperationOptions) => owner.delete(target, options),
+                deleteMany: (channelId: string, ids: readonly string[], options?: MessageOperationOptions) =>
+                    owner.deleteMany(channelId, ids, options),
             }),
             on: <E, R, E2 = never, R2 = never, K extends EventName = "messageCreate">(
                 event: K,
