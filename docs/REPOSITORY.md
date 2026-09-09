@@ -27,6 +27,15 @@ The documentation website remains a scaffold
 | [guilds.ts](/projects/sdk/src/internal/guilds.ts) | Guild/member/role request validation and response/event projection; shared REST owns admission and client-global rate state |
 | [moderation.ts](/projects/sdk/src/internal/moderation.ts) | Timeout, kick and ban request validation and ban-list projection, using shared REST scheduling and resource invalidation |
 | [webhooks.ts](/projects/sdk/src/internal/webhooks.ts) | Webhook request/projection validation and token-only client lifetime, with shared REST admission and no webhook cache |
+| [users.ts](/projects/sdk/src/internal/users.ts) | Public account and private-conversation projection/request validation, with shared REST scheduling |
+| [expressions.ts](/projects/sdk/src/internal/expressions.ts) | Emoji/sticker lifecycle validation and projection, using shared REST admission and guild-resource cache guards |
+| [invites.ts](/projects/sdk/src/internal/invites.ts) | Invite inspection and management validation/projection, using shared REST without invite retention |
+| [audit-logs.ts](/projects/sdk/src/internal/audit-logs.ts) | Filtered audit-page validation and projection; the pagination owner handles bounded traversal without audit retention |
+| [guild-settings.ts](/projects/sdk/src/internal/guild-settings.ts) | Bot-permitted server-setting validation and patch encoding, using shared REST and resource-cache guards |
+| [vanity-url.ts](/projects/sdk/src/internal/vanity-url.ts) | Custom-invite reads and explicit replacement, without retained codes or hidden use-count reads |
+| [guild-discovery.ts](/projects/sdk/src/internal/guild-discovery.ts) | Public server-directory eligibility, categories and application lifecycle; distinct from hosted service discovery |
+| [user-cache.ts](/projects/sdk/src/internal/user-cache.ts) | Optional account/private-conversation retention, conflicting reads and lifecycle invalidation |
+| [presence.ts](/projects/sdk/src/internal/presence.ts) | Process-local bot presence intent, coalescing and gateway reconnect restoration |
 | [multipart.ts](/projects/sdk/src/internal/multipart.ts) | Bounded webhook multipart body streaming over admitted file snapshots |
 | [channels.ts](/projects/sdk/src/internal/channels.ts) | Guild channel request validation and REST/event projection, with scheduling owned by shared REST |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
@@ -130,6 +139,9 @@ Never print credentials or private payloads when diagnosing a failure
 Run a table entry as `pnpm --filter @neontechspace/fluxerly <script>`.
 These checks are opt-in and excluded from `pnpm check`
 
+`test:live:expressions` checks emoji/sticker lifecycle, gateway updates, partial batches and sticker messages through both built APIs.
+It creates temporary expressions and a channel, deletes test-owned resources without media purging, and preserves a recovery journal on unresolved outcomes
+
 | Script | Purpose | Outside effects |
 | --- | --- | --- |
 | `test:live` | Hosted protocol discovery, readiness and heartbeats | No server-content changes |
@@ -141,6 +153,13 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:batch-delete` | Explicit message batches, events/cache, missing IDs and lost-response reconciliation | Temporary channel/messages and test-owned response loss |
 | `test:live:moderation:default`, `test:live:moderation:effect` | Timeout/clear, kick, ban expiry/unban, events and lost-response reconciliation | Authorized disposable member moderation, temporary channel/messages, test-owned response loss |
 | `test:live:webhooks` | Webhook management, destination moves, message/file readback, lost-response reconciliation and credential revocation through both APIs | Temporary webhooks, channels/messages, file uploads and test-owned response loss |
+| `test:live:invites` | Invite creation, inspection, lists, revocation and lost-response reconciliation through both APIs | Temporary channel and invites; no invite acceptance or membership changes |
+| `test:live:administration` | Server-setting edits and filtered audit reads/traversal through both APIs | Temporary sandbox server renaming, restoration, audit records and test-owned response loss |
+| `test:live:vanity` | Custom-invite reads, read recovery and disabled-feature rejection through both APIs | No intended successful mutation, uses a reserved code for rejection checks |
+| `test:live:vanity:mutate:default`, `test:live:vanity:mutate:effect` | Manual custom-invite lifecycle and lost-response reconciliation | Opt-in temporary custom codes on an eligible sandbox with no existing code |
+| `test:live:discovery` | Directory categories, eligibility/status and read recovery through both APIs | Read-only, never submits an application |
+| `test:live:discovery:mutate:default`, `test:live:discovery:mutate:effect` | Manual directory application lifecycle and lost-response reconciliation | Real review-queue submission or immediate public listing, then test-owned withdrawal |
+| `test:live:users:default`, `test:live:users:effect` | Public user reads, private conversations, bot server-profile edits and message failure reconciliation | Test DMs, authorized group messages/renaming, bot profile changes and test-owned response loss |
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
 | `test:live:reactions` | Unicode/custom reactions, collectors, reactor readback, clear events and recovery | Temporary channel/messages, reactions and guild emoji, plus test-socket termination |
 | `test:live:pins` | Pin/unpin, explicit pages, pin status/events and recovery | Temporary channel/messages and pins, server-created pin notices, plus test-socket termination |
@@ -153,15 +172,63 @@ These checks are opt-in and excluded from `pnpm check`
 | `test:live:embeds` | Embed send/reply/edit, readback, events, cache and collectors | Temporary channel/messages and test-message edits |
 | `test:live:attachments` | Uploads, binary readback, file edits, events/cache/collectors and recovery | Temporary channel/messages, 50 MiB file upload/download, file replacements and test-socket termination |
 
-The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools.
+The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools
+
+Invite checks use the same lock and an ignored `.env.test.invites.local` recovery journal containing only test-channel identity, never invite codes.
+Cleanup reconciles the owned channel, verifies invite destination and creator before revocation, then removes the channel
+
+Administration checks use the shared lock and an ignored `.env.test.administration.local` journal containing sandbox identity, a unique marker and the original server name.
+Restoration refuses to overwrite an unexpected concurrent name change and retains its journal on conflict
+
+Audit queries always include a user or action filter; no unfiltered read is used because Fluxer may rewrite deletion records during that request
+
+Custom-invite mutation checks are manual, excluded from `pnpm check`, CI and unattended runs
+
+Use a specifically authorized disposable server with `VANITY_URL`, ManageGuild permission and no existing custom code.
+Supply two distinct, available lowercase codes through `FLUXER_TEST_VANITY_CODE` and `FLUXER_TEST_VANITY_SECOND_CODE`, plus `FLUXER_TEST_VANITY_MUTATIONS=1`.
+Process environment takes precedence over ignored `.env.test.local`; stored values are not authorization.
+Run each mutation mode separately. Successful invite inspection also needs a channel visible to everyone
+
+The ignored `.env.test.vanity.local` journal stores sandbox identity and code hashes, never the codes themselves.
+Recovery removes only a matching test-owned code and refuses concurrent replacements.
+An uncertain provider-side partial write retains the journal for operator reconciliation, even if the guild's custom-code slot is empty
+
+Changing an existing code cannot guarantee reclaiming it, so the harness refuses that scenario.
+Read/rejection checks do not establish successful setting, replacement, removal or lost-response recovery.
+Include executed scenarios and untested mutation paths in the test report
+
+Discovery mutation checks require specific permission for real directory submission and possible immediate public listing.
+Use an eligible disposable sandbox with no existing application or listing, and set `FLUXER_TEST_DISCOVERY_MUTATIONS=1` for that manual invocation.
+Optionally select `FLUXER_TEST_DISCOVERY_CATEGORY_ID`; the default is the provider's Other category.
+Run the default and Effect mutation scripts separately, never in CI or unattended runs.
+The ignored `.env.test.discovery.local` journal retains only target identity, synthetic test marker and application timestamp.
+Cleanup refuses unrelated descriptions or replacement applications and verifies the test record and discoverable guild feature are removed.
+Partial provider writes can require operator reconciliation; search-index removal and reviewer notifications are not reversible guarantees.
+Read-only script success is not live application-lifecycle proof
+
 Webhook checks use the same sandbox identity checks and lock, with their own ignored `.env.test.webhooks.local` recovery journal.
 That journal stores test-owned resource IDs and unique names, never webhook tokens.
 Recovery verifies the webhook creator and destination against the designated bot and owned channels before deletion.
 After a crash, verify that the recorded process has stopped before removing its stale lock.
 Do not stop unrelated processes or bypass a live owner's lock
 
-Member-moderation scripts are manual opt-in checks, never part of `pnpm check`, CI, schedules or unattended reruns.
-Each invocation requires current authorization for its disposable account and a human available to handle rejoining
+User/private-conversation checks are manual and require current authorization for the recipient supplied through `FLUXER_TEST_DM_USER_ID`.
+The process environment takes precedence over ignored `.env.test.local`; a stored ID is not authorization
+
+The checks verify the recipient's membership in the designated sandbox, preserve pre-existing open DMs and remove test-owned messages.
+The ignored `.env.test.users.local` journal records test-owned markers/IDs and temporary bot-profile restoration data, never credentials
+
+Existing-group checks additionally require current permission to rename and send messages in the channel supplied through `FLUXER_TEST_GROUP_DM_ID`.
+Use a named temporary group owned by the authorized recipient, containing only that account and the sandbox bot
+
+An explicitly authorized additional account can be supplied through `FLUXER_TEST_GROUP_EXTRA_USER_ID`.
+The harness preserves membership, restores the original group name and deletes only test-owned messages
+
+Without a selected group, or with `--without-group`, the script reports group checks as skipped. That run is not group verification
+
+Member-moderation scripts are manual opt-in checks, never part of `pnpm check`, CI, schedules or unattended reruns
+
+Each moderation invocation requires current authorization for its disposable account and a human available to handle rejoining
 
 Supply the account ID through `FLUXER_TEST_MODERATION_USER_ID` in the process environment or ignored `.env.test.local`.
 The process environment takes precedence, and a missing or invalid ID fails before live requests.

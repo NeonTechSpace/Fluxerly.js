@@ -136,6 +136,7 @@ test("default callbacks and pull subscriptions route frozen updates and deletion
         content: "changed",
         embeds: [],
         attachments: [],
+        stickers: [],
         author: { id: "30", username: "fixture", isBot: false },
     })
     expect(deletions).toEqual([

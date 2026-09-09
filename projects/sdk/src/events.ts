@@ -1,10 +1,51 @@
 import type { Message, MessageDeletion, MessageBulkDeletion } from "./messages.js"
 import type { ChannelPinsUpdate } from "./pins.js"
 import type { MemberReference } from "./guilds.js"
+import type { GuildEmoji, GuildSticker } from "./expressions.js"
 import type { MessageReaction, MessageReactionBatch, MessageReactionEmojiRemoval, ReactionTarget } from "./reactions.js"
+
+/** Full frozen custom-emoji collection observed through the gateway, without creator accounts or image data
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * export function expressionEventsExample(client: Client) {
+ *     return client.events("guildEmojisUpdate", { maxPendingMessages: 10 })
+ * }
+ * ```
+ */
+export interface GuildEmojisUpdate {
+    /** Owning guild ID */
+    readonly guildId: string
+    /** Provider collection in gateway order */
+    readonly items: readonly GuildEmoji[]
+}
+
+/** Full frozen custom-sticker collection observed through the gateway, without creator accounts or image data */
+export interface GuildStickersUpdate {
+    /** Owning guild ID */
+    readonly guildId: string
+    /** Provider collection in gateway order */
+    readonly items: readonly GuildSticker[]
+}
 
 /** Implemented gateway events and their frozen payloads. No subscription history, cache reconstruction or REST-generated notifications */
 export interface EventMap {
+    /** Complete public account update, never private account settings */
+    readonly userUpdate: import("./users.js").User
+    /** Private conversation became visible, not proof it was newly created */
+    readonly directMessageCreate: import("./users.js").DirectMessageChannel
+    /** Complete private conversation update, not an old/new pair */
+    readonly directMessageUpdate: import("./users.js").DirectMessageChannel
+    /** Private conversation closed, left or deleted for this bot, not proof of deletion for others */
+    readonly directMessageDelete: { readonly id: string }
+    /** Recipient added; invalidates private-channel cache without synthesizing a membership list */
+    readonly directMessageRecipientAdd: import("./users.js").DirectMessageRecipientChange
+    /** Recipient removed; invalidates private-channel cache without claiming channel deletion */
+    readonly directMessageRecipientRemove: import("./users.js").DirectMessageRecipientChange
+    /** Full emoji collection projection, not an initial enumeration or cache hydration. Connection gaps can miss changes; fetch when current state matters. An enabled expression cache is invalidated before delivery */
+    readonly guildEmojisUpdate: GuildEmojisUpdate
+    /** Full sticker collection projection, not an initial enumeration or cache hydration. Connection gaps can miss changes; fetch when current state matters. An enabled expression cache is invalidated before delivery */
+    readonly guildStickersUpdate: GuildStickersUpdate
     /** Ban recorded for these guild/user IDs, not a full ban or proof member removal has finished. Evicts the member cache entry */
     readonly guildBanAdd: MemberReference
     /** Explicit ban removal notice, not proof of rejoining. Database TTL expiry need not emit this event. Evicts the member cache entry */

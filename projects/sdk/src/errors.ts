@@ -27,7 +27,11 @@ export class ConfigurationError extends Error {
             | "guilds"
             | "members"
             | "roles"
+            | "emojis"
+            | "stickers"
             | "channels"
+            | "users"
+            | "directMessages"
             | "maxEntries"
             | "maxBytes"
             | "maxAgeMs"
@@ -51,6 +55,9 @@ export class ConfigurationError extends Error {
 
 /** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
 export type Operation =
+    | "presence.set"
+    | "directMessages.send"
+    | import("./users.js").UserOperation
     | import("./webhooks.js").WebhookOperation
     | "createWebhookClient"
     | import("./channels.js").ChannelOperation
@@ -183,6 +190,8 @@ export type DefectReason =
               | import("./guilds.js").GuildOperationError
               | import("./channels.js").ChannelOperationError
               | import("./webhooks.js").WebhookOperationError
+              | import("./users.js").UserOperationError
+              | import("./presence.js").PresenceError
               | import("./pagination.js").PaginationError
               | import("./collectors.js").CollectorError
       }

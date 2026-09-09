@@ -1,6 +1,12 @@
 import type {
     Guild,
+    GuildContentWarningLevel,
+    GuildDefaultMessageNotification,
+    GuildExplicitContentFilter,
     GuildMember,
+    MemberProfileEdit,
+    GuildSplashCardAlignment,
+    GuildVerificationLevel,
     GuildRole,
     RoleCreate,
     RoleEdit,
@@ -11,6 +17,7 @@ import type {
 } from "#sdk/guilds"
 import { identifier, record } from "./message.js"
 import type { ResourceRequest } from "./guild-cache.js"
+import type { ChannelCacheRequest } from "./channel-cache.js"
 
 /** Validated request description; the shared REST owner retains admission, cleanup and rate state */
 export interface GuildRequest<A> {
@@ -25,9 +32,32 @@ export interface GuildRequest<A> {
     readonly deleteAuthorId?: string
     readonly decode: (value: unknown) => A | undefined
     readonly cache?: ResourceRequest
+    readonly channelCache?: ChannelCacheRequest
 }
 
 const nullableText = (value: unknown) => value === undefined || value === null || typeof value === "string"
+const int32 = (value: unknown): value is number =>
+    typeof value === "number" && Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
+const nonNegativeInt32 = (value: unknown): value is number => int32(value) && value >= 0
+const color = (value: unknown): value is number => nonNegativeInt32(value) && value <= 0xffffff
+const mentionPreference = (value: unknown): value is 0 | 1 | 2 => value === 0 || value === 1 || value === 2
+const guildDefaultMessageNotification = (value: unknown): value is GuildDefaultMessageNotification =>
+    value === 0 || value === 1
+const guildVerificationLevel = (value: unknown): value is GuildVerificationLevel =>
+    value === 0 || value === 1 || value === 2 || value === 3 || value === 4
+const guildExplicitContentFilter = (value: unknown): value is GuildExplicitContentFilter =>
+    value === 0 || value === 1 || value === 2
+const guildContentWarningLevel = (value: unknown): value is GuildContentWarningLevel => value === 0 || value === 1
+const guildSplashCardAlignment = (value: unknown): value is GuildSplashCardAlignment =>
+    value === 0 || value === 1 || value === 2
+const text = (value: unknown, minimum: number, maximum: number): value is string =>
+    typeof value === "string" && [...value].length >= minimum && [...value].length <= maximum
+const imageDataUri = (value: unknown): value is string =>
+    typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
+const timestamp = (value: unknown): value is string =>
+    typeof value === "string" &&
+    /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(value) &&
+    Number.isFinite(Date.parse(value))
 
 export const guildEvents = {
     GUILD_MEMBER_ADD: "guildMemberAdd",
@@ -68,7 +98,26 @@ export function decodeGuild(value: unknown): Guild | undefined {
         !Array.isArray(value.features) ||
         !value.features.every((item) => typeof item === "string") ||
         !nullableText(value.icon) ||
-        !nullableText(value.banner)
+        !nullableText(value.banner) ||
+        !nullableText(value.splash) ||
+        !nullableText(value.embed_splash) ||
+        (value.splash_card_alignment !== undefined && !guildSplashCardAlignment(value.splash_card_alignment)) ||
+        (value.system_channel_id !== undefined &&
+            value.system_channel_id !== null &&
+            !identifier(value.system_channel_id)) ||
+        (value.system_channel_flags !== undefined && !nonNegativeInt32(value.system_channel_flags)) ||
+        (value.afk_channel_id !== undefined && value.afk_channel_id !== null && !identifier(value.afk_channel_id)) ||
+        (value.afk_timeout !== undefined && !nonNegativeInt32(value.afk_timeout)) ||
+        (value.default_message_notifications !== undefined &&
+            !guildDefaultMessageNotification(value.default_message_notifications)) ||
+        (value.verification_level !== undefined && !guildVerificationLevel(value.verification_level)) ||
+        (value.nsfw !== undefined && typeof value.nsfw !== "boolean") ||
+        (value.content_warning_level !== undefined && !guildContentWarningLevel(value.content_warning_level)) ||
+        !nullableText(value.content_warning_text) ||
+        (value.explicit_content_filter !== undefined && !guildExplicitContentFilter(value.explicit_content_filter)) ||
+        (value.message_history_cutoff !== undefined &&
+            value.message_history_cutoff !== null &&
+            !timestamp(value.message_history_cutoff))
     )
         return undefined
     return Object.freeze({
@@ -78,6 +127,36 @@ export function decodeGuild(value: unknown): Guild | undefined {
         features: Object.freeze([...value.features] as string[]),
         ...(value.icon === undefined ? {} : { icon: value.icon as string | null }),
         ...(value.banner === undefined ? {} : { banner: value.banner as string | null }),
+        ...(value.splash === undefined ? {} : { splash: value.splash as string | null }),
+        ...(value.embed_splash === undefined ? {} : { embedSplash: value.embed_splash as string | null }),
+        ...(value.splash_card_alignment === undefined
+            ? {}
+            : { splashCardAlignment: value.splash_card_alignment as GuildSplashCardAlignment }),
+        ...(value.system_channel_id === undefined ? {} : { systemChannelId: value.system_channel_id as string | null }),
+        ...(value.system_channel_flags === undefined
+            ? {}
+            : { systemChannelFlags: value.system_channel_flags as number }),
+        ...(value.afk_channel_id === undefined ? {} : { afkChannelId: value.afk_channel_id as string | null }),
+        ...(value.afk_timeout === undefined ? {} : { afkTimeoutSeconds: value.afk_timeout as number }),
+        ...(value.default_message_notifications === undefined
+            ? {}
+            : { defaultMessageNotifications: value.default_message_notifications as GuildDefaultMessageNotification }),
+        ...(value.verification_level === undefined
+            ? {}
+            : { verificationLevel: value.verification_level as GuildVerificationLevel }),
+        ...(value.nsfw === undefined ? {} : { nsfw: value.nsfw as boolean }),
+        ...(value.content_warning_level === undefined
+            ? {}
+            : { contentWarningLevel: value.content_warning_level as GuildContentWarningLevel }),
+        ...(value.content_warning_text === undefined
+            ? {}
+            : { contentWarningText: value.content_warning_text as string | null }),
+        ...(value.explicit_content_filter === undefined
+            ? {}
+            : { explicitContentFilter: value.explicit_content_filter as GuildExplicitContentFilter }),
+        ...(value.message_history_cutoff === undefined
+            ? {}
+            : { messageHistoryCutoff: value.message_history_cutoff as string | null }),
     })
 }
 
@@ -97,6 +176,12 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         !Number.isFinite(Date.parse(value.joined_at)) ||
         !nullableText(value.nick) ||
         !nullableText(value.avatar) ||
+        !nullableText(value.banner) ||
+        (value.accent_color !== undefined && value.accent_color !== null && !color(value.accent_color)) ||
+        (value.profile_flags !== undefined && value.profile_flags !== null && !nonNegativeInt32(value.profile_flags)) ||
+        (value.mention_flags !== undefined &&
+            value.mention_flags !== null &&
+            !mentionPreference(value.mention_flags)) ||
         (value.communication_disabled_until !== undefined &&
             value.communication_disabled_until !== null &&
             (typeof value.communication_disabled_until !== "string" ||
@@ -116,6 +201,10 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
             : { communicationDisabledUntil: value.communication_disabled_until as string | null }),
         ...(value.nick === undefined ? {} : { nickname: value.nick as string | null }),
         ...(value.avatar === undefined ? {} : { avatar: value.avatar as string | null }),
+        ...(value.banner === undefined ? {} : { banner: value.banner as string | null }),
+        ...(value.accent_color === undefined ? {} : { accentColor: value.accent_color as number | null }),
+        ...(value.profile_flags === undefined ? {} : { profileFlags: value.profile_flags as number | null }),
+        ...(value.mention_flags === undefined ? {} : { mentionFlags: value.mention_flags as 0 | 1 | 2 | null }),
     })
 }
 
@@ -161,6 +250,57 @@ export function memberSelf(guildId: string): GuildRequest<GuildMember> | undefin
         cache: { selection: { kind: "members", guildId } },
         method: "GET",
         status: 200,
+        decode: (value) => decodeMember(value, guildId),
+    }
+}
+
+export function memberEditSelf(guildId: string, input: MemberProfileEdit): GuildRequest<GuildMember> | undefined {
+    if (
+        !identifier(guildId) ||
+        !record(input) ||
+        Object.keys(input).length === 0 ||
+        Object.keys(input).some(
+            (key) =>
+                ![
+                    "nickname",
+                    "avatar",
+                    "banner",
+                    "bio",
+                    "pronouns",
+                    "accentColor",
+                    "profileFlags",
+                    "mentionFlags",
+                ].includes(key),
+        ) ||
+        (input.nickname !== undefined && input.nickname !== null && !text(input.nickname, 1, 32)) ||
+        (input.avatar !== undefined && input.avatar !== null && !imageDataUri(input.avatar)) ||
+        (input.banner !== undefined && input.banner !== null && !imageDataUri(input.banner)) ||
+        (input.bio !== undefined && input.bio !== null && !text(input.bio, 1, 320)) ||
+        (input.pronouns !== undefined && input.pronouns !== null && !text(input.pronouns, 1, 40)) ||
+        (input.accentColor !== undefined && input.accentColor !== null && !color(input.accentColor)) ||
+        (input.profileFlags !== undefined && input.profileFlags !== null && !nonNegativeInt32(input.profileFlags)) ||
+        (input.mentionFlags !== undefined && input.mentionFlags !== null && !mentionPreference(input.mentionFlags))
+    )
+        return undefined
+    const json = JSON.stringify({
+        nick: input.nickname,
+        avatar: input.avatar,
+        banner: input.banner,
+        bio: input.bio,
+        pronouns: input.pronouns,
+        accent_color: input.accentColor,
+        profile_flags: input.profileFlags,
+        mention_flags: input.mentionFlags,
+    })
+    if (json === "{}" || Buffer.byteLength(json) > 4_194_304) return undefined
+    return {
+        guildId,
+        bucket: "guild:member:self:update",
+        cache: { selection: { kind: "members", guildId }, mutation: true },
+        path: `/guilds/${guildId}/members/@me`,
+        method: "PATCH",
+        status: 200,
+        json,
         decode: (value) => decodeMember(value, guildId),
     }
 }
@@ -224,9 +364,6 @@ export function memberRole(target: MemberReference, roleId: string, add: boolean
     }
 }
 
-const int32 = (value: unknown): value is number =>
-    typeof value === "number" && Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
-const nonNegativeInt32 = (value: unknown): value is number => int32(value) && value >= 0
 const permission = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= 18_446_744_073_709_551_615n
 

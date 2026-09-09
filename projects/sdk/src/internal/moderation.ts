@@ -7,7 +7,7 @@ const integer = (value: unknown, min: number, max: number): value is number =>
 const timestamp = (value: unknown): value is string =>
     typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && Number.isFinite(Date.parse(value))
 
-function settings(options?: ModerationOptions): { moderation: true; auditReason?: string } | undefined {
+export function auditSettings(options?: ModerationOptions): { moderation: true; auditReason?: string } | undefined {
     if (options !== undefined && !record(options)) return undefined
     const reason = options?.auditReason
     if (reason === undefined) return { moderation: true }
@@ -24,7 +24,7 @@ export function memberTimeout(
     clear = false,
 ): GuildRequest<GuildMember> | undefined {
     const request = memberFetch(target)
-    const extra = settings(options)
+    const extra = auditSettings(options)
     if (!request || !extra || (!clear && !integer(durationMs, 1, 31_536_000_000))) return undefined
     const { guildId, userId } = target
     return {
@@ -44,7 +44,7 @@ export function memberTimeout(
 
 export function memberKick(target: MemberReference, options?: ModerationOptions): GuildRequest<void> | undefined {
     const request = memberFetch(target)
-    const extra = settings(options)
+    const extra = auditSettings(options)
     if (!request || !extra) return undefined
     return {
         ...request,

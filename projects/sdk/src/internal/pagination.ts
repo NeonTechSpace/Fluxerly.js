@@ -6,6 +6,7 @@ import type { OperationOptions } from "#sdk/client"
 import type { ClientOwner } from "./client.js"
 import { encodeHistory, record, reference } from "./message.js"
 import { memberPage } from "./guilds.js"
+import { auditLogPage } from "./audit-logs.js"
 import { encodePinsQuery } from "./pins.js"
 import { encodeReactionEmoji, encodeReactionUsersQuery } from "./reactions.js"
 
@@ -123,7 +124,7 @@ export class Pagination<A, E> {
                     const advances =
                         this.operation === "iteratePins"
                             ? Date.parse(page.next) < Date.parse(this.#cursor)
-                            : this.operation === "iterateHistory"
+                            : this.operation === "iterateHistory" || this.operation === "auditLogs.iterate"
                               ? BigInt(page.next) < BigInt(this.#cursor)
                               : BigInt(page.next) > BigInt(this.#cursor)
                     if (!advances) this.#failure = new PaginationError(this.operation, "cursorStalled")
@@ -257,6 +258,45 @@ export const pinPagination = (
                     .fetchPins(channelId, cursorQuery("before", cursor, limit), settings.options)
                     .pipe(Effect.map((page) => ({ items: page.items, next: page.nextBefore }))),
         }
+    })
+
+export const auditLogPagination = (
+    owner: ClientOwner,
+    guildId: string,
+    query: unknown,
+    options?: MessageOperationOptions,
+) =>
+    Effect.suspend(() => {
+        if (
+            !record(query) ||
+            Object.keys(query).some(
+                (key) => !["maxItems", "maxPages", "pageSize", "before", "userId", "actionType"].includes(key),
+            ) ||
+            (query.userId === undefined && query.actionType === undefined)
+        )
+            return Effect.fail(new PaginationError("auditLogs.iterate", "input"))
+        const { userId, actionType, ...bounds } = query
+        const filters = {
+            ...(userId === undefined ? {} : { userId: userId as string }),
+            ...(actionType === undefined ? {} : { actionType: actionType as number }),
+        }
+        return prepare(owner, "auditLogs.iterate", bounds, options, "before", 50, 100, (settings) => {
+            const pageQuery = (cursor: string | undefined, limit: number) => ({
+                ...filters,
+                ...cursorQuery("before", cursor, limit),
+            })
+            if (!auditLogPage(guildId, pageQuery(settings.cursor, settings.pageSize))) return undefined
+            return {
+                load: (cursor, limit) =>
+                    owner
+                        .guild(
+                            "auditLogs.fetchPage",
+                            () => auditLogPage(guildId, pageQuery(cursor, limit)),
+                            settings.options,
+                        )
+                        .pipe(Effect.map((page) => ({ items: page.entries, next: page.entries.at(-1)?.id ?? null }))),
+            }
+        })
     })
 
 export const paginationStream = <A, E>(create: Effect.Effect<Pagination<A, E>, PaginationError>) =>

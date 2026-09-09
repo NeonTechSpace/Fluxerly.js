@@ -19,6 +19,14 @@ function limits(event: unknown, options: unknown): Limits | ConfigurationError {
     if (
         typeof event !== "string" ||
         ![
+            "userUpdate",
+            "directMessageCreate",
+            "directMessageUpdate",
+            "directMessageDelete",
+            "directMessageRecipientAdd",
+            "directMessageRecipientRemove",
+            "guildEmojisUpdate",
+            "guildStickersUpdate",
             "guildChannelCreate",
             "guildChannelUpdate",
             "guildChannelDelete",
@@ -212,6 +220,14 @@ export class EventBus {
         }
     }
     #sources: { [K in EventName]: Set<EventSource<EventMap[K]>> } = {
+        userUpdate: new Set(),
+        directMessageCreate: new Set(),
+        directMessageUpdate: new Set(),
+        directMessageDelete: new Set(),
+        directMessageRecipientAdd: new Set(),
+        directMessageRecipientRemove: new Set(),
+        guildEmojisUpdate: new Set(),
+        guildStickersUpdate: new Set(),
         guildChannelCreate: new Set(),
         guildChannelUpdate: new Set(),
         guildChannelDelete: new Set(),

@@ -23,6 +23,19 @@ export function decodeMessage(value: unknown): Message | undefined {
         return undefined
     const embeds = decodeEmbeds(value.embeds)
     const attachments = decodeAttachments(value.attachments)
+    const rawStickers = value.stickers ?? []
+    if (!Array.isArray(rawStickers)) return undefined
+    const stickers = []
+    for (const sticker of rawStickers) {
+        if (
+            !record(sticker) ||
+            !identifier(sticker.id) ||
+            typeof sticker.name !== "string" ||
+            typeof sticker.animated !== "boolean"
+        )
+            return undefined
+        stickers.push(Object.freeze({ id: sticker.id, name: sticker.name, animated: sticker.animated }))
+    }
     if (embeds === undefined || attachments === undefined) return undefined
     return Object.freeze({
         id: value.id,
@@ -32,6 +45,7 @@ export function decodeMessage(value: unknown): Message | undefined {
         ...(value.pinned === undefined ? {} : { pinned: value.pinned }),
         embeds,
         attachments,
+        stickers: Object.freeze(stickers),
         author: Object.freeze({ id: author.id, username: author.username, isBot: author.bot === true }),
     })
 }
@@ -82,18 +96,28 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
     if (!identifier(channelId) || !record(input)) return invalid()
     if (
         Object.keys(input).some(
-            (key) => !["content", "embeds", "attachments", "allowedMentions", "messageReference"].includes(key),
+            (key) =>
+                !["content", "embeds", "attachments", "stickerIds", "allowedMentions", "messageReference"].includes(
+                    key,
+                ),
         )
     )
         return invalid()
     const body = encodeBody(input)
     const attachments = encodeAttachments(input.attachments, false)
+    const stickerIds = input.stickerIds
+    if (
+        stickerIds !== undefined &&
+        (!Array.isArray(stickerIds) || stickerIds.length > 3 || !Array.from(stickerIds).every(identifier))
+    )
+        return invalid()
     if (
         !body ||
         !attachments ||
         (!(typeof input.content === "string" && input.content.length > 0) &&
             !body.embeds?.length &&
-            !attachments.files.length)
+            !attachments.files.length &&
+            !stickerIds?.length)
     )
         return invalid()
     const mentions = encodeAllowedMentions(input.allowedMentions)
@@ -104,6 +128,7 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
         files: attachments.files,
         json: JSON.stringify({
             ...body,
+            ...(stickerIds === undefined ? {} : { sticker_ids: [...stickerIds] }),
             ...(attachments.metadata === undefined ? {} : { attachments: attachments.metadata }),
             nonce,
             allowed_mentions: mentions,
@@ -164,7 +189,13 @@ export function replyInput(target: unknown, input: unknown): MessageInput | Mess
 }
 
 function encodeBody(input: Record<string, unknown>) {
-    if (input.content === undefined && input.embeds === undefined && input.attachments === undefined) return undefined
+    if (
+        input.content === undefined &&
+        input.embeds === undefined &&
+        input.attachments === undefined &&
+        input.stickerIds === undefined
+    )
+        return undefined
     if (input.content !== undefined && typeof input.content !== "string") return undefined
     const embeds = input.embeds === undefined ? undefined : encodeEmbeds(input.embeds)
     if (input.embeds !== undefined && embeds === undefined) return undefined

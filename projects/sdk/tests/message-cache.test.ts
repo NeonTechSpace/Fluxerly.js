@@ -81,6 +81,7 @@ const projection = (id: string, channelId: string, content = `Message ${id}`) =>
     content,
     embeds: [],
     attachments: [],
+    stickers: [],
     author: { id: "30", username: "fixture", isBot: false },
 })
 

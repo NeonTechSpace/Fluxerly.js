@@ -123,6 +123,9 @@ async function fixture() {
             const base = init.method === "POST" ? wire([]) : message
             message = {
                 ...base,
+                ...(body.sticker_ids === undefined
+                    ? {}
+                    : { stickers: body.sticker_ids.map((id: string) => ({ id, name: "Fixture", animated: false })) }),
                 ...(body.content === undefined ? {} : { content: body.content }),
                 ...(body.embeds === undefined
                     ? {}
@@ -234,31 +237,81 @@ async function driver(mode: (typeof modes)[number], maxBytes = 1_000_000) {
     }
 }
 
-test.each(modes)("%s sends every input field, replies, preserves omissions, replaces and clears", async (mode) => {
+test.each(modes)("%s sends stickers without text, replies and projects frozen sticker snapshots", async (mode) => {
     const server = await fixture()
     const api = await driver(mode)
-    const sent = await api.send({ embeds: [input] })
+    const input = { stickerIds: ["501", "502"] }
+    const sent = await api.send(input)
+    expect(server.requests[0]?.body.sticker_ids).toEqual(["501", "502"])
     expect(sent.content).toBe("")
-    expect(sent.embeds[0]?.author?.iconUrl).toBe(input.author?.iconUrl)
-    expect(server.requests[0]?.body).toMatchObject({
-        embeds: [inputWire],
-        allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
-    })
-    expect(server.requests[0]?.body).not.toHaveProperty("content")
-    await api.reply({ embeds: [input] })
-    expect(server.requests[1]?.body.message_reference).toEqual({ message_id: "10", channel_id: "20", type: 0 })
-    const preserved = await api.edit({ content: "Updated text" })
-    expect(preserved.embeds).toEqual(sent.embeds)
-    expect(server.requests[2]?.body).not.toHaveProperty("embeds")
-    const replacement = await api.edit({ embeds: [{ title: "Replacement" }] })
-    expect(replacement.content).toBe("Updated text")
-    expect(replacement.embeds).toEqual([{ type: "rich", title: "Replacement" }])
-    expect(server.requests[3]?.body).not.toHaveProperty("content")
-    expect((await api.edit({ content: "", embeds: [{ title: "Embed only" }] })).content).toBe("")
-    await expect(api.edit({ embeds: [] })).rejects.toBeDefined()
-    expect((await api.edit({ content: "Plain text", embeds: [] })).embeds).toEqual([])
-    expect(server.requests.map((r) => r.method)).not.toContain("GET")
+    expect(sent.stickers.map((item) => item.id)).toEqual(["501", "502"])
+    expect(Object.isFrozen(sent.stickers)).toBe(true)
+    expect(sent.stickers.every(Object.isFrozen)).toBe(true)
+    await api.reply({ stickerIds: ["502"] })
+    expect(server.requests[1]?.body.message_reference.message_id).toBe("10")
+    expect((await api.history())[0]?.stickers).toEqual([{ id: "502", name: "Fixture", animated: false }])
+    expect((await api.get())?.stickers).toEqual([{ id: "502", name: "Fixture", animated: false }])
+    expect((await api.edit({ content: "Caption" })).stickers).toEqual([{ id: "502", name: "Fixture", animated: false }])
+    const before = server.requests.length
+    for (const stickerIds of [[], null, Array(1), ["../501"], [501], ["1", "2", "3", "4"]])
+        await expect(api.send({ stickerIds } as MessageInput)).rejects.toBeDefined()
+    await expect(api.edit({ content: "No replacement", stickerIds: ["501"] } as EditMessageInput)).rejects.toBeDefined()
+    expect(server.requests).toHaveLength(before)
+    for (const stickers of [null, undefined, []]) {
+        server.set({ ...wire(), stickers })
+        expect((await api.fetch()).stickers).toEqual([])
+    }
+    for (const stickers of [{}, [null], [{ id: "501", name: "x" }], [{ id: "501", name: 3, animated: false }]]) {
+        server.set({ ...wire(), stickers })
+        await expect(api.fetch()).rejects.toBeDefined()
+    }
 })
+
+test.each(modes)("%s receives sticker-only gateway changes without retaining extra fields", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    const updates: Message[] = []
+    await api.updates((message) => updates.push(message))
+    await api.connect()
+    await api.fetch()
+    server.set({
+        ...wire([responseEmbed]),
+        stickers: [{ id: "501", name: "Sticker", animated: true, private: "excluded" }],
+    })
+    server.deliver("MESSAGE_UPDATE")
+    await vi.waitFor(() => expect(updates).toHaveLength(1))
+    expect(updates[0]?.stickers).toEqual([{ id: "501", name: "Sticker", animated: true }])
+    expect((await api.get())?.stickers).toEqual(updates[0]?.stickers)
+})
+
+test.each(modes)(
+    "%s sends every embed input field, replies, preserves omissions, replaces and clears",
+    async (mode) => {
+        const server = await fixture()
+        const api = await driver(mode)
+        const sent = await api.send({ embeds: [input] })
+        expect(sent.content).toBe("")
+        expect(sent.embeds[0]?.author?.iconUrl).toBe(input.author?.iconUrl)
+        expect(server.requests[0]?.body).toMatchObject({
+            embeds: [inputWire],
+            allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+        })
+        expect(server.requests[0]?.body).not.toHaveProperty("content")
+        await api.reply({ embeds: [input] })
+        expect(server.requests[1]?.body.message_reference).toEqual({ message_id: "10", channel_id: "20", type: 0 })
+        const preserved = await api.edit({ content: "Updated text" })
+        expect(preserved.embeds).toEqual(sent.embeds)
+        expect(server.requests[2]?.body).not.toHaveProperty("embeds")
+        const replacement = await api.edit({ embeds: [{ title: "Replacement" }] })
+        expect(replacement.content).toBe("Updated text")
+        expect(replacement.embeds).toEqual([{ type: "rich", title: "Replacement" }])
+        expect(server.requests[3]?.body).not.toHaveProperty("content")
+        expect((await api.edit({ content: "", embeds: [{ title: "Embed only" }] })).content).toBe("")
+        await expect(api.edit({ embeds: [] })).rejects.toBeDefined()
+        expect((await api.edit({ content: "Plain text", embeds: [] })).embeds).toEqual([])
+        expect(server.requests.map((r) => r.method)).not.toContain("GET")
+    },
+)
 
 test.each(modes)(
     "%s projects received-only metadata through fetch/history/cache and freezes every nested object",
@@ -354,7 +407,7 @@ test.each(modes)("%s rejects invalid input before dispatch without exposing priv
         { fields: Array.from({ length: 26 }, () => ({ name: "n", value: "v" })) },
     ]
     for (const embed of invalid) {
-        const body = { embeds: [{ description: "private-fixture-sentinel", ...embed }] } as MessageInput
+        const body = { embeds: [{ description: "private-fixture-sentinel", ...embed }] } as { embeds: EmbedInput[] }
         for (const operation of [() => api.send(body), () => api.reply(body), () => api.edit(body)]) {
             const error = await operation().then(
                 () => undefined,

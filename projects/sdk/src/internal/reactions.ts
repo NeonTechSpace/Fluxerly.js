@@ -58,7 +58,11 @@ const name = (value: unknown): value is string =>
 
 export function encodeReactionEmoji(value: ReactionEmojiInput): string | undefined {
     if (typeof value === "string") return name(value) && !/[%/:<>]/.test(value) ? encodeURIComponent(value) : undefined
-    if (!record(value) || Object.keys(value).some((key) => key !== "name" && key !== "id")) return undefined
+    if (!record(value)) return undefined
+    const snapshot =
+        "guildId" in value && "animated" in value && identifier(value.guildId) && typeof value.animated === "boolean"
+    if (Object.keys(value).some((key) => !["name", "id", ...(snapshot ? ["guildId", "animated"] : [])].includes(key)))
+        return undefined
     return typeof value.name === "string" && /^[A-Za-z0-9_]{1,32}$/.test(value.name) && identifier(value.id)
         ? encodeURIComponent(`${value.name}:${value.id}`)
         : undefined

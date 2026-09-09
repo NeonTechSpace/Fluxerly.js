@@ -36,6 +36,14 @@ export interface ClientOptions {
     readonly token: string
     /** Optional resource retention, copied and validated at creation. Omission retains no resource snapshots */
     readonly cache?: {
+        /** Public account snapshots from explicit reads and complete user events, never partial message authors.
+         * Concurrent reads use latest-admitted retention. Gateway gaps and shutdown release snapshots
+         */
+        readonly users?: boolean | ResourceCacheSettings
+        /** Private conversations from explicit reads and complete channel events, without initial enumeration.
+         * Mutations and recipient changes clear private-channel retention; gaps and shutdown release snapshots
+         */
+        readonly directMessages?: boolean | ResourceCacheSettings
         /** Guild identity snapshots from explicit reads and guild create/update events, never nested member/role preload.
          * Guild removal/unavailability clears this guild's resource entries, including channels
          */
@@ -50,6 +58,13 @@ export interface ClientOptions {
          * Full list reads remove absent roles only without overlapping observations. Partial bulk events replace only supplied roles
          */
         readonly roles?: boolean | ResourceCacheSettings
+        /** Opt-in bounded emoji metadata retention, disabled by default. Never retains image bytes or creator accounts.
+         * REST reads/writes populate observations; guild expression events invalidate rather than promise a complete list.
+         * Uses ResourceCacheSettings budgets, expiry and LRU behavior. Gaps and shutdown clear observations
+         */
+        readonly emojis?: boolean | ResourceCacheSettings
+        /** Opt-in sticker metadata retention with the same ownership, bounds and invalidation rules as emojis */
+        readonly stickers?: boolean | ResourceCacheSettings
         /** Guild channel snapshots from explicit reads and channel create/update events, with no initial enumeration.
          * Dispatched channel mutations conservatively clear the entire channel cache, including pending reads.
          * Bulk ordering events evict the guild rather than retaining potentially unfinished permission copies.

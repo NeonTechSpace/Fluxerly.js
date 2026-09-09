@@ -20,7 +20,20 @@ function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationE
     if (value === undefined) return undefined
     if (
         !record(value) ||
-        Object.keys(value).some((key) => !["messages", "guilds", "members", "roles", "channels"].includes(key))
+        Object.keys(value).some(
+            (key) =>
+                ![
+                    "messages",
+                    "guilds",
+                    "members",
+                    "roles",
+                    "channels",
+                    "users",
+                    "directMessages",
+                    "emojis",
+                    "stickers",
+                ].includes(key),
+        )
     )
         return new ConfigurationError("cache", "Cache settings must contain only supported resource settings")
     const messages = value.messages
@@ -53,12 +66,25 @@ function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationE
     }
 }
 
-type ResourceSettings = ResourceConfiguration & { channels?: Required<ResourceCacheSettings> }
+type ResourceSettings = ResourceConfiguration & {
+    channels?: Required<ResourceCacheSettings>
+    users?: Required<ResourceCacheSettings>
+    directMessages?: Required<ResourceCacheSettings>
+}
 
 function resourceConfiguration(value: unknown): ResourceSettings | ConfigurationError {
     const result: ResourceSettings = {}
     if (!record(value)) return result
-    for (const kind of ["guilds", "members", "roles", "channels"] as const) {
+    for (const kind of [
+        "guilds",
+        "members",
+        "roles",
+        "channels",
+        "users",
+        "directMessages",
+        "emojis",
+        "stickers",
+    ] as const) {
         const input = value[kind]
         if (input === undefined || input === false) continue
         if (input !== true && !record(input))
@@ -89,6 +115,7 @@ export interface Configuration {
     readonly cache: CacheConfiguration | undefined
     readonly resourceCache: ResourceConfiguration
     readonly channelCache: Required<ResourceCacheSettings> | undefined
+    readonly userCache: Pick<ResourceSettings, "users" | "directMessages">
 }
 
 export function validateConfiguration(
@@ -148,7 +175,7 @@ export function validateConfiguration(
         if (cache instanceof ConfigurationError) return Effect.fail(cache)
         const resourceCache = resourceConfiguration("cache" in options ? options.cache : undefined)
         if (resourceCache instanceof ConfigurationError) return Effect.fail(resourceCache)
-        const { channels: channelCache, ...guildResourceCache } = resourceCache
+        const { channels: channelCache, users, directMessages, ...guildResourceCache } = resourceCache
         const logging = loggingConfiguration("logging" in options ? options.logging : undefined, native)
         if (logging instanceof ConfigurationError) return Effect.fail(logging)
         return Effect.succeed({
@@ -157,6 +184,7 @@ export function validateConfiguration(
             cache,
             resourceCache: guildResourceCache,
             channelCache,
+            userCache: { ...(users ? { users } : {}), ...(directMessages ? { directMessages } : {}) },
             token: Redacted.make(token),
             startupTimeoutMs: timeout ?? 30_000,
             maxStartupAttempts: attempts ?? 3,

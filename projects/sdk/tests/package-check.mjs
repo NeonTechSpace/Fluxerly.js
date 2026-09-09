@@ -86,6 +86,12 @@ try {
             "guilds",
             "channels",
             "webhooks",
+            "users",
+            "presence",
+            "expressions",
+            "invites",
+            "audit-logs",
+            "discovery",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -131,6 +137,17 @@ try {
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
         const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
+        const userExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) (?:notifyUserExample|botProfileExample)/.test(example))
+        assert.equal(userExamples.length, 2)
+        for (const [index, example] of userExamples.entries())
+            writeFileSync(join(consumer, `user-example-${index}.ts`), example)
         const webhookExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]
@@ -273,6 +290,27 @@ try {
         assert.equal(loggingExamples.length, 1)
         writeFileSync(join(consumer, "logging-example.ts"), loggingExamples[0])
         const embedSource = readFileSync(join(sdk, "src/embeds.ts"), "utf8")
+        for (const entry of ["expressions", "messages", "invites", "audit-logs", "guilds", "events", "discovery"]) {
+            const source = readFileSync(join(sdk, `src/${entry}.ts`), "utf8")
+            const examples = [...source.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+                .map((match) =>
+                    match[1]
+                        .split(/\r?\n/)
+                        .map((line) => line.replace(/^\s*\* ?/, ""))
+                        .join("\n"),
+                )
+                .filter((example) =>
+                    /function (expression|expressionEvents|sticker|invite|audit|guildSettings|discovery)Example/.test(
+                        example,
+                    ),
+                )
+            assert.equal(examples.length, 1)
+            const example =
+                kind === "default"
+                    ? examples[0]
+                    : examples[0].replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"')
+            writeFileSync(join(consumer, `${entry}-example.ts`), example)
+        }
         const embedExamples = [...embedSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)].map((match) =>
             match[1]
                 .split(/\r?\n/)

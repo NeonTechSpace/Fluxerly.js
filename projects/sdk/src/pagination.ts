@@ -7,7 +7,7 @@ export interface PaginationQuery {
     readonly maxItems: number
     /** Maximum items requested per page, reduced to the remaining item allowance.
      * Defaults/ranges match the underlying endpoint: History 50/1–100, members 100/1–1000,
-     * reaction users 25/1–100 and pins 50/1–50
+     * reaction users 25/1–100, pins 50/1–50 and audit logs 50/1–100
      */
     readonly pageSize?: number
     /** Maximum logical page requests, a positive safe integer, default 100.
@@ -39,7 +39,8 @@ export interface PinIterationQuery extends PaginationQuery {
 }
 
 /** Traversal identified by a pagination failure or a default SDK defect */
-export type PaginationOperation = "iterateHistory" | "members.iterate" | "iterateReactionUsers" | "iteratePins"
+export type PaginationOperation =
+    "iterateHistory" | "members.iterate" | "iterateReactionUsers" | "iteratePins" | "auditLogs.iterate"
 
 /** Local traversal failure without identifiers, response bodies or partial results.
  * Items already delivered remain caller-owned. Remote failures retain their underlying page-operation error

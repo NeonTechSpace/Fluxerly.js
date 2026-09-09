@@ -1,11 +1,22 @@
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Queue, Random, Redacted, Scope, Stream } from "effect"
 import type { ConnectionState } from "#sdk/client"
 import type { CachePolicyErrorReport } from "#sdk/cache"
-import { MessageOperationError } from "#sdk/message-errors"
+import { MessageError, MessageOperationError, type SendError } from "#sdk/message-errors"
 import { identifier, record, reference } from "./message.js"
 import { MessageCache } from "./cache.js"
 import { GuildCache, type ResourceKind, type Resources } from "./guild-cache.js"
 import { ChannelCache } from "./channel-cache.js"
+import { UserCache, type UserResources } from "./user-cache.js"
+import { PresenceOwner } from "./presence.js"
+import { PresenceError, type PresenceInput, type PresenceFailure } from "#sdk/presence"
+import {
+    UserOperationError,
+    type UserOperation,
+    type UserOperationOptions,
+    type User,
+    type DirectMessageChannel,
+} from "#sdk/users"
+import { directMessageFetch, type UserRequest } from "./users.js"
 import {
     ChannelOperationError,
     type ChannelOperation,
@@ -55,6 +66,14 @@ import type {
 } from "#sdk/messages"
 
 export class ClientOwner {
+    readonly presence = new PresenceOwner()
+
+    setPresence(input: PresenceInput) {
+        return Effect.suspend((): Effect.Effect<void, PresenceFailure> => {
+            if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
+            return this.presence.set(input) ? Effect.void : Effect.fail(new PresenceError())
+        })
+    }
     #messageCollectors = new Set<MessageCollector>()
     trackMessageCollector(collector: MessageCollector) {
         this.#messageCollectors.add(collector)
@@ -71,6 +90,7 @@ export class ClientOwner {
     readonly cache: MessageCache | undefined
     readonly resources: GuildCache | undefined
     readonly channelCache: ChannelCache | undefined
+    readonly userCache: UserCache
     #configuration: Configuration | undefined
     #state: ConnectionState = "Disconnected"
     #latency: number | null = null
@@ -98,7 +118,14 @@ export class ClientOwner {
             ? new GuildCache(configuration.resourceCache, now)
             : undefined
         this.channelCache = configuration.channelCache ? new ChannelCache(configuration.channelCache, now) : undefined
-        this.rest = new RestOwner(this.cache, configuration.uploadMaxBytes, this.resources, this.channelCache)
+        this.userCache = new UserCache(configuration.userCache, now)
+        this.rest = new RestOwner(
+            this.cache,
+            configuration.uploadMaxBytes,
+            this.resources,
+            this.channelCache,
+            this.userCache,
+        )
     }
     get state(): ConnectionState {
         return this.#state
@@ -114,6 +141,9 @@ export class ClientOwner {
         if (state === "Recovering") this.resources?.gap()
         if (state === "Closing" || state === "Closed") this.resources?.close()
         if (state === "Recovering") this.channelCache?.gap()
+        if (state === "Recovering") this.userCache.gap()
+        if (state === "Closing" || state === "Closed") this.userCache.close()
+        if (state === "Closing" || state === "Closed") this.presence.close()
         if (state === "Closing" || state === "Closed") this.channelCache?.close()
         this.#state = state
         if (state !== "Connected") this.#latency = null
@@ -153,6 +183,76 @@ export class ClientOwner {
         this.#configuration = undefined
         this.#session = { id: undefined, sequence: null }
         this.#setState("Closed")
+    }
+
+    user<A>(operation: UserOperation, build: () => UserRequest<A> | undefined, options?: UserOperationOptions) {
+        return Effect.suspend(() => {
+            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
+                return Effect.fail(new ClientClosedError())
+            const request = build()
+            if (!request) return Effect.fail(new UserOperationError(operation, "input", "notDispatched"))
+            const owner = this
+            const token = this.#configuration.token
+            return Effect.gen(function* () {
+                const timeout = options?.timeoutMs ?? 30_000
+                if (
+                    (options !== undefined &&
+                        (!record(options) ||
+                            Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))) ||
+                    !Number.isSafeInteger(timeout) ||
+                    timeout <= 0 ||
+                    timeout > 2_147_483_647
+                )
+                    return yield* Effect.fail(new UserOperationError(operation, "input", "notDispatched"))
+                const deadline = performance.now() + timeout
+                if (request.verifyType) {
+                    const channel = yield* owner.rest.user(
+                        token,
+                        operation,
+                        () => directMessageFetch(request.id!),
+                        options,
+                    )
+                    if (request.verifyType === "group" && channel.type !== "group")
+                        return yield* Effect.fail(new UserOperationError(operation, "input", "notDispatched"))
+                }
+                const remaining = Math.floor(deadline - performance.now())
+                if (remaining <= 0)
+                    return yield* Effect.fail(new UserOperationError(operation, "timeout", "notDispatched"))
+                const generation = owner.userCache.begin(request.resource, request.method !== "GET")
+                const value = yield* owner.rest
+                    .user(token, operation, () => request, { timeoutMs: remaining })
+                    .pipe(
+                        Effect.onExit((exit) =>
+                            Effect.sync(() => {
+                                if (exit._tag === "Failure") {
+                                    if (request.method !== "GET") owner.userCache.invalidate(request.resource)
+                                    else owner.userCache.failed(request.resource, generation)
+                                }
+                                if (request.method === "DELETE" && request.id) owner.cache?.deleteChannel(request.id)
+                            }),
+                        ),
+                    )
+                if (value !== undefined)
+                    owner.userCache.complete(
+                        request.resource,
+                        generation,
+                        (Array.isArray(value) ? value : [value]) as readonly (User | DirectMessageChannel)[],
+                        request.replace,
+                    )
+                return value
+            })
+        })
+    }
+
+    getUserResource<K extends "users" | "directMessages">(kind: K, id: string) {
+        return Effect.suspend(
+            (): Effect.Effect<UserResources[K] | undefined, ClientClosedError | UserOperationError> => {
+                if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
+                    return Effect.fail(new ClientClosedError())
+                if (!identifier(id)) return Effect.fail(new UserOperationError(`${kind}.get`, "input", "notDispatched"))
+                return Effect.succeed(this.userCache.get(kind, id))
+            },
+        )
     }
 
     webhook<A>(
@@ -226,6 +326,18 @@ export class ClientOwner {
                   )
                 : Effect.fail(new ClientClosedError()),
         )
+    }
+
+    sendDirectMessage(userId: string, input: MessageInput, options?: SendOptions) {
+        return Effect.suspend((): Effect.Effect<Message, SendError> => {
+            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
+                return Effect.fail(new ClientClosedError())
+            if (!identifier(userId) || !record(input) || input.messageReference !== undefined)
+                return Effect.fail(new MessageError("input", "notSent"))
+            return (this.reports?.start() ?? Effect.void).pipe(
+                Effect.andThen(this.rest.send(this.#configuration.token, userId, input, options, userId)),
+            )
+        })
     }
 
     fetchReactionUsers(
@@ -438,6 +550,26 @@ export class ClientOwner {
                         (event, message, bytes) => {
                             owner.resources?.event(event, message)
                             owner.channelCache?.event(event, message)
+                            if (event === "userUpdate" && "discriminator" in message) {
+                                const generation = owner.userCache.begin("users", false)
+                                owner.userCache.complete("users", generation, [message])
+                                owner.userCache.invalidate("directMessages")
+                            }
+                            if (
+                                (event === "directMessageCreate" || event === "directMessageUpdate") &&
+                                "recipients" in message
+                            ) {
+                                const generation = owner.userCache.begin("directMessages", false)
+                                owner.userCache.complete("directMessages", generation, [message])
+                            }
+                            if (
+                                event === "directMessageRecipientAdd" ||
+                                event === "directMessageRecipientRemove" ||
+                                event === "directMessageDelete"
+                            )
+                                owner.userCache.invalidate("directMessages")
+                            if (event === "directMessageDelete" && "id" in message)
+                                owner.cache?.deleteChannel(message.id)
                             if (event === "guildChannelDelete" && "id" in message)
                                 owner.cache?.deleteChannel(message.id)
                             if ("author" in message) owner.cache?.observe(message)
@@ -450,9 +582,11 @@ export class ClientOwner {
                         owner.resources || owner.channelCache
                             ? (event, value) => {
                                   owner.resources?.guildEvent(event, value)
-                                  owner.channelCache?.guildEvent(event, value)
+                                  if (event !== "GUILD_EMOJIS_UPDATE" && event !== "GUILD_STICKERS_UPDATE")
+                                      owner.channelCache?.guildEvent(event, value)
                               }
                             : undefined,
+                        owner.presence,
                     )
                 })
                 const result = yield* Effect.exit(attempt)

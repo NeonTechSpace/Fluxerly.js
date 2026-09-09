@@ -1,3 +1,132 @@
+import type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
+import type {
+    DiscoveryApplication,
+    DiscoveryApplicationInput,
+    DiscoveryApplicationEdit,
+    DiscoveryCategory,
+    DiscoveryStatus,
+} from "./discovery.js"
+export type {
+    DiscoveryApplication,
+    DiscoveryApplicationInput,
+    DiscoveryApplicationEdit,
+    DiscoveryCategory,
+    DiscoveryStatus,
+} from "./discovery.js"
+export { DiscoveryCategories } from "./discovery.js"
+import { discoveryStatus, discoveryCategories, discoveryWrite, discoveryWithdraw } from "#sdk/internal/guild-discovery"
+export type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
+import { auditLogPage } from "#sdk/internal/audit-logs"
+export type { GuildEmojisUpdate, GuildStickersUpdate } from "./events.js"
+export { AuditLogActions } from "./audit-logs.js"
+export type {
+    AuditLogActionType,
+    AuditLogPermissionsDiff,
+    AuditLogChangeValue,
+    AuditLogChange,
+    AuditLogOptions,
+    AuditLogWebhook,
+} from "./audit-logs.js"
+import type { GuildEdit, GuildVanityUrl, GuildVanityUrlUsage } from "./guilds.js"
+export type { GuildEdit, GuildVanityUrl, GuildVanityUrlUsage } from "./guilds.js"
+import { vanityUrlFetch, vanityUrlEdit } from "#sdk/internal/vanity-url"
+export {
+    GuildSystemChannelFlags,
+    GuildDefaultMessageNotifications,
+    GuildVerificationLevels,
+    GuildExplicitContentFilters,
+    GuildContentWarningLevels,
+    GuildSplashCardAlignments,
+    GuildFeatureToggles,
+} from "./guilds.js"
+export type {
+    GuildSystemChannelFlag,
+    GuildDefaultMessageNotification,
+    GuildVerificationLevel,
+    GuildExplicitContentFilter,
+    GuildContentWarningLevel,
+    GuildSplashCardAlignment,
+    GuildFeatureToggle,
+} from "./guilds.js"
+import { guildEdit } from "#sdk/internal/guild-settings"
+import type { Invite, InviteCreate, InviteMetadata } from "./invites.js"
+export type { Invite, InviteCreate, InviteMetadata } from "./invites.js"
+import { inviteFetch, inviteCreate, inviteList, inviteDelete } from "#sdk/internal/invites"
+import type {
+    GuildEmoji,
+    GuildSticker,
+    ExpressionReference,
+    ExpressionMetadata,
+    EmojiCreate,
+    EmojiEdit,
+    StickerCreate,
+    StickerEdit,
+    ExpressionBatch,
+    DefaultExpressionDeleteOptions,
+} from "./expressions.js"
+export type {
+    GuildEmoji,
+    GuildSticker,
+    ExpressionReference,
+    ExpressionMetadata,
+    EmojiCreate,
+    EmojiEdit,
+    StickerCreate,
+    StickerEdit,
+    ExpressionBatch,
+    ExpressionDeleteOptions,
+    DefaultExpressionDeleteOptions,
+} from "./expressions.js"
+import {
+    expressionList,
+    expressionMetadata,
+    expressionCreate,
+    expressionBatch,
+    expressionClone,
+    expressionEdit,
+    expressionDelete,
+} from "#sdk/internal/expressions"
+
+import { PresenceError, type PresenceInput, type PresenceFailure } from "./presence.js"
+export { PresenceError } from "./presence.js"
+export type {
+    PresenceInput,
+    PresenceStatus,
+    CustomStatusInput,
+    CustomStatusEmoji,
+    PresenceFailure,
+} from "./presence.js"
+import type { MemberProfileEdit } from "./guilds.js"
+export type { MemberProfileEdit, MemberMentionPreference } from "./guilds.js"
+export { GuildMemberProfileFlags, MemberMentionPreferences } from "./guilds.js"
+import { memberEditSelf } from "#sdk/internal/guilds"
+import {
+    UserOperationError,
+    type User,
+    type DirectMessageChannel,
+    type DirectMessageGroupEdit,
+    type UserOperationFailure,
+    type DefaultUserOperationOptions,
+} from "./users.js"
+export { UserOperationError } from "./users.js"
+export type {
+    User,
+    DirectMessageChannel,
+    DirectMessageGroupEdit,
+    DirectMessageRecipientChange,
+    UserOperation,
+    UserOperationFailure,
+    UserOperationOptions,
+    DefaultUserOperationOptions,
+} from "./users.js"
+import {
+    userFetch,
+    directMessageOpen,
+    directMessageFetch,
+    directMessageList,
+    directMessageEdit,
+    directMessageClose,
+} from "#sdk/internal/users"
 import {
     type WebhookOperationError,
     type Webhook,
@@ -55,6 +184,7 @@ export type {
 import {
     historyPagination,
     memberPagination,
+    auditLogPagination,
     reactionUserPagination,
     pinPagination,
     iterationOptions,
@@ -238,6 +368,7 @@ export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationE
 export type { EventReadError, RegistrationError, SendError, MessageOperationFailure } from "./message-errors.js"
 export type {
     Message,
+    MessageSticker,
     MessageHistoryQuery,
     MessageDeletion,
     MessageBulkDeletion,
@@ -699,7 +830,7 @@ export interface Messages {
      */
     get(message: MessageReference): Result<Message | undefined, MessageOperationFailure>
     /**
-     * Send text, embeds and/or files and return the decoded message after HTTP, not gateway delivery or recipient acknowledgement
+     * Send text, embeds, files and/or stickers and return the decoded message after HTTP, not gateway delivery or recipient acknowledgement
      *
      * File bytes are snapshotted on invocation, up to 50 MiB per file and the separate uploads.maxBytes client budget.
      * Full upload admission fails with busy before copying. No path access or downloads; servers may impose lower limits.
@@ -771,6 +902,7 @@ export interface Messages {
     ): ResultAsync<readonly Message[], MessageOperationFailure | CancelledError>
     /**
      * Replace text/embeds/files and return the frozen updated snapshot after the API response, without waiting for a gateway event.
+     * Existing stickers are preserved; sticker replacement is not supported by this edit operation.
      * Supplied values replace those fields; omitted values are not sent. No hidden fetch or cache merge
      *
      * List retained attachment IDs alongside new uploads; unknown IDs may be ignored by Fluxer
@@ -865,6 +997,255 @@ export {
 } from "./errors.js"
 export type { ConnectError, ConnectionFailure, DefectReason } from "./errors.js"
 
+/** Remote audit observations requiring ViewAuditLog, without SDK retention or gateway startup.
+ * Eligible reads retry transient failures at most twice under the shared guild REST policy.
+ * Permission, malformed-response and input failures are typed GuildOperationError values.
+ * Page calls start immediately; abort returns CancelledError after cleanup, defects reject with SdkDefect.
+ * Closing clients fail with ClientClosedError. Audit records can change independently; this is not an archival snapshot
+ */
+export interface AuditLogs {
+    /** Read one filtered page, including referenced users and token-free webhook metadata.
+     * Query cursors and filters are defined by AuditLogQuery. Returned data is caller-owned and frozen
+     */
+    fetchPage(
+        guildId: string,
+        query: AuditLogQuery,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<AuditLogPage, GuildOperationFailure | CancelledError>
+    /** Traverse filtered records newest-to-oldest on demand, buffering one page and never prefetching.
+     * maxItems is required; pageSize defaults to 50 (1–100), maxPages to 100. timeoutMs applies to each page.
+     * Stops at maxItems or an empty page, not merely a short page. Concurrent changes can prevent complete enumeration.
+     * Invalid traversal input, a stalled cursor or reaching the page budget fails with PaginationError.
+     * Remote failures retain auditLogs.fetchPage's typed errors. Already-delivered entries remain caller-owned.
+     * Each consumption is independent and lazy; breaking the loop releases its buffered page, abort awaits request cleanup.
+     * Closing/Closed releases the page and fails the next pull. Use fetchPage when referenced-user/webhook snapshots are needed
+     */
+    iterate(
+        guildId: string,
+        query: AuditLogIterationQuery,
+        options?: DefaultGuildOperationOptions,
+    ): AsyncIterable<Result<AuditLogEntry, GuildOperationFailure | PaginationError | CancelledError>>
+}
+
+/** Remote invite operations, without invite retention or gateway readiness requirements.
+ * Reads retry eligible transient failures at most twice; writes retry only confirmed 429 rejections.
+ * Fluxer checks destination visibility, invite permissions and capacity. Failures use GuildOperationError.
+ * Calls start immediately; abort returns CancelledError after cleanup and defects reject with SdkDefect.
+ * Closing clients fail with ClientClosedError. Lost responses can leave mutations applied; do not replay them blindly
+ */
+export interface Invites {
+    /** Inspect a code without consuming it or joining its destination. Supply the code, not a URL.
+     * Expired, revoked or inaccessible codes fail remotely. The provider can canonicalize vanity-code casing
+     */
+    fetch(
+        code: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<Invite, GuildOperationFailure | CancelledError>
+    /** Create an invite to a channel the bot can access, including an existing group DM.
+     * Defaults to a new code, 86400 seconds, unlimited uses and non-temporary membership.
+     * Does not send the code, create a group or add members. Cancellation cannot revoke an already-created invite.
+     * An unknown create outcome requires listing the destination's invites and caller reconciliation
+     */
+    create(
+        channelId: string,
+        input?: InviteCreate,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<InviteMetadata, GuildOperationFailure | CancelledError>
+    /** Remote management list in provider order, subject to channel permissions; not a stable snapshot */
+    fetchChannel(
+        channelId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<readonly InviteMetadata[], GuildOperationFailure | CancelledError>
+    /** Remote guild management list, requiring ManageGuild and excluding the guild vanity invite */
+    fetchGuild(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<readonly InviteMetadata[], GuildOperationFailure | CancelledError>
+    /** Revoke a code after HTTP 204, subject to provider creator/management permissions.
+     * Does not remove existing members. A missing code is an error, not proof of a previous successful deletion
+     */
+    delete(code: string, options?: DefaultModerationOptions): ResultAsync<void, GuildOperationFailure | CancelledError>
+}
+
+/** Emojis share guild REST admission, deadlines and typed GuildOperationError failures.
+ * Reads retry eligible transient failures at most twice; writes retry only confirmed 429 rejections.
+ * Input, permission, 404 and malformed responses do not retry. Unknown outcomes may leave writes applied.
+ * Calls start immediately; abort returns CancelledError after cleanup, defects reject with SdkDefect.
+ * Closing clients fail with ClientClosedError. Snapshots are frozen and HTTP success is not gateway acknowledgement
+ */
+export interface Emojis {
+    /** Local metadata lookup, never HTTP. Disabled, absent, expired or conflicting entries return undefined.
+     * Decimal IDs are required; lookup updates LRU order but not expiry. Synchronous; defects throw SdkDefect
+     */
+    get(target: ExpressionReference): Result<GuildEmoji | undefined, GuildOperationFailure>
+    /** Remote full guild list in provider order, without pagination or an enduring completeness guarantee.
+     * Populates optional bounded metadata retention, excluding image bytes and creator accounts
+     */
+    fetchAll(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<readonly GuildEmoji[], GuildOperationFailure | CancelledError>
+    /** Remote minimal metadata by decimal ID without source-guild membership. Does not populate the cache */
+    fetchMetadata(
+        id: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<ExpressionMetadata, GuildOperationFailure | CancelledError>
+    /** Upload one expression. Fluxer enforces format, dimensions, permissions and capacity.
+     * Copies input at execution start, without implicit URL fetching or replay of uncertain writes
+     */
+    create(
+        guildId: string,
+        input: EmojiCreate,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError>
+    /** Submit 1–50 uploads in one batch, with separate successes and failures and no rollback.
+     * Duplicate names cannot map failures to input positions. No automatic chunking or replay.
+     * Unknown outcomes require fresh remote observations and caller reconciliation
+     */
+    createMany(
+        guildId: string,
+        input: readonly EmojiCreate[],
+        options?: DefaultModerationOptions,
+    ): ResultAsync<ExpressionBatch<GuildEmoji>, GuildOperationFailure | CancelledError>
+    /** Server-side copy by source ID, preserving source metadata. Fluxer enforces source cloning restrictions */
+    clone(
+        guildId: string,
+        sourceId: string,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError>
+    /** Rename without replacing the image or implicitly reading old metadata */
+    edit(
+        target: ExpressionReference,
+        input: EmojiEdit,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError>
+    /** Remove after HTTP 204, invalidating retained observations. A missing target is an error, not proof of prior deletion.
+     * Purging defaults false; explicit true also queues irreversible media removal subject to provider restrictions
+     */
+    delete(
+        target: ExpressionReference,
+        options?: DefaultExpressionDeleteOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+}
+
+/** Stickers share guild REST admission, deadlines and typed GuildOperationError failures.
+ * Reads retry eligible transient failures at most twice; writes retry only confirmed 429 rejections.
+ * Input, permission, 404 and malformed responses do not retry. Unknown outcomes may leave writes applied.
+ * Calls start immediately; abort returns CancelledError after cleanup, defects reject with SdkDefect.
+ * Closing clients fail with ClientClosedError. Snapshots are frozen and HTTP success is not gateway acknowledgement
+ */
+export interface Stickers {
+    /** Replace name, description and tags explicitly, without an implicit fetch or image replacement.
+     * A fetched sticker may be spread into the input. Its identity must match the target; unknown fields fail locally.
+     * Empty/null description clears it; [] clears tags. Uses this group's mutation, failure and cancellation rules
+     */
+    edit(
+        target: ExpressionReference,
+        input: StickerEdit,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError>
+    /** Local metadata lookup, never HTTP. Disabled, absent, expired or conflicting entries return undefined.
+     * Decimal IDs are required; lookup updates LRU order but not expiry. Synchronous; defects throw SdkDefect
+     */
+    get(target: ExpressionReference): Result<GuildSticker | undefined, GuildOperationFailure>
+    /** Remote full guild list in provider order, without pagination or an enduring completeness guarantee.
+     * Populates optional bounded metadata retention, excluding image bytes and creator accounts
+     */
+    fetchAll(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<readonly GuildSticker[], GuildOperationFailure | CancelledError>
+    /** Remote minimal metadata by decimal ID without source-guild membership. Does not populate the cache */
+    fetchMetadata(
+        id: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<ExpressionMetadata, GuildOperationFailure | CancelledError>
+    /** Upload one expression. Fluxer enforces format, dimensions, permissions and capacity.
+     * Copies input at execution start, without implicit URL fetching or replay of uncertain writes
+     */
+    create(
+        guildId: string,
+        input: StickerCreate,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError>
+    /** Submit 1–50 uploads in one batch, with separate successes and failures and no rollback.
+     * Duplicate names cannot map failures to input positions. No automatic chunking or replay.
+     * Unknown outcomes require fresh remote observations and caller reconciliation
+     */
+    createMany(
+        guildId: string,
+        input: readonly StickerCreate[],
+        options?: DefaultModerationOptions,
+    ): ResultAsync<ExpressionBatch<GuildSticker>, GuildOperationFailure | CancelledError>
+    /** Server-side copy by source ID, preserving source metadata. Fluxer enforces source cloning restrictions */
+    clone(
+        guildId: string,
+        sourceId: string,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError>
+    /** Remove after HTTP 204, invalidating retained observations. A missing target is an error, not proof of prior deletion.
+     * Purging defaults false; explicit true also queues irreversible media removal subject to provider restrictions
+     */
+    delete(
+        target: ExpressionReference,
+        options?: DefaultExpressionDeleteOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+}
+
+/** Public server-directory management through the shared guild REST owner, without a discovery cache.
+ * Operations start immediately and do not require gateway readiness. The default 30,000 ms total deadline includes waits.
+ * Reads retry transient transport and HTTP 500/502/503/504 failures at most twice. Writes retry only confirmed 429 rejections.
+ * Input, HTTP and malformed-response failures use GuildOperationError; closing clients use ClientClosedError.
+ * Abort waits for cleanup and returns CancelledError. Unexpected defects reject with SdkDefect.
+ * Application writes may publish or unpublish a listing, invalidate guild observations and cannot promise rollback.
+ * There is no hidden eligibility read, automatic resubmission, review approval or directory-joining operation
+ */
+export interface Discovery {
+    /** Remote eligibility and application state for a decimal guild ID, requiring ManageGuild.
+     * Returns eligible false when discovery is disabled or the member threshold is unmet, not a diagnosis distinguishing them.
+     * Eligibility can change before submission. Reviewed/removed applications include available reasons
+     */
+    fetchStatus(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<DiscoveryStatus, GuildOperationFailure | CancelledError>
+    /** Remote category IDs and provider labels in provider order, without a retained copy.
+     * Requires an authenticated client, not membership of a particular guild or ManageGuild
+     */
+    fetchCategories(
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<readonly DiscoveryCategory[], GuildOperationFailure | CancelledError>
+    /** Submit a guild application, requiring ManageGuild, enabled discovery and current provider eligibility.
+     * Pending/approved existing applications fail remotely. Eligible verified/partnered guilds can be approved immediately.
+     * Success is the stored application observation, not a guarantee of approval or search-index visibility.
+     * An unknown outcome may already have submitted or published the listing; inspect fetchStatus before deciding what to do
+     */
+    apply(
+        guildId: string,
+        input: DiscoveryApplicationInput,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<DiscoveryApplication, GuildOperationFailure | CancelledError>
+    /** Nonempty patch of a pending or approved application, requiring ManageGuild and enabled discovery.
+     * Omitted fields remain unchanged. Uses the input's documented tag normalization and replacement semantics.
+     * No hidden fetch/merge. Approved listing updates can become public, and search-index changes may lag or partially fail
+     */
+    edit(
+        guildId: string,
+        input: DiscoveryApplicationEdit,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<DiscoveryApplication, GuildOperationFailure | CancelledError>
+    /** Withdraw an application or remove an approved listing, requiring ManageGuild and enabled discovery.
+     * HTTP 204 returns no value. An absent application is a remote error, not an assumed successful no-op.
+     * Removes the provider record and may separately remove its discoverable feature/search entry.
+     * It does not restore the prior application, delete the guild or remove its members.
+     * Unknown outcomes require remote reconciliation and can need operator recovery rather than blind retries
+     */
+    withdraw(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+}
+
 /** Explicit guild reads, bans and optional local lookup, independent of gateway readiness.
  * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with message/member/role operations.
  * Total deadline defaults to 30,000 ms, including waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
@@ -874,6 +1255,42 @@ export type { ConnectError, ConnectionFailure, DefectReason } from "./errors.js"
  * Abort returns CancelledError after cleanup; closing clients use ClientClosedError and unexpected defects reject with SdkDefect
  */
 export interface Guilds {
+    /** Read a decimal guild's custom invite and use count, requiring ManageGuild.
+     * Always remote, without a vanity cache or gateway requirement. Null code/url means no custom invite.
+     * Starts immediately, using this group's read retries, deadline, cancellation and typed failure rules
+     */
+    fetchVanityUrl(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<GuildVanityUrlUsage, GuildOperationFailure | CancelledError>
+    /** Set or replace a guild's custom invite, or explicitly remove it with null.
+     * Code must already be lowercase, 2–32 ASCII letters/digits with single internal hyphens. No implicit normalization.
+     * Requires ManageGuild and, when setting a code, the server's VANITY_URL feature. Reserved/taken codes fail remotely
+     *
+     * Changing the code releases the old one and starts a new use count. Neither reclaiming it nor provider rollback is guaranteed.
+     * Returns only code/url after HTTP success, without a hidden read, joinability check or event acknowledgement.
+     * Starts immediately with the shared deadline and abort cleanup. Only confirmed 429 rejections may retry writes.
+     * Dispatched writes invalidate guild observations. Unknown outcomes require fetchVanityUrl and caller reconciliation,
+     * not blind replay; provider-side partial changes can require operator recovery.
+     * Uses this group's GuildOperationError, ClientClosedError, CancelledError and defect behavior
+     */
+    editVanityUrl(
+        guildId: string,
+        code: string | null,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildVanityUrl, GuildOperationFailure | CancelledError>
+    /** Patch bot-permitted server settings without a hidden read or merge; omitted fields remain unchanged.
+     * Requires ManageGuild. Fluxer owns feature restrictions and validation beyond GuildEdit's local checks.
+     * Dispatched mutations invalidate guild-cache observations even when the outcome is unknown.
+     * Starts immediately, using guild REST deadlines and abort cleanup.
+     * Success returns the server's observed configuration, not gateway acknowledgement or rollback guarantees.
+     * Uncertain writes must be reconciled with fetch rather than blindly replayed
+     */
+    edit(
+        guildId: string,
+        input: GuildEdit,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<Guild, GuildOperationFailure | CancelledError>
     /** Ban a decimal guild/user target, including a user who is not currently a member.
      * Requires BanMembers and provider hierarchy/MFA rules. Defaults to permanent with no message deletion
      *
@@ -1029,6 +1446,18 @@ export interface Channels {
  * Writes retry only confirmed 429 rejections, never uncertain outcomes. Cancellation cannot undo a dispatched write
  */
 export interface Members {
+    /** Edit this bot's server profile, not its global account or another member.
+     * Omitted fields remain unchanged and null clears an override. Fluxer enforces permissions and field-specific rate limits.
+     * Empty or unknown-key input fails locally.
+     * Avatar, banner, bio and accentColor may be silently ignored without the provider's per-guild-profile entitlement.
+     * The returned member omits bio and pronouns; success is not proof those fields were stored.
+     * Uncertain dispatched writes and interruption evict affected member retention; definite rejection preserves prior snapshots
+     */
+    editSelf(
+        guildId: string,
+        input: MemberProfileEdit,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
     /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts
      *
      * Requires ModerateMembers and provider hierarchy rules. The provider rejects self and administrator targets.
@@ -1321,12 +1750,28 @@ export interface WebhookClient {
  * Use run for a managed lifetime, or pair connect with waitForClose and shutdown
  */
 export interface Client extends ClientState {
+    /** Public server-directory management, not gateway service discovery or directory joining */
+    readonly discovery: Discovery
+    /** Process-local requested presence, restored after gateway reconnects and never stored across process restarts */
+    readonly presence: Presence
+    /** Public account reads and optional local lookup */
+    readonly users: Users
+    /** One-to-one and group conversations, composed with messages for content operations */
+    readonly directMessages: DirectMessages
     /** Bot-authenticated webhook management with token-free metadata */
     readonly webhooks: Webhooks
     /** Remote role management and explicitly enabled local role lookup */
     readonly roles: Roles
     /** Remote guild reads and ban management, with explicitly enabled local guild lookup */
     readonly guilds: Guilds
+    /** Remote invite inspection and management, without accepting invites or retaining codes */
+    readonly invites: Invites
+    /** Remote filtered audit pages and bounded traversal; no audit cache */
+    readonly auditLogs: AuditLogs
+    /** Custom emoji lifecycle and optional local metadata lookup */
+    readonly emojis: Emojis
+    /** Custom sticker lifecycle and optional local metadata lookup */
+    readonly stickers: Stickers
     /** Remote guild-channel reads, mutations and explicitly enabled local lookup */
     readonly channels: Channels
     /** Remote member reads, moderation and targeted role assignment */
@@ -1455,6 +1900,8 @@ const executeOperation = <
         | GuildOperationError
         | ChannelOperationError
         | WebhookOperationError
+        | UserOperationError
+        | PresenceError
         | PaginationError,
 >(
     effect: Effect.Effect<A, E>,
@@ -1567,6 +2014,8 @@ function fromExit<
         | GuildOperationError
         | ChannelOperationError
         | WebhookOperationError
+        | UserOperationError
+        | PresenceError
         | PaginationError,
 >(exit: Exit.Exit<A, E>, operation: Operation): Result<A, E | CancelledError> {
     if (Exit.isSuccess(exit)) return ok(exit.value)
@@ -1645,6 +2094,96 @@ export function createWebhookClient(options: WebhookClientOptions): Result<Webho
     )
 }
 
+/** One coalesced presence intent, retained in client memory until shutdown.
+ * Updates are spaced by at least four seconds per connection; later requests replace unsent ones.
+ * No provider acknowledgement or recipient-delivery guarantee is available
+ */
+export interface Presence {
+    /** Synchronously validate and freeze the latest requested status/custom status, including before connect.
+     * Omitted customStatus preserves this client's previous request; null clears it, and expired custom statuses are not restored.
+     * Success means local acceptance, not a completed network write. Shutdown releases the intent and pending timer
+     * @example
+     * ```ts
+     * import { MemberMentionPreferences, type Client } from "@neontechspace/fluxerly"
+     * export async function botProfileExample(client: Client, guildId: string) {
+     *     const presence = client.presence.set({ status: "online", customStatus: { text: "Ready", emoji: { name: "🌱" } } })
+     *     if (presence.isErr()) return presence
+     *     return client.members.editSelf(guildId, { nickname: "Support", mentionFlags: MemberMentionPreferences.PreferNoMention })
+     * }
+     * ```
+     * Unexpected defects throw SdkDefect
+     */
+    set(input: PresenceInput): Result<void, PresenceFailure>
+}
+
+/** Immediate ResultAsync operations with shared 30-second default deadlines and bounded read retries.
+ * Writes retry only confirmed rate-limit rejection, never an unknown outcome. No gateway connection is required.
+ * Abort returns CancelledError after cleanup; unexpected defects reject with SdkDefect
+ */
+export interface Users {
+    /** Local optional-cache lookup by decimal ID, without a request. May miss or be stale; closed clients fail */
+    get(id: string): Result<User | undefined, UserOperationFailure>
+    /** Fetch a public account snapshot remotely by decimal ID; unknown IDs fail with notFound */
+    fetch(id: string, options?: DefaultUserOperationOptions): ResultAsync<User, UserOperationFailure | CancelledError>
+    /** Fetch the authenticated bot remotely, stripping private account fields */
+    fetchSelf(options?: DefaultUserOperationOptions): ResultAsync<User, UserOperationFailure | CancelledError>
+}
+
+/** Immediate ResultAsync operations with shared 30-second default deadlines and bounded read retries.
+ * Writes retry only confirmed rate-limit rejection, never an unknown outcome. No gateway connection is required.
+ * Abort returns CancelledError after cleanup; unexpected defects reject with SdkDefect
+ */
+export interface DirectMessages {
+    /** Open/reopen a DM and send using one total deadline, with mentions disabled by default and files snapshotted before opening.
+     * MessageError(notSent) does not mean opening was undone. Unknown sends are never repeated automatically.
+     * No reply reference is accepted here; use messages.reply after obtaining a channel/message reference
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function notifyUserExample(client: Client, userId: string) {
+     *     const user = await client.users.fetch(userId)
+     *     if (user.isErr()) return user
+     *     return client.directMessages.send(user.value.id, { content: `Hello ${user.value.displayName ?? user.value.username}` })
+     * }
+     * ```
+     */
+    send(
+        userId: string,
+        input: ReplyInput,
+        options?: DefaultSendOptions,
+    ): ResultAsync<Message, SendError | CancelledError>
+    /** Local optional-cache lookup by decimal ID, without a request. May miss or be stale; closed clients fail */
+    get(id: string): Result<DirectMessageChannel | undefined, UserOperationFailure>
+    /** Open or reopen a one-to-one conversation. Privacy checks may prevent delivery even after opening succeeds */
+    open(
+        userId: string,
+        options?: DefaultUserOperationOptions,
+    ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError>
+    /** Fetch a private channel remotely. Guild channels are rejected as invalid responses */
+    fetch(
+        id: string,
+        options?: DefaultUserOperationOptions,
+    ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError>
+    /** Read open one-to-one and group conversations remotely, excluding personal notes. This is not an atomic snapshot or a complete message history */
+    fetchAll(
+        options?: DefaultUserOperationOptions,
+    ): ResultAsync<readonly DirectMessageChannel[], UserOperationFailure | CancelledError>
+    /** Edit explicit group settings. Fluxer enforces member/owner permissions; failure does not guarantee rollback */
+    editGroup(
+        id: string,
+        input: DirectMessageGroupEdit,
+        options?: DefaultUserOperationOptions,
+    ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError>
+    /** Close a DM for this bot or leave a group. Does not erase another recipient's conversation; owner departure may transfer ownership */
+    close(id: string, options?: DefaultUserOperationOptions): ResultAsync<void, UserOperationFailure | CancelledError>
+    /** Remove a group recipient as owner, or remove self. Does not request deletion of that user's messages; a last-recipient departure deletes the group */
+    removeRecipient(
+        id: string,
+        userId: string,
+        options?: DefaultUserOperationOptions,
+    ): ResultAsync<void, UserOperationFailure | CancelledError>
+}
+
 /**
  * Create a Disconnected client without sockets, timers or process-signal handlers
  *
@@ -1680,6 +2219,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             | GuildOperationError
             | ChannelOperationError
             | WebhookOperationError
+            | UserOperationError
+            | PresenceError
             | PaginationError,
     >(
         effect: Effect.Effect<A, E>,
@@ -1735,7 +2276,10 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             waitForClose: (options?: OperationOptions) =>
                 execute(Deferred.await(source.closed), "subscription.waitForClose", options),
         })
-    const lookup = <A, E extends GuildOperationFailure | ChannelOperationFailure>(
+    const lookup = <
+        A,
+        E extends GuildOperationFailure | ChannelOperationFailure | UserOperationFailure | PresenceFailure,
+    >(
         effect: Effect.Effect<A, E>,
         operation: Operation,
     ): Result<A, E> => {
@@ -1759,6 +2303,65 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     }
     return ok(
         Object.freeze({
+            presence: Object.freeze({
+                set: (input: PresenceInput) => lookup(owner.setPresence(input), "presence.set"),
+            }),
+            users: Object.freeze({
+                get: (id: string) => lookup(owner.getUserResource("users", id), "users.get"),
+                fetch: (id: string, options?: DefaultUserOperationOptions) =>
+                    execute(
+                        owner.user("users.fetch", () => userFetch(id), options),
+                        "users.fetch",
+                        options,
+                    ),
+                fetchSelf: (options?: DefaultUserOperationOptions) =>
+                    execute(
+                        owner.user("users.fetchSelf", () => userFetch("@me"), options),
+                        "users.fetchSelf",
+                        options,
+                    ),
+            }),
+            directMessages: Object.freeze({
+                send: (userId: string, input: ReplyInput, options?: DefaultSendOptions) =>
+                    execute(owner.sendDirectMessage(userId, input, options), "directMessages.send", options),
+                get: (id: string) => lookup(owner.getUserResource("directMessages", id), "directMessages.get"),
+                open: (userId: string, options?: DefaultUserOperationOptions) =>
+                    execute(
+                        owner.user("directMessages.open", () => directMessageOpen(userId), options),
+                        "directMessages.open",
+                        options,
+                    ),
+                fetch: (id: string, options?: DefaultUserOperationOptions) =>
+                    execute(
+                        owner.user("directMessages.fetch", () => directMessageFetch(id), options),
+                        "directMessages.fetch",
+                        options,
+                    ),
+                fetchAll: (options?: DefaultUserOperationOptions) =>
+                    execute(
+                        owner.user("directMessages.fetchAll", () => directMessageList(), options),
+                        "directMessages.fetchAll",
+                        options,
+                    ),
+                editGroup: (id: string, input: DirectMessageGroupEdit, options?: DefaultUserOperationOptions) =>
+                    execute(
+                        owner.user("directMessages.editGroup", () => directMessageEdit(id, input), options),
+                        "directMessages.editGroup",
+                        options,
+                    ),
+                close: (id: string, options?: DefaultUserOperationOptions) =>
+                    execute(
+                        owner.user("directMessages.close", () => directMessageClose(id), options),
+                        "directMessages.close",
+                        options,
+                    ),
+                removeRecipient: (id: string, userId: string, options?: DefaultUserOperationOptions) =>
+                    execute(
+                        owner.user("directMessages.removeRecipient", () => directMessageClose(id, userId), options),
+                        "directMessages.removeRecipient",
+                        options,
+                    ),
+            }),
             webhooks: Object.freeze({
                 create: (id: string, input: WebhookCreate, options?: DefaultWebhookOperationOptions) =>
                     execute(
@@ -1797,7 +2400,197 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         options,
                     ),
             }),
+            emojis: Object.freeze({
+                get: (target: ExpressionReference) => lookup(owner.getResource("emojis", target), "emojis.get"),
+                fetchAll: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("emojis.fetchAll", () => expressionList("emojis", id), options),
+                        "emojis.fetchAll",
+                        options,
+                    ),
+                fetchMetadata: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("emojis.fetchMetadata", () => expressionMetadata("emojis", id), options),
+                        "emojis.fetchMetadata",
+                        options,
+                    ),
+                create: (id: string, input: EmojiCreate, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("emojis.create", () => expressionCreate("emojis", id, input, options), options),
+                        "emojis.create",
+                        options,
+                    ),
+                createMany: (id: string, input: readonly EmojiCreate[], options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("emojis.createMany", () => expressionBatch("emojis", id, input, options), options),
+                        "emojis.createMany",
+                        options,
+                    ),
+                clone: (id: string, sourceId: string, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("emojis.clone", () => expressionClone("emojis", id, sourceId, options), options),
+                        "emojis.clone",
+                        options,
+                    ),
+                edit: (target: ExpressionReference, input: EmojiEdit, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("emojis.edit", () => expressionEdit("emojis", target, input, options), options),
+                        "emojis.edit",
+                        options,
+                    ),
+                delete: (target: ExpressionReference, options?: DefaultExpressionDeleteOptions) =>
+                    execute(
+                        owner.guild("emojis.delete", () => expressionDelete("emojis", target, options), options),
+                        "emojis.delete",
+                        options,
+                    ),
+            }),
+            stickers: Object.freeze({
+                edit: (target: ExpressionReference, input: StickerEdit, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("stickers.edit", () => expressionEdit("stickers", target, input, options), options),
+                        "stickers.edit",
+                        options,
+                    ),
+                get: (target: ExpressionReference) => lookup(owner.getResource("stickers", target), "stickers.get"),
+                fetchAll: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("stickers.fetchAll", () => expressionList("stickers", id), options),
+                        "stickers.fetchAll",
+                        options,
+                    ),
+                fetchMetadata: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("stickers.fetchMetadata", () => expressionMetadata("stickers", id), options),
+                        "stickers.fetchMetadata",
+                        options,
+                    ),
+                create: (id: string, input: StickerCreate, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("stickers.create", () => expressionCreate("stickers", id, input, options), options),
+                        "stickers.create",
+                        options,
+                    ),
+                createMany: (id: string, input: readonly StickerCreate[], options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild(
+                            "stickers.createMany",
+                            () => expressionBatch("stickers", id, input, options),
+                            options,
+                        ),
+                        "stickers.createMany",
+                        options,
+                    ),
+                clone: (id: string, sourceId: string, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild(
+                            "stickers.clone",
+                            () => expressionClone("stickers", id, sourceId, options),
+                            options,
+                        ),
+                        "stickers.clone",
+                        options,
+                    ),
+                delete: (target: ExpressionReference, options?: DefaultExpressionDeleteOptions) =>
+                    execute(
+                        owner.guild("stickers.delete", () => expressionDelete("stickers", target, options), options),
+                        "stickers.delete",
+                        options,
+                    ),
+            }),
+            auditLogs: Object.freeze({
+                fetchPage: (id: string, query: AuditLogQuery, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("auditLogs.fetchPage", () => auditLogPage(id, query), options),
+                        "auditLogs.fetchPage",
+                        options,
+                    ),
+                iterate: (id: string, query: AuditLogIterationQuery, options?: DefaultGuildOperationOptions) =>
+                    iterate((request) => auditLogPagination(owner, id, query, request), "auditLogs.iterate", options),
+            }),
+            invites: Object.freeze({
+                fetch: (code: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("invites.fetch", () => inviteFetch(code), options),
+                        "invites.fetch",
+                        options,
+                    ),
+                create: (channelId: string, input?: InviteCreate, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("invites.create", () => inviteCreate(channelId, input, options), options),
+                        "invites.create",
+                        options,
+                    ),
+                fetchChannel: (channelId: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("invites.fetchChannel", () => inviteList("channels", channelId), options),
+                        "invites.fetchChannel",
+                        options,
+                    ),
+                fetchGuild: (guildId: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("invites.fetchGuild", () => inviteList("guilds", guildId), options),
+                        "invites.fetchGuild",
+                        options,
+                    ),
+                delete: (code: string, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("invites.delete", () => inviteDelete(code, options), options),
+                        "invites.delete",
+                        options,
+                    ),
+            }),
+            discovery: Object.freeze({
+                fetchStatus: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("discovery.fetchStatus", () => discoveryStatus(id), options),
+                        "discovery.fetchStatus",
+                        options,
+                    ),
+                fetchCategories: (options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("discovery.fetchCategories", discoveryCategories, options),
+                        "discovery.fetchCategories",
+                        options,
+                    ),
+                apply: (id: string, input: DiscoveryApplicationInput, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("discovery.apply", () => discoveryWrite(id, input), options),
+                        "discovery.apply",
+                        options,
+                    ),
+                edit: (id: string, input: DiscoveryApplicationEdit, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("discovery.edit", () => discoveryWrite(id, input, true), options),
+                        "discovery.edit",
+                        options,
+                    ),
+                withdraw: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("discovery.withdraw", () => discoveryWithdraw(id), options),
+                        "discovery.withdraw",
+                        options,
+                    ),
+            }),
             guilds: Object.freeze({
+                fetchVanityUrl: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("guilds.fetchVanityUrl", () => vanityUrlFetch(id), options),
+                        "guilds.fetchVanityUrl",
+                        options,
+                    ),
+                editVanityUrl: (id: string, code: string | null, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("guilds.editVanityUrl", () => vanityUrlEdit(id, code, options), options),
+                        "guilds.editVanityUrl",
+                        options,
+                    ),
+                edit: (id: string, input: GuildEdit, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("guilds.edit", () => guildEdit(id, input, options), options),
+                        "guilds.edit",
+                        options,
+                    ),
                 ban: (target: MemberReference, input?: BanInput, options?: DefaultModerationOptions) =>
                     execute(
                         owner.guild("guilds.ban", () => guildBan(target, input, options), options),
@@ -1888,6 +2681,12 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     ),
             }),
             members: Object.freeze({
+                editSelf: (guildId: string, input: MemberProfileEdit, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("members.editSelf", () => memberEditSelf(guildId, input), options),
+                        "members.editSelf",
+                        options,
+                    ),
                 timeout: (target: MemberReference, durationMs: number, options?: DefaultModerationOptions) =>
                     execute(
                         owner.guild("members.timeout", () => memberTimeout(target, durationMs, options), options),

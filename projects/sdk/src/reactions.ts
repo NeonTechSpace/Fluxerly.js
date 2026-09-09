@@ -1,4 +1,5 @@
 import type { MessageReference } from "./messages.js"
+import type { GuildEmoji } from "./expressions.js"
 
 /** One explicit reaction-user page request; no automatic traversal */
 export interface ReactionUsersQuery {
@@ -31,9 +32,10 @@ export interface ReactionUsersPage {
 /** Literal Unicode emoji, or a custom emoji's name and decimal ID.
  * Pass Unicode without URL encoding, shortcodes or <:name:id> markup.
  * Custom names are 1–32 ASCII letters, digits or underscores; IDs are decimal strings.
+ * GuildEmoji snapshots from client.emojis may be passed directly; no cache lookup or permission inference is performed.
  * Unicode input is bounded to 128 UTF-16 code units; Fluxer validates supported single emoji and permissions
  */
-export type ReactionEmojiInput = string | { readonly name: string; readonly id: string }
+export type ReactionEmojiInput = string | { readonly name: string; readonly id: string } | GuildEmoji
 
 /** Frozen gateway emoji identity. Missing animated means unknown, not false */
 export interface ReactionEmoji {

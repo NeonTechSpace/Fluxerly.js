@@ -67,6 +67,19 @@ async function setup(mode: (typeof modes)[number], options: WebhookClientOptions
     return { bot, webhook, shutdown }
 }
 
+test.each(modes)("%s sends sticker-only webhook messages without bot authentication", async (mode) => {
+    const { webhook } = await setup(mode)
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        expect(url).toContain("/webhooks/100/")
+        expect(new Headers(init.headers).has("Authorization")).toBe(false)
+        expect(JSON.parse(String(init.body)).sticker_ids).toEqual(["501"])
+        return Response.json(message({ content: "", stickers: [{ id: "501", name: "Fixture", animated: false }] }))
+    })
+    expect((await settle(webhook.send({ stickerIds: ["501"] }))).stickers).toEqual([
+        { id: "501", name: "Fixture", animated: false },
+    ])
+})
+
 test.each(modes)("%s manages webhooks with token-free snapshots and explicit credential access", async (mode) => {
     const requests: { path: string; method: string; body: unknown }[] = []
     vi.stubGlobal(

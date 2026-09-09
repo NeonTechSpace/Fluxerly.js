@@ -37,6 +37,7 @@ const projection = (id: string, content = id) => ({
     content,
     embeds: [],
     attachments: [],
+    stickers: [],
     author: { id: "30", username: "fixture", isBot: true },
 })
 const value = <A, E>(result: { isErr(): boolean; value?: A; error?: E }): A => {

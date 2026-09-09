@@ -1,10 +1,13 @@
 import { platform } from "node:os"
 import type { EventMap, EventName } from "#sdk/events"
-import { decodeMessage, decodeDeletion, decodeBulkDeletion, record } from "./message.js"
+import { decodeMessage, decodeDeletion, decodeBulkDeletion, record, identifier } from "./message.js"
+import { decodeUser, decodeDirectMessage } from "./users.js"
 import { decodeReaction, reactionEvents } from "./reactions.js"
 import { decodePinsUpdate } from "./pins.js"
 import { decodeGuildEvent, guildEvents } from "./guilds.js"
 import { decodeChannelEvent, channelEvents } from "./channels.js"
+import { decodeExpressionUpdate } from "./expressions.js"
+import type { GatewayPresenceUpdate, PresenceGatewayOwner } from "./presence.js"
 import { Clock, Deferred, Effect, Redacted } from "effect"
 import WebSocket from "ws"
 import {
@@ -84,6 +87,7 @@ export const runGateway = (
     onRecovering: () => void,
     onDispatch: <K extends EventName>(event: K, message: EventMap[K], bytes: number) => void,
     onGuild?: (event: string, value: unknown) => void,
+    presence?: PresenceGatewayOwner,
 ) =>
     Effect.scoped(
         Effect.gen(function* () {
@@ -222,10 +226,58 @@ export const runGateway = (
                                 if (
                                     payload.t === "GUILD_CREATE" ||
                                     payload.t === "GUILD_UPDATE" ||
-                                    payload.t === "GUILD_DELETE"
+                                    payload.t === "GUILD_DELETE" ||
+                                    payload.t === "GUILD_EMOJIS_UPDATE" ||
+                                    payload.t === "GUILD_STICKERS_UPDATE"
                                 )
                                     onGuild?.(payload.t, body)
-                                if (payload.t === "MESSAGE_CREATE" || payload.t === "MESSAGE_UPDATE") {
+                                if (payload.t === "USER_UPDATE") {
+                                    const user = decodeUser(body)
+                                    if (!user) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("userUpdate", user, Buffer.byteLength(data.toString()))
+                                } else if (
+                                    payload.t === "GUILD_EMOJIS_UPDATE" ||
+                                    payload.t === "GUILD_STICKERS_UPDATE"
+                                ) {
+                                    const update = decodeExpressionUpdate(
+                                        payload.t === "GUILD_EMOJIS_UPDATE" ? "emojis" : "stickers",
+                                        body,
+                                    )
+                                    if (!update) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch(
+                                        payload.t === "GUILD_EMOJIS_UPDATE"
+                                            ? "guildEmojisUpdate"
+                                            : "guildStickersUpdate",
+                                        update,
+                                        Buffer.byteLength(data.toString()),
+                                    )
+                                } else if (
+                                    payload.t === "CHANNEL_RECIPIENT_ADD" ||
+                                    payload.t === "CHANNEL_RECIPIENT_REMOVE"
+                                ) {
+                                    if (
+                                        !record(body) ||
+                                        !identifier(body.channel_id) ||
+                                        !record(body.user) ||
+                                        !identifier(body.user.id)
+                                    ) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch(
+                                        payload.t === "CHANNEL_RECIPIENT_ADD"
+                                            ? "directMessageRecipientAdd"
+                                            : "directMessageRecipientRemove",
+                                        Object.freeze({ channelId: body.channel_id, userId: body.user.id }),
+                                        Buffer.byteLength(data.toString()),
+                                    )
+                                } else if (payload.t === "MESSAGE_CREATE" || payload.t === "MESSAGE_UPDATE") {
                                     const message = decodeMessage(body)
                                     if (!message) {
                                         protocolFailure()
@@ -245,8 +297,30 @@ export const runGateway = (
                                     }
                                     onDispatch(guildEvents[event], update, Buffer.byteLength(data.toString()))
                                 } else if (Object.hasOwn(channelEvents, payload.t)) {
-                                    // These gateway names also carry private-channel observations outside this API's guild scope
-                                    if (record(body) && (body.guild_id === undefined || body.guild_id === null)) return
+                                    if (record(body) && (body.guild_id === undefined || body.guild_id === null)) {
+                                        if (body.type === 999) return
+                                        if (payload.t === "CHANNEL_DELETE" && identifier(body.id))
+                                            onDispatch(
+                                                "directMessageDelete",
+                                                Object.freeze({ id: body.id }),
+                                                Buffer.byteLength(data.toString()),
+                                            )
+                                        else {
+                                            const channel = decodeDirectMessage(body)
+                                            if (!channel) {
+                                                protocolFailure()
+                                                return
+                                            }
+                                            onDispatch(
+                                                payload.t === "CHANNEL_CREATE"
+                                                    ? "directMessageCreate"
+                                                    : "directMessageUpdate",
+                                                channel,
+                                                Buffer.byteLength(data.toString()),
+                                            )
+                                        }
+                                        return
+                                    }
                                     const event = payload.t as keyof typeof channelEvents
                                     const update = decodeChannelEvent(event, body)
                                     if (!update) {
@@ -329,6 +403,7 @@ export const runGateway = (
                     return {
                         socket,
                         heartbeat,
+                        presence: (update: GatewayPresenceUpdate) => send(3, update),
                         detach: () => {
                             socket.off("message", onMessage)
                             socket.off("error", onError)
@@ -343,6 +418,7 @@ export const runGateway = (
                         yield* closeSocket(transport.socket).pipe(Effect.ensuring(Effect.sync(transport.detach)))
                     }),
             )
+            yield* Effect.addFinalizer(() => Effect.sync(() => presence?.detach()))
             const startup = Effect.gen(function* () {
                 const interval = yield* Deferred.await(hello)
                 yield* Effect.forkScoped(
@@ -363,6 +439,7 @@ export const runGateway = (
                 }),
             )
             yield* Effect.raceFirst(startup, Deferred.await(ended))
+            presence?.attach(socket.presence)
             onReady(resuming ? "resume" : "identify")
             return yield* Deferred.await(ended)
         }),

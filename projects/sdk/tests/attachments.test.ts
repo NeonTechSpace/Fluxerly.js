@@ -670,6 +670,7 @@ test.each(modes)("%s cache budgets measure attachment metadata rather than remot
         content: "",
         embeds: [],
         attachments: [{ id: "40", filename: "file.bin", size: 52_428_800, flags: 0 }],
+        stickers: [],
         author: { id: "30", username: "fixture", isBot: true },
     }
     const size = Buffer.byteLength(JSON.stringify(projected))

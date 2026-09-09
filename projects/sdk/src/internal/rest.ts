@@ -28,6 +28,10 @@ import type { ChannelCache, ChannelCacheGuard, ChannelCacheRequest } from "./cha
 import { WebhookOperationError, type WebhookOperation, type WebhookOperationOptions } from "#sdk/webhooks"
 import type { WebhookRequest } from "./webhooks.js"
 import { multipart } from "./multipart.js"
+import { UserOperationError, type UserOperation, type UserOperationOptions } from "#sdk/users"
+import type { UserRequest } from "./users.js"
+import { directMessageOpen } from "./users.js"
+import type { UserCache } from "./user-cache.js"
 
 type Pending = {
     route: string
@@ -39,6 +43,7 @@ type Bucket = { remaining: number; until: number }
 const queuedJsonMaxBytes = 4_194_304
 type Outcome = MessageOperationError["outcome"]
 type Request<A> = {
+    directMessageUser?: string
     method: "POST" | "GET" | "PATCH" | "DELETE" | "PUT"
     channel: string
     webhookId?: string
@@ -118,6 +123,7 @@ export class RestOwner {
         private readonly uploadMaxBytes = 104_857_600,
         private readonly resources?: GuildCache,
         private readonly channels?: ChannelCache,
+        private readonly users?: UserCache,
     ) {}
     #uploadBytes = 0
     #closed = false
@@ -393,6 +399,7 @@ export class RestOwner {
         channel: string,
         input: MessageInput,
         options?: SendOptions,
+        directMessageUser?: string,
     ): Effect.Effect<Message, SendError> {
         return Effect.suspend((): Effect.Effect<Message, SendError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
@@ -405,6 +412,7 @@ export class RestOwner {
                     channel,
                     body,
                     path: `/channels/${channel}/messages`,
+                    ...(directMessageUser === undefined ? {} : { directMessageUser }),
                     decode: (response) => readMessage(response, channel),
                 },
                 options,
@@ -938,7 +946,14 @@ export class RestOwner {
                     (!record(options) ||
                         Object.keys(options).some(
                             (key) =>
-                                key !== "timeoutMs" && key !== "signal" && !(input.moderation && key === "auditReason"),
+                                key !== "timeoutMs" &&
+                                key !== "signal" &&
+                                !(input.moderation && key === "auditReason") &&
+                                !(
+                                    key === "purge" &&
+                                    input.method === "DELETE" &&
+                                    ["guild:emojis", "guild:stickers"].includes(input.bucket)
+                                ),
                         )))
             )
                 return Effect.fail(new RestFailure("input", "notDispatched"))
@@ -950,6 +965,7 @@ export class RestOwner {
                     bucket: input.bucket,
                     cache: false,
                     ...(input.cache === undefined ? {} : { resourceCache: input.cache }),
+                    ...(input.channelCache === undefined ? {} : { channelCache: input.channelCache }),
                     ...(input.moderation === undefined ? {} : { moderation: input.moderation }),
                     ...(input.auditReason === undefined ? {} : { auditReason: input.auditReason }),
                     ...(input.deleteAuthorId === undefined ? {} : { deleteAuthorId: input.deleteAuthorId }),
@@ -1020,6 +1036,49 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                       )
+                    : error,
+            ),
+        )
+    }
+
+    user<A>(
+        token: Redacted.Redacted<string>,
+        operation: UserOperation,
+        build: () => UserRequest<A> | undefined,
+        options?: UserOperationOptions,
+    ) {
+        return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const input = build()
+            if (
+                !input ||
+                (options !== undefined &&
+                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
+            )
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    channel: input.majorId,
+                    bucket: `user:${operation}`,
+                    cache: false,
+                    path: input.path,
+                    method: input.method,
+                    status: input.status,
+                    body: input.json === undefined ? undefined : { json: input.json, files: [] },
+                    decode: async (response) => {
+                        if (input.status === 204) return undefined as A
+                        const value = input.decode(await readUploadJson(response))
+                        if (value === undefined) throw new RestFailure("response", "unknown", response.status)
+                        return value
+                    },
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new UserOperationError(operation, error.reason, error.outcome, error.status, error.retryAfterMs)
                     : error,
             ),
         )
@@ -1129,6 +1188,47 @@ export class RestOwner {
             const operation = Deferred.makeUnsafe<void>()
             owner.#operations.add(operation)
             return Effect.gen(function* () {
+                if (request.directMessageUser !== undefined) {
+                    const open = directMessageOpen(request.directMessageUser)!
+                    const userGeneration = owner.users?.begin("directMessages", true)
+                    const channel = yield* owner
+                        .#exchange(
+                            token,
+                            {
+                                method: "POST",
+                                channel: "@me",
+                                bucket: "user:directMessages.open",
+                                cache: false,
+                                path: open.path,
+                                body: { json: open.json!, files: [] },
+                                status: 200,
+                                preparation: true,
+                                decode: async (response) => {
+                                    const channel = open.decode(await readUploadJson(response))
+                                    if (!channel) throw new RestFailure("response", "notDispatched", response.status)
+                                    return channel
+                                },
+                            },
+                            { outcome: "notDispatched" },
+                            generation,
+                            deadline,
+                            bytes,
+                        )
+                        .pipe(
+                            Effect.mapError((error) =>
+                                error instanceof RestFailure
+                                    ? new RestFailure(error.reason, "notDispatched", error.status, error.retryAfterMs)
+                                    : error,
+                            ),
+                        )
+                    if (userGeneration !== undefined) owner.users!.complete("directMessages", userGeneration, [channel])
+                    request = {
+                        ...request,
+                        channel: channel.id,
+                        path: `/channels/${channel.id}/messages`,
+                        decode: (response) => readMessage(response, channel.id) as Promise<A>,
+                    }
+                }
                 if (request.body?.files.length && !request.webhookId)
                     yield* owner.#prepareUploads(token, request.channel, request.body, progress, generation, deadline)
                 return yield* owner.#exchange(token, request, progress, generation, deadline)

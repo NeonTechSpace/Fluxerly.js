@@ -409,7 +409,26 @@ test.each(modes)(
         expect(bulkCache).toBeUndefined()
         expect(await api.get("11")).toBeUndefined()
 
-        dispatch("CHANNEL_UPDATE", { id: "90", type: 1, name: "direct message" })
+        dispatch("CHANNEL_UPDATE", {
+            id: "90",
+            type: 1,
+            recipients: [
+                {
+                    id: "91",
+                    username: "fixture",
+                    discriminator: "0001",
+                    global_name: null,
+                    avatar: null,
+                    avatar_color: null,
+                    flags: 0,
+                },
+            ],
+            name: "direct message",
+            icon: null,
+            owner_id: null,
+            nicks: {},
+            last_message_id: null,
+        })
         await new Promise((resolve) => setTimeout(resolve, 20))
         expect(seen).toHaveLength(4)
         expect(api.state()).toBe("Connected")

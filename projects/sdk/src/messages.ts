@@ -22,6 +22,8 @@ export interface Message extends MessageReference {
     readonly embeds: readonly Embed[]
     /** Frozen file metadata in received order, empty when absent. Budgets count metadata, never remote file bytes */
     readonly attachments: readonly Attachment[]
+    /** Frozen sticker metadata in received order, empty when absent. No image bytes are fetched or retained */
+    readonly stickers: readonly MessageSticker[]
     /** Frozen author projection. No client-bound methods or cached live state */
     readonly author: {
         /** Decimal author ID supplied by Fluxer. Use webhookId to identify webhook-authored messages */
@@ -31,6 +33,16 @@ export interface Message extends MessageReference {
         /** Whether Fluxer identifies the author as a bot. An omitted wire flag means false */
         readonly isBot: boolean
     }
+}
+
+/** Sticker observation attached to a message, not the editable guild resource */
+export interface MessageSticker {
+    /** Decimal sticker ID */
+    readonly id: string
+    /** Name observed when Fluxer projected this message */
+    readonly name: string
+    /** Whether the sticker is animated */
+    readonly animated: boolean
 }
 
 /** Frozen deletion notice, not a full Message or a recoverable copy of the deleted resource */
@@ -61,8 +73,34 @@ export interface AllowedMentions {
     readonly repliedUser?: boolean
 }
 
-/** Text, embeds or file uploads. TypeScript does not establish that strings or arrays are nonempty */
-export type MessageBody = Body<AttachmentInput>
+/** Text, embeds, file uploads or stickers. TypeScript does not establish nonempty content.
+ * Stickers can be sent by bots and webhooks but cannot be replaced through message edits
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * export function stickerExample(client: Client, channelId: string, stickerId: string) {
+ *     return client.messages.send(channelId, { stickerIds: [stickerId] })
+ * }
+ * ```
+ */
+export type MessageBody = (
+    | Body<AttachmentInput>
+    | {
+          /** Optional text alongside stickers */
+          readonly content?: string
+          /** Optional rich embeds alongside stickers */
+          readonly embeds?: readonly EmbedInput[]
+          /** Optional new uploads alongside stickers */
+          readonly attachments?: readonly AttachmentInput[]
+          /** Required sticker list when no other body field supplies message content */
+          readonly stickerIds: readonly string[]
+      }
+) & {
+    /** Up to three decimal sticker IDs in send order. Fluxer checks availability and external-sticker permissions.
+     * Omitted/empty means no stickers. Inputs are copied before dispatch; no image upload or lookup is performed
+     */
+    readonly stickerIds?: readonly string[]
+}
 
 type Body<A> =
     | {
@@ -90,7 +128,7 @@ type Body<A> =
           readonly attachments: readonly A[]
       }
 
-/** Send text, rich embeds and/or files. A send needs nonempty text, embeds or uploads.
+/** Send text, rich embeds, files and/or stickers. A send needs nonempty text, embeds, uploads or sticker IDs.
  * Unknown input keys are rejected. Forwards and attachment:// embed linking are not supported
  */
 export type MessageInput = MessageBody & {

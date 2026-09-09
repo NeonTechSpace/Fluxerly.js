@@ -1,12 +1,19 @@
 import { isDeepStrictEqual } from "node:util"
 import type { Guild, GuildMember, GuildRole } from "#sdk/guilds"
+import type { GuildEmoji, GuildSticker } from "#sdk/expressions"
 import type { EventMap, EventName } from "#sdk/events"
 import type { ResourceCacheSettings } from "#sdk/cache"
 import { decodeGuild } from "./guilds.js"
 import { identifier, record } from "./message.js"
 
-export type ResourceKind = "guilds" | "members" | "roles"
-export type Resources = { guilds: Guild; members: GuildMember; roles: GuildRole }
+export type ResourceKind = "guilds" | "members" | "roles" | "emojis" | "stickers"
+export type Resources = {
+    guilds: Guild
+    members: GuildMember
+    roles: GuildRole
+    emojis: GuildEmoji
+    stickers: GuildSticker
+}
 type Snapshot = Resources[ResourceKind]
 export type ResourceConfiguration = Partial<Record<ResourceKind, Required<ResourceCacheSettings>>>
 type Selection = { kind: ResourceKind; guildId: string; id?: string }
@@ -15,18 +22,25 @@ export type ResourceRequest = {
     mutation?: boolean
     replace?: boolean
     members?: boolean
+    batch?: boolean
 }
 export type ResourceGuard = ResourceRequest & { generation: number; invalid: boolean; success: boolean }
 type Entry = { selection: Selection; value: Snapshot; bytes: number; expires: number | null }
-const kinds = ["guilds", "members", "roles"] as const
+const kinds = ["guilds", "members", "roles", "emojis", "stickers"] as const
 const key = (selection: Selection) => `${selection.guildId}:${selection.id ?? selection.guildId}`
 const overlaps = (a: Selection, b: Selection) =>
     a.kind === b.kind && a.guildId === b.guildId && (a.id === undefined || b.id === undefined || a.id === b.id)
 
 /** One client's resource observations; REST owns bounded request admission and this owner retains no historical tombstones */
 export class GuildCache {
-    #entries = { guilds: new Map<string, Entry>(), members: new Map<string, Entry>(), roles: new Map<string, Entry>() }
-    #bytes = { guilds: 0, members: 0, roles: 0 }
+    #entries = {
+        guilds: new Map<string, Entry>(),
+        members: new Map<string, Entry>(),
+        roles: new Map<string, Entry>(),
+        emojis: new Map<string, Entry>(),
+        stickers: new Map<string, Entry>(),
+    }
+    #bytes = { guilds: 0, members: 0, roles: 0, emojis: 0, stickers: 0 }
     #requests = new Set<ResourceGuard>()
     #generation = 0
     #closed = false
@@ -91,6 +105,7 @@ export class GuildCache {
     }
 
     complete(guard: ResourceGuard, result: unknown) {
+        if (guard.batch && record(result)) result = result.success
         guard.success = true
         if (this.#closed) return
         if (guard.generation !== this.#generation) {
@@ -181,6 +196,12 @@ export class GuildCache {
 
     guildEvent(event: string, value: unknown) {
         if (this.#closed) return
+        if (event === "GUILD_EMOJIS_UPDATE" || event === "GUILD_STICKERS_UPDATE") {
+            if (!record(value) || !identifier(value.guild_id)) this.gap()
+            else this.#evict({ kind: event === "GUILD_EMOJIS_UPDATE" ? "emojis" : "stickers", guildId: value.guild_id })
+            this.#schedule()
+            return
+        }
         // Guild removal/unavailability must clear dependent resources, not just the guild's own entry
         if (!record(value) || !identifier(value.id)) {
             this.gap()
