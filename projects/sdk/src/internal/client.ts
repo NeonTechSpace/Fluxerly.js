@@ -52,6 +52,8 @@ import {
 } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
 import { RestOwner } from "./rest.js"
+import type { BotApplicationOperation, BotApplicationOperationOptions } from "#sdk/application"
+import type { BotApplicationRequest } from "./application.js"
 import type { ReactionEmojiInput, ReactionUsersQuery } from "#sdk/reactions"
 import type { MessagePinsQuery } from "#sdk/pins"
 import type { MessageSearchContext, MessageSearchQuery } from "#sdk/message-search"
@@ -248,6 +250,18 @@ export class ClientOwner {
                 return value
             })
         })
+    }
+
+    application<A>(
+        operation: BotApplicationOperation,
+        build: () => BotApplicationRequest<A>,
+        options?: BotApplicationOperationOptions,
+    ) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.application(this.#configuration.token, operation, build, options)
+                : Effect.fail(new ClientClosedError()),
+        )
     }
 
     getUserResource<K extends "users" | "directMessages">(kind: K, id: string) {

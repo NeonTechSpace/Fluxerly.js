@@ -29,6 +29,12 @@ export interface UserIterationQuery extends PaginationQuery {
     readonly after?: string
 }
 
+/** Ascending guild-ID traversal of the authenticated bot's memberships */
+export interface GuildIterationQuery extends PaginationQuery {
+    /** Exclusive starting guild ID. A removed cursor that causes repeated results fails with cursorStalled */
+    readonly after?: string
+}
+
 /** Descending pin-time traversal, emitting each message ID at most once per consumption.
  * Timestamp ties and concurrent changes can prevent complete enumeration. A stalled cursor is an error.
  * The first observed pin for an ID wins, even if that message is repinned during traversal
@@ -43,6 +49,7 @@ export type PaginationOperation =
     | "iterateHistory"
     | "messages.iterateSearch"
     | "members.iterate"
+    | "guilds.iterate"
     | "members.iterateSearch"
     | "iterateReactionUsers"
     | "iteratePins"

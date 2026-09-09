@@ -34,6 +34,12 @@ import { UserOperationError, type UserOperation, type UserOperationOptions } fro
 import type { UserRequest } from "./users.js"
 import { directMessageOpen } from "./users.js"
 import type { UserCache } from "./user-cache.js"
+import {
+    BotApplicationOperationError,
+    type BotApplicationOperation,
+    type BotApplicationOperationOptions,
+} from "#sdk/application"
+import type { BotApplicationRequest } from "./application.js"
 
 type Pending = {
     route: string
@@ -55,6 +61,7 @@ type Request<A> = {
     moderation?: true
     auditReason?: string
     deleteAuthorId?: string
+    invalidateMessages?: true
     resourceCache?: ResourceRequest
     resourceGuard?: ResourceGuard
     channelCache?: ChannelCacheRequest
@@ -1044,6 +1051,7 @@ export class RestOwner {
                     ...(input.moderation === undefined ? {} : { moderation: input.moderation }),
                     ...(input.auditReason === undefined ? {} : { auditReason: input.auditReason }),
                     ...(input.deleteAuthorId === undefined ? {} : { deleteAuthorId: input.deleteAuthorId }),
+                    ...(input.invalidateMessages === undefined ? {} : { invalidateMessages: input.invalidateMessages }),
                     path: input.path,
                     method: input.method,
                     status: input.status,
@@ -1154,6 +1162,53 @@ export class RestOwner {
             Effect.mapError((error) =>
                 error instanceof RestFailure
                     ? new UserOperationError(operation, error.reason, error.outcome, error.status, error.retryAfterMs)
+                    : error,
+            ),
+        )
+    }
+
+    application<A>(
+        token: Redacted.Redacted<string>,
+        operation: BotApplicationOperation,
+        build: () => BotApplicationRequest<A>,
+        options?: BotApplicationOperationOptions,
+    ) {
+        return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const input = build()
+            if (
+                options !== undefined &&
+                (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
+            )
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            return this.#execute(
+                token,
+                {
+                    channel: "application",
+                    bucket: "application:current",
+                    cache: false,
+                    path: input.path,
+                    method: input.method,
+                    status: input.status,
+                    body: undefined,
+                    decode: async (response) => {
+                        const value = input.decode(await readUploadJson(response))
+                        if (value === undefined) throw new RestFailure("response", "unknown", response.status)
+                        return value
+                    },
+                },
+                options,
+            )
+        }).pipe(
+            Effect.mapError((error) =>
+                error instanceof RestFailure
+                    ? new BotApplicationOperationError(
+                          operation,
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                      )
                     : error,
             ),
         )
@@ -1326,6 +1381,8 @@ export class RestOwner {
                             )
                         if (request.deleteAuthorId && progress.outcome !== "notDispatched")
                             owner.cache?.deleteAuthor(request.deleteAuthorId)
+                        // Message observations need not carry guild IDs, so leaving conservatively clears this cache
+                        if (request.invalidateMessages && progress.outcome !== "notDispatched") owner.cache?.gap()
                         // A rejected multi-entry reorder can have applied earlier entries before its failure
                         if (channelGuard) owner.channels!.end(channelGuard, progress.outcome !== "notDispatched")
                         if (

@@ -55,6 +55,12 @@ export interface TimestampMarkup {
 /** Exact route context for a hosted channel or message link. Guild channels carry `guildId`; direct messages do not */
 export type ChannelLinkTarget = Pick<GuildChannel, "id" | "guildId"> | Pick<DirectMessageChannel, "id">
 
+/** Optional raw permission bitfield requested by a hosted bot-installation page */
+export interface InstallationLinkOptions {
+    /** Unsigned 64-bit Fluxer permission bitfield. Omit it to leave the provider's requested permissions unspecified */
+    readonly permissions?: bigint
+}
+
 /** Locally invalid pure-helper input, without retaining or exposing the rejected value */
 export class HelperError extends Error {
     /** Stable expected-failure discriminator */
@@ -77,7 +83,8 @@ export class HelperError extends Error {
             | "permissionBits.has"
             | "permissionBits.toDecimal"
             | "links.channel"
-            | "links.message",
+            | "links.message"
+            | "links.installation",
         /** Whether the ID, markup, time, bitfield, or route context was invalid */
         readonly reason: "id" | "markup" | "time" | "permissionBits" | "link",
     ) {
@@ -146,6 +153,18 @@ function channelLink(
     return isSnowflake(input.guildId)
         ? ok({ id: input.id, guildId: input.guildId })
         : err(helperError(operation, "link"))
+}
+
+function installationPermissions(value: unknown): Result<string | undefined, HelperError> {
+    if (value === undefined) return ok(undefined)
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+        return err(helperError("links.installation", "link"))
+    const input = value as Record<string, unknown>
+    if (Object.keys(input).some((key) => key !== "permissions")) return err(helperError("links.installation", "link"))
+    if (input.permissions === undefined) return ok(undefined)
+    if (typeof input.permissions !== "bigint") return err(helperError("links.installation", "permissionBits"))
+    const permissions = permissionBits.toDecimal(input.permissions)
+    return permissions.isOk() ? ok(permissions.value) : err(helperError("links.installation", "permissionBits"))
 }
 
 /**
@@ -286,7 +305,7 @@ export const permissionBits = Object.freeze({
     },
 })
 
-/** Hosted Fluxer application links. They use the verified app routes, not the REST API endpoint, and never check access or resource existence */
+/** Hosted Fluxer application links. They use the verified app routes, not REST endpoints, and never check access or resource existence */
 export const links = Object.freeze({
     /** Build a hosted guild-channel or direct-message route. DirectMessageChannel inputs use Fluxer's `/channels/@me/:channelId` route */
     channel(target: ChannelLinkTarget): Result<string, HelperError> {
@@ -306,5 +325,15 @@ export const links = Object.freeze({
                 ? `https://fluxer.app/channels/@me/${resolvedChannel.value.id}/${id.value}`
                 : `https://fluxer.app/channels/${resolvedChannel.value.guildId}/${resolvedChannel.value.id}/${id.value}`,
         )
+    },
+    /** Build Fluxer's hosted bot-installation page with only the fixed `bot` scope and optional unsigned-64-bit permissions. It never navigates, authorizes, checks application existence, or accepts an alternate origin/scope */
+    installation(applicationId: string, options?: InstallationLinkOptions): Result<string, HelperError> {
+        const id = markupId(applicationId, "links.installation")
+        if (id.isErr()) return err(id.error)
+        const permissions = installationPermissions(options)
+        if (permissions.isErr()) return err(permissions.error)
+        const query = new URLSearchParams({ client_id: id.value, scope: "bot" })
+        if (permissions.value !== undefined) query.set("permissions", permissions.value)
+        return ok(`https://fluxer.app/oauth2/authorize?${query}`)
     },
 })

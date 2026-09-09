@@ -16,11 +16,17 @@ export { HelperError, TimestampStyles } from "./helpers.js"
 export type {
     ChannelLinkTarget,
     CustomEmojiMarkup,
+    InstallationLinkOptions,
     Mention,
     PermissionName,
     TimestampMarkup,
     TimestampStyle,
 } from "./helpers.js"
+import type { GuildListQuery } from "./guilds.js"
+import type { GuildIterationQuery } from "./pagination.js"
+export type { GuildListQuery } from "./guilds.js"
+export type { GuildIterationQuery } from "./pagination.js"
+import { guildList, guildLeave } from "#sdk/internal/guild-lifecycle"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
 import { GuildOperationError } from "./guilds.js"
@@ -110,12 +116,15 @@ export const permissionBits = Object.freeze({
     toDecimal: (bits: bigint) => helperEffect(() => sharedPermissionBits.toDecimal(bits)),
 })
 
-/** Pure hosted Fluxer guild-channel, direct-message, and message link helpers. Fallible route validation is lazy and retains HelperError */
+/** Pure hosted Fluxer guild-channel, direct-message, message, and bot-installation link helpers. Fallible route validation is lazy and retains HelperError */
 export const links = Object.freeze({
     /** Lazily create an official hosted guild-channel or direct-message route from `{ id, guildId }` or `{ id }`. It never checks existence or access */
     channel: (...args: Parameters<typeof sharedLinks.channel>) => helperEffect(() => sharedLinks.channel(...args)),
     /** Lazily create an official hosted message route from a matching message and actual channel context. It never infers context, checks existence, or checks access */
     message: (...args: Parameters<typeof sharedLinks.message>) => helperEffect(() => sharedLinks.message(...args)),
+    /** Lazily create Fluxer's hosted bot-installation page with only the fixed `bot` scope and optional unsigned-64-bit permissions. It never navigates, authorizes, checks existence, or accepts an alternate origin/scope */
+    installation: (...args: Parameters<typeof sharedLinks.installation>) =>
+        helperEffect(() => sharedLinks.installation(...args)),
 })
 
 /**
@@ -172,6 +181,16 @@ export const assets = Object.freeze({
     /** Lazily build a custom-sticker URL from only its ID and animation metadata. Stickers do not expose format because Fluxer returns WebP except an animated sticker's GIF source */
     sticker: (...args: Parameters<typeof sharedAssets.sticker>) => assetEffect(() => sharedAssets.sticker(...args)),
 })
+import type { BotApplication, BotApplicationOperationFailure, BotApplicationOperationOptions } from "./application.js"
+export { BotApplicationOperationError } from "./application.js"
+export type {
+    BotApplication,
+    BotApplicationOperation,
+    BotApplicationOperationFailure,
+    BotApplicationOperationOptions,
+    DefaultBotApplicationOperationOptions,
+} from "./application.js"
+import { applicationCurrent } from "#sdk/internal/application"
 import type {
     MemberSearchQuery,
     MemberSearchPage,
@@ -390,6 +409,7 @@ export type {
 import {
     historyPagination,
     memberPagination,
+    guildPagination,
     auditLogPagination,
     reactionUserPagination,
     pinPagination,
@@ -1588,6 +1608,45 @@ export interface Discovery {
  * Interruption awaits owned cleanup; closing clients use ClientClosedError. Defects retain native causes, including cleanup failures
  */
 export interface Guilds {
+    /** Lazily fetch one remote membership page for this bot, ordered by ascending guild ID.
+     * limit defaults to 200 (1–200); before/after are mutually exclusive existing-membership cursors.
+     * A removed cursor can cause Fluxer to restart the page. Counts and permissions are not projected.
+     * Returns frozen Guild observations without populating the guild cache or claiming a complete membership inventory.
+     * Uses this group's deadlines, retries and failures; no gateway connection or background traversal required
+     */
+    fetchPage(
+        query?: GuildListQuery,
+        options?: GuildOperationOptions,
+    ): Effect.Effect<readonly Guild[], GuildOperationFailure>
+    /** Lazily traverse ascending guild IDs, retaining one page and never prefetching.
+     * maxItems is required; pageSize defaults to 200 and maxPages to 100. Stop at maxItems or an empty page, not a short page
+     *
+     * Repeated/backward IDs after a removed cursor fail with PaginationError cursorStalled before that page is delivered.
+     * Other pagination failures are input/pageLimit; remote failures preserve fetchPage's error and per-page timeout.
+     * Each stream consumption copies inputs in the caller's scope; interruption and scope closure await request cleanup.
+     * Scope cleanup releases the buffered page. Client closure releases the page and fails the next pull.
+     * No cache hydration or consistent-inventory guarantee. Previously delivered values remain caller-owned
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export function guildMembershipsExample(client: Client) {
+     *     return client.guilds.iterate({ maxItems: 1000 })
+     * }
+     * ```
+     */
+    iterate(
+        query: GuildIterationQuery,
+        options?: GuildOperationOptions,
+    ): Stream.Stream<Guild, GuildOperationFailure | PaginationError>
+    /** Lazily leave the named guild as the authenticated bot, explicitly preserving authored messages.
+     * HTTP 204 completes membership removal, not gateway delivery. The client stays usable for other guilds.
+     * Fluxer rejects owners and restricted memberships. Only confirmed 429 rejection is retried; cancellation or a lost
+     * response can leave membership removed. Refetch/list to reconcile; rejoining requires external authorization.
+     * Successful or uncertain writes invalidate this guild's resource observations and pending reads.
+     * Any dispatched attempt conservatively clears channel/message caches because messages need not carry guild IDs.
+     * Existing caller-held snapshots remain unchanged. This operation never deletes the guild or shuts down the client
+     */
+    leave(guildId: string, options?: GuildOperationOptions): Effect.Effect<void, GuildOperationFailure>
     /** Read a decimal guild's custom invite and use count, requiring ManageGuild.
      * Always remote, without a vanity cache or gateway requirement. Null code/url means no custom invite.
      * Lazy and repeatable, using this group's read retries, deadline, interruption and typed failure rules
@@ -2122,6 +2181,8 @@ export interface Client extends ClientState {
     readonly discovery: Discovery
     /** Process-local requested presence, restored after gateway reconnects and never stored across process restarts */
     readonly presence: Presence
+    /** Current authenticated bot application allowlist, without owner or application-management operations */
+    readonly application: CurrentBotApplication
     /** Public account reads and optional local lookup */
     readonly users: Users
     /** One-to-one and group conversations, composed with messages for content operations */
@@ -2318,6 +2379,29 @@ export interface Presence {
     set(input: PresenceInput): Effect.Effect<void, PresenceFailure>
 }
 
+/** Authenticated current-bot application read through GET `/oauth2/applications/@me`, independent of gateway readiness.
+ * Effects are lazy and repeatable in the caller context with the shared 30-second total deadline and at most two transient read retries.
+ * Returns a frozen no-cache allowlist only. Owner identity, redirect URIs, verification keys, client secrets, and nested bot fields are never exposed.
+ * Fluxer remains authoritative for application visibility and installability; this read neither manages an application nor opens an authorization page.
+ * Input, HTTP, and malformed-response failures use BotApplicationOperationError; closure uses ClientClosedError; interruption and defects remain in the native cause
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { links, type Client } from "@neontechspace/fluxerly/effect"
+ * export const applicationExample = (client: Client) => Effect.gen(function* () {
+ *     const application = yield* client.application.fetchCurrent()
+ *     return yield* links.installation(application.id, { permissions: 0n })
+ * })
+ * ```
+ */
+export interface CurrentBotApplication {
+    /** Lazily fetch this token's frozen application allowlist remotely, without cache writes, gateway events, owner lookup, or hidden follow-up requests */
+    fetchCurrent(
+        options?: BotApplicationOperationOptions,
+    ): Effect.Effect<BotApplication, BotApplicationOperationFailure>
+}
+
 /** Lazy Effect operations with shared 30-second default deadlines and bounded read retries.
  * Writes retry only confirmed rate-limit rejection, never an unknown outcome. No gateway connection is required.
  * Interruptions remain in the Effect cause and defects die
@@ -2401,6 +2485,10 @@ export function createClient<E = never, R = never>(
         yield* Effect.addFinalizer((exit) => owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, exit))))
         return Object.freeze({
             presence: Object.freeze({ set: (input: PresenceInput) => owner.setPresence(input) }),
+            application: Object.freeze({
+                fetchCurrent: (options?: BotApplicationOperationOptions) =>
+                    owner.application("application.fetchCurrent", () => applicationCurrent(), options),
+            }),
             users: Object.freeze({
                 get: (id: string) => owner.getUserResource("users", id),
                 fetch: (id: string, options?: UserOperationOptions) =>
@@ -2504,6 +2592,12 @@ export function createClient<E = never, R = never>(
                     owner.guild("discovery.withdraw", () => discoveryWithdraw(id), options),
             }),
             guilds: Object.freeze({
+                fetchPage: (query?: GuildListQuery, options?: GuildOperationOptions) =>
+                    owner.guild("guilds.fetchPage", () => guildList(query), options),
+                iterate: (query: GuildIterationQuery, options?: GuildOperationOptions) =>
+                    paginationStream(guildPagination(owner, query, options)),
+                leave: (id: string, options?: GuildOperationOptions) =>
+                    owner.guild("guilds.leave", () => guildLeave(id), options),
                 fetchVanityUrl: (id: string, options?: GuildOperationOptions) =>
                     owner.guild("guilds.fetchVanityUrl", () => vanityUrlFetch(id), options),
                 editVanityUrl: (id: string, code: string | null, options?: ModerationOptions) =>

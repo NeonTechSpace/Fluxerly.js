@@ -153,6 +153,12 @@ test("applies display, named permissions, decimal serialization, and hosted guil
         `https://fluxer.app/channels/${guildChannel.guildId}/${guildChannel.id}/${message.id}`,
     )
     expect(defaultApi.links.message({ ...message, channelId: directMessage.id }, guildChannel).isErr()).toBe(true)
+    expect(value(defaultApi.links.installation(guildChannel.id))).toBe(
+        `https://fluxer.app/oauth2/authorize?client_id=${guildChannel.id}&scope=bot`,
+    )
+    expect(value(defaultApi.links.installation(guildChannel.id, { permissions: 1n << 63n }))).toBe(
+        `https://fluxer.app/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=9223372036854775808`,
+    )
 
     expect(await Effect.runPromise(native.permissionBits.has(native.Permissions.ManageGuild, "ManageGuild"))).toBe(true)
     expect(await Effect.runPromise(native.permissionBits.toDecimal(1n << 63n))).toBe("9223372036854775808")
@@ -162,9 +168,31 @@ test("applies display, named permissions, decimal serialization, and hosted guil
     expect(await Effect.runPromise(native.links.message(message, guildChannel))).toBe(
         `https://fluxer.app/channels/${guildChannel.guildId}/${guildChannel.id}/${message.id}`,
     )
+    expect(await Effect.runPromise(native.links.installation(guildChannel.id, { permissions: 0n }))).toBe(
+        `https://fluxer.app/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=0`,
+    )
     await expect(nativeError(native.permissionBits.toDecimal(-1n))).resolves.toMatchObject({
         _tag: "HelperError",
         operation: "permissionBits.toDecimal",
         reason: "permissionBits",
     })
+})
+
+test("rejects noncanonical installation IDs and options without alternate hosted routes, scopes, or requests", async () => {
+    for (const [id, options, reason] of [
+        ["01", undefined, "id"],
+        [guildChannel.id, { permissions: -1n }, "permissionBits"],
+        [guildChannel.id, { permissions: 1n << 64n }, "permissionBits"],
+        [guildChannel.id, { scope: "identify" }, "link"],
+    ] as const) {
+        const defaultResult = defaultApi.links.installation(id, options as never)
+        expect(defaultResult).toMatchObject({
+            error: { _tag: "HelperError", operation: "links.installation", reason },
+        })
+        await expect(nativeError(native.links.installation(id, options as never))).resolves.toMatchObject({
+            _tag: "HelperError",
+            operation: "links.installation",
+            reason,
+        })
+    }
 })

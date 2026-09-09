@@ -57,6 +57,7 @@ export class ConfigurationError extends Error {
 export type Operation =
     | "presence.set"
     | "directMessages.send"
+    | import("./application.js").BotApplicationOperation
     | import("./users.js").UserOperation
     | import("./webhooks.js").WebhookOperation
     | "createWebhookClient"
@@ -194,6 +195,7 @@ export type DefectReason =
               | import("./channels.js").ChannelOperationError
               | import("./webhooks.js").WebhookOperationError
               | import("./users.js").UserOperationError
+              | import("./application.js").BotApplicationOperationError
               | import("./presence.js").PresenceError
               | import("./pagination.js").PaginationError
               | import("./collectors.js").CollectorError

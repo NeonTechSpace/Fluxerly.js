@@ -47,7 +47,7 @@ try {
     const tarball = join(temporary, "sdk.tgz")
     const packed = JSON.parse(packageManager(["pack", "--out", tarball, "--json"], sdk))
     const files = packed.files.map((file) => file.path)
-    for (const entry of ["index", "effect", "cache"]) {
+    for (const entry of ["index", "effect", "cache", "application"]) {
         for (const extension of ["js", "js.map", "d.ts", "d.ts.map"]) {
             assert.ok(files.includes(`dist/${entry}.${extension}`))
         }
@@ -108,6 +108,7 @@ try {
             "message-search",
             "role-hierarchy",
             "assets",
+            "application",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -164,6 +165,16 @@ try {
         )
         assert.equal(hierarchyExamples.length, 1)
         writeFileSync(join(consumer, "hierarchy-example.ts"), hierarchyExamples[0])
+        const guildMembershipExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /function guildMembershipsExample/.test(example))
+        assert.equal(guildMembershipExamples.length, 1)
+        writeFileSync(join(consumer, "guild-memberships-example.ts"), guildMembershipExamples[0])
         const userExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]
@@ -235,6 +246,16 @@ try {
         assert.equal(messageSearchExamples.length, 2)
         for (const [index, example] of messageSearchExamples.entries())
             writeFileSync(join(consumer, `message-search-example-${index}.ts`), example)
+        const applicationExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /(?:function|const) applicationExample/.test(example))
+        assert.equal(applicationExamples.length, 1)
+        writeFileSync(join(consumer, "application-example.ts"), applicationExamples[0])
         const guildExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]

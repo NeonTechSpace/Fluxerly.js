@@ -80,6 +80,7 @@ describe("client creation through both public entry points", () => {
             expect(JSON.stringify(client)).not.toContain(token)
             expect(Object.keys(client)).toEqual([
                 "presence",
+                "application",
                 "users",
                 "directMessages",
                 "webhooks",

@@ -306,6 +306,20 @@ export interface MemberQuery {
     readonly after?: string
 }
 
+/** One remote page of the authenticated bot's guild memberships, without approximate counts */
+export interface GuildListQuery {
+    /** Page size, integer 1–200, default 200 */
+    readonly limit?: number
+    /** Existing membership cursor before which to list. Cannot be combined with after.
+     * If the cursor membership no longer exists, Fluxer can restart the page from the beginning
+     */
+    readonly before?: string
+    /** Existing membership cursor after which to list. Cannot be combined with before.
+     * If the cursor membership no longer exists, Fluxer can restart the page from the beginning
+     */
+    readonly after?: string
+}
+
 /** Settings shared by remote guild, member and role operations */
 export interface GuildOperationOptions {
     /** Total milliseconds across admission, rate waits, retries and HTTP; integer 1–2,147,483,647, default 30,000.
@@ -499,6 +513,8 @@ export type GuildOperation =
     | "members.get"
     | "roles.get"
     | "guilds.fetch"
+    | "guilds.fetchPage"
+    | "guilds.leave"
     | "guilds.ban"
     | "guilds.unban"
     | "guilds.fetchBans"

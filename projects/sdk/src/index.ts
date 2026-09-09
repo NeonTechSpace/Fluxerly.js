@@ -13,11 +13,17 @@ export { HelperError, TimestampStyles } from "./helpers.js"
 export type {
     ChannelLinkTarget,
     CustomEmojiMarkup,
+    InstallationLinkOptions,
     Mention,
     PermissionName,
     TimestampMarkup,
     TimestampStyle,
 } from "./helpers.js"
+import type { GuildListQuery } from "./guilds.js"
+import type { GuildIterationQuery } from "./pagination.js"
+export type { GuildListQuery } from "./guilds.js"
+export type { GuildIterationQuery } from "./pagination.js"
+import { guildList, guildLeave } from "#sdk/internal/guild-lifecycle"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
 export type { PermissionInput, PermissionTarget } from "./permissions.js"
@@ -40,11 +46,26 @@ export const display = sharedDisplay
 /** Pure named raw-permission membership and decimal serialization helpers, not an authorisation decision */
 export const permissionBits = sharedPermissionBits
 
-/** Pure hosted Fluxer guild-channel, direct-message, and message link helpers. Fallible route validation returns `Result` */
+/** Pure hosted Fluxer guild-channel, direct-message, message, and bot-installation link helpers. Fallible route validation returns `Result` */
 export const links = sharedLinks
 
 /** Pure hosted Fluxer avatar, member, guild, emoji, and sticker URL helpers. Fallible calls return `Result` without a client, network, cache, or arbitrary origin */
 export const assets = sharedAssets
+import {
+    BotApplicationOperationError,
+    type BotApplication,
+    type BotApplicationOperationFailure,
+    type DefaultBotApplicationOperationOptions,
+} from "./application.js"
+export { BotApplicationOperationError }
+export type {
+    BotApplication,
+    BotApplicationOperation,
+    BotApplicationOperationFailure,
+    BotApplicationOperationOptions,
+    DefaultBotApplicationOperationOptions,
+} from "./application.js"
+import { applicationCurrent } from "#sdk/internal/application"
 import type {
     MemberSearchQuery,
     MemberSearchPage,
@@ -273,6 +294,7 @@ export type {
 import {
     historyPagination,
     memberPagination,
+    guildPagination,
     auditLogPagination,
     reactionUserPagination,
     pinPagination,
@@ -1438,6 +1460,48 @@ export interface Discovery {
  * Abort returns CancelledError after cleanup; closing clients use ClientClosedError and unexpected defects reject with SdkDefect
  */
 export interface Guilds {
+    /** Fetch one remote membership page for this bot, ordered by ascending guild ID.
+     * limit defaults to 200 (1–200); before/after are mutually exclusive existing-membership cursors.
+     * A removed cursor can cause Fluxer to restart the page. Counts and permissions are not projected.
+     * Returns frozen Guild observations without populating the guild cache or claiming a complete membership inventory.
+     * Uses this group's deadlines, retries and failures; no gateway connection or background traversal required
+     */
+    fetchPage(
+        query?: GuildListQuery,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<readonly Guild[], GuildOperationFailure | CancelledError>
+    /** Lazily traverse ascending guild IDs, retaining one page and never prefetching.
+     * maxItems is required; pageSize defaults to 200 and maxPages to 100. Stop at maxItems or an empty page, not a short page
+     *
+     * Repeated/backward IDs after a removed cursor fail with PaginationError cursorStalled before that page is delivered.
+     * Other pagination failures are input/pageLimit; remote failures preserve fetchPage's error and per-page timeout.
+     * Each consumption copies inputs and yields Ok guilds or one terminal Err; abort yields CancelledError after request cleanup.
+     * break/return releases the page; abort the signal to interrupt a pending next. Client closure releases the page and fails the next pull.
+     * No cache hydration or consistent-inventory guarantee. Previously delivered values remain caller-owned
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export function guildMembershipsExample(client: Client) {
+     *     return client.guilds.iterate({ maxItems: 1000 })
+     * }
+     * ```
+     */
+    iterate(
+        query: GuildIterationQuery,
+        options?: DefaultGuildOperationOptions,
+    ): AsyncIterable<Result<Guild, GuildOperationFailure | PaginationError | CancelledError>>
+    /** Leave the named guild as the authenticated bot, explicitly preserving authored messages.
+     * HTTP 204 completes membership removal, not gateway delivery. The client stays usable for other guilds.
+     * Fluxer rejects owners and restricted memberships. Only confirmed 429 rejection is retried; cancellation or a lost
+     * response can leave membership removed. Refetch/list to reconcile; rejoining requires external authorization.
+     * Successful or uncertain writes invalidate this guild's resource observations and pending reads.
+     * Any dispatched attempt conservatively clears channel/message caches because messages need not carry guild IDs.
+     * Existing caller-held snapshots remain unchanged. This operation never deletes the guild or shuts down the client
+     */
+    leave(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
     /** Read a decimal guild's custom invite and use count, requiring ManageGuild.
      * Always remote, without a vanity cache or gateway requirement. Null code/url means no custom invite.
      * Starts immediately, using this group's read retries, deadline, cancellation and typed failure rules
@@ -2046,6 +2110,8 @@ export interface Client extends ClientState {
     readonly discovery: Discovery
     /** Process-local requested presence, restored after gateway reconnects and never stored across process restarts */
     readonly presence: Presence
+    /** Current authenticated bot application allowlist, without owner or application-management operations */
+    readonly application: CurrentBotApplication
     /** Public account reads and optional local lookup */
     readonly users: Users
     /** One-to-one and group conversations, composed with messages for content operations */
@@ -2195,6 +2261,7 @@ const executeOperation = <
         | ChannelOperationError
         | WebhookOperationError
         | UserOperationError
+        | BotApplicationOperationError
         | PresenceError
         | PaginationError,
 >(
@@ -2333,6 +2400,7 @@ function fromExit<
         | ChannelOperationError
         | WebhookOperationError
         | UserOperationError
+        | BotApplicationOperationError
         | PresenceError
         | PaginationError,
 >(exit: Exit.Exit<A, E>, operation: Operation): Result<A, E | CancelledError> {
@@ -2432,6 +2500,28 @@ export interface Presence {
      * Unexpected defects throw SdkDefect
      */
     set(input: PresenceInput): Result<void, PresenceFailure>
+}
+
+/** Authenticated current-bot application read through GET `/oauth2/applications/@me`, independent of gateway readiness.
+ * Starts immediately with the shared 30-second total deadline and at most two transient read retries; abort returns CancelledError after cleanup.
+ * Returns a frozen no-cache allowlist only. Owner identity, redirect URIs, verification keys, client secrets, and nested bot fields are never exposed.
+ * Fluxer remains authoritative for application visibility and installability; this read neither manages an application nor opens an authorization page.
+ * Input, HTTP, and malformed-response failures use BotApplicationOperationError; closure uses ClientClosedError; unexpected defects reject with SdkDefect
+ *
+ * @example
+ * ```ts
+ * import { links, type Client } from "@neontechspace/fluxerly"
+ * export async function applicationExample(client: Client) {
+ *     const application = await client.application.fetchCurrent()
+ *     return application.isErr() ? application : links.installation(application.value.id, { permissions: 0n })
+ * }
+ * ```
+ */
+export interface CurrentBotApplication {
+    /** Fetch this token's frozen application allowlist remotely, without a cache write, gateway event, owner lookup, or hidden follow-up request */
+    fetchCurrent(
+        options?: DefaultBotApplicationOperationOptions,
+    ): ResultAsync<BotApplication, BotApplicationOperationFailure | CancelledError>
 }
 
 /** Immediate ResultAsync operations with shared 30-second default deadlines and bounded read retries.
@@ -2538,6 +2628,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             | ChannelOperationError
             | WebhookOperationError
             | UserOperationError
+            | BotApplicationOperationError
             | PresenceError
             | PaginationError,
     >(
@@ -2623,6 +2714,14 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         Object.freeze({
             presence: Object.freeze({
                 set: (input: PresenceInput) => lookup(owner.setPresence(input), "presence.set"),
+            }),
+            application: Object.freeze({
+                fetchCurrent: (options?: DefaultBotApplicationOperationOptions) =>
+                    execute(
+                        owner.application("application.fetchCurrent", () => applicationCurrent(), options),
+                        "application.fetchCurrent",
+                        options,
+                    ),
             }),
             users: Object.freeze({
                 get: (id: string) => lookup(owner.getUserResource("users", id), "users.get"),
@@ -2891,6 +2990,20 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     ),
             }),
             guilds: Object.freeze({
+                fetchPage: (query?: GuildListQuery, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("guilds.fetchPage", () => guildList(query), options),
+                        "guilds.fetchPage",
+                        options,
+                    ),
+                iterate: (query: GuildIterationQuery, options?: DefaultGuildOperationOptions) =>
+                    iterate((request) => guildPagination(owner, query, request), "guilds.iterate", options),
+                leave: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(
+                        owner.guild("guilds.leave", () => guildLeave(id), options),
+                        "guilds.leave",
+                        options,
+                    ),
                 fetchVanityUrl: (id: string, options?: DefaultGuildOperationOptions) =>
                     execute(
                         owner.guild("guilds.fetchVanityUrl", () => vanityUrlFetch(id), options),

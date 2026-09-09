@@ -6,6 +6,7 @@ import type { OperationOptions } from "#sdk/client"
 import type { ClientOwner } from "./client.js"
 import { encodeHistory, record, reference } from "./message.js"
 import { memberPage } from "./guilds.js"
+import { guildList } from "./guild-lifecycle.js"
 import { auditLogPage } from "./audit-logs.js"
 import { encodePinsQuery } from "./pins.js"
 import { encodeReactionEmoji, encodeReactionUsersQuery } from "./reactions.js"
@@ -216,6 +217,23 @@ export const memberPagination = (
                         settings.options,
                     )
                     .pipe(Effect.map((items) => ({ items, next: items.at(-1)?.userId ?? null }))),
+        }
+    })
+
+export const guildPagination = (owner: ClientOwner, query: unknown, options?: MessageOperationOptions) =>
+    prepare(owner, "guilds.iterate", query, options, "after", 200, 200, (settings) => {
+        if (!guildList(cursorQuery("after", settings.cursor, settings.pageSize))) return undefined
+        return {
+            load: (cursor, limit) =>
+                owner
+                    .guild("guilds.fetchPage", () => guildList(cursorQuery("after", cursor, limit)), settings.options)
+                    .pipe(
+                        Effect.flatMap((items) =>
+                            cursor !== undefined && items.some((guild) => BigInt(guild.id) <= BigInt(cursor))
+                                ? Effect.fail(new PaginationError("guilds.iterate", "cursorStalled"))
+                                : Effect.succeed({ items, next: items.at(-1)?.id ?? null }),
+                        ),
+                    ),
         }
     })
 

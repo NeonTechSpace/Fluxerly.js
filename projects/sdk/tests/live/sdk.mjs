@@ -6,6 +6,7 @@ import WebSocket from "ws"
 
 const mode = process.argv[2]
 const cancelRecovery = process.argv[3] === "--cancel-recovery"
+const applicationCheck = process.argv[3] === "--application"
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, ...details }))
 let stage = "configuration"
@@ -92,6 +93,31 @@ async function observeHeartbeat(client) {
     report(stage, { passed: true, latencyMs: client.gatewayLatencyMs })
 }
 
+function verifyCurrentApplication(value, applicationId, response) {
+    assert.deepEqual(Object.keys(value), ["id", "name", "icon", "description", "botPublic", "botRequireCodeGrant"])
+    assert.equal(value.id, applicationId)
+    assert.equal(value.name, response.name)
+    assert.equal(value.icon, response.icon)
+    assert.equal(value.description, response.description)
+    assert.equal(value.botPublic, response.bot_public)
+    assert.equal(value.botRequireCodeGrant, response.bot_require_code_grant)
+    assert.ok(Object.isFrozen(value))
+    assert.equal(Object.hasOwn(value, "owner"), false)
+    assert.equal(Object.hasOwn(value, "redirectUris"), false)
+    assert.equal(Object.hasOwn(value, "verifyKey"), false)
+    assert.equal(Object.hasOwn(value, "bot"), false)
+}
+
+function verifyInstallationLink(link, applicationId) {
+    const url = new URL(link)
+    assert.equal(url.origin, "https://fluxer.app")
+    assert.equal(url.pathname, "/oauth2/authorize")
+    assert.equal(url.searchParams.get("client_id"), applicationId)
+    assert.equal(url.searchParams.get("scope"), "bot")
+    assert.equal(url.searchParams.get("permissions"), "0")
+    assert.equal([...url.searchParams.keys()].sort().join(","), "client_id,permissions,scope")
+}
+
 // A watchdog is failure containment, never evidence of successful cleanup
 // Keep it unreferenced so a successful check must exit naturally
 setTimeout(() => {
@@ -101,7 +127,7 @@ setTimeout(() => {
 
 try {
     assert.ok(mode === "default" || mode === "effect")
-    assert.ok(process.argv[3] === undefined || cancelRecovery)
+    assert.ok(process.argv[3] === undefined || cancelRecovery || applicationCheck)
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
     writeSync(lock, String(process.pid))
@@ -115,7 +141,7 @@ try {
     assert.match(guildId ?? "", /^\d+$/)
 
     stage = "sandbox_identity"
-    const application = await get("/applications/@me", token)
+    const application = await get("/oauth2/applications/@me", token)
     const user = await get("/users/@me", token)
     assert.equal(application.id, applicationId)
     assert.equal(user.bot, true)
@@ -127,7 +153,7 @@ try {
 
     let client
     if (mode === "default") {
-        const { createClient } = await import("@neontechspace/fluxerly")
+        const { createClient, links } = await import("@neontechspace/fluxerly")
         stage = "creation"
         const created = createClient({ token })
         assert.ok(created.isOk())
@@ -136,28 +162,39 @@ try {
         const controller = new AbortController()
         let running
         try {
-            stage = "connect"
-            if (cancelRecovery) {
-                // Capture defects immediately without printing a credential-bearing rejection
-                running = Promise.resolve(client.run({ signal: controller.signal })).then(
-                    (result) => ({ result }),
-                    () => ({ defect: true }),
-                )
-                await waitForReady(client)
-            } else assert.ok((await client.connect()).isOk())
-            assert.equal(client.state, "Connected")
-            report("ready", { passed: true })
-            await observeHeartbeat(client)
-            if (cancelRecovery) {
-                await gatewayProbe.interrupt(client)
-                stage = "managed_recovery_cancellation"
-                controller.abort()
-                const outcome = await running
-                assert.ok(outcome.result?.isErr())
-                assert.equal(outcome.result.error._tag, "CancelledError")
-                // Verify cancellation-owned closure before the fallback shutdown in finally
-                assert.equal(client.state, "Closed")
-                report(stage, { passed: true })
+            if (applicationCheck) {
+                stage = "current_application"
+                const current = await client.application.fetchCurrent()
+                assert.ok(current.isOk())
+                verifyCurrentApplication(current.value, applicationId, application)
+                const link = links.installation(current.value.id, { permissions: 0n })
+                assert.ok(link.isOk())
+                verifyInstallationLink(link.value, applicationId)
+                report(stage, { passed: true, noCache: true, clientSecretUsed: false })
+            } else {
+                stage = "connect"
+                if (cancelRecovery) {
+                    // Capture defects immediately without printing a credential-bearing rejection
+                    running = Promise.resolve(client.run({ signal: controller.signal })).then(
+                        (result) => ({ result }),
+                        () => ({ defect: true }),
+                    )
+                    await waitForReady(client)
+                } else assert.ok((await client.connect()).isOk())
+                assert.equal(client.state, "Connected")
+                report("ready", { passed: true })
+                await observeHeartbeat(client)
+                if (cancelRecovery) {
+                    await gatewayProbe.interrupt(client)
+                    stage = "managed_recovery_cancellation"
+                    controller.abort()
+                    const outcome = await running
+                    assert.ok(outcome.result?.isErr())
+                    assert.equal(outcome.result.error._tag, "CancelledError")
+                    // Verify cancellation-owned closure before the fallback shutdown in finally
+                    assert.equal(client.state, "Closed")
+                    report(stage, { passed: true })
+                }
             }
         } finally {
             const previous = stage
@@ -169,29 +206,38 @@ try {
         assert.ok((await client.waitForClose()).isOk())
     } else {
         const { Cause, Effect, Exit, Fiber } = await import("effect")
-        const { createClient } = await import("@neontechspace/fluxerly/effect")
+        const { createClient, links } = await import("@neontechspace/fluxerly/effect")
         const exit = await Effect.runPromiseExit(
             Effect.scoped(
                 Effect.gen(function* () {
                     stage = "creation"
                     client = yield* createClient({ token })
                     assert.equal(client.state, "Disconnected")
-                    stage = "connect"
-                    const running = cancelRecovery ? yield* Effect.forkScoped(client.run()) : undefined
-                    if (cancelRecovery) yield* Effect.promise(() => waitForReady(client))
-                    else yield* client.connect()
-                    assert.equal(client.state, "Connected")
-                    report("ready", { passed: true })
-                    yield* Effect.promise(() => observeHeartbeat(client))
-                    if (cancelRecovery) {
-                        yield* Effect.promise(() => gatewayProbe.interrupt(client))
-                        stage = "managed_recovery_cancellation"
-                        yield* Fiber.interrupt(running)
-                        const outcome = yield* Effect.exit(Fiber.join(running))
-                        assert.ok(Exit.isFailure(outcome) && Cause.hasInterruptsOnly(outcome.cause))
-                        // The managed run, rather than the enclosing scope, must have finished cleanup
-                        assert.equal(client.state, "Closed")
-                        report(stage, { passed: true })
+                    if (applicationCheck) {
+                        stage = "current_application"
+                        const current = yield* client.application.fetchCurrent()
+                        verifyCurrentApplication(current, applicationId, application)
+                        const link = yield* links.installation(current.id, { permissions: 0n })
+                        verifyInstallationLink(link, applicationId)
+                        report(stage, { passed: true, noCache: true, clientSecretUsed: false })
+                    } else {
+                        stage = "connect"
+                        const running = cancelRecovery ? yield* Effect.forkScoped(client.run()) : undefined
+                        if (cancelRecovery) yield* Effect.promise(() => waitForReady(client))
+                        else yield* client.connect()
+                        assert.equal(client.state, "Connected")
+                        report("ready", { passed: true })
+                        yield* Effect.promise(() => observeHeartbeat(client))
+                        if (cancelRecovery) {
+                            yield* Effect.promise(() => gatewayProbe.interrupt(client))
+                            stage = "managed_recovery_cancellation"
+                            yield* Fiber.interrupt(running)
+                            const outcome = yield* Effect.exit(Fiber.join(running))
+                            assert.ok(Exit.isFailure(outcome) && Cause.hasInterruptsOnly(outcome.cause))
+                            // The managed run, rather than the enclosing scope, must have finished cleanup
+                            assert.equal(client.state, "Closed")
+                            report(stage, { passed: true })
+                        }
                     }
                     stage = "scope_shutdown"
                 }),

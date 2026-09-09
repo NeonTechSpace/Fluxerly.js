@@ -17,6 +17,7 @@ The documentation website remains a scaffold
 | [index.ts](/projects/sdk/src/index.ts) | Default public API and member documentation |
 | [effect.ts](/projects/sdk/src/effect.ts) | Effect-native public API and member documentation |
 | [client.ts](/projects/sdk/src/internal/client.ts) | Client lifetime and recovery ownership |
+| [application.ts](/projects/sdk/src/internal/application.ts) | Current bot-token application allowlist projection, using shared REST without retention or application management |
 | [discovery.ts](/projects/sdk/src/internal/discovery.ts) | Hosted service discovery |
 | [gateway.ts](/projects/sdk/src/internal/gateway.ts) | Gateway transport and protocol |
 | [events.ts](/projects/sdk/src/internal/events.ts) | Subscription scheduling and bounded event intake |
@@ -25,6 +26,7 @@ The documentation website remains a scaffold
 | [reactions.ts](/projects/sdk/src/internal/reactions.ts) | Reaction emoji/query encoding and user-page/gateway projection; REST owns request scheduling |
 | [pins.ts](/projects/sdk/src/internal/pins.ts) | Pin-page query validation and page/event projection, with REST owning mutation and request scheduling |
 | [guilds.ts](/projects/sdk/src/internal/guilds.ts) | Guild/member/role request validation and response/event projection; shared REST owns admission and client-global rate state |
+| [guild-lifecycle.ts](/projects/sdk/src/internal/guild-lifecycle.ts) | Bot membership pages and explicit leave requests; shared REST and cache owners handle admission and observation invalidation |
 | [moderation.ts](/projects/sdk/src/internal/moderation.ts) | Timeout, kick and ban request validation and ban-list projection, using shared REST scheduling and resource invalidation |
 | [webhooks.ts](/projects/sdk/src/internal/webhooks.ts) | Webhook request/projection validation and token-only client lifetime, with shared REST admission and no webhook cache |
 | [users.ts](/projects/sdk/src/internal/users.ts) | Public account and private-conversation projection/request validation, with shared REST scheduling |
@@ -151,6 +153,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | --- | --- | --- |
 | `test:live` | Hosted protocol discovery, readiness and heartbeats | No server-content changes |
 | `test:live:sdk` | Built default/native client connection and shutdown | No server-content changes |
+| `test:live:application` | Built default/native current-bot application allowlist and hosted installation-link construction | Read-only; no navigation, authorization, or server-content changes |
 | `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
 | `test:live:typing` | One-shot typing, scoped refresh and completion/cancellation cleanup through both APIs | Temporary channel/messages and ephemeral typing notices; does not prove inbound typing delivery |
 | `test:live:recovery` | Forced socket loss, resume, diagnostics and subsequent receive/reply | Temporary channel/messages and test-socket termination |
@@ -166,6 +169,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:discovery` | Directory categories, eligibility/status and read recovery through both APIs | Read-only, never submits an application |
 | `test:live:member-search` | Indexed member search and local/remote permission calculation through both APIs | Resource reads and search requests, which can trigger provider lazy indexing; no member moderation or role/channel edits |
 | `test:live:members` | Authorized target-member nickname set, independent readback and restoration through both APIs | Temporary nickname change for one currently authorized non-owner member |
+| `test:live:guild-lifecycle` | Bot membership pages and bounded traversal through both APIs | Read-only unless the harness is invoked separately with `--leave` |
 | `test:live:discovery:mutate:default`, `test:live:discovery:mutate:effect` | Manual directory application lifecycle and lost-response reconciliation | Real review-queue submission or immediate public listing, then test-owned withdrawal |
 | `test:live:users:default`, `test:live:users:effect` | Public user reads, private conversations, bot server-profile edits and message failure reconciliation | Test DMs, authorized group messages/renaming, bot profile changes and test-owned response loss |
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
@@ -246,6 +250,13 @@ The harness rereads the nickname immediately before the write, but Fluxer's PATC
 It deliberately loses one response after the marker write, verifies the SDK reports an unknown outcome and evicts its member cache, then reconciles raw state before restoration
 
 Member-moderation scripts are manual opt-in checks, never part of `pnpm check`, CI, schedules or unattended reruns
+
+Guild leave checks are also manual: Coordinate with the person who can re-add the bot before each invocation.
+After building, run `node tests/live/guild-lifecycle.mjs default --leave` or the `effect` mode from the SDK directory with the currently authorized `FLUXER_TEST_LEAVE_GUILD_ID` in the process environment.
+The optional `--lose-response` flag discards a successful leave response to verify reconciliation without replay
+
+The harness explicitly preserves authored messages and checks independent membership-list removal, but cannot re-add the bot or prove continued access to its former messages.
+It creates no remote resources. If interrupted after dispatch, inspect bot membership and re-add it before further checks in that server
 
 Each moderation invocation requires current authorization for its disposable account and a human available to handle rejoining
 

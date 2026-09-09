@@ -23,6 +23,7 @@ export type ResourceRequest = {
     replace?: boolean
     members?: boolean
     batch?: boolean
+    wholeGuild?: boolean
 }
 export type ResourceGuard = ResourceRequest & { generation: number; invalid: boolean; success: boolean }
 type Entry = { selection: Selection; value: Snapshot; bytes: number; expires: number | null }
@@ -76,6 +77,7 @@ export class GuildCache {
     }
 
     #selections(request: ResourceRequest): readonly Selection[] {
+        if (request.wholeGuild) return kinds.map((kind) => ({ kind, guildId: request.selection.guildId }))
         return request.members
             ? [request.selection, { kind: "members", guildId: request.selection.guildId }]
             : [request.selection]

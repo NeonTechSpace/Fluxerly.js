@@ -32,6 +32,7 @@ export interface GuildRequest<A> {
     readonly moderation?: true
     readonly auditReason?: string
     readonly deleteAuthorId?: string
+    readonly invalidateMessages?: true
     readonly decode: (value: unknown) => A | undefined
     readonly cache?: ResourceRequest
     readonly channelCache?: ChannelCacheRequest
