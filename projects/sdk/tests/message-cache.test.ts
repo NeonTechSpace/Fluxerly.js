@@ -74,6 +74,19 @@ const wire = (id: string, channelId: string, content = `Message ${id}`) => ({
     content,
     author: { id: "30", username: "fixture" },
 })
+const metadataWire = (id: string, channelId: string, content = `Message ${id}`) => ({
+    ...wire(id, channelId, content),
+    timestamp: "2026-09-09T12:00:00.000Z",
+    edited_timestamp: null,
+    type: 19,
+    flags: 4,
+    guild_id: "40",
+    mentions: [{ id: "31", username: "mentioned" }],
+    mention_roles: ["50"],
+    reactions: [{ emoji: { id: null, name: "👍" }, count: 2, me: false }],
+    message_reference: { message_id: "70", channel_id: "71", type: 1 },
+    referenced_message: { id: "70", channel_id: "71", content: "not retained" },
+})
 
 const projection = (id: string, channelId: string, content = `Message ${id}`) => ({
     id,
@@ -316,6 +329,53 @@ test("native get is lazy and observes the same cached value and closed-client fa
         expect(
             closed.cause.reasons.some((reason) => reason._tag === "Fail" && reason.error._tag === "ClientClosedError"),
         ).toBe(true)
+})
+
+test("cache intake retains received message metadata as one frozen, byte-accounted snapshot", async () => {
+    const server = await fixture()
+    const client = defaultApi({ cache: { messages: true } })
+    server.control.respond = (request) => {
+        expect(request.method).toBe("GET")
+        expect(request.path).toBe("/v1/channels/20/messages/10")
+        request.response.end(JSON.stringify(metadataWire("10", "20")))
+    }
+    const fetched = value(await client.messages.fetch(target))
+    expect(cached(client, target)).toEqual(fetched)
+    expect(Object.isFrozen(fetched.reactions) && Object.isFrozen(fetched.reactions?.[0]?.emoji)).toBe(true)
+
+    value(await client.connect())
+    server.dispatch("MESSAGE_UPDATE", { ...metadataWire("10", "20"), flags: 8 })
+    await vi.waitFor(() => expect(cached(client, target)?.flags).toBe(8))
+    expect(cached(client, target)?.reactions?.[0]).toMatchObject({ emoji: { id: null, name: "👍" }, count: 2 })
+    expect(server.requests).toHaveLength(1)
+})
+
+test.each([
+    ["mentioned account", { mentions: [{ id: "not-an-id", username: "mentioned" }] }],
+    ["mentioned role", { mention_roles: ["not-an-id"] }],
+    ["mentioned channel", { mention_channels: [{ id: "60", name: "visible-channel", type: "not-a-type" }] }],
+    ["reaction emoji", { reactions: [{ emoji: { id: "not-an-id", name: "👍" }, count: 2 }] }],
+    ["reaction count", { reactions: [{ emoji: { name: "👍" }, count: -1 }] }],
+    ["message reference", { message_reference: { message_id: "not-an-id", channel_id: "71" } }],
+    ["resolved message reference", { referenced_message: { id: "70", channel_id: "not-an-id" } }],
+] as const)("REST fetch rejects malformed nested received metadata: %s", async (_label, patch) => {
+    const server = await fixture()
+    const client = defaultApi({ cache: { messages: true } })
+    server.control.respond = (request) => {
+        expect(request.method).toBe("GET")
+        expect(request.path).toBe("/v1/channels/20/messages/10")
+        request.response.end(JSON.stringify({ ...metadataWire("10", "20"), ...patch }))
+    }
+    const result = await client.messages.fetch(target)
+    expect(result.isErr()).toBe(true)
+    if (!result.isErr()) throw Error("Expected malformed metadata response failure")
+    expect(result.error).toMatchObject({
+        _tag: "MessageOperationError",
+        operation: "fetch",
+        reason: "response",
+        status: 200,
+    })
+    expect(cached(client, target)).toBeUndefined()
 })
 
 test("successful REST operations and history populate cache without changing their remote results", async () => {

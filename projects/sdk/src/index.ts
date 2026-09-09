@@ -1,8 +1,42 @@
 import type { PermissionInput, PermissionTarget } from "./permissions.js"
+import {
+    display as sharedDisplay,
+    format as sharedFormat,
+    links as sharedLinks,
+    permissionBits as sharedPermissionBits,
+    snowflakes as sharedSnowflakes,
+} from "./helpers.js"
+export { HelperError, TimestampStyles } from "./helpers.js"
+export type {
+    ChannelLinkTarget,
+    CustomEmojiMarkup,
+    Mention,
+    PermissionName,
+    TimestampMarkup,
+    TimestampStyle,
+} from "./helpers.js"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
 export type { PermissionInput, PermissionTarget } from "./permissions.js"
 import { calculatePermissions, fetchPermissions } from "#sdk/internal/permissions"
+
+/**
+ * Pure Fluxer markup helpers with no client, network, cache, or notification-state ownership.
+ * Fallible helpers return `Result`; `escapeMarkdown` returns text directly. Mention markup does not enable notifications
+ */
+export const format = sharedFormat
+
+/** Pure decimal-string snowflake helpers. Fallible conversions return `Result` and never pass IDs through Number */
+export const snowflakes = sharedSnowflakes
+
+/** Pure user/member display-name fallback with no remote or cache lookup */
+export const display = sharedDisplay
+
+/** Pure named raw-permission membership and decimal serialization helpers, not an authorisation decision */
+export const permissionBits = sharedPermissionBits
+
+/** Pure hosted Fluxer guild-channel, direct-message, and message link helpers. Fallible route validation returns `Result` */
+export const links = sharedLinks
 import type {
     MemberSearchQuery,
     MemberSearchPage,
@@ -391,6 +425,11 @@ export type { EventReadError, RegistrationError, SendError, MessageOperationFail
 export type {
     Message,
     MessageSticker,
+    MessageMention,
+    MessageChannelMention,
+    MessageReactionEmoji,
+    MessageReactionSummary,
+    MessageContextReference,
     MessageHistoryQuery,
     MessageDeletion,
     MessageBulkDeletion,

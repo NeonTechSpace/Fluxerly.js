@@ -1,4 +1,14 @@
-import type { Message, MessageInput, MessageReference, MessageDeletion, MessageBulkDeletion } from "#sdk/messages"
+import type {
+    Message,
+    MessageInput,
+    MessageReference,
+    MessageDeletion,
+    MessageBulkDeletion,
+    MessageMention,
+    MessageChannelMention,
+    MessageReactionSummary,
+    MessageContextReference,
+} from "#sdk/messages"
 import { MessageError } from "#sdk/message-errors"
 import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
 import { decodeAttachments, encodeAttachments, type EncodedBody } from "./attachments.js"
@@ -8,10 +18,29 @@ export const record = (value: unknown): value is Record<string, unknown> =>
 export const identifier = (value: unknown): value is string =>
     typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value)
 
+const timestamp = (value: unknown): value is string =>
+    typeof value === "string" &&
+    /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)$/.test(value) &&
+    Number.isFinite(Date.parse(value))
+const int32 = (value: unknown): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
+const count = (value: unknown): value is number => int32(value) && value >= 0
+
 export function decodeMessage(value: unknown): Message | undefined {
     if (!record(value) || !identifier(value.id) || !identifier(value.channel_id) || typeof value.content !== "string")
         return undefined
-    if (value.pinned !== undefined && typeof value.pinned !== "boolean") return undefined
+    if (
+        (value.pinned !== undefined && typeof value.pinned !== "boolean") ||
+        (value.timestamp !== undefined && !timestamp(value.timestamp)) ||
+        (value.edited_timestamp !== undefined &&
+            value.edited_timestamp !== null &&
+            !timestamp(value.edited_timestamp)) ||
+        (value.type !== undefined && !int32(value.type)) ||
+        (value.flags !== undefined && !int32(value.flags)) ||
+        (value.guild_id !== undefined && !identifier(value.guild_id)) ||
+        (value.mention_everyone !== undefined && typeof value.mention_everyone !== "boolean")
+    )
+        return undefined
     if (value.webhook_id != null && !identifier(value.webhook_id)) return undefined
     const author = value.author
     if (
@@ -37,17 +66,139 @@ export function decodeMessage(value: unknown): Message | undefined {
         stickers.push(Object.freeze({ id: sticker.id, name: sticker.name, animated: sticker.animated }))
     }
     if (embeds === undefined || attachments === undefined) return undefined
+    const mentions = decodeMentions(value.mentions)
+    const mentionRoles = decodeIdentifiers(value.mention_roles)
+    const mentionChannels = decodeMentionChannels(value.mention_channels)
+    const reactions = decodeReactionSummaries(value.reactions)
+    const messageReference = decodeMessageReference(value.message_reference)
+    const referencedMessage = decodeReferencedMessage(value.referenced_message)
+    if (
+        mentions === undefined ||
+        mentionRoles === undefined ||
+        mentionChannels === undefined ||
+        reactions === undefined ||
+        messageReference === undefined ||
+        referencedMessage === undefined
+    )
+        return undefined
     return Object.freeze({
         id: value.id,
         channelId: value.channel_id,
         content: value.content,
         ...(value.webhook_id == null ? {} : { webhookId: value.webhook_id }),
         ...(value.pinned === undefined ? {} : { pinned: value.pinned }),
+        ...(value.timestamp === undefined ? {} : { createdAt: value.timestamp }),
+        ...(value.edited_timestamp === undefined ? {} : { editedAt: value.edited_timestamp }),
+        ...(value.type === undefined ? {} : { type: value.type }),
+        ...(value.flags === undefined ? {} : { flags: value.flags }),
+        ...(value.guild_id === undefined ? {} : { guildId: value.guild_id }),
+        ...(value.mention_everyone === undefined ? {} : { mentionedEveryone: value.mention_everyone }),
         embeds,
         attachments,
         stickers: Object.freeze(stickers),
+        ...(mentions.value === undefined ? {} : { mentions: mentions.value }),
+        ...(mentionRoles.value === undefined ? {} : { mentionRoleIds: mentionRoles.value }),
+        ...(mentionChannels.value === undefined ? {} : { mentionChannels: mentionChannels.value }),
+        ...(reactions.value === undefined ? {} : { reactions: reactions.value }),
+        ...(messageReference.value === undefined ? {} : { messageReference: messageReference.value }),
+        ...(referencedMessage.value === undefined ? {} : { referencedMessage: referencedMessage.value }),
         author: Object.freeze({ id: author.id, username: author.username, isBot: author.bot === true }),
     })
+}
+
+type Observed<A> = { readonly value: A | undefined }
+
+function decodeMentions(value: unknown): Observed<readonly MessageMention[]> | undefined {
+    if (value === undefined) return { value: undefined }
+    if (!Array.isArray(value)) return undefined
+    const mentions: MessageMention[] = []
+    for (const mention of value) {
+        if (
+            !record(mention) ||
+            !identifier(mention.id) ||
+            typeof mention.username !== "string" ||
+            (mention.bot !== undefined && typeof mention.bot !== "boolean")
+        )
+            return undefined
+        mentions.push(Object.freeze({ id: mention.id, username: mention.username, isBot: mention.bot === true }))
+    }
+    return { value: Object.freeze(mentions) }
+}
+
+function decodeIdentifiers(value: unknown): Observed<readonly string[]> | undefined {
+    if (value === undefined) return { value: undefined }
+    return Array.isArray(value) && value.every(identifier) ? { value: Object.freeze([...value]) } : undefined
+}
+
+function decodeMentionChannels(value: unknown): Observed<readonly MessageChannelMention[] | null> | undefined {
+    if (value === undefined) return { value: undefined }
+    if (value === null) return { value: null }
+    if (!Array.isArray(value)) return undefined
+    const channels: MessageChannelMention[] = []
+    for (const channel of value) {
+        if (!record(channel) || !identifier(channel.id) || typeof channel.name !== "string" || !int32(channel.type))
+            return undefined
+        channels.push(Object.freeze({ id: channel.id, name: channel.name, type: channel.type }))
+    }
+    return { value: Object.freeze(channels) }
+}
+
+function decodeReactionSummaries(value: unknown): Observed<readonly MessageReactionSummary[] | null> | undefined {
+    if (value === undefined) return { value: undefined }
+    if (value === null) return { value: null }
+    if (!Array.isArray(value)) return undefined
+    const reactions: MessageReactionSummary[] = []
+    for (const reaction of value) {
+        if (!record(reaction) || !record(reaction.emoji) || !count(reaction.count)) return undefined
+        const emoji = reaction.emoji
+        if (
+            typeof emoji.name !== "string" ||
+            (emoji.id !== undefined && emoji.id !== null && !identifier(emoji.id)) ||
+            (emoji.animated !== undefined && emoji.animated !== null && typeof emoji.animated !== "boolean") ||
+            (reaction.me !== undefined && reaction.me !== null && typeof reaction.me !== "boolean")
+        )
+            return undefined
+        reactions.push(
+            Object.freeze({
+                emoji: Object.freeze({
+                    name: emoji.name,
+                    ...(emoji.id === undefined ? {} : { id: emoji.id }),
+                    ...(emoji.animated === undefined ? {} : { animated: emoji.animated }),
+                }),
+                count: reaction.count,
+                ...(reaction.me === undefined ? {} : { me: reaction.me }),
+            }),
+        )
+    }
+    return { value: Object.freeze(reactions) }
+}
+
+function decodeMessageReference(value: unknown): Observed<MessageContextReference | null> | undefined {
+    if (value === undefined) return { value: undefined }
+    if (value === null) return { value: null }
+    if (
+        !record(value) ||
+        !identifier(value.message_id) ||
+        !identifier(value.channel_id) ||
+        (value.guild_id !== undefined && value.guild_id !== null && !identifier(value.guild_id)) ||
+        (value.type !== undefined && !int32(value.type))
+    )
+        return undefined
+    return {
+        value: Object.freeze({
+            id: value.message_id,
+            channelId: value.channel_id,
+            ...(value.guild_id === undefined ? {} : { guildId: value.guild_id }),
+            ...(value.type === undefined ? {} : { type: value.type }),
+        }),
+    }
+}
+
+function decodeReferencedMessage(value: unknown): Observed<MessageReference | null> | undefined {
+    if (value === undefined) return { value: undefined }
+    if (value === null) return { value: null }
+    if (!record(value) || !identifier(value.id) || !identifier(value.channel_id)) return undefined
+    return { value: Object.freeze({ id: value.id, channelId: value.channel_id }) }
 }
 
 export function reference(value: unknown): value is MessageReference {

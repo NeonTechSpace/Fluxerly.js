@@ -38,6 +38,19 @@ const wire = (id = "10", pinned?: boolean) => ({
     author: { id: "30", username: "fixture" },
     ...(pinned === undefined ? {} : { pinned }),
 })
+const metadataWire = (id = "10") => ({
+    ...wire(id, true),
+    timestamp: "2026-09-09T12:00:00.000Z",
+    edited_timestamp: null,
+    type: 19,
+    flags: 4,
+    guild_id: "40",
+    mention_everyone: false,
+    mentions: [{ id: "31", username: "mentioned", bot: true }],
+    mention_roles: ["50"],
+    mention_channels: null,
+    message_reference: { message_id: "70", channel_id: "71", guild_id: null, type: 1 },
+})
 const pin = (id = "10", time = "2026-09-08T12:00:00.000Z") => ({ message: wire(id, true), pinned_at: time })
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
     vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
@@ -216,6 +229,37 @@ test.each(modes)("%s lists explicit frozen timestamp pages without traversal or 
     expect(calls[1]).toBe(
         "https://api.fluxer.app/v1/channels/20/messages/pins?limit=50&before=2026-09-08T12%3A00%3A00.000Z",
     )
+    expect(await api.get()).toBeUndefined()
+})
+
+test.each(modes)("%s preserves supplied metadata from pin pages without hydration", async (mode) => {
+    rest(async () =>
+        Response.json({ items: [{ message: metadataWire(), pinned_at: "2026-09-08T12:00:00.000Z" }], has_more: false }),
+    )
+    const api = await fixture(mode)
+    const message = (await api.pins()).items[0]!.message
+    expect(message).toMatchObject({
+        id: "10",
+        createdAt: "2026-09-09T12:00:00.000Z",
+        editedAt: null,
+        type: 19,
+        flags: 4,
+        guildId: "40",
+        mentionedEveryone: false,
+        mentions: [{ id: "31", username: "mentioned", isBot: true }],
+        mentionRoleIds: ["50"],
+        mentionChannels: null,
+        messageReference: { id: "70", channelId: "71", guildId: null, type: 1 },
+    })
+    expect("reactions" in message).toBe(false)
+    expect("referencedMessage" in message).toBe(false)
+    expect(
+        Object.isFrozen(message) &&
+            Object.isFrozen(message.mentions) &&
+            Object.isFrozen(message.mentions?.[0]) &&
+            Object.isFrozen(message.mentionRoleIds) &&
+            Object.isFrozen(message.messageReference),
+    ).toBe(true)
     expect(await api.get()).toBeUndefined()
 })
 

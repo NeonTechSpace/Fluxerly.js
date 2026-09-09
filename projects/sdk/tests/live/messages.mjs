@@ -1735,6 +1735,74 @@ async function verifyManaged(snapshot, content, seed) {
     report(stage, true)
 }
 
+function verifyReceivedMetadata(snapshot, wire) {
+    const requireObserved = (wireKey, snapshotKey, project = (value) => value) => {
+        assert.ok(Object.hasOwn(wire, wireKey), `Readback omitted required ${wireKey}`)
+        assert.ok(snapshotKey in snapshot, `SDK snapshot omitted required ${snapshotKey}`)
+        assert.deepEqual(snapshot[snapshotKey], project(wire[wireKey]))
+    }
+    const compareIfObserved = (wireKey, snapshotKey, project = (value) => value) => {
+        // The SDK snapshot may come from a send or gateway response while this direct GET is a later,
+        // context-dependent observation. Optional fields such as guild_id can therefore be omitted by one source.
+        if (Object.hasOwn(wire, wireKey) && snapshotKey in snapshot)
+            assert.deepEqual(snapshot[snapshotKey], project(wire[wireKey]))
+    }
+    const projectReference = (value) =>
+        value === null
+            ? null
+            : {
+                  id: value.message_id,
+                  channelId: value.channel_id,
+                  ...(Object.hasOwn(value, "guild_id") ? { guildId: value.guild_id } : {}),
+                  ...(Object.hasOwn(value, "type") ? { type: value.type } : {}),
+              }
+    const projectReaction = (reaction) => ({
+        emoji: {
+            name: reaction.emoji.name,
+            ...(Object.hasOwn(reaction.emoji, "id") ? { id: reaction.emoji.id } : {}),
+            ...(Object.hasOwn(reaction.emoji, "animated") ? { animated: reaction.emoji.animated } : {}),
+        },
+        count: reaction.count,
+        ...(Object.hasOwn(reaction, "me") ? { me: reaction.me } : {}),
+    })
+    requireObserved("timestamp", "createdAt")
+    requireObserved("type", "type")
+    requireObserved("flags", "flags")
+    requireObserved("mention_everyone", "mentionedEveryone")
+    requireObserved("mentions", "mentions", (mentions) =>
+        mentions.map((mention) => ({ id: mention.id, username: mention.username, isBot: mention.bot === true })),
+    )
+    requireObserved("mention_roles", "mentionRoleIds")
+    compareIfObserved("edited_timestamp", "editedAt")
+    compareIfObserved("guild_id", "guildId")
+    compareIfObserved("mention_channels", "mentionChannels", (channels) =>
+        channels === null
+            ? null
+            : channels.map((channel) => ({ id: channel.id, name: channel.name, type: channel.type })),
+    )
+    compareIfObserved("reactions", "reactions", (reactions) =>
+        reactions === null ? null : reactions.map(projectReaction),
+    )
+    compareIfObserved("message_reference", "messageReference", projectReference)
+    compareIfObserved("referenced_message", "referencedMessage", (reference) =>
+        reference === null ? null : { id: reference.id, channelId: reference.channel_id },
+    )
+    assert.ok(Object.isFrozen(snapshot))
+    for (const nested of [
+        snapshot.mentions,
+        snapshot.mentions?.[0],
+        snapshot.mentionRoleIds,
+        snapshot.mentionChannels,
+        snapshot.mentionChannels?.[0],
+        snapshot.reactions,
+        snapshot.reactions?.[0],
+        snapshot.reactions?.[0]?.emoji,
+        snapshot.messageReference,
+        snapshot.referencedMessage,
+    ])
+        if (nested !== undefined && nested !== null) assert.ok(Object.isFrozen(nested))
+}
+
 function verifyMissing(error, operation) {
     assert.equal(error?._tag, "MessageOperationError")
     assert.equal(error.operation, operation)
@@ -3605,6 +3673,11 @@ try {
     assert.equal(actual?.message_reference?.message_id, seed.id)
     assert.equal(actual?.mention_everyone, false)
     assert.deepEqual(actual?.mentions, [])
+    stage = "received_message_metadata_readback"
+    const seedWire = (await api("GET", `/channels/${channel.id}/messages/${seed.id}`)).data
+    verifyReceivedMetadata(seed, seedWire)
+    verifyReceivedMetadata(reply, actual)
+    report(stage, true)
     report("sdk_receive_and_reply", true)
     if (forceRecovery) report("post_resume_receive_and_reply", true)
     report("reply_reference_and_mentions_verified", true)

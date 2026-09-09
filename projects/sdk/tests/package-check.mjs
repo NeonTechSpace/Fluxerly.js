@@ -94,6 +94,8 @@ try {
             "discovery",
             "permissions",
             "member-search",
+            "messages",
+            "helpers",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -304,6 +306,7 @@ try {
             "discovery",
             "permissions",
             "member-search",
+            "helpers",
         ]) {
             const source = readFileSync(join(sdk, `src/${entry}.ts`), "utf8")
             const examples = [...source.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
@@ -314,7 +317,7 @@ try {
                         .join("\n"),
                 )
                 .filter((example) =>
-                    /function (expression|expressionEvents|sticker|invite|audit|guildSettings|discovery|permissions|memberSearch)Example/.test(
+                    /function (expression|expressionEvents|sticker|invite|audit|guildSettings|discovery|permissions|memberSearch|helpers)Example/.test(
                         example,
                     ),
                 )
@@ -324,6 +327,19 @@ try {
                     ? examples[0]
                     : examples[0].replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"')
             writeFileSync(join(consumer, `${entry}-example.ts`), example)
+        }
+        if (kind === "effect") {
+            const nativeHelperSource = readFileSync(join(sdk, "src/effect.ts"), "utf8")
+            const nativeHelperExamples = [...nativeHelperSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+                .map((match) =>
+                    match[1]
+                        .split(/\r?\n/)
+                        .map((line) => line.replace(/^\s*\* ?/, ""))
+                        .join("\n"),
+                )
+                .filter((example) => /const helpersEffectExample/.test(example))
+            assert.equal(nativeHelperExamples.length, 1)
+            writeFileSync(join(consumer, "helpers-effect-example.ts"), nativeHelperExamples[0])
         }
         const embedExamples = [...embedSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)].map((match) =>
             match[1]
@@ -342,6 +358,25 @@ try {
         )
         assert.equal(attachmentExamples.length, 1)
         writeFileSync(join(consumer, "attachment-example.ts"), attachmentExamples[0])
+        const messageSource = readFileSync(join(sdk, "src/messages.ts"), "utf8")
+        const messageMetadataExamples = [...messageSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
+            .map((match) =>
+                match[1]
+                    .split(/\r?\n/)
+                    .map((line) => line.replace(/^\s*\* ?/, ""))
+                    .join("\n"),
+            )
+            .filter((example) => /function messageMetadataExample/.test(example))
+        assert.equal(messageMetadataExamples.length, 1)
+        writeFileSync(
+            join(consumer, "message-metadata-example.ts"),
+            kind === "default"
+                ? messageMetadataExamples[0]
+                : messageMetadataExamples[0].replaceAll(
+                      '"@neontechspace/fluxerly"',
+                      '"@neontechspace/fluxerly/effect"',
+                  ),
+        )
         writeFileSync(
             join(consumer, "tsconfig.json"),
             JSON.stringify({

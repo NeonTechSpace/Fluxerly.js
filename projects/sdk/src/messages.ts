@@ -10,12 +10,36 @@ export interface MessageReference {
     readonly channelId: string
 }
 
-/** Frozen message projection shared by REST responses and messageCreate/messageUpdate events, not a complete wire object */
+/** Frozen message projection shared by REST responses and messageCreate/messageUpdate events, not a complete wire object.
+ * Each observation is independent: omitted optional fields are unknown, and explicit nulls retain Fluxer's response state.
+ * The SDK neither hydrates absent references/users nor updates a snapshot's reaction totals after delivery
+ * @example
+ * ```ts
+ * import type { Message } from "@neontechspace/fluxerly"
+ * export function messageMetadataExample(message: Message) {
+ *     const forwardedFrom = message.messageReference?.type === 1 ? message.messageReference.channelId : undefined
+ *     const totals = message.reactions?.map(({ emoji, count }) => `${emoji.name}: ${count}`) ?? []
+ *     return { createdAt: message.createdAt, forwardedFrom, totals }
+ * }
+ * ```
+ */
 export interface Message extends MessageReference {
     /** Webhook ID when supplied by Fluxer. Missing/null wire values omit this field, without inferring identity from the author */
     readonly webhookId?: string
     /** Pin status supplied by Fluxer. Omitted means unknown, not false. Snapshots do not update in place */
     readonly pinned?: boolean
+    /** ISO 8601 creation time when Fluxer supplied it. Omitted means this partial observation did not include a creation time */
+    readonly createdAt?: string
+    /** ISO 8601 time of the latest observed edit. Null means Fluxer explicitly reported no edit; omission means unknown */
+    readonly editedAt?: string | null
+    /** Provider message type as an integer. Unknown future values are retained; omission means this partial observation did not include it */
+    readonly type?: number
+    /** Provider message flags as an integer. Unknown future bits are retained; omission does not mean no flags */
+    readonly flags?: number
+    /** Guild containing this message when Fluxer supplied one. Private or partial observations omit it; no guild lookup occurs */
+    readonly guildId?: string
+    /** Whether Fluxer reports an @everyone or @here mention. Omitted means unknown, not false */
+    readonly mentionedEveryone?: boolean
     /** Text exactly as returned by Fluxer, including empty text for non-text messages */
     readonly content: string
     /** Deeply frozen embeds in received order, empty when absent. Included in cache and collector byte budgets */
@@ -24,6 +48,18 @@ export interface Message extends MessageReference {
     readonly attachments: readonly Attachment[]
     /** Frozen sticker metadata in received order, empty when absent. No image bytes are fetched or retained */
     readonly stickers: readonly MessageSticker[]
+    /** Mentioned account projections in received order. Omitted means unknown; an empty frozen array means Fluxer reported no user mentions */
+    readonly mentions?: readonly MessageMention[]
+    /** Mentioned role IDs in received order. Omitted means unknown; an empty frozen array means Fluxer reported none */
+    readonly mentionRoleIds?: readonly string[]
+    /** Mentioned visible channel projections in received order. Omitted means Fluxer did not supply channel mentions */
+    readonly mentionChannels?: readonly MessageChannelMention[] | null
+    /** Reaction totals observed with this message. They are not a reactor list and may be stale immediately after this snapshot */
+    readonly reactions?: readonly MessageReactionSummary[] | null
+    /** Reply or forward target data when supplied. This is only a reference; it never fetches, retains, or expands snapshots */
+    readonly messageReference?: MessageContextReference | null
+    /** Shallow resolved reply target. Null means Fluxer reported the reply target missing; omission means it supplied no reply resolution state */
+    readonly referencedMessage?: MessageReference | null
     /** Frozen author projection. No client-bound methods or cached live state */
     readonly author: {
         /** Decimal author ID supplied by Fluxer. Use webhookId to identify webhook-authored messages */
@@ -33,6 +69,54 @@ export interface Message extends MessageReference {
         /** Whether Fluxer identifies the author as a bot. An omitted wire flag means false */
         readonly isBot: boolean
     }
+}
+
+/** One mentioned account as supplied with a message, not a complete profile, guild member or client-cached object */
+export interface MessageMention {
+    /** Decimal account ID */
+    readonly id: string
+    /** Account username supplied by Fluxer */
+    readonly username: string
+    /** Whether Fluxer identifies this account as a bot. An omitted wire flag means false */
+    readonly isBot: boolean
+}
+
+/** One channel mention visible to everyone, not a channel cache entry or permission decision */
+export interface MessageChannelMention {
+    /** Decimal channel ID */
+    readonly id: string
+    /** Channel name observed with this message */
+    readonly name: string
+    /** Provider channel type. Unknown future values are retained */
+    readonly type: number
+}
+
+/** Emoji identity nested in a received reaction summary. Null and omission remain distinct when Fluxer supplied them */
+export interface MessageReactionEmoji {
+    /** Unicode emoji or custom emoji name supplied by Fluxer */
+    readonly name: string
+    /** Custom emoji ID. Null means an explicit Unicode-emoji identity; omission means the field was not supplied */
+    readonly id?: string | null
+    /** Animation state. Null and omission retain Fluxer's distinct response states */
+    readonly animated?: boolean | null
+}
+
+/** One reaction total observed in a received message. It is not a complete reactor list and never updates an existing snapshot */
+export interface MessageReactionSummary {
+    /** Frozen emoji identity */
+    readonly emoji: MessageReactionEmoji
+    /** Total reactions Fluxer reported for this emoji at snapshot time */
+    readonly count: number
+    /** Whether the current bot had reacted when Fluxer supplied that viewer-specific value. Null and omission remain distinct */
+    readonly me?: boolean | null
+}
+
+/** Shallow reply/forward reference supplied by Fluxer. Its type is 0 for a reply and 1 for a forward in the inspected protocol */
+export interface MessageContextReference extends MessageReference {
+    /** Guild containing the referenced message. Null means Fluxer explicitly reported no guild; omission means unknown */
+    readonly guildId?: string | null
+    /** Provider reference type. Omitted by partial gateway payloads; unknown future values are retained */
+    readonly type?: number
 }
 
 /** Sticker observation attached to a message, not the editable guild resource */

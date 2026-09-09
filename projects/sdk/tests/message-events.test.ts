@@ -27,6 +27,21 @@ const wire = (content = "changed") => ({
     content,
     author: { id: "30", username: "fixture" },
 })
+const metadataWire = (content = "metadata") => ({
+    ...wire(content),
+    timestamp: "2026-09-09T12:00:00.000Z",
+    edited_timestamp: null,
+    type: 19,
+    flags: 4,
+    guild_id: "40",
+    mention_everyone: false,
+    mentions: [{ id: "31", username: "mentioned", bot: true }],
+    mention_roles: ["50"],
+    mention_channels: [{ id: "60", name: "visible-channel", type: 0 }],
+    reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
+    message_reference: { message_id: "70", channel_id: "71", guild_id: null, type: 1 },
+    referenced_message: { id: "70", channel_id: "71", content: "not retained" },
+})
 
 async function fixture() {
     const sockets: import("ws").WebSocket[] = []
@@ -88,6 +103,42 @@ function defaultApi() {
         await client.shutdown()
     })
     return client
+}
+
+function expectMetadata(message: Message) {
+    expect(message).toMatchObject({
+        id: "10",
+        channelId: "20",
+        content: "metadata",
+        createdAt: "2026-09-09T12:00:00.000Z",
+        editedAt: null,
+        type: 19,
+        flags: 4,
+        guildId: "40",
+        mentionedEveryone: false,
+        mentions: [{ id: "31", username: "mentioned", isBot: true }],
+        mentionRoleIds: ["50"],
+        mentionChannels: [{ id: "60", name: "visible-channel", type: 0 }],
+        reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
+        messageReference: { id: "70", channelId: "71", guildId: null, type: 1 },
+        referencedMessage: { id: "70", channelId: "71" },
+    })
+    expect("content" in message.referencedMessage!).toBe(false)
+    for (const nested of [
+        message,
+        message.author,
+        message.mentions,
+        message.mentions?.[0],
+        message.mentionRoleIds,
+        message.mentionChannels,
+        message.mentionChannels?.[0],
+        message.reactions,
+        message.reactions?.[0],
+        message.reactions?.[0]?.emoji,
+        message.messageReference,
+        message.referencedMessage,
+    ])
+        expect(Object.isFrozen(nested)).toBe(true)
 }
 
 test("default callbacks and pull subscriptions route frozen updates and deletion payloads without cache or bulk fan-out", async () => {
@@ -156,6 +207,69 @@ test("default callbacks and pull subscriptions route frozen updates and deletion
     expect(server.requests).toBe(1)
     value(await client.shutdown())
     expect(value(await pull.next())).toBeNull()
+})
+
+test("default and native message subscriptions preserve supplied metadata without hydration or recursive message graphs", async () => {
+    const defaultServer = await fixture()
+    const defaultClient = defaultApi()
+    const defaultEvents = value(defaultClient.events("messageCreate"))
+    value(await defaultClient.connect())
+    defaultServer.dispatch("MESSAGE_CREATE", metadataWire())
+    expectMetadata(value(await defaultEvents.next())!)
+    expect(defaultServer.requests).toBe(1)
+
+    const nativeServer = await fixture()
+    const nativeEvents: Message[] = []
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createNative({ token: "fixture-only-not-a-credential" })
+                const subscription = yield* client.on("messageCreate", (message) =>
+                    Effect.sync(() => {
+                        nativeEvents.push(message)
+                    }),
+                )
+                yield* client.connect()
+                nativeServer.dispatch("MESSAGE_CREATE", metadataWire())
+                yield* Effect.promise(() => vi.waitFor(() => expect(nativeEvents).toHaveLength(1)))
+                yield* subscription.unsubscribe()
+                yield* subscription.waitForClose()
+            }),
+        ),
+    )
+    expectMetadata(nativeEvents[0]!)
+    expect(nativeServer.requests).toBe(1)
+})
+
+test("partial metadata preserves omissions and explicit nulls, while malformed supplied metadata closes the connection", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const updates = value(client.events("messageUpdate"))
+    const closed = client.waitForClose()
+    value(await client.connect())
+    server.dispatch("MESSAGE_UPDATE", {
+        ...wire("partial"),
+        edited_timestamp: null,
+        mention_channels: null,
+        reactions: null,
+        message_reference: null,
+        referenced_message: null,
+    })
+    const partial = value(await updates.next())!
+    expect(partial).toMatchObject({
+        content: "partial",
+        editedAt: null,
+        mentionChannels: null,
+        reactions: null,
+        messageReference: null,
+        referencedMessage: null,
+    })
+    for (const key of ["createdAt", "type", "flags", "guildId", "mentions", "mentionRoleIds"])
+        expect(key in partial).toBe(false)
+
+    server.dispatch("MESSAGE_UPDATE", { ...wire("malformed"), timestamp: "not-a-timestamp" })
+    const outcome = await closed
+    expect(outcome.isErr() && outcome.error).toMatchObject({ _tag: "ConnectionError", reason: "protocol" })
 })
 
 test("native callbacks preserve caller context and streams route single and bulk deletions", async () => {

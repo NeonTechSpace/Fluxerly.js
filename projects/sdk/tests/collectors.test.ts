@@ -31,6 +31,20 @@ const wire = (id: string, channel = "20", content = id) => ({
     content,
     author: { id: "30", username: "fixture", bot: true },
 })
+const metadataWire = (id: string, channel = "20", content = id) => ({
+    ...wire(id, channel, content),
+    timestamp: "2026-09-09T12:00:00.000Z",
+    edited_timestamp: null,
+    type: 19,
+    flags: 4,
+    guild_id: "40",
+    mentions: [{ id: "31", username: "mentioned" }],
+    mention_roles: ["50"],
+    mention_channels: null,
+    reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
+    message_reference: { message_id: "70", channel_id: "71", guild_id: null, type: 1 },
+    referenced_message: { id: "70", channel_id: "71", content: "not retained" },
+})
 const projection = (id: string, content = id) => ({
     id,
     channelId: "20",
@@ -39,6 +53,20 @@ const projection = (id: string, content = id) => ({
     attachments: [],
     stickers: [],
     author: { id: "30", username: "fixture", isBot: true },
+})
+const metadataProjection = (id: string, content = id) => ({
+    ...projection(id, content),
+    createdAt: "2026-09-09T12:00:00.000Z",
+    editedAt: null,
+    type: 19,
+    flags: 4,
+    guildId: "40",
+    mentions: [{ id: "31", username: "mentioned", isBot: false }],
+    mentionRoleIds: ["50"],
+    mentionChannels: null,
+    reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
+    messageReference: { id: "70", channelId: "71", guildId: null, type: 1 },
+    referencedMessage: { id: "70", channelId: "71" },
 })
 const value = <A, E>(result: { isErr(): boolean; value?: A; error?: E }): A => {
     if (result.isErr()) throw result.error
@@ -241,6 +269,36 @@ test.each(modes)(
         await collector.stop()
         expect(await collector.wait()).toBe(result)
         expect(server.requests).toEqual(["/v1/gateway/bot", "/v1/channels/20/messages"])
+    },
+)
+
+test.each(modes)(
+    "%s collector retains frozen received metadata and counts it against the result byte budget",
+    async (mode) => {
+        const server = await fixture()
+        const api = await driver(mode)
+        const metadataBytes = Buffer.byteLength(JSON.stringify(metadataProjection("10")))
+        const tooSmall = await api.open({ maxBytes: metadataBytes - 1 })
+        server.send(metadataWire("10"))
+        await expect(tooSmall.wait()).resolves.toMatchObject({
+            _tag: "CollectorError",
+            reason: "overflow",
+            limit: "maxBytes",
+        })
+
+        const exact = await api.open({ maxBytes: metadataBytes })
+        server.send(metadataWire("11"))
+        const result = (await exact.wait()) as CollectorResult
+        expect(result).toEqual({ reason: "limit", messages: [metadataProjection("11")] })
+        const message = result.messages[0]!
+        expect(
+            Object.isFrozen(message) &&
+                Object.isFrozen(message.mentions) &&
+                Object.isFrozen(message.reactions) &&
+                Object.isFrozen(message.reactions?.[0]?.emoji) &&
+                Object.isFrozen(message.messageReference) &&
+                Object.isFrozen(message.referencedMessage),
+        ).toBe(true)
     },
 )
 

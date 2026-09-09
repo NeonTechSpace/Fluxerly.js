@@ -1,9 +1,107 @@
 import type { PermissionInput, PermissionTarget } from "./permissions.js"
+import type { Result } from "neverthrow"
+import {
+    display as sharedDisplay,
+    format as sharedFormat,
+    links as sharedLinks,
+    permissionBits as sharedPermissionBits,
+    snowflakes as sharedSnowflakes,
+} from "./helpers.js"
+import type { HelperError } from "./helpers.js"
+export { HelperError, TimestampStyles } from "./helpers.js"
+export type {
+    ChannelLinkTarget,
+    CustomEmojiMarkup,
+    Mention,
+    PermissionName,
+    TimestampMarkup,
+    TimestampStyle,
+} from "./helpers.js"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
 import type { GuildOperationError } from "./guilds.js"
 export type { PermissionInput, PermissionTarget } from "./permissions.js"
 import { calculatePermissions, fetchPermissions } from "#sdk/internal/permissions"
+
+function helperEffect<A>(create: () => Result<A, HelperError>): Effect.Effect<A, HelperError> {
+    return Effect.suspend(() => {
+        const result = create()
+        return result.isOk() ? Effect.succeed(result.value) : Effect.fail(result.error)
+    })
+}
+
+/**
+ * Pure Fluxer markup helpers with no client, network, cache, or notification-state ownership.
+ * Fallible helpers are lazy Effects; `escapeMarkdown` returns text directly. Mention markup does not enable notifications
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { format, links, type GuildChannel } from "@neontechspace/fluxerly/effect"
+ *
+ * export const helpersEffectExample = (userId: string, messageId: string, channel: GuildChannel) =>
+ *     Effect.gen(function* () {
+ *         const mention = yield* format.userMention(userId)
+ *         const message = yield* links.message({ id: messageId, channelId: channel.id }, channel)
+ *         return { escaped: format.escapeMarkdown("@everyone: **literal**"), mention, message }
+ *     })
+ * ```
+ */
+export const format = Object.freeze({
+    /** Escape every character accepted after a Fluxer markup backslash. This returns text immediately and cannot change allowed mentions */
+    escapeMarkdown: sharedFormat.escapeMarkdown,
+    /** Lazily format a canonical decimal user ID as `<@id>`. Execution fails with HelperError for an invalid ID and never enables notifications */
+    userMention: (id: string) => helperEffect(() => sharedFormat.userMention(id)),
+    /** Lazily format a canonical decimal role ID as `<@&id>`. Execution fails with HelperError for an invalid ID and never enables notifications */
+    roleMention: (id: string) => helperEffect(() => sharedFormat.roleMention(id)),
+    /** Lazily format a canonical decimal channel ID as `<#id>`. Execution fails with HelperError for an invalid ID and performs no lookup */
+    channelMention: (id: string) => helperEffect(() => sharedFormat.channelMention(id)),
+    /** Lazily parse one complete user, role, or channel mention. Execution fails with HelperError for malformed markup or a noncanonical ID */
+    parseMention: (value: string) => helperEffect(() => sharedFormat.parseMention(value)),
+    /** Lazily format a Date whose whole Unix second is 1 through 8_640_000_000_000. The default style is `ShortDateTime`; invalid Dates and nonpositive seconds fail */
+    timestamp: (...args: Parameters<typeof sharedFormat.timestamp>) =>
+        helperEffect(() => sharedFormat.timestamp(...args)),
+    /** Lazily parse one complete timestamp to a new whole-second UTC Date. Nonpositive seconds and seconds beyond JavaScript's representable Date range fail */
+    parseTimestamp: (value: string) => helperEffect(() => sharedFormat.parseTimestamp(value)),
+    /** Lazily format explicit `<:name:id>` or `<a:name:id>` markup. Execution fails with HelperError unless the name and canonical decimal ID are valid */
+    customEmoji: (...args: Parameters<typeof sharedFormat.customEmoji>) =>
+        helperEffect(() => sharedFormat.customEmoji(...args)),
+    /** Lazily parse complete explicit custom-emoji markup. Unicode emoji and shortcode resolution are intentionally outside this helper */
+    parseCustomEmoji: (value: string) => helperEffect(() => sharedFormat.parseCustomEmoji(value)),
+})
+
+/** Pure decimal-string snowflake helpers. Fallible conversions are lazy Effects and never pass IDs through Number */
+export const snowflakes = Object.freeze({
+    /** Check canonical decimal snowflake form in Fluxer's signed 64-bit range. This returns immediately and does not convert through Number */
+    isValid: sharedSnowflakes.isValid,
+    /** Lazily parse one canonical decimal snowflake to bigint without precision loss. Execution fails with HelperError for an invalid ID */
+    parse: (value: string) => helperEffect(() => sharedSnowflakes.parse(value)),
+    /** Lazily derive a snowflake's UTC issuance time from its high 41 timestamp bits. Execution fails with HelperError for an invalid ID */
+    createdAt: (value: string) => helperEffect(() => sharedSnowflakes.createdAt(value)),
+    /** Lazily create the smallest snowflake at a UTC millisecond for an endpoint-specific cursor boundary. Dates before Fluxer's epoch or beyond its range fail */
+    boundary: (...args: Parameters<typeof sharedSnowflakes.boundary>) =>
+        helperEffect(() => sharedSnowflakes.boundary(...args)),
+})
+
+/** Pure user/member display-name fallback with no remote or cache lookup */
+export const display = sharedDisplay
+
+/** Pure named raw-permission membership and decimal serialization helpers, not an authorisation decision. Fallible calls are lazy Effects */
+export const permissionBits = Object.freeze({
+    /** Lazily test a named Fluxer permission against an unsigned 64-bit raw bitfield. This is not effective-permission calculation or authorisation */
+    has: (...args: Parameters<typeof sharedPermissionBits.has>) =>
+        helperEffect(() => sharedPermissionBits.has(...args)),
+    /** Lazily serialize an unsigned 64-bit raw bitfield as a canonical decimal wire value. Execution fails with HelperError outside that range */
+    toDecimal: (bits: bigint) => helperEffect(() => sharedPermissionBits.toDecimal(bits)),
+})
+
+/** Pure hosted Fluxer guild-channel, direct-message, and message link helpers. Fallible route validation is lazy and retains HelperError */
+export const links = Object.freeze({
+    /** Lazily create an official hosted guild-channel or direct-message route from `{ id, guildId }` or `{ id }`. It never checks existence or access */
+    channel: (...args: Parameters<typeof sharedLinks.channel>) => helperEffect(() => sharedLinks.channel(...args)),
+    /** Lazily create an official hosted message route from a matching message and actual channel context. It never infers context, checks existence, or checks access */
+    message: (...args: Parameters<typeof sharedLinks.message>) => helperEffect(() => sharedLinks.message(...args)),
+})
 import type {
     MemberSearchQuery,
     MemberSearchPage,
@@ -438,6 +536,11 @@ export type { EventReadError, RegistrationError, SendError, MessageOperationFail
 export type {
     Message,
     MessageSticker,
+    MessageMention,
+    MessageChannelMention,
+    MessageReactionEmoji,
+    MessageReactionSummary,
+    MessageContextReference,
     MessageHistoryQuery,
     MessageDeletion,
     MessageBulkDeletion,

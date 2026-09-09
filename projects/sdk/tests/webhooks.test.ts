@@ -26,6 +26,22 @@ const message = (extra = {}) => ({
     author: { id: "100", username: "Deployments", bot: true },
     ...extra,
 })
+const metadataMessage = (extra = {}) =>
+    message({
+        timestamp: "2026-09-09T12:00:00.000Z",
+        edited_timestamp: null,
+        type: 19,
+        flags: 4,
+        guild_id: "200",
+        mention_everyone: false,
+        mentions: [{ id: "101", username: "mentioned", bot: true }],
+        mention_roles: ["102"],
+        mention_channels: [{ id: "300", name: "deployments", type: 0 }],
+        reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
+        message_reference: { message_id: "401", channel_id: "300", guild_id: "200", type: 0 },
+        referenced_message: { id: "401", channel_id: "300", content: "not retained" },
+        ...extra,
+    })
 afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
@@ -150,6 +166,43 @@ test.each(modes)("%s sends and manages owned messages without bot auth or discov
     })
     expect(calls[0]!.body).not.toHaveProperty("nonce")
     expect(calls.slice(1).every((call) => call.url.endsWith("/messages/400"))).toBe(true)
+})
+
+test.each(modes)("%s preserves supplied metadata from webhook message responses without hydration", async (mode) => {
+    const fetch = vi.fn(async () => Response.json(metadataMessage()))
+    vi.stubGlobal("fetch", fetch)
+    const { webhook } = await setup(mode)
+    const received = await settle(webhook.fetchMessage("400"))
+    expect(received).toMatchObject({
+        id: "400",
+        createdAt: "2026-09-09T12:00:00.000Z",
+        editedAt: null,
+        type: 19,
+        flags: 4,
+        guildId: "200",
+        mentionedEveryone: false,
+        mentions: [{ id: "101", username: "mentioned", isBot: true }],
+        mentionRoleIds: ["102"],
+        mentionChannels: [{ id: "300", name: "deployments", type: 0 }],
+        reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
+        messageReference: { id: "401", channelId: "300", guildId: "200", type: 0 },
+        referencedMessage: { id: "401", channelId: "300" },
+    })
+    expect("content" in received.referencedMessage!).toBe(false)
+    expect(
+        Object.isFrozen(received) &&
+            Object.isFrozen(received.mentions) &&
+            Object.isFrozen(received.mentions?.[0]) &&
+            Object.isFrozen(received.mentionRoleIds) &&
+            Object.isFrozen(received.mentionChannels) &&
+            Object.isFrozen(received.mentionChannels?.[0]) &&
+            Object.isFrozen(received.reactions) &&
+            Object.isFrozen(received.reactions?.[0]) &&
+            Object.isFrozen(received.reactions?.[0]?.emoji) &&
+            Object.isFrozen(received.messageReference) &&
+            Object.isFrozen(received.referencedMessage),
+    ).toBe(true)
+    expect(fetch).toHaveBeenCalledTimes(1)
 })
 
 test.each(modes)("%s rejects invalid input before any dispatch", async (mode) => {
