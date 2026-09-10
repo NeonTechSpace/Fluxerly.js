@@ -22,6 +22,19 @@ const url: Reader = (value) => {
         return undefined
     }
 }
+const attachmentUrl = (value: unknown, uploadedFilenames: readonly string[] | undefined): string | undefined => {
+    if (typeof value !== "string" || value.length < 1 || value.length > 2048) return undefined
+    if (!value.startsWith("attachment://")) return url(value) as string | undefined
+    const filename = value.slice("attachment://".length)
+    const extension = filename.split(".").pop()?.toLowerCase()
+    const matches = uploadedFilenames?.filter((uploaded) => uploaded === filename).length ?? 0
+    return /^[\p{L}\p{N}\p{M}_.-]+$/u.test(filename) &&
+        matches === 1 &&
+        extension !== undefined &&
+        ["png", "jpg", "jpeg", "webp", "gif"].includes(extension)
+        ? value
+        : undefined
+}
 const timestamp: Reader = (value) =>
     typeof value === "string" &&
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
@@ -66,16 +79,16 @@ const inputFooter: Shape = {
     text: ["text", length(1, 2048), true],
     iconUrl: ["icon_url", url],
 }
-const inputMedia: Shape = {
-    url: ["url", url, true],
+const inputMedia = (uploadedFilenames: readonly string[] | undefined): Shape => ({
+    url: ["url", (value) => attachmentUrl(value, uploadedFilenames), true],
     description: ["description", length(1, 4096)],
-}
+})
 const inputField: Shape = {
     name: ["name", length(1, 256), true],
     value: ["value", length(0, 1024), true],
     inline: ["inline", boolean],
 }
-const inputEmbed: Shape = {
+const inputEmbed = (uploadedFilenames: readonly string[] | undefined): Shape => ({
     title: ["title", length(0, 256)],
     description: ["description", length(0, 4096)],
     url: ["url", url],
@@ -83,10 +96,10 @@ const inputEmbed: Shape = {
     timestamp: ["timestamp", timestamp],
     author: ["author", (value) => project(value, inputAuthor, true)],
     footer: ["footer", (value) => project(value, inputFooter, true)],
-    image: ["image", (value) => project(value, inputMedia, true)],
-    thumbnail: ["thumbnail", (value) => project(value, inputMedia, true)],
+    image: ["image", (value) => project(value, inputMedia(uploadedFilenames), true)],
+    thumbnail: ["thumbnail", (value) => project(value, inputMedia(uploadedFilenames), true)],
     fields: ["fields", (value) => list(value, (field) => project(field, inputField, true), 25)],
-}
+})
 
 const outputAuthor: Shape = {
     name: ["name", string, true],
@@ -141,7 +154,9 @@ const outputEmbed: Shape = {
     children: ["children", (value) => list(value, (child) => project(child, outputChild, false), 1)],
 }
 
-export const encodeEmbeds = (value: unknown) => list(value, (embed) => project(embed, inputEmbed, true))
+/** attachment:// media targets need an unambiguous new upload in this request. Retained IDs never imply a filename lookup */
+export const encodeEmbeds = (value: unknown, uploadedFilenames?: readonly string[]) =>
+    list(value, (embed) => project(embed, inputEmbed(uploadedFilenames), true))
 
 export function decodeEmbeds(value: unknown): readonly Embed[] | undefined {
     if (value === undefined || value === null) return Object.freeze([])

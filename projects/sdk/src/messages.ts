@@ -58,6 +58,8 @@ export interface Message extends MessageReference {
     readonly reactions?: readonly MessageReactionSummary[] | null
     /** Reply or forward target data when supplied. This is only a reference; it never fetches, retains, or expands snapshots */
     readonly messageReference?: MessageContextReference | null
+    /** Deeply frozen copies captured when Fluxer created a forward. Null preserves Fluxer's explicit response state; snapshots have no source identity and never follow source edits */
+    readonly messageSnapshots?: readonly MessageSnapshot[] | null
     /** Shallow resolved reply target. Null means Fluxer reported the reply target missing; omission means it supplied no reply resolution state */
     readonly referencedMessage?: MessageReference | null
     /** Frozen author projection. No client-bound methods or cached live state */
@@ -119,6 +121,32 @@ export interface MessageContextReference extends MessageReference {
     readonly type?: number
 }
 
+/** One deeply frozen, source-anonymous copy captured for a forward. Omitted and null fields preserve Fluxer's distinct response states */
+export interface MessageSnapshot {
+    /** Original text when Fluxer captured it. Null preserves an explicit provider value */
+    readonly content?: string | null
+    /** ISO 8601 creation time of the source message */
+    readonly createdAt: string
+    /** ISO 8601 source-edit time when one existed at capture. Null preserves an explicit provider value */
+    readonly editedAt?: string | null
+    /** Source user IDs mentioned at capture. Resolve them only from parent message data if Fluxer supplied it */
+    readonly mentionUserIds?: readonly string[] | null
+    /** Source role IDs mentioned at capture */
+    readonly mentionRoleIds?: readonly string[] | null
+    /** Source channel mentions captured in display order */
+    readonly mentionChannels?: readonly MessageChannelMention[] | null
+    /** Source embeds captured in display order */
+    readonly embeds?: readonly Embed[] | null
+    /** Independent attachment metadata captured in display order. Deleting the source does not update this copy */
+    readonly attachments?: readonly Attachment[] | null
+    /** Source sticker metadata captured in display order */
+    readonly stickers?: readonly MessageSticker[] | null
+    /** Source message type as an integer. Unknown future values are retained */
+    readonly type: number
+    /** Source message flags as an integer. Unknown future bits are retained */
+    readonly flags: number
+}
+
 /** Sticker observation attached to a message, not the editable guild resource */
 export interface MessageSticker {
     /** Decimal sticker ID */
@@ -156,6 +184,15 @@ export interface AllowedMentions {
     /** Allow notification of the referenced message's author. Defaults to false */
     readonly repliedUser?: boolean
 }
+
+/** Fluxer's writable non-voice message flags exposed by the SDK */
+export const MessageFlags = Object.freeze({
+    SuppressEmbeds: 4,
+    SuppressNotifications: 4096,
+} as const)
+
+/** One writable non-voice message flag. Combine values with bitwise OR before assigning `flags` */
+export type MessageFlag = (typeof MessageFlags)[keyof typeof MessageFlags]
 
 /** Text, embeds, file uploads or stickers. TypeScript does not establish nonempty content.
  * Stickers can be sent by bots and webhooks but cannot be replaced through message edits
@@ -213,29 +250,56 @@ type Body<A> =
       }
 
 /** Send text, rich embeds, files and/or stickers. A send needs nonempty text, embeds, uploads or sticker IDs.
- * Unknown input keys are rejected. Forwards and attachment:// embed linking are not supported
+ * Unknown input keys are rejected. Use `messages.forward` for immutable source snapshots. An `attachment://` image or thumbnail URL needs one matching new image upload in this request
  */
 export type MessageInput = MessageBody & {
-    /** Notifications are disabled by default, including the replied-to author */
+    /** Mention notifications are disabled by default, including the replied-to author */
     readonly allowedMentions?: AllowedMentions
     /** Optional reply reference. Its channelId must match the send destination */
     readonly messageReference?: MessageReference
+    /** Writable non-voice flags. Only MessageFlags bits are accepted. Omit to use Fluxer's default */
+    readonly flags?: number
 }
 
 /** Reply helper input. The reference comes from reply's first argument */
-export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions">
+export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions" | "flags">
+
+/** Create an immutable forward without fetching or validating the source locally, or uploading new content.
+ * A nonempty media selector creates a media-only forward, omitting source text. Omit both selectors to copy source text and media.
+ * Empty arrays alone behave like omitted selectors; they do not request a text-only forward
+ */
+export interface ForwardMessageInput {
+    /** Source message to capture. Its channel may differ from the destination channel, and the SDK does not fetch it */
+    readonly source: MessageReference
+    /** Up to ten source attachment IDs to copy. A nonempty list makes the forward media-only */
+    readonly attachmentIds?: readonly string[]
+    /** Up to ten zero-based source embed positions to copy. A nonempty list makes the forward media-only */
+    readonly embedIndices?: readonly number[]
+}
+
+type EditMessageOptions = {
+    /** Mention notifications default off for this edit, including the reply author. Explicit entries permit notifications */
+    readonly allowedMentions?: AllowedMentions
+    /** Replace the writable non-voice flags. Omit to preserve them, or use zero to clear both. Voice-message flags are unsupported */
+    readonly flags?: number
+}
 
 /** Replace supplied text/embeds/attachments without fetching or merging old data. Omitted properties are not sent.
  * Omitted attachments preserve files; a supplied list replaces them, so list existing IDs to retain alongside new uploads.
  * Clearing attachments requires nonempty content or embeds alongside attachments: [].
  * Omitted embeds preserve rich embeds, though Fluxer may regenerate link previews when text changes.
  * Clearing embeds requires nonempty content alongside embeds: []; an empty edit alone is rejected by Fluxer.
- * Empty content requests clearing text, subject to Fluxer validation. Unknown input keys are rejected
+ * Empty content requests clearing text, subject to Fluxer validation. A flags-only edit is valid. Unknown input keys are rejected
  */
-export type EditMessageInput = Body<AttachmentInput | AttachmentReference> & {
-    /** Notifications default off for this edit, including the reply author. Explicit entries permit notifications */
-    readonly allowedMentions?: AllowedMentions
-}
+export type EditMessageInput =
+    | (Body<AttachmentInput | AttachmentReference> & EditMessageOptions)
+    | (EditMessageOptions & {
+          /** A flags-only edit cannot also supply a body field */
+          readonly flags: number
+          readonly content?: never
+          readonly embeds?: never
+          readonly attachments?: never
+      })
 
 /** One remote history page. Omit cursor fields for the latest messages. Combined cursor modes and unknown fields are rejected */
 export type MessageHistoryQuery = {

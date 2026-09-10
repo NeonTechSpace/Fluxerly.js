@@ -24,6 +24,38 @@ export interface User {
     readonly flags: number
 }
 
+/** Optional explicit guild context for one remote profile read. It does not request mutuals, relationships, or member hydration */
+export interface UserProfileQuery {
+    /** Decimal guild ID whose returned guild-specific profile is projected when Fluxer supplies it */
+    readonly guildId?: string
+}
+
+/** Frozen allowlisted account or guild-specific profile fields. Undefined bannerColor means Fluxer did not supply it */
+export interface UserProfileFields {
+    /** Biography, null when absent or hidden by profile privacy */
+    readonly bio: string | null
+    /** Pronouns, null when absent or hidden by profile privacy */
+    readonly pronouns: string | null
+    /** Banner hash, or null when absent or withheld by Fluxer */
+    readonly banner: string | null
+    /** Account-profile banner colour when Fluxer supplies it. Guild-specific profiles do not supply this field */
+    readonly bannerColor?: number | null
+    /** Packed profile accent colour, or null */
+    readonly accentColor: number | null
+}
+
+/** Frozen privacy-aware profile observation without relationship, connection, timezone, premium, or cache state */
+export interface UserProfile {
+    /** Public account identity from this profile response, never a cache hydration */
+    readonly user: User
+    /** Account-wide allowlisted profile fields */
+    readonly profile: UserProfileFields
+    /** Explicit guild-context profile fields, or null when Fluxer did not supply them. Null does not establish membership */
+    readonly guildProfile: UserProfileFields | null
+    /** Whether Fluxer limited this read by profile privacy. Its omitted unrestricted marker becomes false */
+    readonly isLimited: boolean
+}
+
 /** Frozen private-channel observation, not proof that a message can be delivered */
 export interface DirectMessageChannel {
     /** Decimal channel ID, accepted by the existing messages API */
@@ -74,6 +106,7 @@ export interface DefaultUserOperationOptions extends UserOperationOptions, Opera
 export type UserOperation =
     | "users.fetch"
     | "users.fetchSelf"
+    | "users.fetchProfile"
     | "users.get"
     | "directMessages.open"
     | "directMessages.fetch"

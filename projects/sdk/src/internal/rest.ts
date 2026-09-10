@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { Deferred, Effect, Random, Redacted } from "effect"
+import { Cause, Deferred, Effect, Exit, Random, Redacted } from "effect"
+import { mapFailureCause, withDeadline } from "./effect-failures.js"
 import { ClientClosedError } from "#sdk/errors"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import type {
     EditMessageInput,
+    ForwardMessageInput,
     Message,
     MessageInput,
     MessageHistoryQuery,
@@ -11,7 +13,16 @@ import type {
     MessageReference,
     SendOptions,
 } from "#sdk/messages"
-import { decodeMessage, encodeEdit, encodeHistory, encodeMessage, identifier, record, reference } from "./message.js"
+import {
+    decodeMessage,
+    encodeEdit,
+    encodeForward,
+    encodeHistory,
+    encodeMessage,
+    identifier,
+    record,
+    reference,
+} from "./message.js"
 import type { MessageCache } from "./cache.js"
 import type { EncodedBody } from "./attachments.js"
 import { decodeUploadPlans, readUploadJson, uploadBody } from "./uploads.js"
@@ -231,6 +242,12 @@ export class RestOwner {
         RestFailure | ClientClosedError
     > {
         const owner = this
+        const failure = (error: unknown): RestFailure | ClientClosedError =>
+            owner.#closed
+                ? new ClientClosedError()
+                : error instanceof RestFailure || error instanceof ClientClosedError
+                  ? error
+                  : new RestFailure("network", progress.outcome)
         return Effect.acquireUseRelease(
             Effect.sync(() => {
                 const controller = new AbortController()
@@ -256,117 +273,139 @@ export class RestOwner {
                     upload && "contentType" in upload && "size" in upload
                         ? { "Content-Type": String(upload.contentType), "Content-Length": String(upload.size) }
                         : undefined
-                return { controller, settled: Promise.resolve(), guard, success: false, upload, multipartHeaders }
+                return {
+                    controller,
+                    settled: Promise.resolve(),
+                    response: undefined as Response | undefined,
+                    guard,
+                    success: false,
+                    upload,
+                    multipartHeaders,
+                }
             }),
             (state) =>
                 Effect.tryPromise({
                     try: () => {
-                        const work = (async () => {
-                            if (owner.#closed) throw new ClientClosedError()
-                            if (!request.preparation) progress.outcome = "unknown"
-                            const response = await fetch(
-                                request.put?.url ??
-                                    `https://api.fluxer.app/v1${request.webhookId ? `/webhooks/${request.webhookId}/${encodeURIComponent(Redacted.value(token))}` : ""}${request.path}`,
-                                {
-                                    method: request.method,
-                                    redirect: "error",
-                                    signal: state.controller.signal,
-                                    headers: request.put
-                                        ? {
-                                              "Content-Length": String(request.put.size),
-                                              ...(request.put.contentType
-                                                  ? { "Content-Type": request.put.contentType }
-                                                  : {}),
-                                          }
-                                        : {
-                                              ...(request.webhookId
-                                                  ? {}
-                                                  : { Authorization: `Bot ${Redacted.value(token)}` }),
-                                              ...(request.auditReason === undefined
-                                                  ? {}
-                                                  : { "X-Audit-Log-Reason": request.auditReason }),
-                                              ...(state.multipartHeaders
-                                                  ? state.multipartHeaders
-                                                  : request.body === undefined
-                                                    ? {}
-                                                    : { "Content-Type": "application/json" }),
-                                          },
-                                    ...(state.upload
-                                        ? { body: state.upload.body }
-                                        : request.body
-                                          ? { body: request.body.json }
-                                          : {}),
-                                    ...(state.upload === undefined ? {} : { duplex: "half" }),
-                                },
-                            ).catch(() => {
+                        if (owner.#closed) throw new ClientClosedError()
+                        if (!request.preparation) progress.outcome = "unknown"
+                        const work = fetch(
+                            request.put?.url ??
+                                `https://api.fluxer.app/v1${request.webhookId ? `/webhooks/${request.webhookId}/${encodeURIComponent(Redacted.value(token))}` : ""}${request.path}`,
+                            {
+                                method: request.method,
+                                redirect: "error",
+                                signal: state.controller.signal,
+                                headers: request.put
+                                    ? {
+                                          "Content-Length": String(request.put.size),
+                                          ...(request.put.contentType
+                                              ? { "Content-Type": request.put.contentType }
+                                              : {}),
+                                      }
+                                    : {
+                                          ...(request.webhookId
+                                              ? {}
+                                              : { Authorization: `Bot ${Redacted.value(token)}` }),
+                                          ...(request.auditReason === undefined
+                                              ? {}
+                                              : { "X-Audit-Log-Reason": request.auditReason }),
+                                          ...(state.multipartHeaders
+                                              ? state.multipartHeaders
+                                              : request.body === undefined
+                                                ? {}
+                                                : { "Content-Type": "application/json" }),
+                                      },
+                                ...(state.upload
+                                    ? { body: state.upload.body }
+                                    : request.body
+                                      ? { body: request.body.json }
+                                      : {}),
+                                ...(state.upload === undefined ? {} : { duplex: "half" }),
+                            },
+                        )
+                            .then((response) => {
+                                state.response = response
+                                return response
+                            })
+                            .catch(() => {
                                 throw new RestFailure("network", progress.outcome, null, null, true)
                             })
-                            if (!request.put) owner.#headers(route, response)
-                            try {
-                                if (response.status === 429) {
-                                    if (request.put) throw new RestFailure("rateLimit", progress.outcome, 429)
-                                    const header = response.headers.get("retry-after")
-                                    let delay = header === null ? NaN : Number(header) * 1000
-                                    if (header !== null && !Number.isFinite(delay))
-                                        delay = Date.parse(header) - Date.now()
-                                    const data: unknown = await response.json().catch(() => null)
-                                    if (
-                                        record(data) &&
-                                        typeof data.retry_after === "number" &&
-                                        Number.isFinite(data.retry_after) &&
-                                        data.retry_after >= 0
-                                    )
-                                        delay = Math.max(Number.isFinite(delay) ? delay : 0, data.retry_after * 1000)
-                                    // Mutation resends require a received rate-limit rejection
-                                    if (!request.preparation) progress.outcome = "rejected"
-                                    if (!Number.isFinite(delay) || delay <= 0)
-                                        throw new RestFailure("rateLimit", progress.outcome, 429)
-                                    const retry = Math.ceil(delay)
-                                    const global = record(data) && data.global === true
-                                    const until = performance.now() + retry
-                                    if (global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
-                                    else owner.#buckets.set(route, { remaining: 0, until })
-                                    return { kind: "retry" as const, retry, global }
-                                }
-                                if (!response.ok) {
-                                    if (response.status === 404 && request.method === "GET" && request.resourceGuard)
-                                        owner.resources!.missing(request.resourceGuard)
-                                    if (response.status === 404 && request.method === "GET" && request.channelGuard)
-                                        owner.channels!.missing(request.channelGuard)
-                                    const rejected = response.status >= 400 && response.status < 500
-                                    if (rejected && !request.preparation) progress.outcome = "rejected"
-                                    const retryableRead =
-                                        request.method === "GET" && [500, 502, 503, 504].includes(response.status)
-                                    throw new RestFailure(
-                                        response.status === 404 && !request.preparation ? "notFound" : "rejected",
-                                        progress.outcome,
-                                        response.status,
-                                        retryableRead ? retryAfter(response) : null,
-                                        retryableRead,
-                                    )
-                                }
-                                if (request.status !== undefined && response.status !== request.status)
-                                    throw new RestFailure("response", progress.outcome, response.status)
-                                const value = await request.decode(response)
-                                return { kind: "success" as const, value }
-                            } finally {
-                                if (!response.bodyUsed) await response.body?.cancel()
-                            }
-                        })()
-                        // Interruption waits for fetch/body cleanup instead of abandoning its promise
                         state.settled = work.then(
-                            () => {},
-                            () => {},
+                            () => undefined,
+                            () => undefined,
                         )
                         return work
                     },
-                    catch: (error): RestFailure | ClientClosedError =>
-                        owner.#closed
-                            ? new ClientClosedError()
-                            : error instanceof RestFailure || error instanceof ClientClosedError
-                              ? error
-                              : new RestFailure("network", progress.outcome),
+                    catch: failure,
                 }).pipe(
+                    Effect.flatMap((response) => {
+                        if (!request.put) owner.#headers(route, response)
+                        return Effect.tryPromise({
+                            try: () => {
+                                const work = (async () => {
+                                    if (response.status === 429) {
+                                        if (request.put) throw new RestFailure("rateLimit", progress.outcome, 429)
+                                        const header = response.headers.get("retry-after")
+                                        let delay = header === null ? NaN : Number(header) * 1000
+                                        if (header !== null && !Number.isFinite(delay))
+                                            delay = Date.parse(header) - Date.now()
+                                        const data: unknown = await response.json().catch(() => null)
+                                        if (
+                                            record(data) &&
+                                            typeof data.retry_after === "number" &&
+                                            Number.isFinite(data.retry_after) &&
+                                            data.retry_after >= 0
+                                        )
+                                            delay = Math.max(
+                                                Number.isFinite(delay) ? delay : 0,
+                                                data.retry_after * 1000,
+                                            )
+                                        // Mutation resends require a received rate-limit rejection
+                                        if (!request.preparation) progress.outcome = "rejected"
+                                        if (!Number.isFinite(delay) || delay <= 0)
+                                            throw new RestFailure("rateLimit", progress.outcome, 429)
+                                        const retry = Math.ceil(delay)
+                                        const global = record(data) && data.global === true
+                                        const until = performance.now() + retry
+                                        if (global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
+                                        else owner.#buckets.set(route, { remaining: 0, until })
+                                        return { kind: "retry" as const, retry, global }
+                                    }
+                                    if (!response.ok) {
+                                        if (
+                                            response.status === 404 &&
+                                            request.method === "GET" &&
+                                            request.resourceGuard
+                                        )
+                                            owner.resources!.missing(request.resourceGuard)
+                                        if (response.status === 404 && request.method === "GET" && request.channelGuard)
+                                            owner.channels!.missing(request.channelGuard)
+                                        const rejected = response.status >= 400 && response.status < 500
+                                        if (rejected && !request.preparation) progress.outcome = "rejected"
+                                        const retryableRead =
+                                            request.method === "GET" && [500, 502, 503, 504].includes(response.status)
+                                        throw new RestFailure(
+                                            response.status === 404 && !request.preparation ? "notFound" : "rejected",
+                                            progress.outcome,
+                                            response.status,
+                                            retryableRead ? retryAfter(response) : null,
+                                            retryableRead,
+                                        )
+                                    }
+                                    if (request.status !== undefined && response.status !== request.status)
+                                        throw new RestFailure("response", progress.outcome, response.status)
+                                    const value = await request.decode(response)
+                                    return { kind: "success" as const, value }
+                                })()
+                                state.settled = work.then(
+                                    () => undefined,
+                                    () => undefined,
+                                )
+                                return work
+                            },
+                            catch: failure,
+                        })
+                    }),
                     Effect.map((result) => {
                         if (result.kind === "success") {
                             state.success = true
@@ -389,17 +428,43 @@ export class RestOwner {
                     }),
                 ),
             (state) =>
-                Effect.promise(async () => {
-                    state.controller.abort()
-                    state.upload?.stop()
-                    await state.settled
-                    owner.#controllers.delete(state.controller)
-                    if (state.guard) {
-                        if (!state.success && progress.outcome === "unknown" && state.guard.mutation)
-                            owner.cache!.delete({ id: request.target!, channelId: request.channel }, state.guard)
-                        owner.cache!.end(state.guard)
-                    }
-                }),
+                Effect.uninterruptible(
+                    Effect.promise(async () => {
+                        let cancelled = false
+                        try {
+                            if (state.response && !state.response.bodyUsed) {
+                                await state.response.body?.cancel()
+                                cancelled = true
+                            }
+                        } finally {
+                            state.controller.abort()
+                            state.upload?.stop()
+                            await state.settled
+                        }
+                        if (!cancelled && !state.response?.bodyUsed) {
+                            try {
+                                await state.response?.body?.cancel()
+                            } catch (error) {
+                                if (!state.controller.signal.aborted || error !== state.controller.signal.reason)
+                                    throw error
+                            }
+                        }
+                    }).pipe(
+                        Effect.ensuring(
+                            Effect.sync(() => {
+                                owner.#controllers.delete(state.controller)
+                                if (state.guard) {
+                                    if (!state.success && progress.outcome === "unknown" && state.guard.mutation)
+                                        owner.cache!.delete(
+                                            { id: request.target!, channelId: request.channel },
+                                            state.guard,
+                                        )
+                                    owner.cache!.end(state.guard)
+                                }
+                            }),
+                        ),
+                    ),
+                ),
         )
     }
 
@@ -410,9 +475,34 @@ export class RestOwner {
         options?: SendOptions,
         directMessageUser?: string,
     ): Effect.Effect<Message, SendError> {
+        return this.#send(
+            token,
+            channel,
+            () => encodeMessage(channel, input, randomUUID().replaceAll("-", "")),
+            options,
+            directMessageUser,
+        )
+    }
+
+    forward(token: Redacted.Redacted<string>, channel: string, input: ForwardMessageInput, options?: SendOptions) {
+        return this.#send(
+            token,
+            channel,
+            () => encodeForward(channel, input, randomUUID().replaceAll("-", "")),
+            options,
+        )
+    }
+
+    #send(
+        token: Redacted.Redacted<string>,
+        channel: string,
+        encode: () => EncodedBody | MessageError,
+        options?: SendOptions,
+        directMessageUser?: string,
+    ): Effect.Effect<Message, SendError> {
         return Effect.suspend((): Effect.Effect<Message, SendError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            const body = encodeMessage(channel, input, randomUUID().replaceAll("-", ""))
+            const body = encode()
             if (body instanceof MessageError) return Effect.fail(body)
             return this.#execute(
                 token,
@@ -426,7 +516,7 @@ export class RestOwner {
                 },
                 options,
             ).pipe(
-                Effect.mapError((error) =>
+                mapFailureCause((error) =>
                     error instanceof RestFailure
                         ? new MessageError(
                               error.reason === "notFound" ? "rejected" : error.reason,
@@ -474,7 +564,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new MessageOperationError("typing", error.reason, error.outcome, error.status, error.retryAfterMs)
                     : error,
@@ -506,7 +596,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new MessageOperationError(
                           "fetchHistory",
@@ -549,7 +639,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new MessageOperationError("search", error.reason, error.outcome, error.status, error.retryAfterMs)
                     : error,
@@ -608,7 +698,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new MessageOperationError(
                           "deleteMany",
@@ -653,7 +743,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new MessageOperationError(
                           "fetchReactionUsers",
@@ -695,7 +785,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new MessageOperationError(
                           "fetchPins",
@@ -733,7 +823,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new MessageOperationError(
                           operation,
@@ -784,7 +874,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new MessageOperationError(
                           operation,
@@ -827,7 +917,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new MessageOperationError(
                           operation,
@@ -856,24 +946,42 @@ export class RestOwner {
             let retries = 0
             let until = 0
             while (true) {
-                const attempt = yield* Effect.result(
-                    Effect.acquireUseRelease(
-                        Effect.interruptible(owner.#acquire(route, bytes, until)).pipe(
-                            Effect.mapError((error) =>
-                                error instanceof RestFailure
-                                    ? new RestFailure(error.reason, progress.outcome, error.status, error.retryAfterMs)
-                                    : error,
+                const attempt = yield* Effect.uninterruptibleMask((restore) =>
+                    Effect.exit(
+                        restore(
+                            Effect.acquireUseRelease(
+                                Effect.interruptible(owner.#acquire(route, bytes, until)).pipe(
+                                    mapFailureCause((error) =>
+                                        error instanceof RestFailure
+                                            ? new RestFailure(
+                                                  error.reason,
+                                                  progress.outcome,
+                                                  error.status,
+                                                  error.retryAfterMs,
+                                              )
+                                            : error,
+                                    ),
+                                ),
+                                () =>
+                                    performance.now() >= deadline
+                                        ? Effect.fail(new RestFailure("timeout", progress.outcome))
+                                        : owner.#request(token, request, route, progress, generation),
+                                (release) => Effect.sync(release),
                             ),
                         ),
-                        () =>
-                            performance.now() >= deadline
-                                ? Effect.fail(new RestFailure("timeout", progress.outcome))
-                                : owner.#request(token, request, route, progress, generation),
-                        (release) => Effect.sync(release),
+                    ).pipe(
+                        Effect.flatMap((exit) =>
+                            Exit.isFailure(exit) && (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause))
+                                ? Effect.failCause(exit.cause)
+                                : Effect.succeed(exit),
+                        ),
                     ),
                 )
-                if (attempt._tag === "Failure") {
-                    const error = attempt.failure
+                if (Exit.isFailure(attempt)) {
+                    const reason = attempt.cause.reasons.find((reason) => reason._tag === "Fail")
+                    if (reason?._tag !== "Fail")
+                        return yield* Effect.die(new Error("REST request failed without a cause"))
+                    const error = reason.error
                     if (
                         request.method !== "GET" ||
                         !(error instanceof RestFailure) ||
@@ -886,7 +994,7 @@ export class RestOwner {
                     until = performance.now() + Math.ceil(delay)
                     continue
                 }
-                const response = attempt.success
+                const response = attempt.value
                 if (response.kind === "success") return response.value
                 until = performance.now() + response.retry
                 if (response.global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
@@ -1066,7 +1174,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new GuildOperationError(operation, error.reason, error.outcome, error.status, error.retryAfterMs)
                     : error,
@@ -1110,7 +1218,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new ChannelOperationError(
                           operation,
@@ -1159,7 +1267,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new UserOperationError(operation, error.reason, error.outcome, error.status, error.retryAfterMs)
                     : error,
@@ -1200,7 +1308,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new BotApplicationOperationError(
                           operation,
@@ -1257,7 +1365,7 @@ export class RestOwner {
                 options,
             )
         }).pipe(
-            Effect.mapError((error) =>
+            mapFailureCause((error) =>
                 error instanceof RestFailure
                     ? new WebhookOperationError(
                           operation,
@@ -1345,7 +1453,7 @@ export class RestOwner {
                             bytes,
                         )
                         .pipe(
-                            Effect.mapError((error) =>
+                            mapFailureCause((error) =>
                                 error instanceof RestFailure
                                     ? new RestFailure(error.reason, "notDispatched", error.status, error.retryAfterMs)
                                     : error,
@@ -1363,10 +1471,7 @@ export class RestOwner {
                     yield* owner.#prepareUploads(token, request.channel, request.body, progress, generation, deadline)
                 return yield* owner.#exchange(token, request, progress, generation, deadline)
             }).pipe(
-                Effect.timeoutOrElse({
-                    duration: timeout,
-                    orElse: () => Effect.fail(new RestFailure("timeout", progress.outcome)),
-                }),
+                withDeadline(timeout, () => new RestFailure("timeout", progress.outcome)),
                 Effect.ensuring(
                     Effect.sync(() => {
                         if (request.deleteIds && progress.outcome !== "notDispatched")

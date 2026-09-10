@@ -19,6 +19,7 @@ The documentation website remains a scaffold
 | [client.ts](/projects/sdk/src/internal/client.ts) | Client lifetime and recovery ownership |
 | [application.ts](/projects/sdk/src/internal/application.ts) | Current bot-token application allowlist projection, using shared REST without retention or application management |
 | [discovery.ts](/projects/sdk/src/internal/discovery.ts) | Hosted service discovery |
+| [effect-failures.ts](/projects/sdk/src/internal/effect-failures.ts) | REST/discovery cause-preserving error translation and deadlines, including cleanup defects during interruption |
 | [gateway.ts](/projects/sdk/src/internal/gateway.ts) | Gateway transport and protocol |
 | [events.ts](/projects/sdk/src/internal/events.ts) | Subscription scheduling and bounded event intake |
 | [rest.ts](/projects/sdk/src/internal/rest.ts) | REST admission, deadlines and rate state |
@@ -173,6 +174,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:application` | Built default/native current-bot application allowlist and hosted installation-link construction | Read-only; no navigation, authorization, or server-content changes |
 | `test:live:presence` | Interactive selected-guild member presence delivery, Op14 restore after a test-owned socket interruption and cleanup through both built APIs | No account-state changes by the harness; the authorized participant performs visible status transitions and the harness interrupts only its own socket |
 | `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
+| `test:live:consumer-features` | Forward snapshots, attachment-backed embeds, retained file metadata, non-voice flags, bot profile reads and lost-response reconciliation through both APIs | Journaled temporary channel/messages and uploads, test-owned response loss; profile GET may trigger provider expired-premium cleanup |
 | `test:live:typing` | One-shot typing, scoped refresh and completion/cancellation cleanup through both APIs | Temporary channel/messages and ephemeral typing notices; does not prove inbound typing delivery |
 | `test:live:typing:interactive` | Human-visible outgoing typing and selected-member inbound events through both APIs | Temporary channel and typing notices, with awaited refresh shutdown and verified channel removal |
 | `test:live:roles:reset` | Guild-wide role-display reset and lost-response reconciliation through both APIs | Two temporary zero-permission roles and whole-guild display reset, with existing display assignments required to be null |
@@ -207,6 +209,10 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:attachments` | Uploads, binary readback, file edits, events/cache/collectors and recovery | Temporary channel/messages, 50 MiB file upload/download, file replacements and test-socket termination |
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools
+
+Consumer-feature checks use the same sandbox identity checks and an ignored `.env.test.consumer-features.local` journal.
+Recovery resolves only the journaled channel marker and verifies channel removal before deleting the journal.
+Profile reads target only the designated bot, with and without the designated guild context; no human profile changes or private conversations are part of this check
 
 Invite checks use the same lock and an ignored `.env.test.invites.local` recovery journal containing only test-channel identity, never invite codes.
 Cleanup reconciles the owned channel, verifies invite destination and creator before revocation, then removes the channel

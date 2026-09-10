@@ -273,6 +273,33 @@ test.each(modes)("%s does not replay unknown sends, but retries confirmed rate l
     expect(attempts).toBe(2)
 })
 
+test.each(modes)("%s supports non-voice webhook flags and rejects invalid flags without dispatch", async (mode) => {
+    const bodies: Record<string, unknown>[] = []
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+            bodies.push(JSON.parse(String(init.body)))
+            return Response.json(message())
+        }),
+    )
+    const { webhook } = await setup(mode)
+    await settle(webhook.send({ content: "quiet", flags: 4100 }))
+    await settle(webhook.editMessage("400", { flags: 4 }))
+    await settle(webhook.editMessage("400", { flags: 0 }))
+    expect(bodies.map((body) => body.flags)).toEqual([4100, 4, 0])
+    for (const flags of [8192, -1, 1.5, 2 ** 32 + 4]) {
+        await expect(settle(webhook.send({ content: "quiet", flags }))).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+        })
+        await expect(settle(webhook.editMessage("400", { flags }))).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    }
+    expect(fetch).toHaveBeenCalledTimes(3)
+})
+
 test.each(modes)("%s snapshots binary uploads and replays identical multipart after 429", async (mode) => {
     let calls = 0
     const bytes = new Uint8Array([1, 2, 3])

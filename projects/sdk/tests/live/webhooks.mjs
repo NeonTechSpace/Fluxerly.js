@@ -230,6 +230,7 @@ try {
     const sent = await value(
         hook.send({
             content: "SDK webhook check",
+            flags: 4096,
             username: "SDK webhook fixture",
             embeds: [{ title: "Verification" }],
             attachments: [{ filename: "check.txt", data: new TextEncoder().encode("webhook fixture bytes") }],
@@ -237,6 +238,8 @@ try {
     )
     assert.equal(sent.channelId, journal.channels[1].id)
     assert.equal(sent.webhookId, created.webhook.id)
+    assert.equal(sent.flags & 4100, 4096)
+    assert.equal((await api("GET", `/channels/${sent.channelId}/messages/${sent.id}`)).data.flags & 4100, 4096)
     await waitObserved(sent.id, "SDK webhook check")
     assert.equal(sent.author.username, "SDK webhook fixture")
     assert.equal(sent.embeds[0]?.title, "Verification")
@@ -252,12 +255,16 @@ try {
     assert.ok(file.ok)
     assert.equal(await file.text(), "webhook fixture bytes")
     assert.equal((await value(hook.fetchMessage(sent.id))).id, sent.id)
-    await value(hook.editMessage(sent.id, { content: "SDK webhook edited", embeds: [] }))
+    await value(hook.editMessage(sent.id, { content: "SDK webhook edited", embeds: [], flags: 4 }))
     await waitObserved(sent.id, "SDK webhook edited")
     assert.equal(
         (await api("GET", `/channels/${sent.channelId}/messages/${sent.id}`)).data.content,
         "SDK webhook edited",
     )
+    assert.equal((await api("GET", `/channels/${sent.channelId}/messages/${sent.id}`)).data.flags & 4100, 4)
+    const clearedFlags = await value(hook.editMessage(sent.id, { flags: 0 }))
+    assert.equal(clearedFlags.flags & 4100, 0)
+    assert.equal((await api("GET", `/channels/${sent.channelId}/messages/${sent.id}`)).data.flags & 4100, 0)
     report(stage)
     stage = "webhook_unknown_send_reconciliation"
     let attempts = 0

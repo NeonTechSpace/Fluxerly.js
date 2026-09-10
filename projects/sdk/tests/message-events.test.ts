@@ -48,6 +48,15 @@ const metadataWire = (content = "metadata") => ({
     reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
     message_reference: { message_id: "70", channel_id: "71", guild_id: null, type: 1 },
     referenced_message: { id: "70", channel_id: "71", content: "not retained" },
+    message_snapshots: [
+        {
+            content: "Forwarded source",
+            timestamp: "2026-09-09T11:00:00.000Z",
+            type: 0,
+            flags: 0,
+            attachments: [{ id: "72", filename: "source.txt", size: 2, flags: 0 }],
+        },
+    ],
 })
 const presenceWire = (overrides: Record<string, unknown> = {}) => ({
     guild_id: "40",
@@ -158,6 +167,15 @@ function expectMetadata(message: Message) {
         reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
         messageReference: { id: "70", channelId: "71", guildId: null, type: 1 },
         referencedMessage: { id: "70", channelId: "71" },
+        messageSnapshots: [
+            {
+                content: "Forwarded source",
+                createdAt: "2026-09-09T11:00:00.000Z",
+                type: 0,
+                flags: 0,
+                attachments: [{ id: "72", filename: "source.txt", size: 2, flags: 0 }],
+            },
+        ],
     })
     expect("content" in message.referencedMessage!).toBe(false)
     for (const nested of [
@@ -173,6 +191,10 @@ function expectMetadata(message: Message) {
         message.reactions?.[0]?.emoji,
         message.messageReference,
         message.referencedMessage,
+        message.messageSnapshots,
+        message.messageSnapshots?.[0],
+        message.messageSnapshots?.[0]?.attachments,
+        message.messageSnapshots?.[0]?.attachments?.[0],
     ])
         expect(Object.isFrozen(nested)).toBe(true)
 }

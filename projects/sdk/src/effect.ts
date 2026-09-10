@@ -335,6 +335,8 @@ export { GuildMemberProfileFlags, MemberMentionPreferences } from "./guilds.js"
 import { memberEditSelf, memberNicknameEdit } from "#sdk/internal/guilds"
 import type {
     User,
+    UserProfile,
+    UserProfileQuery,
     DirectMessageChannel,
     DirectMessageGroupEdit,
     UserOperationFailure,
@@ -343,6 +345,9 @@ import type {
 export { UserOperationError } from "./users.js"
 export type {
     User,
+    UserProfile,
+    UserProfileFields,
+    UserProfileQuery,
     DirectMessageChannel,
     DirectMessageGroupEdit,
     DirectMessageRecipientChange,
@@ -353,6 +358,7 @@ export type {
 } from "./users.js"
 import {
     userFetch,
+    userProfile,
     directMessageOpen,
     directMessageFetch,
     directMessageList,
@@ -709,6 +715,7 @@ import {
 } from "./message-errors.js"
 import type {
     EditMessageInput,
+    ForwardMessageInput,
     MessageHistoryQuery,
     Message,
     MessageReference,
@@ -720,9 +727,13 @@ import type {
 import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
+export { MessageFlags } from "./messages.js"
 export type { EventReadError, RegistrationError, SendError, MessageOperationFailure } from "./message-errors.js"
 export type {
     Message,
+    ForwardMessageInput,
+    MessageSnapshot,
+    MessageFlag,
     MessageSticker,
     MessageMention,
     MessageChannelMention,
@@ -1194,13 +1205,16 @@ export interface Messages {
      */
     get(message: MessageReference): Effect.Effect<Message | undefined, MessageOperationFailure>
     /**
-     * Send text, embeds, files and/or stickers without requiring a connected gateway. Closing/Closed reject new work.
+     * Send text, embeds, files and/or stickers without requiring a connected gateway. Closing/Closed reject new work
+     *
+     * Embed images/thumbnails may use attachment://filename for a matching new image upload in this execution.
+     * Optional flags accept only MessageFlags' non-voice bits; suppressing previews is distinct from omitting embeds.
      * Each execution snapshots file bytes before waiting, up to 50 MiB per file and the separate uploads.maxBytes budget.
      * Full upload admission fails with busy before copying. No path access or downloads; servers may impose lower limits.
      * Cleanup releases owned bytes; failed uploads may leave temporary server data, with no physical-erasure guarantee
      *
      * Returns the created snapshot after an API response, not gateway delivery or recipient acknowledgement.
-     * Notifications default off. Deadline defaults to 30,000 ms across admission, rate waits and HTTP.
+     * Mention notifications default off. Deadline defaults to 30,000 ms across admission, rate waits and HTTP.
      * Enabled caching retains eligible created snapshots without changing send completion or delivery.
      * Shared admission allows four active requests and 256 pending bodies or 4 MiB of pending JSON.
      * Only confirmed rate-limit rejections retry within the deadline. Ambiguous sends never retry automatically
@@ -1209,6 +1223,26 @@ export interface Messages {
      * Typed failures, defects and interruption retain native channels, including cleanup causes
      */
     send(channelId: string, input: MessageInput, options?: SendOptions): Effect.Effect<Message, SendError>
+    /** Lazily forward an accessible source message into an explicit destination, without fetching or caching the source.
+     * Each execution starts a separate send. No gateway connection is required; Closing/Closed fail with ClientClosedError
+     *
+     * Optional media selections belong to the source. Extra content, files, mentions and flags are rejected
+     *
+     * Returns the created message after HTTP, with frozen messageSnapshots rather than live views of later source edits.
+     * Uses send's shared admission, optional destination-message caching and 30,000 ms default total deadline
+     *
+     * Fluxer checks source access and destination permissions. Only confirmed rate-limit rejection retries.
+     * A lost response or interruption after dispatch may leave a created forward. No rollback or exactly-once guarantee.
+     * Expected failures use MessageError or ClientClosedError. Defects and interruption retain native causes and await cleanup
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export function forwardExample(client: Client, destinationId: string, source: MessageReference) {
+     *     return client.messages.forward(destinationId, { source })
+     * }
+     * ```
+     */
+    forward(channelId: string, input: ForwardMessageInput, options?: SendOptions): Effect.Effect<Message, SendError>
     /**
      * Lazily tell Fluxer that this bot is typing in one decimal channel ID, completing only after HTTP 204.
      * No gateway connection, event confirmation, cache change or local typing state is required or created.
@@ -1289,7 +1323,11 @@ export interface Messages {
      * Existing stickers are preserved; sticker replacement is not supported by this edit operation.
      * Supplied values replace those fields; omitted values are not sent. No hidden fetch or cache merge
      *
-     * List retained attachment IDs alongside new uploads; unknown IDs may be ignored by Fluxer
+     * List retained attachment IDs alongside new uploads; retained title/description may be changed or cleared with null.
+     * The supplied attachment list replaces the old list. Unknown IDs may be ignored and a stale list may remove concurrent additions.
+     * attachment:// embed images/thumbnails must match a new image upload in this execution, not a retained ID
+     *
+     * A flags-only edit is supported. Omitted flags preserve them; flags replaces writable bits and 0 clears both non-voice bits
      *
      * Clear files with attachments: [] and nonempty text or embeds. Uploads use send's per-execution snapshot and budget.
      * Interruption awaits upload cleanup; failed edits may leave temporary server data, without physical-erasure guarantees
@@ -2146,6 +2184,7 @@ export interface Webhooks {
 
 /** Token-only HTTP client, without a bot token, gateway, caches or persistent storage.
  * Operations are lazy and preserve native defects/interruption.
+ * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause.
  * Requests default to a 30-second total deadline across admission, rate waits, retries and HTTP.
  * Cancellation interrupts only that operation and awaits request/body cleanup, without rolling back remote effects
  *
@@ -2156,11 +2195,14 @@ export interface WebhookClient {
     /** Credential identity, never a token-bearing URL */
     readonly id: string
     /** Send with wait=true and return the created message. Mentions default off. Files use bounded multipart streaming, with 50 MiB maximum per file.
+     * Image/thumbnail attachment URLs match a new upload in this execution. flags accepts only the two non-voice MessageFlags bits.
      * Snapshot inputs at execution, including admitted file bytes. Never retry an uncertain send, which may already have posted */
     send(input: WebhookMessageInput, options?: MessageOperationOptions): Effect.Effect<Message, WebhookOperationFailure>
     /** Fetch a decimal message ID authored by this webhook in its current channel, with bounded transient read retries */
     fetchMessage(messageId: string, options?: MessageOperationOptions): Effect.Effect<Message, WebhookOperationFailure>
-    /** Edit this webhook's message and return its snapshot. Omitted fields remain unchanged, mentions default off, and attachments cannot be replaced */
+    /** Edit this webhook's message and return its snapshot. Omitted fields remain unchanged, mentions default off, and attachments cannot be replaced.
+     * flags-only edits replace the two writable non-voice bits; zero clears them. Existing file references are not resolved for embed inputs
+     */
     editMessage(
         messageId: string,
         input: WebhookMessageEdit,
@@ -2177,7 +2219,8 @@ export interface WebhookClient {
 /**
  * Native client with lazy operations in the caller's Effect context.
  * The scope that creates the client owns its connection work and permanent cleanup.
- * Expected errors use the typed failure channel, while defects and interruption remain in the native cause
+ * Expected errors use the typed failure channel, while defects and interruption remain in the native cause.
+ * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause
  */
 export interface Client extends ClientState {
     /** Public server-directory management, not gateway service discovery or directory joining */
@@ -2444,6 +2487,26 @@ export interface Users {
     get(id: string): Effect.Effect<User | undefined, UserOperationFailure>
     /** Fetch a public account snapshot remotely by decimal ID; unknown IDs fail with notFound */
     fetch(id: string, options?: UserOperationOptions): Effect.Effect<User, UserOperationFailure>
+    /** Lazily fetch one frozen privacy-filtered profile by decimal user ID, optionally in an explicit guild context.
+     * Each execution issues a separate read, without gateway readiness, hidden hydration or account/profile cache effects.
+     * Returns allowlisted account identity and profile fields. isLimited reports Fluxer's privacy restriction, not missing membership.
+     * A null guildProfile means no contextual profile was supplied, not proof that the account is outside the guild.
+     * Uses Users' shared deadline and bounded read retries. Fluxer may clear expired premium state while serving this GET.
+     * Invalid IDs/query, denied access and malformed responses fail with UserOperationError operation users.fetchProfile.
+     * Closing/Closed fail with ClientClosedError. Interruption awaits cleanup; defects and interruption retain native causes
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export function profileExample(client: Client, userId: string, guildId: string) {
+     *     return client.users.fetchProfile(userId, { guildId })
+     * }
+     * ```
+     */
+    fetchProfile(
+        id: string,
+        query?: UserProfileQuery,
+        options?: UserOperationOptions,
+    ): Effect.Effect<UserProfile, UserOperationFailure>
     /** Fetch the authenticated bot remotely, stripping private account fields */
     fetchSelf(options?: UserOperationOptions): Effect.Effect<User, UserOperationFailure>
 }
@@ -2532,6 +2595,8 @@ export function createClient<E = never, R = never>(
                     owner.user("users.fetch", () => userFetch(id), options),
                 fetchSelf: (options?: UserOperationOptions) =>
                     owner.user("users.fetchSelf", () => userFetch("@me"), options),
+                fetchProfile: (id: string, query?: UserProfileQuery, options?: UserOperationOptions) =>
+                    owner.user("users.fetchProfile", () => userProfile(id, query), options),
             }),
             directMessages: Object.freeze({
                 send: (userId: string, input: ReplyInput, options?: SendOptions) =>
@@ -2831,6 +2896,8 @@ export function createClient<E = never, R = never>(
                     ),
                 send: (channelId: string, input: MessageInput, options?: SendOptions) =>
                     owner.send(channelId, input, options),
+                forward: (channelId: string, input: ForwardMessageInput, options?: SendOptions) =>
+                    owner.forward(channelId, input, options),
                 typing: (channelId: string, options?: MessageOperationOptions) => owner.typing(channelId, options),
                 keepTyping: <A, E, R>(
                     channelId: string,

@@ -1,3 +1,4 @@
+import { MessageFlags } from "#sdk/messages"
 import type {
     Message,
     MessageInput,
@@ -8,6 +9,8 @@ import type {
     MessageChannelMention,
     MessageReactionSummary,
     MessageContextReference,
+    MessageSnapshot,
+    MessageSticker,
 } from "#sdk/messages"
 import { MessageError } from "#sdk/message-errors"
 import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
@@ -25,6 +28,13 @@ const timestamp = (value: unknown): value is string =>
 const int32 = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
 const count = (value: unknown): value is number => int32(value) && value >= 0
+const writableMessageFlags = MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications
+const writableFlags = (value: unknown): value is number =>
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= 2_147_483_647 &&
+    (value & ~writableMessageFlags) === 0
 
 export function decodeMessage(value: unknown): Message | undefined {
     if (!record(value) || !identifier(value.id) || !identifier(value.channel_id) || typeof value.content !== "string")
@@ -52,25 +62,14 @@ export function decodeMessage(value: unknown): Message | undefined {
         return undefined
     const embeds = decodeEmbeds(value.embeds)
     const attachments = decodeAttachments(value.attachments)
-    const rawStickers = value.stickers ?? []
-    if (!Array.isArray(rawStickers)) return undefined
-    const stickers = []
-    for (const sticker of rawStickers) {
-        if (
-            !record(sticker) ||
-            !identifier(sticker.id) ||
-            typeof sticker.name !== "string" ||
-            typeof sticker.animated !== "boolean"
-        )
-            return undefined
-        stickers.push(Object.freeze({ id: sticker.id, name: sticker.name, animated: sticker.animated }))
-    }
-    if (embeds === undefined || attachments === undefined) return undefined
+    const stickers = decodeStickers(value.stickers)
+    if (embeds === undefined || attachments === undefined || stickers === undefined) return undefined
     const mentions = decodeMentions(value.mentions)
     const mentionRoles = decodeIdentifiers(value.mention_roles)
     const mentionChannels = decodeMentionChannels(value.mention_channels)
     const reactions = decodeReactionSummaries(value.reactions)
     const messageReference = decodeMessageReference(value.message_reference)
+    const messageSnapshots = decodeMessageSnapshots(value.message_snapshots)
     const referencedMessage = decodeReferencedMessage(value.referenced_message)
     if (
         mentions === undefined ||
@@ -78,6 +77,7 @@ export function decodeMessage(value: unknown): Message | undefined {
         mentionChannels === undefined ||
         reactions === undefined ||
         messageReference === undefined ||
+        messageSnapshots === undefined ||
         referencedMessage === undefined
     )
         return undefined
@@ -95,18 +95,36 @@ export function decodeMessage(value: unknown): Message | undefined {
         ...(value.mention_everyone === undefined ? {} : { mentionedEveryone: value.mention_everyone }),
         embeds,
         attachments,
-        stickers: Object.freeze(stickers),
+        stickers,
         ...(mentions.value === undefined ? {} : { mentions: mentions.value }),
         ...(mentionRoles.value === undefined ? {} : { mentionRoleIds: mentionRoles.value }),
         ...(mentionChannels.value === undefined ? {} : { mentionChannels: mentionChannels.value }),
         ...(reactions.value === undefined ? {} : { reactions: reactions.value }),
         ...(messageReference.value === undefined ? {} : { messageReference: messageReference.value }),
+        ...(messageSnapshots.value === undefined ? {} : { messageSnapshots: messageSnapshots.value }),
         ...(referencedMessage.value === undefined ? {} : { referencedMessage: referencedMessage.value }),
         author: Object.freeze({ id: author.id, username: author.username, isBot: author.bot === true }),
     })
 }
 
 type Observed<A> = { readonly value: A | undefined }
+
+function decodeStickers(value: unknown): readonly MessageSticker[] | undefined {
+    const rawStickers = value ?? []
+    if (!Array.isArray(rawStickers)) return undefined
+    const stickers: MessageSticker[] = []
+    for (const sticker of rawStickers) {
+        if (
+            !record(sticker) ||
+            !identifier(sticker.id) ||
+            typeof sticker.name !== "string" ||
+            typeof sticker.animated !== "boolean"
+        )
+            return undefined
+        stickers.push(Object.freeze({ id: sticker.id, name: sticker.name, animated: sticker.animated }))
+    }
+    return Object.freeze(stickers)
+}
 
 function decodeMentions(value: unknown): Observed<readonly MessageMention[]> | undefined {
     if (value === undefined) return { value: undefined }
@@ -194,6 +212,78 @@ function decodeMessageReference(value: unknown): Observed<MessageContextReferenc
     }
 }
 
+function decodeMessageSnapshots(value: unknown): Observed<readonly MessageSnapshot[] | null> | undefined {
+    if (value === undefined) return { value: undefined }
+    if (value === null) return { value: null }
+    if (!Array.isArray(value)) return undefined
+    const snapshots: MessageSnapshot[] = []
+    for (const snapshot of value) {
+        const decoded = decodeMessageSnapshot(snapshot)
+        if (!decoded) return undefined
+        snapshots.push(decoded)
+    }
+    return { value: Object.freeze(snapshots) }
+}
+
+function decodeMessageSnapshot(value: unknown): MessageSnapshot | undefined {
+    if (
+        !record(value) ||
+        !timestamp(value.timestamp) ||
+        !int32(value.type) ||
+        !int32(value.flags) ||
+        (value.content !== undefined && value.content !== null && typeof value.content !== "string") ||
+        (value.edited_timestamp !== undefined && value.edited_timestamp !== null && !timestamp(value.edited_timestamp))
+    )
+        return undefined
+    const mentionUserIds = decodeSnapshotField(value.mentions, decodeSnapshotIdentifiers)
+    const mentionRoleIds = decodeSnapshotField(value.mention_roles, decodeSnapshotIdentifiers)
+    const mentionChannels = decodeSnapshotField(value.mention_channels, decodeSnapshotMentionChannels)
+    const embeds = decodeSnapshotField(value.embeds, decodeEmbeds)
+    const attachments = decodeSnapshotField(value.attachments, decodeAttachments)
+    const stickers = decodeSnapshotField(value.stickers, decodeStickers)
+    if (
+        mentionUserIds === undefined ||
+        mentionRoleIds === undefined ||
+        mentionChannels === undefined ||
+        embeds === undefined ||
+        attachments === undefined ||
+        stickers === undefined
+    )
+        return undefined
+    return Object.freeze({
+        ...(value.content === undefined ? {} : { content: value.content }),
+        createdAt: value.timestamp,
+        ...(value.edited_timestamp === undefined ? {} : { editedAt: value.edited_timestamp }),
+        ...(mentionUserIds.value === undefined ? {} : { mentionUserIds: mentionUserIds.value }),
+        ...(mentionRoleIds.value === undefined ? {} : { mentionRoleIds: mentionRoleIds.value }),
+        ...(mentionChannels.value === undefined ? {} : { mentionChannels: mentionChannels.value }),
+        ...(embeds.value === undefined ? {} : { embeds: embeds.value }),
+        ...(attachments.value === undefined ? {} : { attachments: attachments.value }),
+        ...(stickers.value === undefined ? {} : { stickers: stickers.value }),
+        type: value.type,
+        flags: value.flags,
+    })
+}
+
+function decodeSnapshotField<A>(
+    value: unknown,
+    decode: (value: unknown) => A | undefined,
+): Observed<A | null> | undefined {
+    if (value === undefined) return { value: undefined }
+    if (value === null) return { value: null }
+    const decoded = decode(value)
+    return decoded === undefined ? undefined : { value: decoded }
+}
+
+function decodeSnapshotIdentifiers(value: unknown): readonly string[] | undefined {
+    return Array.isArray(value) && value.every(identifier) ? Object.freeze([...value]) : undefined
+}
+
+function decodeSnapshotMentionChannels(value: unknown): readonly MessageChannelMention[] | undefined {
+    const decoded = decodeMentionChannels(value)
+    return decoded?.value === null || decoded?.value === undefined ? undefined : decoded.value
+}
+
 function decodeReferencedMessage(value: unknown): Observed<MessageReference | null> | undefined {
     if (value === undefined) return { value: undefined }
     if (value === null) return { value: null }
@@ -248,14 +338,20 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
     if (
         Object.keys(input).some(
             (key) =>
-                !["content", "embeds", "attachments", "stickerIds", "allowedMentions", "messageReference"].includes(
-                    key,
-                ),
+                ![
+                    "content",
+                    "embeds",
+                    "attachments",
+                    "stickerIds",
+                    "allowedMentions",
+                    "messageReference",
+                    "flags",
+                ].includes(key),
         )
     )
         return invalid()
-    const body = encodeBody(input)
     const attachments = encodeAttachments(input.attachments, false)
+    const body = encodeBody(input, attachments?.uploadedFilenames)
     const stickerIds = input.stickerIds
     if (
         stickerIds !== undefined &&
@@ -263,8 +359,9 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
     )
         return invalid()
     if (
-        !body ||
         !attachments ||
+        !body ||
+        (input.flags !== undefined && !writableFlags(input.flags)) ||
         (!(typeof input.content === "string" && input.content.length > 0) &&
             !body.embeds?.length &&
             !attachments.files.length &&
@@ -283,9 +380,55 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
             ...(attachments.metadata === undefined ? {} : { attachments: attachments.metadata }),
             nonce,
             allowed_mentions: mentions,
+            ...(input.flags === undefined ? {} : { flags: input.flags }),
             ...(ref === undefined
                 ? {}
                 : { message_reference: { message_id: ref.id, channel_id: ref.channelId, type: 0 } }),
+        }),
+    }
+}
+
+/** Forward inputs encode only Fluxer's source reference and optional media selectors */
+export function encodeForward(channelId: unknown, input: unknown, nonce: string): EncodedBody | MessageError {
+    const invalid = () => new MessageError("input", "notSent")
+    if (
+        !identifier(channelId) ||
+        !record(input) ||
+        Object.keys(input).some((key) => !["source", "attachmentIds", "embedIndices"].includes(key))
+    )
+        return invalid()
+    const source = input.source
+    if (!reference(source)) return invalid()
+    const attachmentIds = input.attachmentIds
+    const embedIndices = input.embedIndices
+    if (
+        (attachmentIds !== undefined &&
+            (!Array.isArray(attachmentIds) ||
+                attachmentIds.length > 10 ||
+                !Array.from(attachmentIds).every(identifier))) ||
+        (embedIndices !== undefined &&
+            (!Array.isArray(embedIndices) ||
+                embedIndices.length > 10 ||
+                !Array.from(embedIndices).every(
+                    (index) =>
+                        typeof index === "number" &&
+                        Number.isSafeInteger(index) &&
+                        index >= 0 &&
+                        index <= 2_147_483_647,
+                )))
+    )
+        return invalid()
+    return {
+        files: [],
+        json: JSON.stringify({
+            nonce,
+            message_reference: {
+                message_id: source.id,
+                channel_id: source.channelId,
+                type: 1,
+                ...(attachmentIds === undefined ? {} : { attachment_ids: [...attachmentIds] }),
+                ...(embedIndices === undefined ? {} : { embed_indices: [...embedIndices] }),
+            },
         }),
     }
 }
@@ -314,32 +457,50 @@ function encodeAllowedMentions(value: unknown) {
 
 export function encodeEdit(input: unknown): EncodedBody | undefined {
     if (!record(input)) return undefined
-    if (Object.keys(input).some((key) => !["content", "embeds", "attachments", "allowedMentions"].includes(key)))
+    if (
+        Object.keys(input).some(
+            (key) => !["content", "embeds", "attachments", "allowedMentions", "flags"].includes(key),
+        )
+    )
         return undefined
-    const body = encodeBody(input)
-    if (!body) return undefined
-    const mentions = encodeAllowedMentions(input.allowedMentions)
     const attachments = encodeAttachments(input.attachments, true)
-    if (!mentions || !attachments || (attachments.metadata?.length === 0 && !input.content && !body.embeds?.length))
+    const body = encodeBody(input, attachments?.uploadedFilenames)
+    const mentions = encodeAllowedMentions(input.allowedMentions)
+    const hasBodyInput = input.content !== undefined || input.embeds !== undefined || input.attachments !== undefined
+    if (
+        !mentions ||
+        !attachments ||
+        (input.flags !== undefined && !writableFlags(input.flags)) ||
+        (!body && (hasBodyInput || input.flags === undefined)) ||
+        (attachments.metadata?.length === 0 && !input.content && !body?.embeds?.length)
+    )
         return undefined
     return {
         files: attachments.files,
         json: JSON.stringify({
             ...body,
             allowed_mentions: mentions,
+            ...(input.flags === undefined ? {} : { flags: input.flags }),
             ...(attachments.metadata === undefined ? {} : { attachments: attachments.metadata }),
         }),
     }
 }
 
 export function replyInput(target: unknown, input: unknown): MessageInput | MessageError {
-    if (!reference(target) || !record(input) || "messageReference" in input || !encodeBody(input))
+    const attachments = record(input) ? encodeAttachments(input.attachments, false) : undefined
+    if (
+        !reference(target) ||
+        !record(input) ||
+        "messageReference" in input ||
+        !attachments ||
+        !encodeBody(input, attachments.uploadedFilenames)
+    )
         return new MessageError("input", "notSent")
     // Body presence/types were checked above; send performs complete validation of mentions and unknown keys
     return { ...input, messageReference: target } as MessageInput
 }
 
-function encodeBody(input: Record<string, unknown>) {
+function encodeBody(input: Record<string, unknown>, uploadedFilenames?: readonly string[]) {
     if (
         input.content === undefined &&
         input.embeds === undefined &&
@@ -348,7 +509,7 @@ function encodeBody(input: Record<string, unknown>) {
     )
         return undefined
     if (input.content !== undefined && typeof input.content !== "string") return undefined
-    const embeds = input.embeds === undefined ? undefined : encodeEmbeds(input.embeds)
+    const embeds = input.embeds === undefined ? undefined : encodeEmbeds(input.embeds, uploadedFilenames)
     if (input.embeds !== undefined && embeds === undefined) return undefined
     return {
         ...(input.content === undefined ? {} : { content: input.content }),

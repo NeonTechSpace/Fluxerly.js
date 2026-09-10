@@ -74,6 +74,7 @@ export type Operation =
     | "events"
     | "next"
     | "send"
+    | "forward"
     | "reply"
     | "typing"
     | "keepTyping"

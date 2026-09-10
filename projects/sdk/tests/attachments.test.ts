@@ -187,9 +187,14 @@ test.each(modes)(
         expect(Object.isFrozen(sent.attachments[0])).toBe(true)
         await api.reply({ attachments: [{ data: Buffer.from([1]), filename: "reply.bin" }] })
         expect(calls[1]!.json.message_reference.message_id).toBe(target.id)
-        await api.edit({ attachments: [{ id: attachment.id }, { data: new Uint8Array([2]), filename: "new.bin" }] })
+        await api.edit({
+            attachments: [
+                { id: attachment.id, title: "Edited title", description: null },
+                { data: new Uint8Array([2]), filename: "new.bin" },
+            ],
+        })
         expect(calls[2]!.json.attachments).toEqual([
-            { id: attachment.id },
+            { id: attachment.id, title: "Edited title", description: null },
             {
                 id: 1,
                 filename: "new.bin",
@@ -209,6 +214,199 @@ test.each(modes)(
         expect(calls).toHaveLength(5)
     },
 )
+
+test.each(modes)(
+    "%s changes retained attachment metadata without reading or accepting unrelated fields",
+    async (mode) => {
+        const calls: { json: any; method: string }[] = []
+        const fetch = transport({
+            message: async (json, init) => {
+                calls.push({ json, method: init.method! })
+                return Response.json(
+                    wire([
+                        {
+                            ...attachment,
+                            ...(json.attachments[0].title === undefined ? {} : { title: json.attachments[0].title }),
+                            ...(json.attachments[0].description === undefined
+                                ? {}
+                                : { description: json.attachments[0].description }),
+                        },
+                    ]),
+                )
+            },
+        })
+        const api = await driver(mode)
+        const updated = await api.edit({
+            attachments: [{ id: attachment.id, title: "Edited title", description: null }],
+        })
+        const cleared = await api.edit({
+            attachments: [{ id: attachment.id, title: null, description: "Edited description" }],
+        })
+        expect(calls).toEqual([
+            {
+                method: "PATCH",
+                json: {
+                    attachments: [{ id: attachment.id, title: "Edited title", description: null }],
+                    allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+                },
+            },
+            {
+                method: "PATCH",
+                json: {
+                    attachments: [{ id: attachment.id, title: null, description: "Edited description" }],
+                    allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+                },
+            },
+        ])
+        expect(updated.attachments[0]).toMatchObject({
+            id: attachment.id,
+            filename: attachment.filename,
+            size: attachment.size,
+            flags: attachment.flags,
+            url: attachment.url,
+            proxyUrl: attachment.proxy_url,
+            title: "Edited title",
+        })
+        expect(updated.attachments[0]).not.toHaveProperty("description")
+        expect(cleared.attachments[0]).toMatchObject({
+            id: attachment.id,
+            filename: attachment.filename,
+            size: attachment.size,
+            flags: attachment.flags,
+            url: attachment.url,
+            proxyUrl: attachment.proxy_url,
+            description: "Edited description",
+        })
+        expect(cleared.attachments[0]).not.toHaveProperty("title")
+        expect(Object.isFrozen(updated.attachments)).toBe(true)
+        expect(Object.isFrozen(updated.attachments[0])).toBe(true)
+        expect(Object.isFrozen(cleared.attachments[0])).toBe(true)
+        const before = fetch.mock.calls.length
+        for (const attachments of [
+            [{ id: attachment.id, title: "" }],
+            [{ id: attachment.id, description: "" }],
+            [{ id: attachment.id, title: "x".repeat(1025) }],
+            [{ id: attachment.id, description: "x".repeat(4097) }],
+            [{ id: attachment.id, filename: "renamed.bin" }],
+            [{ id: attachment.id, contentType: "image/png" }],
+            [{ id: attachment.id, spoiler: false }],
+            [{ id: attachment.id, flags: 0 }],
+            [{ id: attachment.id, data: new Uint8Array([1]) }],
+            [{ id: attachment.id }, { id: attachment.id, title: "Duplicate" }],
+        ])
+            await expect(api.edit({ attachments } as EditMessageInput)).rejects.toBeDefined()
+        expect(fetch).toHaveBeenCalledTimes(before)
+    },
+)
+
+test.each(modes)("%s links same-message image uploads through embed image and thumbnail only", async (mode) => {
+    const messages: { json: any; method: string }[] = []
+    const fetch = transport({
+        message: async (json, init) => {
+            messages.push({ json, method: init.method! })
+            return Response.json({
+                ...wire(json.attachments?.length === 0 ? [] : [attachment]),
+                embeds: (json.embeds ?? []).map((embed: any) => ({
+                    ...embed,
+                    type: "rich",
+                    ...(embed.image ? { image: { ...embed.image, flags: 0 } } : {}),
+                    ...(embed.thumbnail ? { thumbnail: { ...embed.thumbnail, flags: 0 } } : {}),
+                })),
+            })
+        },
+    })
+    const api = await driver(mode)
+    const image = { data: new Uint8Array([137, 80, 78, 71]), filename: "image.PNG" }
+    const sent = await api.send({
+        content: "Image",
+        attachments: [image],
+        embeds: [
+            {
+                image: { url: "attachment://image.PNG", description: "Full image" },
+                thumbnail: { url: "attachment://image.PNG", description: "Small image" },
+            },
+        ],
+    })
+    await api.reply({
+        content: "Reply",
+        attachments: [{ data: new Uint8Array([1]), filename: "reply.gif" }],
+        embeds: [{ image: { url: "attachment://reply.gif" } }],
+    })
+    await api.edit({
+        attachments: [{ id: attachment.id }, { data: new Uint8Array([1]), filename: "edit.webp" }],
+        embeds: [{ thumbnail: { url: "attachment://edit.webp" } }],
+    })
+    expect(messages).toEqual([
+        expect.objectContaining({
+            method: "POST",
+            json: expect.objectContaining({
+                embeds: [
+                    {
+                        image: { url: "attachment://image.PNG", description: "Full image" },
+                        thumbnail: { url: "attachment://image.PNG", description: "Small image" },
+                    },
+                ],
+            }),
+        }),
+        expect.objectContaining({
+            method: "POST",
+            json: expect.objectContaining({
+                message_reference: { message_id: target.id, channel_id: target.channelId, type: 0 },
+                embeds: [{ image: { url: "attachment://reply.gif" } }],
+            }),
+        }),
+        expect.objectContaining({
+            method: "PATCH",
+            json: expect.objectContaining({
+                embeds: [{ thumbnail: { url: "attachment://edit.webp" } }],
+            }),
+        }),
+    ])
+    expect(sent.embeds[0]?.image?.url).toBe("attachment://image.PNG")
+    expect(Object.isFrozen(sent.embeds)).toBe(true)
+    expect(Object.isFrozen(sent.embeds[0])).toBe(true)
+    const before = fetch.mock.calls.length
+    const upload = (filename: string) => ({ data: new Uint8Array([1]), filename })
+    for (const input of [
+        { content: "Missing", embeds: [{ image: { url: "attachment://missing.png" } }] },
+        {
+            content: "Case",
+            attachments: [upload("image.png")],
+            embeds: [{ image: { url: "attachment://Image.png" } }],
+        },
+        {
+            content: "Text",
+            attachments: [upload("file.txt")],
+            embeds: [{ image: { url: "attachment://file.txt" } }],
+        },
+        {
+            content: "Duplicate",
+            attachments: [upload("same.png"), upload("same.png")],
+            embeds: [{ image: { url: "attachment://same.png" } }],
+        },
+        { content: "Top level", attachments: [upload("image.png")], embeds: [{ url: "attachment://image.png" }] },
+        {
+            content: "Author",
+            attachments: [upload("image.png")],
+            embeds: [{ author: { name: "Author", url: "attachment://image.png" } }],
+        },
+        {
+            content: "Author icon",
+            attachments: [upload("image.png")],
+            embeds: [{ author: { name: "Author", iconUrl: "attachment://image.png" } }],
+        },
+        {
+            content: "Footer",
+            attachments: [upload("image.png")],
+            embeds: [{ footer: { text: "Footer", iconUrl: "attachment://image.png" } }],
+        },
+    ])
+        await expect(api.send(input as MessageInput)).rejects.toBeDefined()
+    await expect(
+        api.edit({ attachments: [{ id: attachment.id }], embeds: [{ image: { url: "attachment://retained.png" } }] }),
+    ).rejects.toBeDefined()
+    expect(fetch).toHaveBeenCalledTimes(before)
+})
 
 test.each(modes)("%s validates metadata and projects nullable fields across fetch/history/cache", async (mode) => {
     let payload: unknown = [

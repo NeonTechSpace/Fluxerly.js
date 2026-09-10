@@ -213,6 +213,8 @@ import { memberEditSelf, memberNicknameEdit } from "#sdk/internal/guilds"
 import {
     UserOperationError,
     type User,
+    type UserProfile,
+    type UserProfileQuery,
     type DirectMessageChannel,
     type DirectMessageGroupEdit,
     type UserOperationFailure,
@@ -221,6 +223,9 @@ import {
 export { UserOperationError } from "./users.js"
 export type {
     User,
+    UserProfile,
+    UserProfileFields,
+    UserProfileQuery,
     DirectMessageChannel,
     DirectMessageGroupEdit,
     DirectMessageRecipientChange,
@@ -231,6 +236,7 @@ export type {
 } from "./users.js"
 import {
     userFetch,
+    userProfile,
     directMessageOpen,
     directMessageFetch,
     directMessageList,
@@ -470,6 +476,7 @@ import {
 } from "./message-errors.js"
 import type {
     EditMessageInput,
+    ForwardMessageInput,
     MessageHistoryQuery,
     Message,
     MessageReference,
@@ -481,9 +488,13 @@ import type {
 import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
+export { MessageFlags } from "./messages.js"
 export type { EventReadError, RegistrationError, SendError, MessageOperationFailure } from "./message-errors.js"
 export type {
     Message,
+    ForwardMessageInput,
+    MessageSnapshot,
+    MessageFlag,
     MessageSticker,
     MessageMention,
     MessageChannelMention,
@@ -1001,7 +1012,9 @@ export interface Messages {
      */
     get(message: MessageReference): Result<Message | undefined, MessageOperationFailure>
     /**
-     * Send text, embeds, files and/or stickers and return the decoded message after HTTP, not gateway delivery or recipient acknowledgement
+     * Send text, embeds, files and/or stickers and return the decoded message after HTTP, not gateway delivery or recipient acknowledgement.
+     * Embed images/thumbnails may use attachment://filename for a matching new image upload in this request.
+     * Optional flags accept only MessageFlags' non-voice bits; suppressing previews is distinct from omitting embeds
      *
      * File bytes are snapshotted on invocation, up to 50 MiB per file and the separate uploads.maxBytes client budget.
      * Full upload admission fails with busy before copying. No path access or downloads; servers may impose lower limits.
@@ -1019,6 +1032,30 @@ export interface Messages {
     send(
         channelId: string,
         input: MessageInput,
+        options?: DefaultSendOptions,
+    ): ResultAsync<Message, SendError | CancelledError>
+    /** Forward an accessible source message into an explicit destination, without fetching or caching the source.
+     * Starts immediately and returns the created message after HTTP, not gateway delivery or recipient acknowledgement
+     *
+     * Optional media selections belong to the source. Extra content, files, mentions and flags are rejected.
+     * The returned messageSnapshots contain frozen copied content, not live views of later source edits.
+     * Uses send's shared admission, optional destination-message caching and 30,000 ms default total deadline
+     *
+     * Fluxer checks source access and destination permissions. Only confirmed rate-limit rejection retries.
+     * Expected failures return Err with MessageError or ClientClosedError; cancellation returns CancelledError after cleanup.
+     * A lost response or cancellation after dispatch may leave a created forward. No rollback or exactly-once guarantee.
+     * SDK and cleanup defects reject with SdkDefect
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     * export function forwardExample(client: Client, destinationId: string, source: MessageReference) {
+     *     return client.messages.forward(destinationId, { source })
+     * }
+     * ```
+     */
+    forward(
+        channelId: string,
+        input: ForwardMessageInput,
         options?: DefaultSendOptions,
     ): ResultAsync<Message, SendError | CancelledError>
     /**
@@ -1112,7 +1149,11 @@ export interface Messages {
      * Existing stickers are preserved; sticker replacement is not supported by this edit operation.
      * Supplied values replace those fields; omitted values are not sent. No hidden fetch or cache merge
      *
-     * List retained attachment IDs alongside new uploads; unknown IDs may be ignored by Fluxer
+     * List retained attachment IDs alongside new uploads; retained title/description may be changed or cleared with null.
+     * The supplied attachment list replaces the old list. Unknown IDs may be ignored and a stale list may remove concurrent additions.
+     * attachment:// embed images/thumbnails must match a new image upload in this request, not a retained ID
+     *
+     * A flags-only edit is supported. Omitted flags preserve them; flags replaces writable bits and 0 clears both non-voice bits
      *
      * Clear files with attachments: [] and nonempty text or embeds. Uploads use send's snapshot, budget and cleanup rules
      *
@@ -2066,6 +2107,7 @@ export interface Webhooks {
 
 /** Token-only HTTP client, without a bot token, gateway, caches or persistent storage.
  * Operations start immediately and return expected failures, while unexpected defects reject with SdkDefect.
+ * Cleanup defects stop retries and retain any operation failure or cancellation in SdkDefect's safe reasons.
  * Requests default to a 30-second total deadline across admission, rate waits, retries and HTTP.
  * Cancellation interrupts only that operation and awaits request/body cleanup, without rolling back remote effects
  *
@@ -2076,6 +2118,7 @@ export interface WebhookClient {
     /** Credential identity, never a token-bearing URL */
     readonly id: string
     /** Send with wait=true and return the created message. Mentions default off. Files use bounded multipart streaming, with 50 MiB maximum per file.
+     * Image/thumbnail attachment URLs match a new upload in this request. flags accepts only the two non-voice MessageFlags bits.
      * Snapshot inputs at execution, including admitted file bytes. Never retry an uncertain send, which may already have posted */
     send(
         input: WebhookMessageInput,
@@ -2086,7 +2129,9 @@ export interface WebhookClient {
         messageId: string,
         options?: DefaultMessageOperationOptions,
     ): ResultAsync<Message, WebhookOperationFailure | CancelledError>
-    /** Edit this webhook's message and return its snapshot. Omitted fields remain unchanged, mentions default off, and attachments cannot be replaced */
+    /** Edit this webhook's message and return its snapshot. Omitted fields remain unchanged, mentions default off, and attachments cannot be replaced.
+     * flags-only edits replace the two writable non-voice bits; zero clears them. Existing file references are not resolved for embed inputs
+     */
     editMessage(
         messageId: string,
         input: WebhookMessageEdit,
@@ -2106,6 +2151,7 @@ export interface WebhookClient {
 /**
  * Default client with SDK-owned execution of asynchronous operations.
  * Expected failures use ResultAsync Err values, while SDK defects reject with SdkDefect.
+ * Cleanup defects stop retries and retain any operation failure or cancellation in SdkDefect's safe reasons.
  * Use run for a managed lifetime, or pair connect with waitForClose and shutdown
  */
 export interface Client extends ClientState {
@@ -2565,6 +2611,26 @@ export interface Users {
     get(id: string): Result<User | undefined, UserOperationFailure>
     /** Fetch a public account snapshot remotely by decimal ID; unknown IDs fail with notFound */
     fetch(id: string, options?: DefaultUserOperationOptions): ResultAsync<User, UserOperationFailure | CancelledError>
+    /** Fetch one frozen privacy-filtered profile by decimal user ID, optionally in an explicit guild context.
+     * Starts immediately without a gateway connection, hidden member fetch or account/profile cache read, write or invalidation.
+     * Returns allowlisted account identity and profile fields. isLimited reports Fluxer's privacy restriction, not missing membership.
+     * A null guildProfile means no contextual profile was supplied; it is not proof that the account is outside the guild.
+     * Uses Users' shared deadline and bounded read retries. Fluxer may clear expired premium state while serving this GET.
+     * Invalid IDs/query, denied access and malformed responses use UserOperationError operation users.fetchProfile.
+     * Cancellation affects this request only and returns CancelledError after cleanup; SDK/cleanup defects reject with SdkDefect
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export function profileExample(client: Client, userId: string, guildId: string) {
+     *     return client.users.fetchProfile(userId, { guildId })
+     * }
+     * ```
+     */
+    fetchProfile(
+        id: string,
+        query?: UserProfileQuery,
+        options?: DefaultUserOperationOptions,
+    ): ResultAsync<UserProfile, UserOperationFailure | CancelledError>
     /** Fetch the authenticated bot remotely, stripping private account fields */
     fetchSelf(options?: DefaultUserOperationOptions): ResultAsync<User, UserOperationFailure | CancelledError>
 }
@@ -2769,6 +2835,12 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     execute(
                         owner.user("users.fetchSelf", () => userFetch("@me"), options),
                         "users.fetchSelf",
+                        options,
+                    ),
+                fetchProfile: (id: string, query?: UserProfileQuery, options?: DefaultUserOperationOptions) =>
+                    execute(
+                        owner.user("users.fetchProfile", () => userProfile(id, query), options),
+                        "users.fetchProfile",
                         options,
                     ),
             }),
@@ -3415,6 +3487,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 },
                 send: (channelId: string, input: MessageInput, options?: DefaultSendOptions) =>
                     execute(owner.send(channelId, input, options), "send", options),
+                forward: (channelId: string, input: ForwardMessageInput, options?: DefaultSendOptions) =>
+                    execute(owner.forward(channelId, input, options), "forward", options),
                 typing: (channelId: string, options?: DefaultMessageOperationOptions) =>
                     execute(owner.typing(channelId, options), "typing", options),
                 keepTyping: <A>(

@@ -17,7 +17,13 @@ import { realpathSync } from "node:fs"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { Context, Effect, Logger, References } from "effect"
-import { createClient, MessageOperationError, CollectorError, fromEffectLogger } from "@neontechspace/fluxerly/effect"
+import {
+    createClient,
+    MessageOperationError,
+    CollectorError,
+    fromEffectLogger,
+    MessageFlags,
+} from "@neontechspace/fluxerly/effect"
 import { createClient as createDefault } from "@neontechspace/fluxerly"
 
 globalThis.fetch = () => {
@@ -48,6 +54,14 @@ const client = await Effect.runPromise(
         Effect.gen(function* () {
             const client = yield* createClient({ token: "fixture-only-not-a-credential" })
             assert.equal(client.state, "Disconnected")
+            assert.deepEqual(MessageFlags, { SuppressEmbeds: 4, SuppressNotifications: 4096 })
+            assert.ok(Object.isFrozen(MessageFlags))
+            assert.equal(
+                (yield* client.messages.forward("20", { source: { id: "bad", channelId: "30" } }).pipe(Effect.flip))
+                    .reason,
+                "input",
+            )
+            assert.equal((yield* client.users.fetchProfile("bad").pipe(Effect.flip)).operation, "users.fetchProfile")
             assert.equal((yield* client.messages.deleteMany("20", []).pipe(Effect.flip)).operation, "deleteMany")
             assert.equal(
                 (yield* client.members.timeout({ guildId: "20", userId: "30" }, 0).pipe(Effect.flip)).operation,

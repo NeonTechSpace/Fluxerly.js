@@ -41,14 +41,21 @@ export interface AttachmentInput {
     readonly id?: never
 }
 
-/** Keep an existing attachment during an edit. Unknown IDs may be ignored by Fluxer.
- * No hidden fetch, positional lookup or metadata update is performed by the SDK
+/** Keep an existing attachment during an edit, optionally changing its display metadata. Unknown IDs may be ignored by Fluxer.
+ * Omit title and description to preserve their current values. Pass null to clear either value.
+ * No hidden fetch, positional lookup or filename or flag update is performed by the SDK
  */
 export interface AttachmentReference {
     /** Decimal attachment ID from the message being edited, not its message ID */
     readonly id: string
+    /** Replacement display title, 1 to 1,024 characters, or null to clear */
+    readonly title?: string | null
+    /** Replacement alternative-text description, 1 to 4,096 characters, or null to clear */
+    readonly description?: string | null
     readonly data?: never
     readonly filename?: never
+    readonly contentType?: never
+    readonly spoiler?: never
 }
 
 /** Frozen received file metadata, not file bytes. URLs may expire; no automatic download or refresh */

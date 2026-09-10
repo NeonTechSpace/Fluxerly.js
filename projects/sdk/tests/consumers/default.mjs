@@ -16,7 +16,7 @@ globalThis.WebSocket = class {
     }
 }
 
-const { createClient, ConfigurationError, MessageOperationError, CollectorError } =
+const { createClient, ConfigurationError, MessageOperationError, CollectorError, MessageFlags } =
     await import("@neontechspace/fluxerly")
 const cacheReports = []
 let completeCacheReport
@@ -40,6 +40,13 @@ const result = createClient({
 })
 assert.equal(result.isOk(), true)
 assert.equal(result.value.state, "Disconnected")
+assert.deepEqual(MessageFlags, { SuppressEmbeds: 4, SuppressNotifications: 4096 })
+assert.ok(Object.isFrozen(MessageFlags))
+assert.equal(
+    (await result.value.messages.forward("20", { source: { id: "bad", channelId: "30" } })).error.reason,
+    "input",
+)
+assert.equal((await result.value.users.fetchProfile("bad")).error.operation, "users.fetchProfile")
 assert.equal((await result.value.messages.deleteMany("20", [])).error.operation, "deleteMany")
 assert.equal(
     (await result.value.members.timeout({ guildId: "20", userId: "30" }, 0)).error.operation,

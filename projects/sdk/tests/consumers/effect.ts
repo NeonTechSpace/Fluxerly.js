@@ -5,6 +5,10 @@ import {
     compareHierarchy,
     ChannelType,
     Permissions,
+    MessageFlags,
+    type ForwardMessageInput,
+    type MessageSnapshot,
+    type UserProfile,
     type GuildChannel,
     type Client,
     type ConfigurationError,
@@ -33,6 +37,28 @@ import {
     type RoleHierarchyInput,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+export const useConsumerFeatures = (client: Client, channelId: string, source: MessageReference, userId: string) =>
+    Effect.gen(function* () {
+        const input: ForwardMessageInput = { source, attachmentIds: [], embedIndices: [0] }
+        const forwarded = yield* client.messages.forward(channelId, input)
+        const snapshot: MessageSnapshot | undefined = forwarded.messageSnapshots?.[0]
+        const sent = yield* client.messages.send(channelId, {
+            attachments: [{ data: new Uint8Array([1, 2]), filename: "chart.png" }],
+            embeds: [{ image: { url: "attachment://chart.png" } }],
+            flags: MessageFlags.SuppressNotifications,
+        })
+        yield* client.messages.edit(sent, { flags: MessageFlags.SuppressEmbeds })
+        yield* client.messages.edit(sent, {
+            attachments: sent.attachments.map(({ id }) => ({ id, title: "Chart", description: null })),
+        })
+        const observed: UserProfile = yield* client.users.fetchProfile(userId, { guildId: "20" })
+        // @ts-expect-error Forward inputs cannot add content
+        client.messages.forward(channelId, { source, content: "extra" })
+        // @ts-expect-error Profile observations are immutable
+        observed.profile.bio = "changed"
+        return { snapshot, observed }
+    })
 
 export const useChannels = (client: Client, guildId: string, channelId: string) =>
     Effect.gen(function* () {

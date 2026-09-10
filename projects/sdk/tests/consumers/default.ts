@@ -4,6 +4,10 @@ import {
     compareHierarchy,
     ChannelType,
     Permissions,
+    MessageFlags,
+    type ForwardMessageInput,
+    type MessageSnapshot,
+    type UserProfile,
     type GuildChannel,
     type Client,
     type ConnectionState,
@@ -31,6 +35,31 @@ import {
     type RoleHierarchyInput,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+export async function useConsumerFeatures(client: Client, channelId: string, source: MessageReference, userId: string) {
+    const input: ForwardMessageInput = { source, attachmentIds: [], embedIndices: [0] }
+    const forwarded = await client.messages.forward(channelId, input)
+    if (forwarded.isErr()) return forwarded
+    const snapshot: MessageSnapshot | undefined = forwarded.value.messageSnapshots?.[0]
+    const sent = await client.messages.send(channelId, {
+        attachments: [{ data: new Uint8Array([1, 2]), filename: "chart.png" }],
+        embeds: [{ image: { url: "attachment://chart.png" } }],
+        flags: MessageFlags.SuppressNotifications,
+    })
+    if (sent.isErr()) return sent
+    await client.messages.edit(sent.value, { flags: MessageFlags.SuppressEmbeds })
+    await client.messages.edit(sent.value, {
+        attachments: sent.value.attachments.map(({ id }) => ({ id, title: "Chart", description: null })),
+    })
+    const profile = await client.users.fetchProfile(userId, { guildId: "20" })
+    if (profile.isErr()) return profile
+    const observed: UserProfile = profile.value
+    // @ts-expect-error Forward inputs cannot add content
+    client.messages.forward(channelId, { source, content: "extra" })
+    // @ts-expect-error Profile observations are immutable
+    observed.profile.bio = "changed"
+    return { snapshot, observed }
+}
 
 export async function useChannels(client: Client, guildId: string, channelId: string) {
     const retained = client.channels.get(channelId)

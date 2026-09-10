@@ -1,6 +1,12 @@
 /** Rich embed input, not a received preview. Unknown keys and null values are rejected locally.
- * String length limits count UTF-16 code units before server normalization.
- * URLs must use HTTP/HTTPS and contain at most 2048 characters; uploads and attachment URLs are not supported
+ * String length limits count UTF-16 code units before server normalization
+ *
+ * URLs must use HTTP/HTTPS and contain at most 2048 characters, except image and thumbnail URLs may use attachment://filename.
+ * An attachment URL must exactly and case-sensitively match one new PNG, JPG, JPEG, WEBP or GIF upload filename in the same send, reply or edit.
+ * Its filename may contain letters, marks, numbers, underscores, dots and hyphens only
+ *
+ * The SDK does not fetch existing attachment metadata, so retained attachment IDs cannot supply an attachment URL.
+ * Fluxer moves referenced uploads into embed media; they are not returned in the default message attachment list
  *
  * Fluxer fetches remote media and may normalize text. Permissions and instance-specific limits remain server-owned
  * @example
@@ -37,9 +43,9 @@ export interface EmbedInput {
     readonly author?: EmbedAuthorInput
     /** Footer label and optional icon */
     readonly footer?: EmbedFooterInput
-    /** Full-size remote image */
+    /** Full-size HTTP(S) image or attachment://filename for one same-message uploaded image */
     readonly image?: EmbedMediaInput
-    /** Small remote image */
+    /** Small HTTP(S) image or attachment://filename for one same-message uploaded image */
     readonly thumbnail?: EmbedMediaInput
     /** Up to 25 named sections, in display order */
     readonly fields?: readonly EmbedFieldInput[]
@@ -63,9 +69,11 @@ export interface EmbedFooterInput {
     readonly iconUrl?: string
 }
 
-/** Remote image input; the SDK does not upload or fetch these bytes */
+/** Image input; attachment URLs refer only to a same-message upload and are otherwise HTTP(S) URLs.
+ * The SDK neither uploads through this object nor fetches remote or retained attachment bytes
+ */
 export interface EmbedMediaInput {
-    /** Required HTTP/HTTPS image URL */
+    /** Required HTTP(S) image URL or attachment://filename for image and thumbnail fields */
     readonly url: string
     /** Optional alternative text, 1 through 4096 characters */
     readonly description?: string

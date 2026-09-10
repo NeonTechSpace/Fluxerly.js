@@ -39,6 +39,7 @@
         "test:live:application": "pnpm run build && node tests/live/sdk.mjs default --application && node tests/live/sdk.mjs effect --application",
         "test:live:presence": "pnpm run build && node tests/live/presence.mjs default && node tests/live/presence.mjs effect",
         "test:live:messages": "pnpm run build && node tests/live/messages.mjs default && node tests/live/messages.mjs effect",
+        "test:live:consumer-features": "pnpm run build && node tests/live/consumer-features.mjs default && node tests/live/consumer-features.mjs effect",
         "test:live:typing": "pnpm run build && node tests/live/messages.mjs default --typing && node tests/live/messages.mjs effect --typing",
         "test:live:typing:interactive": "pnpm run build && node tests/live/typing-interactive.mjs",
         "test:live:roles:reset": "pnpm run build && node tests/live/role-display-reset.mjs default && node tests/live/role-display-reset.mjs effect",

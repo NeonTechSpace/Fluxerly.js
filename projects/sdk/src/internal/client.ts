@@ -39,6 +39,7 @@ import {
 } from "#sdk/errors"
 import { type Configuration, validateConfiguration } from "./configuration.js"
 import { discoverGateway } from "./discovery.js"
+import { mapFailureCause, withDeadline } from "./effect-failures.js"
 import { AttemptFailure, runGateway, type Session } from "./gateway.js"
 import { EventBus } from "./events.js"
 import type { MessageCollector } from "./collector.js"
@@ -62,6 +63,7 @@ import type { ClientLogging } from "./logging.js"
 import type {
     Message,
     EditMessageInput,
+    ForwardMessageInput,
     MessageHistoryQuery,
     MessageInput,
     MessageOperationOptions,
@@ -234,6 +236,8 @@ export class ClientOwner {
                 const remaining = Math.floor(deadline - performance.now())
                 if (remaining <= 0)
                     return yield* Effect.fail(new UserOperationError(operation, "timeout", "notDispatched"))
+                if (request.noCache)
+                    return yield* owner.rest.user(token, operation, () => request, { timeoutMs: remaining })
                 const generation = owner.userCache.begin(request.resource, request.method !== "GET")
                 const value = yield* owner.rest
                     .user(token, operation, () => request, { timeoutMs: remaining })
@@ -357,6 +361,16 @@ export class ClientOwner {
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? (this.reports?.start() ?? Effect.void).pipe(
                       Effect.andThen(this.rest.send(this.#configuration.token, channelId, input, options)),
+                  )
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    forward(channelId: string, input: ForwardMessageInput, options?: SendOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? (this.reports?.start() ?? Effect.void).pipe(
+                      Effect.andThen(this.rest.forward(this.#configuration.token, channelId, input, options)),
                   )
                 : Effect.fail(new ClientClosedError()),
         )
@@ -629,7 +643,7 @@ export class ClientOwner {
                     const attemptDeadline = now() + budget
                     if (!url) {
                         url = yield* discoverGateway(configuration.token).pipe(
-                            Effect.mapError(
+                            mapFailureCause(
                                 (error) =>
                                     new AttemptFailure(
                                         error,
@@ -639,10 +653,7 @@ export class ClientOwner {
                                                 (error.status === null || error.status >= 500)),
                                     ),
                             ),
-                            Effect.timeoutOrElse({
-                                duration: budget,
-                                orElse: () => Effect.fail(new AttemptFailure(new ConnectionTimeoutError(budget), true)),
-                            }),
+                            withDeadline(budget, () => new AttemptFailure(new ConnectionTimeoutError(budget), true)),
                         )
                     }
                     return yield* runGateway(
@@ -708,18 +719,28 @@ export class ClientOwner {
                         owner.presence,
                     )
                 })
-                const result = yield* Effect.exit(attempt)
+                const result = yield* Effect.uninterruptibleMask((restore) =>
+                    Effect.exit(restore(attempt)).pipe(
+                        Effect.flatMap((result) => {
+                            // Translate even when caller interruption is pending, without exposing AttemptFailure
+                            if (
+                                Exit.isFailure(result) &&
+                                (Cause.hasDies(result.cause) || Cause.hasInterrupts(result.cause))
+                            ) {
+                                if (!Cause.hasInterruptsOnly(result.cause))
+                                    emit({
+                                        event: "connectionEnded",
+                                        phase: established ? "recovery" : "startup",
+                                        failure: Cause.hasDies(result.cause) ? "defect" : "interrupted",
+                                    })
+                                return Effect.failCause(Cause.map(result.cause, (failure) => failure.failure))
+                            }
+                            return Effect.succeed(result)
+                        }),
+                    ),
+                )
                 if (Exit.isSuccess(result))
                     return yield* Effect.die(new Error("Gateway lifetime ended without an outcome"))
-                // Inspect the full cause before considering a retry; typed matching can hide a cleanup defect
-                if (Cause.hasDies(result.cause) || Cause.hasInterrupts(result.cause)) {
-                    emit({
-                        event: "connectionEnded",
-                        phase: established ? "recovery" : "startup",
-                        failure: Cause.hasDies(result.cause) ? "defect" : "interrupted",
-                    })
-                    return yield* Effect.failCause(Cause.map(result.cause, (failure) => failure.failure))
-                }
                 const reason = result.cause.reasons.find((reason) => reason._tag === "Fail")
                 if (reason?._tag !== "Fail") return yield* Effect.die(new Error("Gateway failure had no reason"))
                 const failure = reason.error

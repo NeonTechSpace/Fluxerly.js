@@ -234,7 +234,10 @@ export function webhookMessage(
     const base = messageRequest(id, messageId)
     if (!base) return undefined
     if (method === "GET") return base
-    if (!record(input) || Object.keys(input).some((key) => !["content", "embeds", "allowedMentions"].includes(key)))
+    if (
+        !record(input) ||
+        Object.keys(input).some((key) => !["content", "embeds", "allowedMentions", "flags"].includes(key))
+    )
         return undefined
     const body = encodeEdit(input)
     return body ? { ...base, method, body } : undefined

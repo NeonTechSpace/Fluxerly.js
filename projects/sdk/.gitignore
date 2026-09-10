@@ -1,9 +1,3 @@
 dist/
 .vitest/
-.env.test.local
-.env.test.local.lock
-.env.test.messages.local
-.env.test.webhooks.local
-.env.test.members.local
-.env.test.role-reset.local
-.env.test.typing.local
+.env.test.*

@@ -6,18 +6,38 @@ export type EncodedBody = { json: string; files: FilePart[] }
 
 /** Validate without copying binary bytes; admission owns the subsequent snapshot */
 export function encodeAttachments(value: unknown, edit: boolean) {
-    if (value === undefined) return { metadata: undefined, files: [] as FilePart[] }
+    if (value === undefined) return { metadata: undefined, files: [] as FilePart[], uploadedFilenames: [] as string[] }
     if (!Array.isArray(value)) return undefined
     const metadata: Record<string, unknown>[] = []
     const files: FilePart[] = []
+    const uploadedFilenames: string[] = []
     const retained = new Set<string>()
     for (const item of value) {
         if (!record(item)) return undefined
         if (item.id !== undefined) {
-            if (!edit || !identifier(item.id) || Object.keys(item).some((key) => key !== "id") || retained.has(item.id))
+            if (
+                !edit ||
+                !identifier(item.id) ||
+                Object.keys(item).some((key) => !["id", "title", "description"].includes(key)) ||
+                retained.has(item.id)
+            )
                 return undefined
+            for (const [key, max] of [
+                ["title", 1024],
+                ["description", 4096],
+            ] as const)
+                if (
+                    item[key] !== undefined &&
+                    item[key] !== null &&
+                    (typeof item[key] !== "string" || item[key].length < 1 || item[key].length > max)
+                )
+                    return undefined
             retained.add(item.id)
-            metadata.push({ id: item.id })
+            metadata.push({
+                id: item.id,
+                ...(item.title === undefined ? {} : { title: item.title }),
+                ...(item.description === undefined ? {} : { description: item.description }),
+            })
             continue
         }
         if (
@@ -45,6 +65,7 @@ export function encodeAttachments(value: unknown, edit: boolean) {
             /[\x00-\x1f\x7f/\\]/.test(item.filename)
         )
             return undefined
+        uploadedFilenames.push(item.filename)
         if (
             item.contentType !== undefined &&
             (typeof item.contentType !== "string" || !/^[\x20-\x7e]{1,255}$/.test(item.contentType))
@@ -76,7 +97,7 @@ export function encodeAttachments(value: unknown, edit: boolean) {
             data: item.data,
         })
     }
-    return { metadata, files }
+    return { metadata, files, uploadedFilenames }
 }
 
 export function decodeAttachments(value: unknown): readonly Attachment[] | undefined {

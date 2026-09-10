@@ -1,4 +1,11 @@
-import type { DirectMessageChannel, DirectMessageGroupEdit, User } from "#sdk/users"
+import type {
+    DirectMessageChannel,
+    DirectMessageGroupEdit,
+    User,
+    UserProfile,
+    UserProfileFields,
+    UserProfileQuery,
+} from "#sdk/users"
 import { identifier, record } from "./message.js"
 
 /** Validated requests executed by the client's shared REST scheduler */
@@ -13,6 +20,8 @@ export interface UserRequest<A> {
     readonly id?: string
     readonly replace?: boolean
     readonly verifyType?: "private" | "group"
+    /** Skips all user-cache generations and writes while retaining the shared REST scheduler and retries */
+    readonly noCache?: boolean
 }
 
 const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
@@ -103,6 +112,81 @@ export function userFetch(id: string): UserRequest<User> | undefined {
             return user && (id === "@me" || user.id === id) ? user : undefined
         },
     }
+}
+
+/** Build one explicit profile read with only a caller-selected guild context and no relationship-expansion flags */
+export function userProfile(id: string, query?: UserProfileQuery): UserRequest<UserProfile> | undefined {
+    if (
+        !identifier(id) ||
+        (query !== undefined &&
+            (!record(query) ||
+                Object.keys(query).some((key) => key !== "guildId") ||
+                (query.guildId !== undefined && !identifier(query.guildId))))
+    )
+        return undefined
+    const guildId = typeof query?.guildId === "string" ? query.guildId : undefined
+    const path = `/users/${id}/profile${guildId === undefined ? "" : `?guild_id=${encodeURIComponent(guildId)}`}`
+    return {
+        majorId: id,
+        path,
+        method: "GET",
+        status: 200,
+        resource: "users",
+        noCache: true,
+        decode: (value) => {
+            if (
+                !record(value) ||
+                !record(value.user) ||
+                !record(value.user_profile) ||
+                (value.profile_limited !== undefined && typeof value.profile_limited !== "boolean")
+            )
+                return undefined
+            const user = decodeUser(value.user)
+            const profile = decodeUserProfileFields(value.user_profile, true)
+            if (!user || user.id !== id || !profile) return undefined
+
+            const member = value.guild_member
+            if (member !== undefined) {
+                if (!record(member)) return undefined
+                if (member.guild_id !== undefined && (!identifier(member.guild_id) || member.guild_id !== guildId))
+                    return undefined
+                if (member.user !== undefined && (!record(member.user) || member.user.id !== id)) return undefined
+            }
+
+            let guildProfile: UserProfileFields | null = null
+            if (value.guild_member_profile !== undefined && value.guild_member_profile !== null) {
+                if (guildId === undefined) return undefined
+                const decodedGuildProfile = decodeUserProfileFields(value.guild_member_profile, false)
+                if (!decodedGuildProfile) return undefined
+                guildProfile = decodedGuildProfile
+            }
+            return Object.freeze({ user, profile, guildProfile, isLimited: value.profile_limited === true })
+        },
+    }
+}
+
+function decodeUserProfileFields(value: unknown, accountProfile: boolean): UserProfileFields | undefined {
+    if (
+        !record(value) ||
+        !nullableText(value.bio) ||
+        !nullableText(value.pronouns) ||
+        !nullableText(value.banner) ||
+        !(value.accent_color === null || integer(value.accent_color))
+    )
+        return undefined
+    let bannerColor: number | null | undefined
+    if (accountProfile && value.banner_color !== undefined) {
+        if (!(value.banner_color === null || integer(value.banner_color))) return undefined
+        bannerColor = value.banner_color
+    }
+    const profile: UserProfileFields = {
+        bio: value.bio,
+        pronouns: value.pronouns,
+        banner: value.banner,
+        ...(bannerColor === undefined ? {} : { bannerColor }),
+        accentColor: value.accent_color,
+    }
+    return Object.freeze(profile)
 }
 
 export function directMessageOpen(id: string): UserRequest<DirectMessageChannel> | undefined {

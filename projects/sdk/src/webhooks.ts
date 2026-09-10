@@ -53,6 +53,8 @@ export interface WebhookEdit {
 
 /** Webhook delivery reuses message body/mention inputs without requiring a known channel or bot token */
 export type WebhookMessageInput = MessageBody & {
+    /** Writable non-voice MessageFlags bits. Omit for Fluxer's default; voice flags and unknown bits are rejected */
+    readonly flags?: number
     /** Explicit notification permissions, default none */
     readonly allowedMentions?: AllowedMentions
     /** Per-message display name, 1–80 nonblank Unicode code points */
@@ -61,8 +63,10 @@ export type WebhookMessageInput = MessageBody & {
     readonly avatarUrl?: string
 }
 
-/** Supply content or embeds. Fluxer's webhook edit route cannot replace or upload attachments */
+/** Supply content, embeds or flags. Fluxer's webhook edit route cannot replace or upload attachments */
 export interface WebhookMessageEdit {
+    /** Replace writable non-voice MessageFlags bits. Omit to preserve them; zero clears both supported bits */
+    readonly flags?: number
     /** Replacement text, including empty text to clear */
     readonly content?: string
     /** Replacement embeds, including [] to clear */

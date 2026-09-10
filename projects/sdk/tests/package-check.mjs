@@ -155,6 +155,11 @@ try {
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
         const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
         const publicExamples = examples(publicSource)
+        for (const name of ["forwardExample", "profileExample"]) {
+            const matched = publicExamples.filter((example) => example.includes(`function ${name}(`))
+            assert.equal(matched.length, 1)
+            writeFileSync(join(consumer, `${name}.ts`), matched[0])
+        }
         const nicknameExamples = publicExamples.filter((example) => /function nicknameExample/.test(example))
         assert.equal(nicknameExamples.length, 1)
         writeFileSync(join(consumer, "nickname-example.ts"), nicknameExamples[0])

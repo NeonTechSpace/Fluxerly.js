@@ -1,6 +1,11 @@
 import { Cause, Effect, Exit, Random, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { createClient, type DefaultMessageOperationOptions, type MessageOperationFailure } from "../src/index.js"
+import {
+    createClient,
+    SdkDefect,
+    type DefaultMessageOperationOptions,
+    type MessageOperationFailure,
+} from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 
 const modes = ["default", "native"] as const
@@ -130,18 +135,45 @@ test.each(modes)(
             expect(calls).toBe([500, 502, 503, 504].includes(status) ? 3 : 1)
         }
         let calls = 0
+        const cleanup = new Error("private cleanup detail")
         vi.stubGlobal("fetch", async () => {
             calls++
             return new Response(
                 new ReadableStream({
                     cancel: () => {
-                        throw Error("cleanup")
+                        throw cleanup
                     },
                 }),
                 { status: 503 },
             )
         })
-        await expect(api.read()).rejects.toMatchObject({ reason: "network" })
+        if (mode === "default") {
+            const error = await api.read().catch((error) => error)
+            expect(error).toBeInstanceOf(SdkDefect)
+            expect(error).toMatchObject({
+                reasons: expect.arrayContaining([
+                    {
+                        kind: "Failure",
+                        failure: expect.objectContaining({ _tag: "MessageOperationError", status: 503 }),
+                    },
+                    { kind: "Defect" },
+                ]),
+            })
+            expect(JSON.stringify(error)).not.toContain("private cleanup detail")
+        } else {
+            const exit = await Effect.runPromiseExit(api.native!.messages.fetch(target))
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit)) {
+                const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
+                expect(failure).toMatchObject({
+                    _tag: "Fail",
+                    error: expect.objectContaining({ _tag: "MessageOperationError", status: 503 }),
+                })
+                const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
+                expect(defect).toMatchObject({ _tag: "Die" })
+                if (defect?._tag === "Die") expect(defect.defect).toBe(cleanup)
+            }
+        }
         expect(calls).toBe(1)
     },
 )
