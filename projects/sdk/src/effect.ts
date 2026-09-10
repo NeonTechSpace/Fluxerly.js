@@ -577,6 +577,27 @@ export type {
     NativePrefixCommandRouter,
 } from "./native-commands.js"
 import { nativeCommands } from "./native-commands.js"
+export { SupervisorChildError, SupervisorError } from "./supervisor.js"
+export type {
+    SupervisorAssignment,
+    SupervisorAssignmentOptions,
+    SupervisorChildOptions,
+    SupervisorChildState,
+    SupervisorChildStatus,
+    SupervisorFileUrl,
+    SupervisorIdentifyOptions,
+    SupervisorOptions,
+    SupervisorRestartOptions,
+    SupervisorState,
+    SupervisorStatus,
+} from "./supervisor.js"
+export type {
+    NativeSupervisor,
+    NativeSupervisorChildContext,
+    NativeSupervisorChildOptions,
+    NativeSupervisorTools,
+} from "./native-supervisor.js"
+import { makeNativeSupervisor } from "./native-supervisor.js"
 
 /**
  * Optional builders and prefix-command routing above direct client primitives.
@@ -599,6 +620,42 @@ import { nativeCommands } from "./native-commands.js"
  * ```
  */
 export const commands = nativeCommands
+
+/**
+ * Optional local Node process supervision above independently usable clients.
+ * create is lazy and starts no child. start starts the configured children once and waits for their assignment and configuration acknowledgements, not gateway READY. waitForClose observes the terminal local lifetime after every owned child exits, can be interrupted without stopping it and status returns a frozen safe snapshot
+ *
+ * Each child module must run supervisor.child.run. The helper owns a nested client and IPC scope, preserves the caller environment and Cause, and obtains a parent permit immediately before every fresh gateway Identify. Resumes bypass the permit
+ *
+ * One parent permit remains outstanding until the child confirms its synchronous Identify send or cancels before sending. The parent then spaces fresh sends by at least one second. A stalled child is stopped and must exit before another permit, after a full interval
+ *
+ * It does not discover shard counts, coordinate another process or host, preserve sessions across replacement, or manage distributed REST limits. The helper installs no signal handlers or process termination. After its graceful deadline, the parent may terminate only its own unresponsive child and still waits for its exit
+ *
+ * restart is opt-in, with bounded exponential replacement when supplied. childEnvironment, args and execArgv select the owned child process but never appear in status or failures. stdout and stderr are ignored and never retained
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { supervisor } from "@neontechspace/fluxerly/effect"
+ *
+ * export const workers = Effect.gen(function* () {
+ *     const managed = yield* supervisor.create({
+ *         entry: "/srv/bot-worker.js",
+ *         totalShards: 2,
+ *         assignments: [
+ *             { id: "one", shardIds: [0] },
+ *             { id: "two", shardIds: [1] },
+ *         ],
+ *     })
+ *     yield* managed.start().pipe(
+ *         Effect.andThen(managed.waitForClose()),
+ *         Effect.ensuring(managed.shutdown()),
+ *     )
+ *     return managed.status()
+ * })
+ * ```
+ */
+export const supervisor = makeNativeSupervisor(createClient)
 import type { PaginationError, HistoryIterationQuery, UserIterationQuery, PinIterationQuery } from "./pagination.js"
 export { PaginationError } from "./pagination.js"
 export type {

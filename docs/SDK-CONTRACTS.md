@@ -56,13 +56,16 @@ The immutable [shard plan](/projects/sdk/src/internal/sharding.ts) owns guild ro
 Session state, sequence, heartbeat timing and reconnect backoff belong to one shard; REST admission, event-subscription budgets and cache limits belong to the client
 
 Keep a healthy shard's work independent of another shard's transient gap, while awaiting every assigned shard for initial readiness.
-Group startup has one deadline, including Identify waits, and terminal supervision must preserve sibling cleanup failures.
-Cross-process assignment, Identify coordination and distributed REST limits remain application-owned
+Group startup has one deadline, including Identify waits, and terminal supervision must preserve sibling cleanup failures
+
+Cross-process assignment and Identify coordination remain application-owned unless callers opt into the local supervisor.
+The optional supervisor coordinates only fixed assignments and fresh Identify sends among child processes that it forked itself. It does not coordinate another process or host, discover shard counts, preserve sessions across replacement, or manage distributed REST limits
 
 Shutdown stops startup and recovery, shares cleanup across concurrent callers and awaits actual resource release.
 Do not report timeout or cancellation completion while abandoning an owned socket
 
-The SDK must not install process-signal handlers or terminate the consumer process
+The SDK must not install process-signal handlers or terminate the consumer process.
+The local supervisor may terminate only an unresponsive child process that it forked itself after its graceful deadline, and still awaits that child’s exit
 
 Allow bounded graceful socket closure, then force termination and await closure, with immediate termination for pending handshakes
 

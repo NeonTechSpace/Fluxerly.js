@@ -120,7 +120,7 @@ export const runGateway = (
     counts?: CountGatewayOwner,
     memberChunks?: Pick<MemberChunkOwner, "attach" | "detach" | "receive" | "rateLimited">,
     shard?: readonly [number, number],
-    identify?: (send: () => void) => Effect.Effect<void>,
+    identify?: (send: () => void) => Effect.Effect<void, AttemptFailure>,
     inviteBase = "https://fluxer.gg",
 ) =>
     Effect.scoped(

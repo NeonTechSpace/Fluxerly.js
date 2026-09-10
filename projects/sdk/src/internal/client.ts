@@ -126,6 +126,19 @@ interface ShardRuntime {
 
 type GuildBuild<A> = () => GuildRequest<A> | undefined
 
+/** Internal fresh-Identify coordination used only by supervisor.child.run */
+export interface IdentifyGate {
+    permit(shardId: number, send: () => void): Effect.Effect<void, ConnectionError>
+}
+
+const identifyGates = new WeakMap<object, IdentifyGate>()
+
+/** Attach a non-public gateway permit to the helper-owned client configuration object */
+export function attachIdentifyGate<T extends object>(options: T, gate: IdentifyGate): T {
+    identifyGates.set(options, gate)
+    return options
+}
+
 export class ClientOwner {
     readonly presence: PresenceOwner
     readonly #gatewayRequests = new GatewayRequestBudget()
@@ -188,6 +201,7 @@ export class ClientOwner {
         readonly scope: Scope.Scope,
         private readonly reports: CacheReports | undefined,
         now: () => number,
+        private readonly identifyGate: IdentifyGate | undefined,
     ) {
         this.#configuration = configuration
         this.#plan = configuration.sharding
@@ -1057,17 +1071,25 @@ export class ClientOwner {
                         configuration.sharding.identifyShards
                             ? [shard.shardId, configuration.sharding.totalShards]
                             : undefined,
-                        configuration.sharding.identifyShards
-                            ? (send) =>
-                                  owner.#identify.withPermit(
+                        configuration.sharding.identifyShards || owner.identifyGate
+                            ? (send) => {
+                                  const grant = () =>
+                                      owner
+                                          .identifyGate!.permit(shard.shardId, send)
+                                          .pipe(Effect.mapError((error) => new AttemptFailure(error, true)))
+                                  if (!configuration.sharding.identifyShards)
+                                      return owner.identifyGate ? grant() : Effect.sync(send)
+                                  return owner.#identify.withPermit(
                                       Effect.gen(function* () {
                                           // Pace actual Identify sends, including handshakes that finish out of order
                                           while (owner.#nextIdentifyAt > now())
                                               yield* Effect.sleep(owner.#nextIdentifyAt - now())
-                                          send()
+                                          if (owner.identifyGate) yield* grant()
+                                          else send()
                                           owner.#nextIdentifyAt = now() + 1_000
                                       }),
                                   )
+                              }
                             : undefined,
                         inviteBase,
                     )
@@ -1301,6 +1323,8 @@ export function makeClient(
     native = false,
 ): Effect.Effect<ClientOwner, ConfigurationError> {
     return Effect.gen(function* () {
+        const identifyGate = typeof options === "object" && options !== null ? identifyGates.get(options) : undefined
+        if (typeof options === "object" && options !== null) identifyGates.delete(options)
         const configuration = yield* validateConfiguration(options, native)
         return yield* configuration.logging.provide(
             Effect.gen(function* () {
@@ -1331,6 +1355,7 @@ export function makeClient(
                     scope,
                     reports,
                     () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000,
+                    identifyGate,
                 )
             }),
         )

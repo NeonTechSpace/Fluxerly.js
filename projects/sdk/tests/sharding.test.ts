@@ -1,11 +1,12 @@
 import { once } from "node:events"
 import { createServer } from "node:http"
-import { Cause, Effect, Exit, Fiber, Scope } from "effect"
+import { Cause, Effect, Exit, Fiber, Scope, Semaphore } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import WebSocket, { WebSocketServer } from "ws"
 import { createClient, type Client as DefaultClient } from "../src/index.js"
 import { createClient as createNative, type Client as NativeClient } from "../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
+import { attachIdentifyGate, type IdentifyGate } from "#sdk/internal/client"
 
 const transport = vi.hoisted(() => ({ url: "", sockets: [] as import("ws").WebSocket[] }))
 vi.mock("ws", async (original) => {
@@ -672,4 +673,60 @@ test.each(modes)("%s cancels sharded startup before a scheduled sibling Identify
     expect(await connect(driver)).toEqual({ kind: "success", value: undefined })
     expect(fixture.identifies).toHaveLength(3)
     expect(fixture.identifies[1]!.receivedAt - fixture.identifies[0]!.receivedAt).toBeGreaterThanOrEqual(995)
+})
+
+test("an attached parent permit spaces fresh Identifies and bypasses Resume", async () => {
+    const fixture = await gatewayFixture()
+    const scope = Scope.makeUnsafe()
+    const permits: number[] = []
+    const serial = Semaphore.makeUnsafe(1)
+    let next = 0
+    const gate: IdentifyGate = {
+        permit: (_shardId, send) =>
+            serial.withPermit(
+                Effect.gen(function* () {
+                    const wait = next - performance.now()
+                    if (wait > 0) yield* Effect.sleep(wait)
+                    permits.push(performance.now())
+                    send()
+                    next = performance.now() + 45
+                }),
+            ),
+    }
+    const first = await Effect.runPromise(
+        createNative(
+            attachIdentifyGate(
+                { token: "fixture-only-not-a-credential", sharding: { totalShards: 2, shardIds: [0] } },
+                gate,
+            ),
+        ).pipe(Scope.provide(scope)),
+    )
+    const second = await Effect.runPromise(
+        createNative(
+            attachIdentifyGate(
+                { token: "fixture-only-not-a-credential", sharding: { totalShards: 2, shardIds: [1] } },
+                gate,
+            ),
+        ).pipe(Scope.provide(scope)),
+    )
+    onTestFinished(async () => {
+        await Effect.runPromise(first.shutdown())
+        await Effect.runPromise(second.shutdown())
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+        await fixture.close()
+    })
+    try {
+        await Promise.all([Effect.runPromise(first.connect()), Effect.runPromise(second.connect())])
+        await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 2_000 })
+        expect(permits).toHaveLength(2)
+        expect(fixture.identifies[1]!.receivedAt - fixture.identifies[0]!.receivedAt).toBeGreaterThanOrEqual(40)
+        fixture.closeShard(0)
+        await vi.waitFor(() => expect(fixture.resumes).toHaveLength(1), { interval: 5, timeout: 2_000 })
+        expect(permits).toHaveLength(2)
+    } finally {
+        await Effect.runPromise(first.shutdown())
+        await Effect.runPromise(second.shutdown())
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+        await fixture.close()
+    }
 })

@@ -114,9 +114,12 @@ try {
             "assets",
             "application",
             "builders",
+            "supervisor",
             "commands",
             "default-commands",
             "native-commands",
+            "default-supervisor",
+            "native-supervisor",
             "counts",
             "member-chunks",
             "sharding",
@@ -172,6 +175,9 @@ try {
         const instanceExamples = publicExamples.filter((example) => /(?:function|const) instanceExample/.test(example))
         assert.equal(instanceExamples.length, 1)
         writeFileSync(join(consumer, "instance-example.ts"), instanceExamples[0])
+        const supervisorExamples = publicExamples.filter((example) => /const workers/.test(example))
+        assert.equal(supervisorExamples.length, 1)
+        writeFileSync(join(consumer, "supervisor-example.ts"), supervisorExamples[0])
         for (const name of [
             "forwardExample",
             "profileExample",

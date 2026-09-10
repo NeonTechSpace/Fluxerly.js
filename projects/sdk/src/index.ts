@@ -435,6 +435,27 @@ export type {
     DefaultPrefixCommandRouter,
 } from "./default-commands.js"
 import { defaultCommands } from "./default-commands.js"
+export { SupervisorChildError, SupervisorError } from "./supervisor.js"
+export type {
+    SupervisorAssignment,
+    SupervisorAssignmentOptions,
+    SupervisorChildOptions,
+    SupervisorChildState,
+    SupervisorChildStatus,
+    SupervisorFileUrl,
+    SupervisorIdentifyOptions,
+    SupervisorOptions,
+    SupervisorRestartOptions,
+    SupervisorState,
+    SupervisorStatus,
+} from "./supervisor.js"
+export type {
+    DefaultSupervisor,
+    DefaultSupervisorChildContext,
+    DefaultSupervisorChildOptions,
+    DefaultSupervisorTools,
+} from "./default-supervisor.js"
+import { makeDefaultSupervisor } from "./default-supervisor.js"
 
 /**
  * Optional builders and prefix-command routing above direct client primitives.
@@ -461,6 +482,34 @@ import { defaultCommands } from "./default-commands.js"
  * ```
  */
 export const commands = defaultCommands
+
+/**
+ * Optional local Node process supervision above independently usable clients.
+ * create snapshots fixed non-overlapping local shard assignments without starting work. start starts the configured children once and waits for their assignment and configuration acknowledgements, not gateway READY. waitForClose observes the terminal local lifetime after every owned child exits and status returns a frozen safe snapshot
+ *
+ * Each child module must call supervisor.child.run. That helper receives the parent assignment, creates and runs its client, and obtains a parent permit immediately before every fresh gateway Identify. Resumes bypass the permit. A parent stop returns without waiting for an uncooperative default configure promise and never starts the client after that stop
+ *
+ * One parent permit remains outstanding until the child confirms its synchronous Identify send or cancels before sending. The parent then spaces fresh sends by at least one second. A stalled child is stopped and must exit before another permit, after a full interval
+ *
+ * It does not discover shard counts, coordinate another process or host, preserve sessions across replacement, or manage distributed REST limits. The helper installs no signal handlers or process termination. After its graceful deadline, the parent may terminate only its own unresponsive child and still waits for its exit
+ *
+ * restart is opt-in, with bounded exponential replacement when supplied. childEnvironment, args and execArgv select the owned child process but never appear in status or failures. stdout and stderr are ignored and never retained
+ *
+ * @example
+ * ```ts
+ * import { supervisor } from "@neontechspace/fluxerly"
+ *
+ * export const workers = supervisor.create({
+ *     entry: "/srv/bot-worker.js",
+ *     totalShards: 2,
+ *     assignments: [
+ *         { id: "one", shardIds: [0] },
+ *         { id: "two", shardIds: [1] },
+ *     ],
+ * })
+ * ```
+ */
+export const supervisor = makeDefaultSupervisor(createClient)
 export type { LoggingOptions, DefaultLoggingOptions, DefaultLogger } from "./logging.js"
 export type { CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"

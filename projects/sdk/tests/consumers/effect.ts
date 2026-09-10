@@ -15,6 +15,7 @@ import {
     MessageFlags,
     builders,
     commands,
+    supervisor,
     type ForwardMessageInput,
     type MessageSnapshot,
     type UserProfile,
@@ -51,6 +52,7 @@ import {
     type AttachmentFileSource,
     type AttachmentInput,
     type AttachmentStreamSource,
+    type SupervisorOptions,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
 const CommandService = Context.Service<{ readonly enabled: true }>("command-service")
@@ -142,6 +144,36 @@ export function optionalCommandTypes(client: Client) {
         // @ts-expect-error Registered command services remain required until the caller provides CommandService
         Effect.runPromise(needsService)
         return Effect.provideService(needsService, CommandService, { enabled: true })
+    })
+}
+
+/** Packed native supervisor tools retain callback services while child.run owns its nested Scope */
+export function supervisorTypes(entry: string) {
+    const plan: SupervisorOptions = {
+        entry,
+        totalShards: 1,
+        assignments: [{ id: "worker", shardIds: [0] }],
+    }
+    const child = supervisor.child.run({
+        token: "fixture-only",
+        configure: () => Effect.service(CommandService).pipe(Effect.asVoid),
+    })
+    // @ts-expect-error Callback services remain required until the caller provides CommandService
+    Effect.runPromise(child)
+    const scopedChild = supervisor.child.run({
+        token: "fixture-only",
+        configure: () => Effect.forkScoped(Effect.void).pipe(Effect.asVoid),
+    })
+    Effect.runPromise(scopedChild)
+    return Effect.gen(function* () {
+        const managed = yield* supervisor.create(plan)
+        return yield* Effect.provideService(
+            child.pipe(Effect.as([managed.status(), managed.start()])),
+            CommandService,
+            {
+                enabled: true,
+            },
+        )
     })
 }
 

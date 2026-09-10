@@ -58,7 +58,21 @@ export class ConfigurationError extends Error {
             | "parser"
             | "command"
             | "aliases"
-            | "cooldown",
+            | "cooldown"
+            | "supervisor"
+            | "assignments"
+            | "childId"
+            | "entry"
+            | "restart"
+            | "maxAttempts"
+            | "minDelayMs"
+            | "maxDelayMs"
+            | "identify"
+            | "minimumSpacingMs"
+            | "shutdownTimeoutMs"
+            | "childEnvironment"
+            | "args"
+            | "execArgv",
         message: string,
     ) {
         super(message)
@@ -85,6 +99,11 @@ export type Operation =
     | import("./guilds.js").GuildOperation
     | import("./pagination.js").PaginationOperation
     | "createClient"
+    | "supervisor.create"
+    | "supervisor.start"
+    | "supervisor.waitForClose"
+    | "supervisor.shutdown"
+    | "supervisor.child.run"
     | "commands"
     | "connect"
     | "run"
@@ -245,6 +264,9 @@ export type DefectReason =
               | import("./pagination.js").PaginationError
               | import("./collectors.js").CollectorError
               | import("./attachments.js").AttachmentDownloadFailure
+              | import("./supervisor.js").SupervisorError
+              | import("./supervisor.js").SupervisorChildError
+              | CancelledError
       }
     | { readonly kind: "Defect" }
     | { readonly kind: "Interruption" }

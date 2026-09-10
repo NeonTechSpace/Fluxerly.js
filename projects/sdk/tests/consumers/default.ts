@@ -14,6 +14,7 @@ import {
     MessageFlags,
     builders,
     commands,
+    supervisor,
     type ForwardMessageInput,
     type MessageSnapshot,
     type UserProfile,
@@ -54,6 +55,7 @@ import {
     type AttachmentFileSource,
     type AttachmentInput,
     type AttachmentStreamSource,
+    type SupervisorOptions,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
 
@@ -134,6 +136,26 @@ export function optionalCommandTypes(client: Client) {
     if (created.isErr()) return created
     const extended = created.value.register({ name: "ping", execute: () => undefined })
     return extended.isErr() ? extended : extended.value.attach(client)
+}
+
+/** Packed default supervisor tools preserve the opt-in parent and child entry types */
+export function supervisorTypes(entry: string) {
+    const plan: SupervisorOptions = {
+        entry,
+        totalShards: 1,
+        assignments: [{ id: "worker", shardIds: [0] }],
+    }
+    const created = supervisor.create(plan)
+    if (created.isErr()) return created
+    const child = supervisor.child.run({ token: "fixture-only", configure: () => undefined })
+    // @ts-expect-error Supervisor entries must be absolute paths or file URLs at runtime, not numeric shard identifiers
+    supervisor.create({ entry: 1, totalShards: 1, assignments: [{ id: "bad", shardIds: [0] }] })
+    return {
+        child,
+        starting: created.value.start(),
+        status: created.value.status(),
+        closing: created.value.waitForClose(),
+    }
 }
 
 export async function useConsumerFeatures(client: Client, channelId: string, source: MessageReference, userId: string) {
