@@ -99,7 +99,7 @@ export interface GuildLifecycleEvents {
     readonly guildCreate: Guild
     /** A complete current guild configuration snapshot, not an old/new pair or a partial patch */
     readonly guildUpdate: Guild
-    /** Guild visibility ended or became temporarily unavailable without an inferred deletion cause or membership result; enabled guild-resource and channel observations invalidate before delivery, while message-cache observations and pending admissions clear globally because no complete guild index exists */
+    /** Guild visibility ended or became temporarily unavailable without an inferred deletion cause or membership result; enabled guild-resource and channel observations for this guild invalidate before delivery. Message-cache observations with this guild or unknown guild scope invalidate conservatively because the SDK has no channel-to-guild index */
     readonly guildDelete: GuildDeletion
 }
 

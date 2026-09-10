@@ -1,5 +1,7 @@
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Queue, Random, Redacted, Scope, Stream } from "effect"
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Queue, Random, Redacted, Scope, Semaphore, Stream } from "effect"
 import type { ConnectionState } from "#sdk/client"
+import type { ShardState } from "#sdk/sharding"
+import { guildShardId, type ShardPlan } from "./sharding.js"
 import type { CachePolicyErrorReport } from "#sdk/cache"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import { identifier, record, reference } from "./message.js"
@@ -33,6 +35,7 @@ import {
     ConnectionError,
     ConnectionTimeoutError,
     RateLimitError,
+    ShardConnectionError,
     type ConfigurationError,
     type ConnectError,
     type ConnectionFailure,
@@ -40,6 +43,9 @@ import {
 import { type Configuration, validateConfiguration } from "./configuration.js"
 import { discoverGateway } from "./discovery.js"
 import { mapFailureCause, withDeadline } from "./effect-failures.js"
+import { CountOwner } from "./counts.js"
+import { GatewayRequestBudget } from "./gateway-requests.js"
+import { MemberChunkOwner } from "./member-chunks.js"
 import { AttemptFailure, runGateway, type Session } from "./gateway.js"
 import { EventBus } from "./events.js"
 import type { MessageCollector } from "./collector.js"
@@ -73,8 +79,20 @@ import type {
 
 const typingRefreshMs = 8_000
 
+interface ShardRuntime {
+    readonly shardId: number
+    state: ConnectionState
+    latency: number | null
+    session: Session
+}
+
 export class ClientOwner {
-    readonly presence = new PresenceOwner()
+    readonly presence: PresenceOwner
+    readonly #gatewayRequests = new GatewayRequestBudget()
+    readonly #identify = Semaphore.makeUnsafe(1)
+    /** SDK-private owner for fresh correlated gateway-count replies, with no count cache */
+    readonly counts: CountOwner
+    readonly memberChunks: MemberChunkOwner
 
     setPresence(input: PresenceInput) {
         return Effect.suspend((): Effect.Effect<void, PresenceFailure> => {
@@ -108,15 +126,18 @@ export class ClientOwner {
     readonly userCache: UserCache
     #configuration: Configuration | undefined
     #state: ConnectionState = "Disconnected"
-    #latency: number | null = null
+    readonly #plan: ShardPlan
+    readonly #shards = new Map<number, ShardRuntime>()
+    readonly #shardListeners = new Map<number, Set<(state: ConnectionState) => void>>()
+    #groupReady = false
+    #nextIdentifyAt = 0
     #worker: Fiber.Fiber<void> | undefined
-    #workerExit: Exit.Exit<never, ConnectionFailure> | undefined
+    #workerExit: Exit.Exit<void, ConnectionFailure> | undefined
     #terminal = Deferred.makeUnsafe<void, ConnectionFailure>()
     #shutdown = Deferred.makeUnsafe<void>()
     #typingClosed = Deferred.makeUnsafe<void>()
     #typing = new Map<symbol, Fiber.Fiber<never, MessageOperationFailure>>()
     #listeners = new Set<(state: ConnectionState) => void>()
-    #session: Session = { id: undefined, sequence: null }
     #managed = false
     #shutdownStarted = false
 
@@ -127,6 +148,18 @@ export class ClientOwner {
         now: () => number,
     ) {
         this.#configuration = configuration
+        this.#plan = configuration.sharding
+        for (const shardId of this.#plan.shardIds)
+            this.#shards.set(shardId, {
+                shardId,
+                state: "Disconnected",
+                latency: null,
+                session: { id: undefined, sequence: null },
+            })
+        const route = (guildId: string) => this.shardIdForGuild(guildId)
+        this.presence = new PresenceOwner(undefined, route)
+        this.counts = new CountOwner(this.#gatewayRequests, route)
+        this.memberChunks = new MemberChunkOwner(this.#gatewayRequests, route)
         this.logging = configuration.logging
         this.cache = configuration.cache
             ? new MessageCache(configuration.cache, (report) => reports!.offer(report), now)
@@ -148,24 +181,103 @@ export class ClientOwner {
         return this.#state
     }
     get gatewayLatencyMs(): number | null {
-        return this.#latency
+        if (this.#state !== "Connected") return null
+        let maximum = 0
+        for (const shard of this.#shards.values()) {
+            if (shard.latency === null) return null
+            maximum = Math.max(maximum, shard.latency)
+        }
+        return maximum
+    }
+    get shards(): readonly ShardState[] {
+        return Object.freeze(
+            [...this.#shards.values()].map((shard) =>
+                Object.freeze({
+                    shardId: shard.shardId,
+                    state: shard.state,
+                    gatewayLatencyMs: shard.latency,
+                }),
+            ),
+        )
+    }
+    shardIdForGuild(guildId: string): number | undefined {
+        const id = guildShardId(guildId, this.#plan.totalShards)
+        return this.#shards.has(id) ? id : undefined
+    }
+    gatewayState(guildId?: string): ConnectionState {
+        if (guildId === undefined) return this.#state
+        if (this.#state === "Closing" || this.#state === "Closed") return this.#state
+        const id = this.shardIdForGuild(guildId)
+        return id === undefined ? "Disconnected" : this.#shards.get(id)!.state
+    }
+    subscribeGateway(guildId: string | undefined, listener: (state: ConnectionState) => void) {
+        if (guildId === undefined) return this.subscribe(listener)
+        const id = this.shardIdForGuild(guildId)
+        if (id === undefined) {
+            listener(this.gatewayState(guildId))
+            return () => {}
+        }
+        let listeners = this.#shardListeners.get(id)
+        if (!listeners) this.#shardListeners.set(id, (listeners = new Set()))
+        if (this.#state !== "Closed") listeners.add(listener)
+        listener(this.gatewayState(guildId))
+        return () => {
+            listeners.delete(listener)
+            if (!listeners.size) this.#shardListeners.delete(id)
+        }
+    }
+    #gapShard(shardId: number) {
+        const affects = (guildId: string | null | undefined) =>
+            guildId === undefined ||
+            (guildId === null ? shardId === 0 : guildShardId(guildId, this.#plan.totalShards) === shardId)
+        this.cache?.gap(affects)
+        this.resources?.gap(affects)
+        this.channelCache?.gap(affects)
+        this.userCache.gap(affects)
+        this.counts.detach(shardId)
+        this.memberChunks.detach(shardId)
+        this.presence.detach(shardId)
+    }
+    #setShardState(shard: ShardRuntime, state: ConnectionState) {
+        if (this.#state === "Closing" || this.#state === "Closed" || shard.state === state) return
+        if (state === "Recovering") this.#gapShard(shard.shardId)
+        shard.state = state
+        if (state !== "Connected") shard.latency = null
+        for (const listener of this.#shardListeners.get(shard.shardId) ?? []) listener(state)
+        if ([...this.#shards.values()].every((value) => value.state === "Connected")) {
+            this.#groupReady = true
+            this.#setState("Connected")
+        } else this.#setState(this.#groupReady ? "Recovering" : "Connecting")
     }
 
     #setState(state: ConnectionState) {
         if (this.#state === state) return
-        if (state === "Recovering") this.cache?.gap()
+        if (state === "Disconnected") {
+            // A reusable startup can have delivered events from a ready sibling before the group failed
+            for (const shard of this.#shards.values())
+                if (shard.state === "Connected" || shard.state === "Recovering") this.#gapShard(shard.shardId)
+        }
         if (state === "Closing" || state === "Closed") this.cache?.close()
-        if (state === "Recovering") this.resources?.gap()
+        if (state === "Closing" || state === "Closed") this.counts.close()
+        if (state === "Closing" || state === "Closed") this.memberChunks.close()
         if (state === "Closing" || state === "Closed") this.resources?.close()
-        if (state === "Recovering") this.channelCache?.gap()
-        if (state === "Recovering") this.userCache.gap()
         if (state === "Closing" || state === "Closed") this.userCache.close()
         if (state === "Closing" || state === "Closed") this.presence.close()
         if (state === "Closing" || state === "Closed") this.channelCache?.close()
         this.#state = state
-        if (state !== "Connected") this.#latency = null
+        if (state === "Disconnected" || state === "Closing" || state === "Closed") {
+            for (const shard of this.#shards.values()) {
+                shard.state = state
+                shard.latency = null
+                if (state !== "Closing") shard.session = { id: undefined, sequence: null }
+                for (const listener of this.#shardListeners.get(shard.shardId) ?? []) listener(state)
+            }
+        }
         for (const listener of this.#listeners) listener(state)
-        if (state === "Closed") this.#listeners.clear()
+        if (state === "Closed") {
+            this.#listeners.clear()
+            this.#shardListeners.clear()
+        }
     }
 
     subscribe(listener: (state: ConnectionState) => void) {
@@ -199,7 +311,6 @@ export class ClientOwner {
         this.rest.stop()
         if (this.#configuration) Redacted.wipeUnsafe(this.#configuration.token)
         this.#configuration = undefined
-        this.#session = { id: undefined, sequence: null }
         this.#setState("Closed")
     }
 
@@ -540,6 +651,18 @@ export class ClientOwner {
         )
     }
 
+    deleteAttachment(target: MessageReference, attachmentId: string, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? (this.reports?.start() ?? Effect.void).pipe(
+                      Effect.andThen(
+                          this.rest.deleteAttachment(this.#configuration.token, target, attachmentId, options),
+                      ),
+                  )
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
     deleteMany(channelId: string, ids: readonly string[], options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
@@ -618,15 +741,74 @@ export class ClientOwner {
         )
     }
 
-    #loop(configuration: Configuration, startup: Deferred.Deferred<void, ConnectError>) {
+    #supervise(configuration: Configuration, startup: Deferred.Deferred<void, ConnectError>) {
+        const owner = this
+        return Effect.suspend(() => {
+            const exits: Exit.Exit<unknown, ConnectionFailure>[] = []
+            const sessions = Effect.gen(function* () {
+                const clock = yield* Clock.Clock
+                const deadline = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + configuration.startupTimeoutMs
+                return yield* Effect.forEach(
+                    [...owner.#shards.values()],
+                    (shard) =>
+                        owner.#loop(configuration, startup, shard, deadline).pipe(
+                            mapFailureCause((failure) =>
+                                configuration.sharding.identifyShards && !(failure instanceof ShardConnectionError)
+                                    ? new ShardConnectionError(shard.shardId, failure)
+                                    : failure,
+                            ),
+                            Effect.onExit((exit) =>
+                                Effect.sync(() => {
+                                    exits.push(exit)
+                                }),
+                            ),
+                        ),
+                    { concurrency: "unbounded", discard: true },
+                )
+            })
+            const startupGuard = Deferred.await(startup).pipe(
+                Effect.ignore,
+                withDeadline(
+                    configuration.startupTimeoutMs,
+                    () => new ConnectionTimeoutError(configuration.startupTimeoutMs),
+                ),
+                Effect.andThen(Effect.never),
+            )
+            return Effect.raceFirst(sessions, startupGuard).pipe(
+                // A losing session may defect during socket cleanup. Keep those causes across the race boundary
+                Effect.onExit((outcome) => {
+                    const missing = exits.flatMap((exit) =>
+                        Exit.isFailure(exit)
+                            ? exit.cause.reasons.filter(
+                                  (reason) =>
+                                      reason._tag !== "Interrupt" &&
+                                      (!Exit.isFailure(outcome) || !outcome.cause.reasons.includes(reason)),
+                              )
+                            : [],
+                    )
+                    return missing.length ? Effect.failCause(Cause.fromReasons(missing)) : Effect.void
+                }),
+            )
+        })
+    }
+
+    #loop(
+        configuration: Configuration,
+        startup: Deferred.Deferred<void, ConnectError>,
+        shard: ShardRuntime,
+        deadline: number,
+    ) {
         const owner = this
         return Effect.gen(function* () {
             const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
-            const emit = (diagnostic: Parameters<ClientLogging["emit"]>[1]) => owner.logging.emit(fiber, diagnostic)
+            const emit = (diagnostic: Parameters<ClientLogging["emit"]>[1]) =>
+                owner.logging.emit(fiber, {
+                    ...diagnostic,
+                    ...(configuration.sharding.identifyShards ? { shardId: shard.shardId } : {}),
+                })
             emit({ event: "connecting", phase: "startup" })
             const clock = yield* Clock.Clock
             const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000
-            const deadline = now() + configuration.startupTimeoutMs
             let established = false
             let attempts = 0
             let recoveryStep = 0
@@ -636,7 +818,7 @@ export class ClientOwner {
             while (true) {
                 attempts += 1
                 const phase = established ? "recovery" : "startup"
-                const mode = owner.#session.id !== undefined && owner.#session.sequence !== null ? "resume" : "identify"
+                const mode = shard.session.id !== undefined && shard.session.sequence !== null ? "resume" : "identify"
                 emit({ event: "attempt", phase, attempt: attempts, mode })
                 const budget = established ? 30_000 : Math.max(0, deadline - now())
                 const attempt = Effect.gen(function* () {
@@ -659,22 +841,22 @@ export class ClientOwner {
                     return yield* runGateway(
                         url,
                         configuration.token,
-                        owner.#session,
+                        shard.session,
                         Math.max(0, attemptDeadline - now()),
                         (readyMode) => {
                             established = true
                             connectedAt = now()
                             disconnectedAt = undefined
-                            owner.#setState("Connected")
+                            owner.#setShardState(shard, "Connected")
                             emit({ event: "connected", phase, attempt: attempts, mode: readyMode })
-                            Deferred.doneUnsafe(startup, Effect.void)
+                            if (owner.#state === "Connected") Deferred.doneUnsafe(startup, Effect.void)
                         },
                         (latency) => {
-                            owner.#latency = latency
+                            shard.latency = latency
                         },
                         () => {
                             disconnectedAt ??= now()
-                            owner.#setState("Recovering")
+                            owner.#setShardState(shard, "Recovering")
                         },
                         (event, message, bytes) => {
                             owner.resources?.event(event, message)
@@ -706,17 +888,51 @@ export class ClientOwner {
                                 for (const id of message.ids) owner.cache?.delete({ id, channelId: message.channelId })
                             } else if (event === "messageDelete" && "id" in message && "channelId" in message)
                                 owner.cache?.delete(message)
-                            owner.events.offer(event, message, bytes)
+                            owner.events.offer(event, message, bytes, shard.shardId)
                         },
                         owner.resources || owner.channelCache || owner.cache
                             ? (event, value) => {
                                   owner.resources?.guildEvent(event, value)
                                   if (event !== "GUILD_EMOJIS_UPDATE" && event !== "GUILD_STICKERS_UPDATE")
                                       owner.channelCache?.guildEvent(event, value)
-                                  if (event === "GUILD_DELETE") owner.cache?.gap()
+                                  if (event === "GUILD_DELETE")
+                                      owner.cache?.gap(
+                                          (guildId) => guildId === undefined || (record(value) && value.id === guildId),
+                                      )
                               }
                             : undefined,
-                        owner.presence,
+                        {
+                            attach: (send, members, mode) => owner.presence.attach(send, members, mode, shard.shardId),
+                            detach: () => owner.presence.detach(shard.shardId),
+                            guildCreate: (guildId) => owner.presence.guildCreate(guildId),
+                        },
+                        {
+                            attach: (guilds, channels) => owner.counts.attach(guilds, channels, shard.shardId),
+                            detach: () => owner.counts.detach(shard.shardId),
+                            receiveGuildCounts: (value) => owner.counts.receiveGuildCounts(value),
+                            receiveChannelMemberCounts: (value) => owner.counts.receiveChannelMemberCounts(value),
+                        },
+                        {
+                            attach: (send) => owner.memberChunks.attach(send, shard.shardId),
+                            detach: () => owner.memberChunks.detach(shard.shardId),
+                            receive: (value, bytes) => owner.memberChunks.receive(value, bytes),
+                            rateLimited: (value) => owner.memberChunks.rateLimited(value),
+                        },
+                        configuration.sharding.identifyShards
+                            ? [shard.shardId, configuration.sharding.totalShards]
+                            : undefined,
+                        configuration.sharding.identifyShards
+                            ? (send) =>
+                                  owner.#identify.withPermit(
+                                      Effect.gen(function* () {
+                                          // Pace actual Identify sends, including handshakes that finish out of order
+                                          while (owner.#nextIdentifyAt > now())
+                                              yield* Effect.sleep(owner.#nextIdentifyAt - now())
+                                          send()
+                                          owner.#nextIdentifyAt = now() + 1_000
+                                      }),
+                                  )
+                            : undefined,
                     )
                 })
                 const result = yield* Effect.uninterruptibleMask((restore) =>
@@ -746,7 +962,7 @@ export class ClientOwner {
                 const failure = reason.error
                 if (established && connectedAt !== undefined) emit({ event: "connectionLost", phase: "recovery" })
                 if (failure.resetSession) {
-                    owner.#session = { id: undefined, sequence: null }
+                    shard.session = { id: undefined, sequence: null }
                     emit({ event: "sessionReset", phase, mode: "identify" })
                 }
                 const reported =
@@ -764,7 +980,7 @@ export class ClientOwner {
                     return yield* Effect.fail(reported)
                 }
                 if (established) {
-                    owner.#setState("Recovering")
+                    owner.#setShardState(shard, "Recovering")
                     if (connectedAt !== undefined && (disconnectedAt ?? now()) - connectedAt >= 60_000) recoveryStep = 0
                     connectedAt = undefined
                 }
@@ -809,12 +1025,14 @@ export class ClientOwner {
                 const startup = Deferred.makeUnsafe<void, ConnectError>()
                 let becameReady = false
                 owner.#workerExit = undefined
+                owner.#groupReady = false
+                for (const shard of owner.#shards.values()) shard.state = "Connecting"
                 owner.#setState("Connecting")
                 const trackReady = owner.subscribe((state) => {
                     if (state === "Connected") becameReady = true
                 })
                 owner.#worker = yield* Effect.forkIn(
-                    owner.#loop(configuration, startup).pipe(
+                    owner.#supervise(configuration, startup).pipe(
                         Effect.onExit((exit) =>
                             Effect.gen(function* () {
                                 trackReady()
@@ -846,7 +1064,6 @@ export class ClientOwner {
                                         interrupted && !Exit.isFailure(services) ? Effect.void : outcome,
                                     )
                                 } else if (!closing) {
-                                    owner.#session = { id: undefined, sequence: null }
                                     owner.#setState("Disconnected")
                                 }
                             }),

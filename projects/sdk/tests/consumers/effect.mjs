@@ -16,13 +16,18 @@ await Effect.runPromise(
 import { realpathSync } from "node:fs"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
-import { Context, Effect, Logger, References } from "effect"
+import { Context, Effect, Logger, References, Stream } from "effect"
 import {
     createClient,
     MessageOperationError,
     CollectorError,
     fromEffectLogger,
     MessageFlags,
+    assets,
+    CountOperationError,
+    MemberChunkError,
+    ShardConnectionError,
+    AuthenticationError,
 } from "@neontechspace/fluxerly/effect"
 import { createClient as createDefault } from "@neontechspace/fluxerly"
 
@@ -36,6 +41,24 @@ globalThis.WebSocket = class {
 }
 
 const messages = []
+await Effect.runPromise(
+    Effect.scoped(
+        Effect.gen(function* () {
+            const sharded = yield* createClient({
+                token: "fixture-only",
+                sharding: { totalShards: 4, shardIds: [2, 0] },
+            })
+            assert.deepEqual(sharded.shards, [
+                { shardId: 2, state: "Disconnected", gatewayLatencyMs: null },
+                { shardId: 0, state: "Disconnected", gatewayLatencyMs: null },
+            ])
+            assert.ok(Object.isFrozen(sharded.shards) && sharded.shards.every(Object.isFrozen))
+            assert.ok(new ShardConnectionError(2, new AuthenticationError()).failure instanceof AuthenticationError)
+            yield* sharded.shutdown()
+            assert.ok(sharded.shards.every((shard) => shard.state === "Closed"))
+        }),
+    ),
+)
 const defaultLogs = []
 const defaultApi = createDefault({
     token: "fixture-only-not-a-credential",
@@ -54,6 +77,25 @@ const client = await Effect.runPromise(
         Effect.gen(function* () {
             const client = yield* createClient({ token: "fixture-only-not-a-credential" })
             assert.equal(client.state, "Disconnected")
+            const chunks = yield* Effect.flip(client.members.iterateChunks("20", { all: true }).pipe(Stream.runDrain))
+            assert.ok(chunks instanceof MemberChunkError)
+            assert.equal(chunks.reason, "notConnected")
+            const guildCounts = yield* Effect.flip(client.guilds.fetchCounts(["20"]))
+            assert.ok(guildCounts instanceof CountOperationError)
+            assert.equal(guildCounts.reason, "notConnected")
+            assert.equal((yield* Effect.flip(client.channels.fetchMemberCounts("20", ["30"]))).reason, "notConnected")
+            assert.equal(
+                (yield* Effect.flip(client.members.setRoles({ guildId: "20", userId: "30" }, ["20"]))).operation,
+                "members.setRoles",
+            )
+            assert.equal(
+                (yield* Effect.flip(client.messages.deleteAttachment({ id: "10", channelId: "20" }, "bad"))).operation,
+                "deleteAttachment",
+            )
+            assert.equal(
+                yield* assets.userBanner({ user: { id: "20" }, profile: { banner: "account" } }),
+                "https://fluxerusercontent.com/banners/20/account.webp",
+            )
             assert.deepEqual(MessageFlags, { SuppressEmbeds: 4, SuppressNotifications: 4096 })
             assert.ok(Object.isFrozen(MessageFlags))
             assert.equal(

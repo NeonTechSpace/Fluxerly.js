@@ -47,7 +47,7 @@ try {
     const tarball = join(temporary, "sdk.tgz")
     const packed = JSON.parse(packageManager(["pack", "--out", tarball, "--json"], sdk))
     const files = packed.files.map((file) => file.path)
-    for (const entry of ["index", "effect", "cache", "application"]) {
+    for (const entry of ["index", "effect", "cache", "application", "sharding"]) {
         for (const extension of ["js", "js.map", "d.ts", "d.ts.map"]) {
             assert.ok(files.includes(`dist/${entry}.${extension}`))
         }
@@ -109,6 +109,9 @@ try {
             "role-hierarchy",
             "assets",
             "application",
+            "counts",
+            "member-chunks",
+            "sharding",
         ]) {
             const declaration = `dist/${entry}.d.ts`
             assert.equal(
@@ -155,7 +158,15 @@ try {
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
         const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
         const publicExamples = examples(publicSource)
-        for (const name of ["forwardExample", "profileExample"]) {
+        for (const name of [
+            "forwardExample",
+            "profileExample",
+            "countsExample",
+            "roleSetExample",
+            "attachmentDeleteExample",
+            "memberChunksExample",
+            "shardingExample",
+        ]) {
             const matched = publicExamples.filter((example) => example.includes(`function ${name}(`))
             assert.equal(matched.length, 1)
             writeFileSync(join(consumer, `${name}.ts`), matched[0])

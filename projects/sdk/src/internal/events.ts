@@ -200,32 +200,39 @@ export class EventSource<A = Message> {
 export class EventBus {
     #reactionCollectors = new Map<
         string,
-        Set<(reaction: MessageReaction | MessageReactionBatch, bytes: number) => void>
+        Set<(reaction: MessageReaction | MessageReactionBatch, bytes: number, shardId: number) => void>
     >()
 
     /** Exact message selection precedes queue admission; user filters run outside gateway decoding */
     listenReactions(
         target: MessageReference,
         listener: (reaction: MessageReaction | MessageReactionBatch, bytes: number) => void,
+        shardId?: number,
     ) {
         const key = `${target.channelId}:${target.id}`
         let listeners = this.#reactionCollectors.get(key)
         if (!listeners) this.#reactionCollectors.set(key, (listeners = new Set()))
-        listeners.add(listener)
+        const offer = (message: MessageReaction | MessageReactionBatch, bytes: number, sourceShard: number) => {
+            if (shardId === undefined || shardId === sourceShard) listener(message, bytes)
+        }
+        listeners.add(offer)
         return () => {
-            listeners.delete(listener)
+            listeners.delete(offer)
             if (!listeners.size) this.#reactionCollectors.delete(key)
         }
     }
-    #collectors = new Map<string, Set<(message: Message, bytes: number) => void>>()
+    #collectors = new Map<string, Set<(message: Message, bytes: number, shardId: number) => void>>()
 
     /** Channel selection precedes collector queue admission. These callbacks only enqueue, never run user filters */
-    listenMessages(channelId: string, listener: (message: Message, bytes: number) => void) {
+    listenMessages(channelId: string, listener: (message: Message, bytes: number) => void, shardId?: number) {
         let listeners = this.#collectors.get(channelId)
         if (!listeners) this.#collectors.set(channelId, (listeners = new Set()))
-        listeners.add(listener)
+        const offer = (message: Message, bytes: number, sourceShard: number) => {
+            if (shardId === undefined || shardId === sourceShard) listener(message, bytes)
+        }
+        listeners.add(offer)
         return () => {
-            listeners.delete(listener)
+            listeners.delete(offer)
             if (!listeners.size) this.#collectors.delete(channelId)
         }
     }
@@ -292,15 +299,15 @@ export class EventBus {
             return Effect.succeed(source)
         })
     }
-    offer<K extends EventName>(event: K, message: EventMap[K], bytes: number) {
+    offer<K extends EventName>(event: K, message: EventMap[K], bytes: number, shardId = 0) {
         if (event === "messageReactionAdd" || event === "messageReactionAddMany") {
             const reaction = message as MessageReaction | MessageReactionBatch
             for (const offer of this.#reactionCollectors.get(`${reaction.channelId}:${reaction.id}`) ?? [])
-                offer(reaction, bytes)
+                offer(reaction, bytes, shardId)
         }
         if (event === "messageCreate") {
             const created = message as Message
-            for (const offer of this.#collectors.get(created.channelId) ?? []) offer(created, bytes)
+            for (const offer of this.#collectors.get(created.channelId) ?? []) offer(created, bytes, shardId)
         }
         for (const source of this.#sources[event]) source.offer(message, bytes)
     }

@@ -14,9 +14,19 @@ import type { ClientOwner } from "./client.js"
 import { reference, record } from "./message.js"
 import { encodeReactionEmoji } from "./reactions.js"
 
-type Settings = Required<Omit<ReactionCollectorOptions, "filter" | "emoji">> &
-    Pick<ReactionCollectorOptions, "filter" | "emoji"> &
+type Settings = Required<Omit<ReactionCollectorOptions, "filter" | "emoji" | "guildId">> &
+    Pick<ReactionCollectorOptions, "filter" | "emoji" | "guildId"> &
     OperationOptions
+
+const maximumGuildId = "18446744073709551615"
+
+function guildId(value: unknown): value is string {
+    return (
+        typeof value === "string" &&
+        /^[1-9][0-9]{0,19}$/.test(value) &&
+        (value.length < maximumGuildId.length || value <= maximumGuildId)
+    )
+}
 
 function settings(target: unknown, options: unknown, defaultApi: boolean): Settings | ConfigurationError {
     if (!reference(target))
@@ -34,6 +44,7 @@ function settings(target: unknown, options: unknown, defaultApi: boolean): Setti
         Object.keys(input).some(
             (key) =>
                 !Object.hasOwn(result, key) &&
+                key !== "guildId" &&
                 key !== "filter" &&
                 key !== "emoji" &&
                 key !== "onReaction" &&
@@ -58,6 +69,8 @@ function settings(target: unknown, options: unknown, defaultApi: boolean): Setti
     }
     if (input.filter !== undefined && typeof input.filter !== "function")
         return new ConfigurationError("filter", "Collector filter must be a function")
+    if (input.guildId !== undefined && !guildId(input.guildId))
+        return new ConfigurationError("guildId", "Guild ID must be a positive uint64 decimal string")
     const emoji = input.emoji as ReactionEmojiInput | undefined
     if (emoji !== undefined && encodeReactionEmoji(emoji) === undefined)
         return new ConfigurationError(
@@ -77,6 +90,7 @@ function settings(target: unknown, options: unknown, defaultApi: boolean): Setti
         return new ConfigurationError("signal", "Collector signal must be an AbortSignal")
     return {
         ...result,
+        ...(input.guildId === undefined ? {} : { guildId: input.guildId }),
         ...(emoji === undefined
             ? {}
             : { emoji: typeof emoji === "string" ? emoji : { name: emoji.name, id: emoji.id } }),
@@ -181,16 +195,23 @@ export class ReactionCollector {
     }
 
     start(owner: ClientOwner, target: MessageReference) {
-        const signal = this.#settings!.signal
+        const settings = this.#settings!
+        const signal = settings.signal
         const abort = () => this.#finish(Exit.interrupt())
-        const intake = owner.events.listenReactions(target, this.#offer.bind(this))
-        const state = owner.subscribe(this.#stateChanged.bind(this))
+        const shardId = settings.guildId === undefined ? undefined : owner.shardIdForGuild(settings.guildId)
+        const intake = owner.events.listenReactions(target, this.#offer.bind(this), shardId)
+        let state: (() => void) | undefined
         this.#release = () => {
             intake()
-            state()
+            state?.()
             signal?.removeEventListener("abort", abort)
         }
         try {
+            state =
+                settings.guildId === undefined
+                    ? owner.subscribe(this.#stateChanged.bind(this))
+                    : owner.subscribeGateway(settings.guildId, this.#stateChanged.bind(this))
+            if (!this.#active) state()
             signal?.addEventListener("abort", abort, { once: true })
             if (signal?.aborted) abort()
             if (this.#active) this.#scheduleDeadline()
@@ -201,7 +222,7 @@ export class ReactionCollector {
     }
 
     #stateChanged(state: ConnectionState) {
-        if (state === "Recovering") this.fail(new CollectorError("connectionLost"))
+        if (state === "Recovering" || state === "Disconnected") this.fail(new CollectorError("connectionLost"))
         else if (state === "Closing" || state === "Closed") this.fail(new ClientClosedError())
     }
 
@@ -238,6 +259,8 @@ export class ReactionCollector {
         try {
             if (this.#expired()) return
             const settings = this.#settings!
+            if (settings.guildId !== undefined && message.guildId !== undefined && message.guildId !== settings.guildId)
+                return
             const limit =
                 this.#pending.length >= settings.maxPendingMessages
                     ? "maxPendingMessages"
@@ -377,7 +400,13 @@ export function collectReactions<E = never, R = never>(
         const config = settings(target, options, defaultApi)
         if (config instanceof ConfigurationError) return yield* Effect.fail(config)
         if (config.signal?.aborted) return yield* Effect.interrupt
-        if (owner.state !== "Connected") return yield* Effect.fail(new CollectorError("notConnected"))
+        if (config.guildId === undefined) {
+            if (owner.state !== "Connected") return yield* Effect.fail(new CollectorError("notConnected"))
+        } else if (
+            owner.shardIdForGuild(config.guildId) === undefined ||
+            owner.gatewayState(config.guildId) !== "Connected"
+        )
+            return yield* Effect.fail(new CollectorError("notConnected"))
         const clock = yield* Clock.Clock
         const collector = new ReactionCollector(config, clock)
         if (handler) yield* collector.run(owner, handler)

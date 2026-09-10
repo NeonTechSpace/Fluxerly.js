@@ -1,5 +1,6 @@
 import type { MessageCacheOptions, ResourceCacheSettings } from "./cache.js"
 import type { DefaultLoggingOptions } from "./logging.js"
+import type { ShardingOptions, ShardState } from "./sharding.js"
 
 /**
  * Options accepted when creating a disconnected client
@@ -34,7 +35,11 @@ export interface ClientOptions {
     readonly logging?: DefaultLoggingOptions
     /** Bot credential, checked locally for a non-blank string but not authenticated */
     readonly token: string
-    /** Optional resource retention, copied and validated at creation. Omission retains no resource snapshots */
+    /**
+     * Optional resource retention, copied and validated at creation. Omission retains no resource snapshots.
+     * Every configured entry, byte and age budget belongs to this client across its locally owned shards. Sharding never multiplies a budget.
+     * A gap on one shard invalidates observations with known scope on that shard. Missing guild scope invalidates conservatively because the SDK keeps no channel-to-guild index
+     */
     readonly cache?: {
         /** Public account snapshots from explicit reads and complete user events, never partial message authors.
          * Concurrent reads use latest-admitted retention. Gateway gaps and shutdown release snapshots
@@ -83,26 +88,36 @@ export interface ClientOptions {
     /** Client-wide startup settings shared by connect and run, not per-call overrides */
     readonly connection?: {
         /**
-         * Overall startup budget in milliseconds, including discovery, readiness and retry waits.
+         * Overall startup budget in milliseconds, including discovery, every assigned shard's READY, retry waits and local Identify spacing.
+         * With multiple shards, this client spaces Identify commands by one second. It does not coordinate an IP-wide or cross-process quota.
          * Must be a positive safe integer no greater than 2,147,483,647.
          * Expiry stops connection work, but returning still waits for owned-resource cleanup
          * @defaultValue 30000
          */
         readonly startupTimeoutMs?: number
         /**
-         * Maximum total startup attempts, including the first, as a positive safe integer.
+         * Maximum startup attempts per assigned shard, including its first, as a positive safe integer.
          * Only transient failures are retried, and the overall deadline can end startup sooner.
          * Does not set the established-session recovery attempt limit
          * @defaultValue 3
          */
         readonly maxStartupAttempts?: number
     }
+    /**
+     * Optional immutable local gateway-shard assignment. Omit it to retain the default one-connection gateway wire form.
+     * Omitted shardIds assigns every ID in totalShards to this client. Explicit IDs are copied in their supplied order and cannot change during this client's lifetime.
+     * Use explicit, non-overlapping lists when an external process supervisor owns distribution. Shard zero owns direct-message gateway traffic, so a client that handles DMs must own ID zero.
+     * The SDK copies and validates the plan at creation. It does not auto-size, coordinate processes, or reshard a running client.
+     * Supplying one total shard uses the default one-connection gateway wire form, not an Identify shard tuple
+     */
+    readonly sharding?: ShardingOptions
 }
 
 /**
  * Current connection status, not an event history.
- * Disconnected permits startup, Connecting includes startup retries, and Connected means readiness completed.
- * Recovering means an established session is reconnecting, Closing means permanent cleanup, and Closed cannot restart
+ * Disconnected permits startup. Connecting lasts until every locally assigned shard is ready at the same time, including initial retries and recovery.
+ * Connected means every locally assigned shard is ready. After that point, Recovering means at least one established shard has a gap until every assigned shard is ready again.
+ * Healthy-shard work can continue during aggregate Recovering. Closing means permanent cleanup, and Closed cannot restart
  */
 export type ConnectionState = "Disconnected" | "Connecting" | "Connected" | "Recovering" | "Closing" | "Closed"
 
@@ -111,12 +126,18 @@ export interface ClientState {
     /** Current connection state, controlled by the SDK rather than the consumer */
     readonly state: ConnectionState
     /**
-     * Latest heartbeat round-trip time in milliseconds for the current connection.
-     * Null before an acknowledgement and after connection loss or shutdown, including during recovery.
-     * A new connection must receive its own acknowledgement before reporting a measurement.
+     * Maximum current heartbeat round-trip time in milliseconds across every locally owned shard.
+     * Null while the aggregate state is not Connected.
+     * Null until every locally owned shard has an acknowledgement and whenever any shard has no current measurement.
+     * Connection loss, recovery and shutdown clear the affected shard's measurement until its new connection acknowledges.
      * Zero is a valid measurement, not a marker for unavailable data
      */
     readonly gatewayLatencyMs: number | null
+    /**
+     * Frozen snapshot for every gateway shard owned by this client, in configured local ID order. An unsharded client contains only shard ID zero.
+     * It excludes shards owned by other processes and has no whole-bot or cross-process ordering. Read it to distinguish per-shard recovery and latency from aggregate client values
+     */
+    readonly shards: readonly ShardState[]
 }
 
 /** Cancellation belongs to this operation, not the client's connection policy */

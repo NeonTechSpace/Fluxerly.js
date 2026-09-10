@@ -526,6 +526,7 @@ export type GuildOperation =
     | "members.fetchPage"
     | "members.editSelf"
     | "members.setNickname"
+    | "members.setRoles"
     | "members.addRole"
     | "members.removeRole"
     | "roles.fetchAll"

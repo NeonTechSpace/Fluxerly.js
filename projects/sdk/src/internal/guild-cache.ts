@@ -25,7 +25,13 @@ export type ResourceRequest = {
     batch?: boolean
     wholeGuild?: boolean
 }
-export type ResourceGuard = ResourceRequest & { generation: number; invalid: boolean; success: boolean }
+export type ResourceGuard = ResourceRequest & {
+    generation: number
+    invalid: boolean
+    /** A scoped gateway gap made this read stale; it must not evict a newer post-gap observation */
+    gapped: boolean
+    success: boolean
+}
 type Entry = { selection: Selection; value: Snapshot; bytes: number; expires: number | null }
 const kinds = ["guilds", "members", "roles", "emojis", "stickers"] as const
 const key = (selection: Selection) => `${selection.guildId}:${selection.id ?? selection.guildId}`
@@ -96,7 +102,7 @@ export class GuildCache {
     }
 
     begin(request: ResourceRequest): ResourceGuard {
-        const guard = { ...request, generation: this.#generation, invalid: false, success: false }
+        const guard = { ...request, generation: this.#generation, invalid: false, gapped: false, success: false }
         for (const other of this.#requests) {
             if (!this.#selections(guard).some((a) => this.#selections(other).some((b) => overlaps(a, b)))) continue
             if (guard.mutation) other.invalid = true
@@ -110,7 +116,7 @@ export class GuildCache {
         if (guard.batch && record(result)) result = result.success
         guard.success = true
         if (this.#closed) return
-        if (guard.generation !== this.#generation) {
+        if (guard.generation !== this.#generation || (!guard.mutation && guard.gapped)) {
             // A pre-gap write can still affect newer observations, but its response cannot repopulate them
             if (guard.mutation) this.missing(guard)
             return
@@ -131,7 +137,7 @@ export class GuildCache {
     }
 
     missing(guard: ResourceGuard) {
-        if (this.#closed || (!guard.mutation && guard.generation !== this.#generation)) return
+        if (this.#closed || (!guard.mutation && (guard.generation !== this.#generation || guard.gapped))) return
         for (const selection of this.#selections(guard)) this.#evict(selection, guard)
         this.#schedule()
     }
@@ -246,12 +252,23 @@ export class GuildCache {
         }
     }
 
-    gap() {
-        this.#generation++
-        for (const request of this.#requests) request.invalid = true
-        for (const kind of kinds) {
-            this.#entries[kind].clear()
-            this.#bytes[kind] = 0
+    gap(affects?: (guildId: string | null | undefined) => boolean) {
+        if (!affects) {
+            this.#generation++
+            for (const request of this.#requests) request.invalid = true
+            for (const kind of kinds) {
+                this.#entries[kind].clear()
+                this.#bytes[kind] = 0
+            }
+        } else {
+            for (const request of this.#requests)
+                if (affects(request.selection.guildId)) {
+                    request.invalid = true
+                    request.gapped = true
+                }
+            for (const kind of kinds)
+                for (const entry of this.#entries[kind].values())
+                    if (affects(entry.selection.guildId)) this.#remove(entry)
         }
         this.#schedule()
     }

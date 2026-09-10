@@ -163,11 +163,18 @@ export class MessageCache {
         this.#schedule()
     }
 
-    gap() {
-        this.#generation++
-        for (const request of this.#requests) request.invalid = true
-        this.#entries.clear()
-        this.#bytes = 0
+    gap(affects?: (guildId: string | null | undefined) => boolean) {
+        // Channel-only requests capture this generation before admission and retain it across retries
+        if (!affects || affects(undefined)) {
+            this.#generation++
+            for (const request of this.#requests) request.invalid = true
+        }
+        if (!affects) {
+            this.#entries.clear()
+            this.#bytes = 0
+        } else {
+            for (const entry of this.#entries.values()) if (affects(entry.message.guildId)) this.#remove(entry.message)
+        }
         this.#schedule()
     }
 

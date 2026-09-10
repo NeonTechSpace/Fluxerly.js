@@ -12,6 +12,9 @@ export class ConfigurationError extends Error {
             | "logger"
             | "token"
             | "connection"
+            | "sharding"
+            | "totalShards"
+            | "shardIds"
             | "startupTimeoutMs"
             | "maxStartupAttempts"
             | "event"
@@ -37,6 +40,7 @@ export class ConfigurationError extends Error {
             | "maxAgeMs"
             | "collectorOptions"
             | "channelId"
+            | "guildId"
             | "filter"
             | "onReaction"
             | "onMessage"
@@ -59,6 +63,8 @@ export type Operation =
     | "presence.setMembers"
     | "directMessages.send"
     | import("./application.js").BotApplicationOperation
+    | import("./counts.js").CountOperation
+    | "members.iterateChunks"
     | import("./users.js").UserOperation
     | import("./webhooks.js").WebhookOperation
     | "createWebhookClient"
@@ -93,6 +99,7 @@ export type Operation =
     | "clearReactions"
     | "edit"
     | "delete"
+    | "deleteAttachment"
     | "deleteMany"
     | "subscription.waitForClose"
     | "collect"
@@ -151,6 +158,22 @@ export class RateLimitError extends Error {
     }
 }
 
+/** A configured shard could not start or permanently lost its gateway lifetime.
+ * The client awaits sibling cleanup before returning this failure. This does not roll back delivered events or HTTP work
+ */
+export class ShardConnectionError extends Error {
+    readonly _tag = "ShardConnectionError"
+    constructor(
+        /** The locally assigned shard whose connection failed */
+        readonly shardId: number,
+        /** Original SDK-owned expected failure, without private upstream payloads */
+        readonly failure: AuthenticationError | ConnectionError | ConnectionTimeoutError | RateLimitError,
+    ) {
+        super(`Fluxer shard ${shardId} connection failed (${failure._tag})`)
+        this.name = this._tag
+    }
+}
+
 /** The operation was not admitted because existing connection work already owns the client */
 export class ClientBusyError extends Error {
     readonly _tag = "ClientBusyError"
@@ -179,7 +202,8 @@ export class CancelledError extends Error {
 }
 
 /** Expected startup or terminal connection failures, excluding cancellation and SDK defects */
-export type ConnectionFailure = AuthenticationError | ConnectionError | ConnectionTimeoutError | RateLimitError
+export type ConnectionFailure =
+    AuthenticationError | ConnectionError | ConnectionTimeoutError | RateLimitError | ShardConnectionError
 /** Expected connect and run failures, with default methods adding CancelledError to their result union */
 export type ConnectError = ConnectionFailure | ClientBusyError | ClientClosedError
 
@@ -198,6 +222,8 @@ export type DefectReason =
               | import("./webhooks.js").WebhookOperationError
               | import("./users.js").UserOperationError
               | import("./application.js").BotApplicationOperationError
+              | import("./counts.js").CountOperationError
+              | import("./member-chunks.js").MemberChunkError
               | import("./presence.js").PresenceError
               | import("./pagination.js").PaginationError
               | import("./collectors.js").CollectorError

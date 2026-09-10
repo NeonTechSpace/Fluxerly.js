@@ -4,6 +4,7 @@ import type { MessageCacheSettings, ResourceCacheSettings, CachePolicyErrorRepor
 import { record } from "./message.js"
 import { loggingConfiguration, type ClientLogging } from "./logging.js"
 import type { ResourceConfiguration } from "./guild-cache.js"
+import { parseShardPlan, type ShardPlan } from "./sharding.js"
 
 export interface CacheConfiguration {
     readonly maxEntries: number
@@ -116,6 +117,7 @@ export interface Configuration {
     readonly resourceCache: ResourceConfiguration
     readonly channelCache: Required<ResourceCacheSettings> | undefined
     readonly userCache: Pick<ResourceSettings, "users" | "directMessages">
+    readonly sharding: ShardPlan
 }
 
 export function validateConfiguration(
@@ -178,6 +180,8 @@ export function validateConfiguration(
         const { channels: channelCache, users, directMessages, ...guildResourceCache } = resourceCache
         const logging = loggingConfiguration("logging" in options ? options.logging : undefined, native)
         if (logging instanceof ConfigurationError) return Effect.fail(logging)
+        const sharding = parseShardPlan("sharding" in options ? options.sharding : undefined)
+        if (sharding instanceof ConfigurationError) return Effect.fail(sharding)
         return Effect.succeed({
             uploadMaxBytes,
             logging,
@@ -188,6 +192,7 @@ export function validateConfiguration(
             token: Redacted.make(token),
             startupTimeoutMs: timeout ?? 30_000,
             maxStartupAttempts: attempts ?? 3,
+            sharding,
         })
     })
 }

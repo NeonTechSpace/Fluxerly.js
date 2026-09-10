@@ -3,7 +3,7 @@ import { GuildMemberProfileFlags } from "./guilds.js"
 import type { Guild, GuildMember } from "./guilds.js"
 import { snowflakes } from "./helpers.js"
 import type { GuildEmoji, GuildSticker } from "./expressions.js"
-import type { User } from "./users.js"
+import type { User, UserProfileFields } from "./users.js"
 
 const mediaOrigin = "https://fluxerusercontent.com"
 const staticOrigin = "https://fluxerstatic.com"
@@ -49,6 +49,7 @@ export class AssetUrlError extends Error {
         /** Asset helper that rejected the input */
         readonly operation:
             | "assets.avatar"
+            | "assets.userBanner"
             | "assets.defaultAvatar"
             | "assets.displayAvatar"
             | "assets.memberAvatar"
@@ -311,18 +312,47 @@ function memberProfileFlags(
  *
  * @example
  * ```ts
- * import { assets, AssetFormats, type Guild, type GuildEmoji, type GuildMember, type User } from "@neontechspace/fluxerly"
+ * import { assets, AssetFormats, type Guild, type GuildEmoji, type GuildMember, type User, type UserProfile } from "@neontechspace/fluxerly"
  *
- * export function assetsExample(user: Pick<User, "id" | "avatar">, member: Pick<GuildMember, "guildId" | "userId" | "avatar" | "profileFlags">, guild: Pick<Guild, "id" | "icon">, emoji: Pick<GuildEmoji, "id" | "animated">) {
+ * export function assetsExample(user: Pick<User, "id" | "avatar">, member: Pick<GuildMember, "guildId" | "userId" | "avatar" | "profileFlags">, guild: Pick<Guild, "id" | "icon">, emoji: Pick<GuildEmoji, "id" | "animated">, profile: UserProfile) {
  *     const avatar = assets.displayAvatar(user, { size: 256, format: AssetFormats.Webp })
  *     const memberAvatar = assets.displayMemberAvatar(user, member, { size: 256 })
  *     const icon = assets.guildIcon(guild, { format: AssetFormats.Png })
  *     const emojiUrl = assets.emoji(emoji, { animated: emoji.animated })
- *     return { avatar, memberAvatar, icon, emojiUrl }
+ *     const banner = assets.userBanner(profile)
+ *     return { avatar, memberAvatar, icon, emojiUrl, banner }
  * }
  * ```
  */
 export const assets = Object.freeze({
+    /** Build an account-banner URL directly from a users.fetchProfile observation, reading only user.id and profile.banner.
+     * A null banner stays null, including withheld limited-profile data; it does not prove the account has no banner.
+     * Uses AssetUrlOptions' WebP default and transform validation, without fetching, selecting a guild banner or verifying existence
+     */
+    userBanner(
+        profile: Readonly<{ user: Pick<User, "id">; profile: Pick<UserProfileFields, "banner"> }>,
+        options?: AssetUrlOptions,
+    ): Result<string | null, AssetUrlError> {
+        const operation = "assets.userBanner"
+        const resolved = target(profile, operation)
+        if (resolved.isErr()) return err(resolved.error)
+        const user = target(resolved.value.user, operation)
+        if (user.isErr()) return err(user.error)
+        const userId = id(user.value.id, operation)
+        if (userId.isErr()) return err(userId.error)
+        const fields = target(resolved.value.profile, operation)
+        if (fields.isErr()) return err(fields.error)
+        if (fields.value.banner === null) return validateImageOptions(options, operation).map(() => null)
+        return hash(fields.value.banner, operation).andThen((banner) =>
+            ownerAsset(
+                userId.value,
+                banner,
+                (id, hash, format) => `/banners/${id}/${hash}.${format}`,
+                options,
+                operation,
+            ),
+        )
+    },
     /** Build a user avatar URL, or `null` when this known user has no avatar. The user target contains only `id` and `avatar`; no profile lookup occurs */
     avatar(user: Pick<User, "id" | "avatar">, options?: AssetUrlOptions): Result<string | null, AssetUrlError> {
         const resolved = userTarget(user, "assets.avatar")

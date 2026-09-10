@@ -55,9 +55,9 @@ export class UserCache {
     failed(kind: Kind, generation: number) {
         if (generation === this.#generation[kind]) this.invalidate(kind)
     }
-    gap() {
-        this.invalidate("users")
-        this.invalidate("directMessages")
+    gap(affects?: (guildId: string | null | undefined) => boolean) {
+        if (!affects || affects(undefined)) this.invalidate("users")
+        if (!affects || affects(null)) this.invalidate("directMessages")
     }
     close() {
         this.#closed = true

@@ -1,5 +1,12 @@
 import assert from "node:assert/strict"
-import { createWebhookClient } from "@neontechspace/fluxerly"
+import {
+    createWebhookClient,
+    assets,
+    CountOperationError,
+    MemberChunkError,
+    ShardConnectionError,
+    AuthenticationError,
+} from "@neontechspace/fluxerly"
 
 const webhookClient = createWebhookClient({ id: "100", token: "fixture_only" })
 assert.ok(webhookClient.isOk())
@@ -18,6 +25,15 @@ globalThis.WebSocket = class {
 
 const { createClient, ConfigurationError, MessageOperationError, CollectorError, MessageFlags } =
     await import("@neontechspace/fluxerly")
+const sharded = createClient({ token: "fixture-only", sharding: { totalShards: 4, shardIds: [2, 0] } })._unsafeUnwrap()
+assert.deepEqual(sharded.shards, [
+    { shardId: 2, state: "Disconnected", gatewayLatencyMs: null },
+    { shardId: 0, state: "Disconnected", gatewayLatencyMs: null },
+])
+assert.ok(Object.isFrozen(sharded.shards) && sharded.shards.every(Object.isFrozen))
+assert.ok(new ShardConnectionError(2, new AuthenticationError()).failure instanceof AuthenticationError)
+assert.ok((await sharded.shutdown()).isOk())
+assert.ok(sharded.shards.every((shard) => shard.state === "Closed"))
 const cacheReports = []
 let completeCacheReport
 const cacheReported = new Promise((resolve) => {
@@ -40,6 +56,26 @@ const result = createClient({
 })
 assert.equal(result.isOk(), true)
 assert.equal(result.value.state, "Disconnected")
+for await (const batch of result.value.members.iterateChunks("20", { all: true })) {
+    assert.ok(batch.isErr() && batch.error instanceof MemberChunkError)
+    assert.equal(batch.error.reason, "notConnected")
+}
+const guildCounts = await result.value.guilds.fetchCounts(["20"])
+assert.ok(guildCounts.isErr() && guildCounts.error instanceof CountOperationError)
+assert.equal(guildCounts.error.reason, "notConnected")
+assert.equal((await result.value.channels.fetchMemberCounts("20", ["30"])).error.reason, "notConnected")
+assert.equal(
+    (await result.value.members.setRoles({ guildId: "20", userId: "30" }, ["20"])).error.operation,
+    "members.setRoles",
+)
+assert.equal(
+    (await result.value.messages.deleteAttachment({ id: "10", channelId: "20" }, "bad")).error.operation,
+    "deleteAttachment",
+)
+assert.equal(
+    assets.userBanner({ user: { id: "20" }, profile: { banner: "account" } }).value,
+    "https://fluxerusercontent.com/banners/20/account.webp",
+)
 assert.deepEqual(MessageFlags, { SuppressEmbeds: 4, SuppressNotifications: 4096 })
 assert.ok(Object.isFrozen(MessageFlags))
 assert.equal(

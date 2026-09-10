@@ -1,4 +1,31 @@
 import type { PermissionInput, PermissionTarget } from "./permissions.js"
+import type { MemberChunk, MemberChunkQuery, MemberChunkFailure, MemberChunkOptions } from "./member-chunks.js"
+import { memberChunkStream } from "#sdk/internal/member-chunks"
+export { MemberChunkError } from "./member-chunks.js"
+export type {
+    MemberChunk,
+    MemberChunkQuery,
+    MemberChunkFailure,
+    MemberChunkOptions,
+    DefaultMemberChunkOptions,
+} from "./member-chunks.js"
+import type {
+    CountOperationFailure,
+    CountOperationOptions,
+    GuildCountsResult,
+    ChannelMemberCountsResult,
+} from "./counts.js"
+export { CountOperationError } from "./counts.js"
+export type {
+    CountOperation,
+    CountOperationFailure,
+    CountOperationOptions,
+    DefaultCountOperationOptions,
+    GuildCount,
+    GuildCountsResult,
+    ChannelMemberCount,
+    ChannelMemberCountsResult,
+} from "./counts.js"
 import type { Result } from "neverthrow"
 import { assets as sharedAssets } from "./assets.js"
 import {
@@ -135,19 +162,26 @@ export const links = Object.freeze({
  * @example
  * ```ts
  * import { Effect } from "effect"
- * import { assets, AssetFormats, type Guild, type GuildEmoji, type GuildMember, type User } from "@neontechspace/fluxerly/effect"
+ * import { assets, AssetFormats, type Guild, type GuildEmoji, type GuildMember, type User, type UserProfile } from "@neontechspace/fluxerly/effect"
  *
- * export const assetsEffectExample = (user: Pick<User, "id" | "avatar">, member: Pick<GuildMember, "guildId" | "userId" | "avatar" | "profileFlags">, guild: Pick<Guild, "id" | "icon">, emoji: Pick<GuildEmoji, "id" | "animated">) =>
+ * export const assetsEffectExample = (user: Pick<User, "id" | "avatar">, member: Pick<GuildMember, "guildId" | "userId" | "avatar" | "profileFlags">, guild: Pick<Guild, "id" | "icon">, emoji: Pick<GuildEmoji, "id" | "animated">, profile: UserProfile) =>
  *     Effect.gen(function* () {
  *         const avatar = yield* assets.displayAvatar(user, { size: 256, format: AssetFormats.Webp })
  *         const memberAvatar = yield* assets.displayMemberAvatar(user, member, { size: 256 })
  *         const icon = yield* assets.guildIcon(guild, { format: AssetFormats.Png })
  *         const emojiUrl = yield* assets.emoji(emoji, { animated: emoji.animated })
- *         return { avatar, memberAvatar, icon, emojiUrl }
+ *         const banner = yield* assets.userBanner(profile)
+ *         return { avatar, memberAvatar, icon, emojiUrl, banner }
  *     })
  * ```
  */
 export const assets = Object.freeze({
+    /** Lazily build an account-banner URL from user.id and profile.banner of a users.fetchProfile observation.
+     * Null stays null for absent or withheld profile data, without choosing a guild banner or fetching anything.
+     * Uses AssetUrlOptions' WebP default and transform validation. A URL does not establish asset existence or access
+     */
+    userBanner: (...args: Parameters<typeof sharedAssets.userBanner>) =>
+        assetEffect(() => sharedAssets.userBanner(...args)),
     /** Lazily build a user avatar URL, or `null` for a known missing avatar. It only reads the supplied `id` and `avatar` fields and performs no profile lookup */
     avatar: (...args: Parameters<typeof sharedAssets.avatar>) => assetEffect(() => sharedAssets.avatar(...args)),
     /** Lazily build Fluxer's static default-avatar URL from a canonical user ID. It has no media transform query and does not depend on profile availability */
@@ -332,7 +366,7 @@ export type {
 import type { MemberProfileEdit } from "./guilds.js"
 export type { MemberProfileEdit, MemberMentionPreference } from "./guilds.js"
 export { GuildMemberProfileFlags, MemberMentionPreferences } from "./guilds.js"
-import { memberEditSelf, memberNicknameEdit } from "#sdk/internal/guilds"
+import { memberEditSelf, memberNicknameEdit, memberRolesSet } from "#sdk/internal/guilds"
 import type {
     User,
     UserProfile,
@@ -644,7 +678,10 @@ export interface MessageCacheOptions<E = never, R = never> extends MessageCacheS
     readonly onError?: (report: CachePolicyErrorReport) => Effect.Effect<unknown, E, R>
 }
 
-/** Creation-time native settings. Reporting services are captured when creation executes */
+/**
+ * Creation-time native settings. Reporting services are captured when creation executes.
+ * Sharding uses the shared immutable local assignment, including shard zero for direct-message traffic. Client-wide REST and cache budgets are not multiplied by local shard count
+ */
 export interface ClientOptions<E = never, R = never> extends Omit<SharedClientOptions, "cache" | "logging"> {
     /**
      * Explicit SDK development-log opt-in. Logger, level and tracing remain owned by the executing Effect context.
@@ -653,7 +690,9 @@ export interface ClientOptions<E = never, R = never> extends Omit<SharedClientOp
      * Default-only logger/minimumLevel settings are rejected. A throwing logger cannot fail connection diagnostics
      */
     readonly logging?: LoggingOptions
-    /** Optional resource retention. Omission retains no resource snapshots */
+    /** Optional resource retention. Omission retains no resource snapshots. Every configured budget is client-wide across locally owned shards.
+     * A gateway gap invalidates known-scope observations from its affected shard. Unknown guild scope invalidates conservatively because the SDK keeps no channel-to-guild index
+     */
     readonly cache?: Omit<NonNullable<SharedClientOptions["cache"]>, "messages"> & {
         /**
          * Omitted/false disables caching. True or an options object enables global bounded memory-only message snapshots.
@@ -781,8 +820,9 @@ export interface EventHandlerOptions<E = never, R = never> extends HandlerOption
 }
 
 /**
- * Lazy message operations preserving caller context and interruption. REST/local lookup work without a gateway. Collection requires Connected.
- * Closing/Closed reject new work. Remote calls share four active HTTP slots and 256 queued requests or 4 MiB of queued JSON bodies.
+ * Lazy message operations preserving caller context and interruption. REST/local lookup work without a gateway.
+ * Collection with guildId requires its locally owned shard to be ready; channel-only collection requires aggregate Connected. Closing/Closed reject new work.
+ * Remote calls share four active HTTP slots and 256 queued requests or 4 MiB of queued JSON bodies, client-wide across locally owned shards.
  * Each remote call defaults to a 30,000 ms total deadline, including admission, retry and rate waits, with cleanup awaited afterward
  *
  * fetch, fetchHistory, fetchReactionUsers and fetchPins retry fetch transport failures and HTTP 500/502/503/504 at most twice.
@@ -1086,6 +1126,9 @@ export interface Messages {
      * Lazily register future messageCreate collection in one decimal channel ID within the execution caller's scope.
      * Each execution returns a ready handle before subsequent sends. No history, cache reads, implicit connect or prompt correlation
      *
+     * With options.guildId, the caller supplies the channel's owning guild and intake accepts only that locally owned ready shard. Known conflicting event guilds are discarded without a channel lookup.
+     * Without guildId, channel-only collection retains conservative aggregate recovery: any gateway gap ends it because its guild scope is unknown
+     *
      * Defaults: One accepted message, 30,000 ms total lifetime, 4 MiB retained Message JSON.
      * Pending intake separately allows 256 payloads or 4 MiB source JSON after channel selection, before synchronous filtering.
      * Options are copied when executed. Budgets are positive safe integers. The timeoutMs maximum is 2,147,483,647
@@ -1147,6 +1190,9 @@ export interface Messages {
     /**
      * Lazily register future reaction additions for one message with decimal id and channelId in the caller's scope.
      * Execute before the expected reaction. No REST request, existing-reactor lookup, implicit connect or cache reads
+     *
+     * With options.guildId, the caller supplies the target channel's owning guild and intake accepts only that locally owned ready shard. Known conflicting event guilds are discarded without a membership lookup.
+     * Without guildId, target-only collection retains conservative aggregate recovery: any gateway gap ends it because its guild scope is unknown
      *
      * Defaults: One accepted addition, 30,000 ms total lifetime and 4 MiB retained MessageReaction JSON.
      * Copy target IDs/options when executed. Pending intake allows 256 payloads or 4 MiB full source JSON.
@@ -1353,6 +1399,27 @@ export interface Messages {
      * Native interruption awaits owned cleanup but cannot undo a dispatched deletion
      */
     delete(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    /** Lazily delete one attachment by decimal ID from a message authored by this bot, without fetching or rewriting the retained attachment list.
+     * Copies the target when run, using message REST deadlines/failures in caller context; no gateway connection is required
+     *
+     * HTTP 204 returns no value, not event acknowledgement. Deleting the last attachment can delete the whole message if Fluxer considers it otherwise empty.
+     * Confirmed or uncertain deletion evicts this message's cached copy. No optimistic events are emitted.
+     * A notFound failure can mean only that the attachment is missing; it does not prove the message is absent.
+     * Only confirmed 429 rejections retry. Storage removal and message updates are not atomic; lost responses can leave either applied.
+     * Interruption awaits cleanup but cannot undo deletion or guarantee physical erasure; defects retain their Cause
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export function attachmentDeleteExample(client: Client, message: MessageReference, attachmentId: string) {
+     *     return client.messages.deleteAttachment(message, attachmentId)
+     * }
+     * ```
+     */
+    deleteAttachment(
+        message: MessageReference,
+        attachmentId: string,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Lazily delete 1–100 distinct decimal message IDs from one guild channel, requiring ManageMessages permission.
      * No gateway connection, hidden selection, chunking, age filter or audit reason. Each run copies the current IDs.
@@ -1403,6 +1470,7 @@ export interface ReactionCollector {
 export type { ConnectionState } from "./client.js"
 export {
     AuthenticationError,
+    ShardConnectionError,
     ClientBusyError,
     ClientClosedError,
     ConfigurationError,
@@ -1411,6 +1479,7 @@ export {
     RateLimitError,
 } from "./errors.js"
 export type { ConnectError, ConnectionFailure } from "./errors.js"
+export type { ShardingOptions, ShardState } from "./sharding.js"
 
 /** Remote audit observations requiring ViewAuditLog, without SDK retention or gateway startup.
  * Eligible reads retry transient failures at most twice under the shared guild REST policy.
@@ -1638,8 +1707,9 @@ export interface Discovery {
     withdraw(guildId: string, options?: GuildOperationOptions): Effect.Effect<void, GuildOperationFailure>
 }
 
-/** Lazy guild reads, bans and optional local lookup in caller context, independent of gateway readiness.
- * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with message/member/role operations
+/** Lazy guild REST operations, gateway counts and optional local lookup in caller context.
+ * The REST rules below exclude fetchCounts, which requires gateway readiness and has its own documented contract.
+ * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with message/member/role operations, client-wide across locally owned shards
  *
  * Total deadline defaults to 30,000 ms including waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Backoff is 125–250 ms then 250–500 ms, honoring longer Retry-After. Confirmed 429 waits are separate and never reset the deadline
@@ -1648,6 +1718,38 @@ export interface Discovery {
  * Interruption awaits owned cleanup; closing clients use ClientClosedError. Defects retain native causes, including cleanup failures
  */
 export interface Guilds {
+    /** Lazily fetch fresh, visibility-filtered counts for 1–100 distinct canonical positive uint64 decimal guild IDs over the connected gateway.
+     * Copies IDs when run, in the caller's Effect context. No implicit connection, REST read, cache, polling or retries
+     *
+     * Every requested guild must route to a locally owned ready shard. An unowned or unready guild fails notConnected instead of appearing in omittedGuildIds
+     *
+     * Returns frozen counts plus omittedGuildIds in input order. Missing entries are not zero and do not explain access or timeout.
+     * Observations are not a consistent snapshot across guilds. A missing whole reply fails with timeout instead
+     *
+     * One logical call holds one client-wide slot across every routed shard command and reply fragment. It shares four slots with channels.fetchMemberCounts and members.iterateChunks, without a queue; additional calls fail busy.
+     * The default 30,000 ms overall deadline covers local registration, all commands and all fragments.
+     * Fluxer also shares provider capacity with member/presence requests, so local admission cannot guarantee a reply
+     *
+     * Only a gap on a participating shard fails this request with connectionLost; late replies are ignored.
+     * CountOperationError covers input/readiness/admission/timeout/response failures; closure uses ClientClosedError.
+     * Interruption awaits local cleanup but cannot cancel dispatched provider work; defects retain their Cause
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export function countsExample(client: Client, guildId: string, channelId: string) {
+     *     return Effect.gen(function* () {
+     *         const guilds = yield* client.guilds.fetchCounts([guildId])
+     *         const channels = yield* client.channels.fetchMemberCounts(guildId, [channelId])
+     *         return { guilds, channels }
+     *     })
+     * }
+     * ```
+     */
+    fetchCounts(
+        guildIds: readonly string[],
+        options?: CountOperationOptions,
+    ): Effect.Effect<GuildCountsResult, CountOperationFailure>
     /** Lazily fetch one remote membership page for this bot, ordered by ascending guild ID.
      * limit defaults to 200 (1–200); before/after are mutually exclusive existing-membership cursors.
      * A removed cursor can cause Fluxer to restart the page. Counts and permissions are not projected.
@@ -1764,10 +1866,11 @@ export interface Guilds {
     fetch(guildId: string, options?: GuildOperationOptions): Effect.Effect<Guild, GuildOperationFailure>
 }
 
-/** Lazy guild-channel reads and mutations in the caller's Effect context, independent of gateway readiness
+/** Lazy guild-channel REST operations, gateway member counts and optional local lookup in caller context.
+ * The REST rules below exclude fetchMemberCounts, which requires gateway readiness and has its own documented contract
  *
  * DM operations are outside this API contract. Supply decimal guild-channel IDs. ID-targeted writes do not prefetch or verify their guild type.
- * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with guild/member/role/message operations.
+ * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with guild/member/role/message operations, client-wide across locally owned shards.
  * Total deadline defaults to 30,000 ms, including admission, retry and rate waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Writes retry only confirmed 429 responses. Permission, input, 404 and malformed-response failures do not retry
  *
@@ -1778,6 +1881,20 @@ export interface Guilds {
  * Expected failures use ChannelOperationError or ClientClosedError. Interruption and defects retain native causes after owned cleanup
  */
 export interface Channels {
+    /** Lazily fetch fresh counts for 1–25 distinct channel IDs in one guild, using canonical positive uint64 decimal IDs over the connected gateway.
+     * Copies IDs when run. Requires the guild's locally owned shard to be ready plus ViewChannel and ViewChannelMembers; no hidden connect or REST reads.
+     * The guild must route to a locally owned ready shard. An unowned or unready guild fails notConnected instead of appearing in omittedChannelIds
+     *
+     * Returns frozen counts plus omittedChannelIds in input order. Omission never becomes zero or identifies its cause.
+     * Counts are visibility-filtered observations, not a subscription or guaranteed cross-channel snapshot.
+     * Uses guilds.fetchCounts' one-logical-slot four-call admission, default 30,000 ms overall deadline, no-retry, participant-shard recovery and failure/cleanup rules.
+     * No channel/member cache writes. Native interruption cannot stop dispatched provider work
+     */
+    fetchMemberCounts(
+        guildId: string,
+        channelIds: readonly string[],
+        options?: CountOperationOptions,
+    ): Effect.Effect<ChannelMemberCountsResult, CountOperationFailure>
     /** Lazily read the enabled channel cache without HTTP or requiring a connection.
      * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote observation.
      * Invalid decimal IDs fail with ChannelOperationError(input). Closing/closed clients fail with ClientClosedError.
@@ -1856,11 +1973,71 @@ export interface Channels {
     ): Effect.Effect<void, ChannelOperationFailure>
 }
 
-/** Lazy membership reads, moderation and targeted role writes with Guilds' admission, deadlines and failure rules.
+/** Lazy membership reads, moderation and targeted role writes with Guilds' REST admission, deadlines and failure rules.
+ * iterateChunks uses the gateway and its own documented stream rules instead.
  * Returned members are frozen observations. Optional retention follows ClientOptions.cache.members, without permission prediction or automatic guild download.
  * Writes retry only confirmed 429 rejections, never uncertain outcomes. Interruption cannot undo a dispatched write
  */
 export interface Members {
+    /** Lazily request one guild's gateway members, streaming frozen batches in the consuming Effect scope without accumulating a roster.
+     * Each consumption copies inputs and sends one request. Select explicit userIds, a query prefix, or all: true
+     *
+     * Requires the guild's locally owned shard to be ready. Full-list mode is provider-capped at 100,000 members; its 30-second per-bot/guild limit depends on server enforcement.
+     * One member stream is admitted at a time per client, not per gateway connection. It holds one of four client-wide slots shared with gateway counts until consumed or released
+     *
+     * The guild must route to a locally owned ready shard. An unowned or unready guild fails notConnected. Only its owning-shard gap fails this stream; healthy-shard work continues.
+     * No implicit connection, REST fallback, cache writes, presence subscription, raw-event forwarding or automatic retries
+     *
+     * Delivers provider chunk order, checking indices, advertised count, member uniqueness and presence association.
+     * Success means every advertised batch arrived, not a complete or atomic guild snapshot. Missing selected IDs are explicit on the final batch.
+     * Optional presences omit unavailable/offline/invisible observations. Missing presence never proves offline status
+     *
+     * timeoutMs defaults to 30,000 for the whole reply. maxPendingBytes defaults to 4 MiB of accounted unread wire bytes.
+     * Fluxer pushes batches without backpressure; slow readers can overflow. Pausing consumption does not pause intake or its deadline
+     *
+     * A gap, timeout, malformed reply or overflow discards unread batches and fails with MemberChunkError, never a silent partial success.
+     * Previously emitted batches stay caller-owned. Client closure fails with ClientClosedError and releases local buffers
+     *
+     * Interruption, early stream termination and scope closure release intake, timers and buffers without cancelling Fluxer's dispatched work.
+     * Late/unmatched chunks are ignored and chunks are not replayed on Resume. Defects and interruption retain native causes and caller context
+     * @example
+     * ```ts
+     * import { Effect, Stream } from "effect"
+     * import type { Client, MemberChunk } from "@neontechspace/fluxerly/effect"
+     * export function memberChunksExample(client: Client, guildId: string, handleBatch: (chunk: MemberChunk) => Effect.Effect<void>) {
+     *     return client.members.iterateChunks(guildId, { all: true, presences: true }).pipe(
+     *         Stream.runForEach(handleBatch)
+     *     )
+     * }
+     * ```
+     */
+    iterateChunks(
+        guildId: string,
+        query: MemberChunkQuery,
+        options?: MemberChunkOptions,
+    ): Stream.Stream<MemberChunk, MemberChunkFailure>
+    /** Lazily replace the member's entire explicit role set with 0–250 distinct positive decimal role IDs in one PATCH.
+     * Copies IDs when run in the caller's Effect context, with no prefetch or merge. [] clears assigned roles; the implicit everyone role is rejected as input
+     *
+     * Requires provider ManageRoles and hierarchy permission for changes. This may overwrite concurrent role changes.
+     * Fluxer can silently omit nonexistent or foreign role IDs. Returns its frozen actual member, not a promise that every requested role was accepted
+     *
+     * Uses shared guild write deadlines/failures and only confirmed 429 retries. No gateway readiness or event acknowledgement is required.
+     * Eligible responses update member caching; uncertain dispatched writes evict it and need explicit fetch reconciliation.
+     * Interruption awaits cleanup but cannot undo the replacement; defects retain their Cause
+     * @example
+     * ```ts
+     * import type { Client, MemberReference } from "@neontechspace/fluxerly/effect"
+     * export function roleSetExample(client: Client, member: MemberReference, desiredRoles: readonly string[]) {
+     *     return client.members.setRoles(member, desiredRoles)
+     * }
+     * ```
+     */
+    setRoles(
+        member: MemberReference,
+        roleIds: readonly string[],
+        options?: GuildOperationOptions,
+    ): Effect.Effect<GuildMember, GuildOperationFailure>
     /** Lazy remote search of indexed snapshots, not the local member cache or full hydrated members.
      * Default page size 25, offset 0, join-time descending. Results can lag membership changes.
      * indexing=true is not completed emptiness; empty/indexing=false can also mean an unavailable provider search service
@@ -2285,13 +2462,13 @@ export interface Client extends ClientState {
         options?: EventBufferOptions,
     ): Stream.Stream<EventMap[K], RegistrationError | EventOverflowError>
     /**
-     * Connect when this Effect executes and complete after authentication and the required READY event.
-     * Readiness does not mean every guild or resource has loaded
+     * Connect when this Effect executes and complete after every locally assigned shard authenticates and completes READY.
+     * Readiness does not wait for GUILD_CREATE, a guild roster, or every resource to load
      *
      * Owns startup only, using the client's connection settings.
-     * Startup interruption waits for cleanup and permits reuse while the owning scope stays open.
+     * Interruption or an expected failure before initial group readiness waits for assigned-shard cleanup and permits reuse while the owning scope stays open.
      * After success the connection and recovery remain owned by that scope, not by this completed operation.
-     * Observe waitForClose for later terminal failures
+     * After all assigned shards are ready, a permanent required-shard failure in a multi-shard plan closes the client. waitForClose retains `ShardConnectionError { shardId, failure }`
      *
      * @returns A lazy Effect with connection, busy or closed failures.
      * An already connected unmanaged client succeeds without opening another socket.
@@ -2301,7 +2478,8 @@ export interface Client extends ClientState {
     /**
      * Own startup, lifetime observation and permanent cleanup in one lazy Effect.
      * Remains pending through established operation and transient recovery.
-     * An accepted run leaves the client Closed when it ends, including failure or interruption
+     * An accepted run leaves the client Closed when it ends, including failure or interruption.
+     * After all assigned shards are ready, a permanent required-shard failure in a multi-shard plan closes the client and reports `ShardConnectionError { shardId, failure }`
      *
      * Accepts only a Disconnected client without competing work.
      * Rejection before admission leaves existing work untouched.
@@ -2329,7 +2507,9 @@ export interface Client extends ClientState {
      * Observe the retained terminal outcome without starting or owning the connection.
      * Transient recovery keeps the Effect pending, and late observers receive the retained outcome.
      * Interrupting this wait releases only its observation, not the client or other waiters.
-     * Closing the client's owning scope still shuts down the connection
+     * Closing the client's owning scope still shuts down the connection.
+     * After all assigned shards are ready, a permanent required-shard failure in a multi-shard plan closes the client and is retained as `ShardConnectionError { shardId, failure }`.
+     * Background and cleanup defects remain in the native Cause alongside a retained typed failure
      *
      * @returns Success after normal shutdown or the retained permanent connection failure.
      * Unexpected background and cleanup defects retain their native cause
@@ -2404,13 +2584,13 @@ export function createWebhookClient(
 }
 
 /** Process-local outgoing bot presence and explicitly selected inbound member-presence intent.
- * Outgoing status updates are spaced by at least four seconds per connection. Member selections are separate bounded Op14 requests.
+ * Outgoing status updates fan out to every live locally owned shard and are spaced by at least four seconds per shard. Member selections are separate bounded Op14 requests.
  * No provider acknowledgement or recipient-delivery guarantee is available. The SDK performs no remote membership lookup or self filtering; Fluxer owns access and filtering
  */
 export interface Presence {
     /** Lazily validate and freeze the latest requested status/custom status, including before connect.
      * Omitted customStatus preserves this client's previous request; null clears it, and expired custom statuses are not restored.
-     * Success means local acceptance, not a completed network write. Shutdown releases the intent and pending timer
+     * Success means local acceptance and scheduled per-shard fanout, not an atomic provider acknowledgement across shards. Shutdown releases the intent and pending timer
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -2426,6 +2606,8 @@ export interface Presence {
     /**
      * Lazily validate, copy and retain this guild's selected member IDs when run. Pass `[]` to clear its selection.
      * The SDK neither fetches members nor subscribes all guild members. Select accessible non-self members deliberately; Fluxer remains authoritative for access and filtering
+     *
+     * The guild must route to a shard assigned to this client. An unassigned guild fails PresenceError input instead of retaining an unsent selection
      *
      * Input accepts at most 1,000 distinct decimal IDs, but the full UTF-8 Op14 frame must be at most 4,096 bytes, so long IDs lower the effective per-guild maximum.
      * This client retains selections for at most 100 guilds and 10,000 IDs. A cleared selection that was already sent retains one bounded session slot until a fresh identify or a confirmed leave, because a local socket write has no provider acknowledgement. Clearing an unsent selection releases its slot immediately
@@ -2562,11 +2744,28 @@ export interface DirectMessages {
  * Hosted Fluxer only; self-hosted instances and custom REST or gateway endpoints are not supported
  *
  * Cache settings are copied and validated here without invoking retention policies or reporters.
- * Unknown cache or message-cache option keys fail validation. Caching is disabled by default
+ * Unknown cache or message-cache option keys fail validation. Caching is disabled by default.
+ * Connection settings default to a 30,000 ms overall startup budget and three total attempts per assigned shard
  *
  * Each execution creates a separate client in the caller's owning scope.
  * Cache reporters capture this creation context, including their required services.
  * Closing that scope permanently shuts down the client and releases its credential reference
+ *
+ * A sharded plan fixes this client's local IDs for its lifetime. Shard zero receives direct-message gateway traffic, and REST/cache budgets remain client-wide
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { createClient } from "@neontechspace/fluxerly/effect"
+ *
+ * export function shardingExample(token: string) {
+ *     return Effect.scoped(Effect.gen(function* () {
+ *         const client = yield* createClient({ token, sharding: { totalShards: 4, shardIds: [0, 2] } })
+ *         yield* client.connect()
+ *         return client.shards
+ *     }))
+ * }
+ * ```
  *
  * @returns A scoped, lazy creation Effect with ConfigurationError for invalid input.
  * Unexpected creation defects retain their native cause
@@ -2694,6 +2893,8 @@ export function createClient<E = never, R = never>(
                     owner.guild("discovery.withdraw", () => discoveryWithdraw(id), options),
             }),
             guilds: Object.freeze({
+                fetchCounts: (ids: readonly string[], options?: CountOperationOptions) =>
+                    owner.counts.fetchGuilds(ids, options),
                 fetchPage: (query?: GuildListQuery, options?: GuildOperationOptions) =>
                     owner.guild("guilds.fetchPage", () => guildList(query), options),
                 iterate: (query: GuildIterationQuery, options?: GuildOperationOptions) =>
@@ -2716,6 +2917,8 @@ export function createClient<E = never, R = never>(
                     owner.guild("guilds.fetch", () => guildFetch(id), options),
             }),
             channels: Object.freeze({
+                fetchMemberCounts: (guildId: string, ids: readonly string[], options?: CountOperationOptions) =>
+                    owner.counts.fetchChannels(guildId, ids, options),
                 get: (id: string) => owner.getChannel(id),
                 fetch: (id: string, options?: ChannelOperationOptions) =>
                     owner.channel("channels.fetch", () => channelFetch(id), options),
@@ -2735,6 +2938,10 @@ export function createClient<E = never, R = never>(
                     owner.channel("channels.removePermissionOverwrite", () => permissionRemove(id, targetId), options),
             }),
             members: Object.freeze({
+                iterateChunks: (guildId: string, query: MemberChunkQuery, options?: MemberChunkOptions) =>
+                    memberChunkStream(owner.memberChunks.open(guildId, query, options)),
+                setRoles: (target: MemberReference, roleIds: readonly string[], options?: GuildOperationOptions) =>
+                    owner.guild("members.setRoles", () => memberRolesSet(target, roleIds), options),
                 search: (id: string, query?: MemberSearchQuery, options?: GuildOperationOptions) =>
                     searchMembers(owner, id, query, options),
                 iterateSearch: (
@@ -2917,6 +3124,8 @@ export function createClient<E = never, R = never>(
                 edit: (target: MessageReference, input: EditMessageInput, options?: MessageOperationOptions) =>
                     owner.edit(target, input, options),
                 delete: (target: MessageReference, options?: MessageOperationOptions) => owner.delete(target, options),
+                deleteAttachment: (target: MessageReference, attachmentId: string, options?: MessageOperationOptions) =>
+                    owner.deleteAttachment(target, attachmentId, options),
                 deleteMany: (channelId: string, ids: readonly string[], options?: MessageOperationOptions) =>
                     owner.deleteMany(channelId, ids, options),
             }),
@@ -2937,6 +3146,9 @@ export function createClient<E = never, R = never>(
             },
             get gatewayLatencyMs() {
                 return owner.gatewayLatencyMs
+            },
+            get shards() {
+                return owner.shards
             },
             connect: () => owner.connect(),
             run: () => owner.run(),

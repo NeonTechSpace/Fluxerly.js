@@ -16,6 +16,8 @@ import {
     type GatewayPresenceUpdate,
     type PresenceGatewayOwner,
 } from "./presence.js"
+import type { CountGatewayOwner } from "./counts.js"
+import type { MemberChunkOwner } from "./member-chunks.js"
 import { Clock, Deferred, Effect, Redacted } from "effect"
 import WebSocket from "ws"
 import {
@@ -115,6 +117,10 @@ export const runGateway = (
     onDispatch: <K extends EventName>(event: K, message: EventMap[K], bytes: number) => void,
     onGuild?: (event: string, value: unknown) => void,
     presence?: PresenceGatewayOwner,
+    counts?: CountGatewayOwner,
+    memberChunks?: Pick<MemberChunkOwner, "attach" | "detach" | "receive" | "rateLimited">,
+    shard?: readonly [number, number],
+    identify?: (send: () => void) => Effect.Effect<void>,
 ) =>
     Effect.scoped(
         Effect.gen(function* () {
@@ -194,17 +200,6 @@ export const runGateway = (
                                 }
                                 receivedHello = true
                                 Deferred.doneUnsafe(hello, Effect.succeed(body.heartbeat_interval))
-                                if (resuming)
-                                    send(6, {
-                                        token: Redacted.value(token),
-                                        session_id: session.id,
-                                        seq: session.sequence,
-                                    })
-                                else
-                                    send(2, {
-                                        token: Redacted.value(token),
-                                        properties: { os: platform(), browser: "Fluxerly.js", device: "Fluxerly.js" },
-                                    })
                                 break
                             }
                             case 0: {
@@ -228,7 +223,13 @@ export const runGateway = (
                                         body === null ||
                                         !("session_id" in body) ||
                                         typeof body.session_id !== "string" ||
-                                        !body.session_id
+                                        !body.session_id ||
+                                        (shard !== undefined &&
+                                            (!("shard" in body) ||
+                                                !Array.isArray(body.shard) ||
+                                                body.shard.length !== 2 ||
+                                                body.shard[0] !== shard[0] ||
+                                                body.shard[1] !== shard[1]))
                                     ) {
                                         protocolFailure()
                                         return
@@ -258,7 +259,15 @@ export const runGateway = (
                                     payload.t === "GUILD_STICKERS_UPDATE"
                                 )
                                     onGuild?.(payload.t, body)
-                                if (payload.t === "USER_UPDATE") {
+                                if (payload.t === "GUILD_MEMBERS_CHUNK") {
+                                    memberChunks?.receive(body, Buffer.byteLength(data.toString()))
+                                } else if (payload.t === "RATE_LIMITED") {
+                                    memberChunks?.rateLimited(body)
+                                } else if (payload.t === "GUILD_COUNTS_UPDATE") {
+                                    counts?.receiveGuildCounts(body)
+                                } else if (payload.t === "CHANNEL_MEMBER_COUNTS_UPDATE") {
+                                    counts?.receiveChannelMemberCounts(body)
+                                } else if (payload.t === "USER_UPDATE") {
                                     const user = decodeUser(body)
                                     if (!user) {
                                         protocolFailure()
@@ -506,9 +515,29 @@ export const runGateway = (
                     return {
                         socket,
                         heartbeat,
+                        authenticate: () => {
+                            if (resuming)
+                                send(6, {
+                                    token: Redacted.value(token),
+                                    session_id: session.id,
+                                    seq: session.sequence,
+                                })
+                            else
+                                send(2, {
+                                    token: Redacted.value(token),
+                                    properties: { os: platform(), browser: "Fluxerly.js", device: "Fluxerly.js" },
+                                    ...(shard ? { shard } : {}),
+                                })
+                        },
                         presence: (update: GatewayPresenceUpdate) => send(3, update),
                         memberSubscriptions: (subscriptions: GatewayPresenceMemberSubscriptions) =>
                             send(14, subscriptions),
+                        guildCounts: (guildIds: readonly string[], nonce: string) =>
+                            send(15, { guild_ids: guildIds, nonce }),
+                        memberChunks: (payload: Readonly<Record<string, unknown>>, nonce: string) =>
+                            send(8, { ...payload, nonce }),
+                        channelMemberCounts: (guildId: string, channelIds: readonly string[], nonce: string) =>
+                            send(16, { guild_id: guildId, channel_ids: channelIds, nonce }),
                         detach: () => {
                             socket.off("message", onMessage)
                             socket.off("error", onError)
@@ -523,7 +552,13 @@ export const runGateway = (
                         yield* closeSocket(transport.socket).pipe(Effect.ensuring(Effect.sync(transport.detach)))
                     }),
             )
-            yield* Effect.addFinalizer(() => Effect.sync(() => presence?.detach()))
+            yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                    presence?.detach()
+                    counts?.detach()
+                    memberChunks?.detach()
+                }),
+            )
             const startup = Effect.gen(function* () {
                 const interval = yield* Deferred.await(hello)
                 yield* Effect.forkScoped(
@@ -536,6 +571,7 @@ export const runGateway = (
                         }),
                     ),
                 )
+                yield* !resuming && identify ? identify(socket.authenticate) : Effect.sync(socket.authenticate)
                 yield* Deferred.await(ready)
             }).pipe(
                 Effect.timeoutOrElse({
@@ -545,6 +581,8 @@ export const runGateway = (
             )
             yield* Effect.raceFirst(startup, Deferred.await(ended))
             presence?.attach(socket.presence, socket.memberSubscriptions, resuming ? "resume" : "identify")
+            counts?.attach(socket.guildCounts, socket.channelMemberCounts)
+            memberChunks?.attach(socket.memberChunks)
             onReady(resuming ? "resume" : "identify")
             return yield* Deferred.await(ended)
         }),

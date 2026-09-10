@@ -11,6 +11,7 @@ export interface LoggingOptions {
      * Enable Info-level connection attempts, readiness, loss, retry waits, session resets and termination/shutdown diagnostics.
      * Default false, independent of consumer Effect Debug settings. Minimum-level filtering still applies.
      * Records use SDK-owned event/phase names, attempt counts, delayMs, identify/resume modes and safe failure classifications.
+     * Connection records include the locally assigned shard ID when more than one shard is configured. They do not report cross-process or whole-bot state.
      * These are best-effort diagnostics, not a lossless event stream or an acknowledgement of log persistence
      */
     readonly development?: boolean

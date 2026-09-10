@@ -24,8 +24,8 @@ export interface CustomStatusInput {
 
 /**
  * The latest desired bot presence. `customStatus: null` requests clearing the custom status, while omission preserves it at Fluxer.
- * Accepted input is retained only in this client process and is sent or restored after the next READY or RESUMED.
- * Local acceptance does not confirm that Fluxer accepted the update or that another user observed it
+ * Accepted input is retained only in this client process and fans out to every live locally owned shard after READY or RESUMED.
+ * Local acceptance is not an atomic multi-shard provider acknowledgement and does not confirm that another user observed the update
  */
 export interface PresenceInput {
     /** The status to retain and publish */
@@ -34,7 +34,7 @@ export interface PresenceInput {
     readonly customStatus?: CustomStatusInput | null
 }
 
-/** Locally invalid or over-budget presence request. It does not indicate whether Fluxer accepted a previously valid update */
+/** Locally invalid or over-budget presence request. A member selection for a guild not assigned to this client is input, not a silently retained request */
 export class PresenceError extends Error {
     /** Stable discriminant for default Result failures */
     readonly _tag = "PresenceError"

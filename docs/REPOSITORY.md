@@ -16,7 +16,8 @@ The documentation website remains a scaffold
 | --- | --- |
 | [index.ts](/projects/sdk/src/index.ts) | Default public API and member documentation |
 | [effect.ts](/projects/sdk/src/effect.ts) | Effect-native public API and member documentation |
-| [client.ts](/projects/sdk/src/internal/client.ts) | Client lifetime and recovery ownership |
+| [client.ts](/projects/sdk/src/internal/client.ts) | Client lifetime, per-shard recovery supervision and shared Identify pacing |
+| [sharding.ts](/projects/sdk/src/internal/sharding.ts) | Immutable local shard-plan validation and guild ownership calculation |
 | [application.ts](/projects/sdk/src/internal/application.ts) | Current bot-token application allowlist projection, using shared REST without retention or application management |
 | [discovery.ts](/projects/sdk/src/internal/discovery.ts) | Hosted service discovery |
 | [effect-failures.ts](/projects/sdk/src/internal/effect-failures.ts) | REST/discovery cause-preserving error translation and deadlines, including cleanup defects during interruption |
@@ -44,6 +45,9 @@ The documentation website remains a scaffold
 | [permissions.ts](/projects/sdk/src/internal/permissions.ts) | Local permission-bit calculation and explicit fresh-resource composition, not action authorization |
 | [user-cache.ts](/projects/sdk/src/internal/user-cache.ts) | Optional account/private-conversation retention, conflicting reads and lifecycle invalidation |
 | [presence.ts](/projects/sdk/src/internal/presence.ts) | Bot presence intent, bounded member selections, reconnect restoration and incoming presence projection without a cache |
+| [counts.ts](/projects/sdk/src/internal/counts.ts) | Fresh guild/channel count requests, shard scatter/gather, private nonce correlation and interruption/gap cleanup without count retention |
+| [member-chunks.ts](/projects/sdk/src/internal/member-chunks.ts) | One on-demand member stream, chunk validation, bounded buffering, deadline and interruption/gap cleanup without roster retention |
+| [gateway-requests.ts](/projects/sdk/src/internal/gateway-requests.ts) | Shared four-slot local admission for member and count requests, distinct from provider-side worker state |
 | [multipart.ts](/projects/sdk/src/internal/multipart.ts) | Bounded webhook multipart body streaming over admitted file snapshots |
 | [channels.ts](/projects/sdk/src/internal/channels.ts) | Guild channel request validation and REST/event projection, with scheduling owned by shared REST |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
@@ -172,6 +176,9 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live` | Hosted protocol discovery, readiness and heartbeats | No server-content changes |
 | `test:live:sdk` | Built default/native client connection and shutdown | No server-content changes |
 | `test:live:application` | Built default/native current-bot application allowlist and hosted installation-link construction | Read-only; no navigation, authorization, or server-content changes |
+| `test:live:consumer-operations` | Account-banner URLs, attachment deletion, exact bot-role replacement and fresh gateway counts through both built APIs | Temporary channel/messages and one zero-permission role assigned only to the test bot, plus test-owned response loss and socket interruption |
+| `test:live:member-chunks` | Streamed member selection, optional presence, full-list readback and failure/recovery through both built APIs | Read-only guild/member requests, test-owned reply drops and one socket interruption per mode, no server-content changes |
+| `test:live:sharding` | Two-shard readiness, member routing, isolated recovery and partial-startup cancellation through both built APIs | Read-only sandbox requests, one test-owned shard-socket interruption and one cancelled startup per mode, no content or account-presence changes |
 | `test:live:presence` | Interactive selected-guild member presence delivery, Op14 restore after a test-owned socket interruption and cleanup through both built APIs | No account-state changes by the harness; the authorized participant performs visible status transitions and the harness interrupts only its own socket |
 | `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
 | `test:live:consumer-features` | Forward snapshots, attachment-backed embeds, retained file metadata, non-voice flags, bot profile reads and lost-response reconciliation through both APIs | Journaled temporary channel/messages and uploads, test-owned response loss; profile GET may trigger provider expired-premium cleanup |
@@ -209,6 +216,21 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:attachments` | Uploads, binary readback, file edits, events/cache/collectors and recovery | Temporary channel/messages, 50 MiB file upload/download, file replacements and test-socket termination |
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools
+
+Sharding checks use that lock and the same sandbox identity verification, without a recovery journal or remote resource creation.
+The harness explicitly skips owning-shard count replies while the provider fix remains undeployed; a passing run does not establish that path.
+Recheck deployment before enabling that stage. Local transport tests cover the GitHub reply contract in the meantime
+
+Member-chunk checks require a sandbox with fewer than 1,000 members and compare the response with one fresh REST member page.
+The harness can wait once for a confirmed full-list rate limit left by a prior mode, then make a new request.
+It reports whether the hosted gateway actually rejects an immediate repeat; acceptance does not verify live rate-limit handling.
+It creates no resources or recovery journal and does not change account presence.
+Multi-batch arrival, missing-batch and slow-reader behavior use local transport tests rather than claiming a large live-guild run
+
+Consumer-operation checks preserve the designated bot's original roles in `.env.test.consumer-operations.local`, alongside test-role and channel markers.
+Recovery restores only the recorded baseline plus the unchanged zero-permission test role, verifies restoration and resource removal, then deletes the journal.
+An unexpected role assignment or altered test resource retains the journal for reconciliation.
+Fresh reads detect existing conflicts, but Fluxer's role PATCH has no conditional precondition and cannot make the read-and-write sequence atomic
 
 Consumer-feature checks use the same sandbox identity checks and an ignored `.env.test.consumer-features.local` journal.
 Recovery resolves only the journaled channel marker and verifies channel removal before deleting the journal.

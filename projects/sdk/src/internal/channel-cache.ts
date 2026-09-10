@@ -15,6 +15,8 @@ export type ChannelCacheRequest = {
 export type ChannelCacheGuard = ChannelCacheRequest & {
     readonly generation: number
     invalid: boolean
+    /** A scoped gateway gap made this read stale; it must not evict a newer post-gap observation */
+    gapped: boolean
     success: boolean
 }
 
@@ -65,6 +67,7 @@ export class ChannelCache {
             ...request,
             generation: this.#generation,
             invalid: false,
+            gapped: false,
             success: false,
         }
         for (const other of this.#requests) {
@@ -85,7 +88,7 @@ export class ChannelCache {
             this.gap()
             return
         }
-        if (guard.generation !== this.#generation) return
+        if (guard.generation !== this.#generation || guard.gapped) return
         // Request decoders own the result shape and freezing; void responses never fabricate a snapshot.
         const values: readonly GuildChannel[] =
             result === undefined
@@ -106,7 +109,7 @@ export class ChannelCache {
     }
 
     missing(guard: ChannelCacheGuard) {
-        if (this.#closed || (!guard.mutation && guard.generation !== this.#generation)) return
+        if (this.#closed || (!guard.mutation && (guard.generation !== this.#generation || guard.gapped))) return
         this.#evict(selection(guard), guard)
         this.#schedule()
     }
@@ -146,11 +149,20 @@ export class ChannelCache {
         this.#schedule()
     }
 
-    gap() {
-        this.#generation++
-        for (const guard of this.#requests) guard.invalid = true
-        this.#entries.clear()
-        this.#bytes = 0
+    gap(affects?: (guildId: string | null | undefined) => boolean) {
+        if (!affects) {
+            this.#generation++
+            for (const guard of this.#requests) guard.invalid = true
+            this.#entries.clear()
+            this.#bytes = 0
+        } else {
+            for (const guard of this.#requests)
+                if (affects(guard.guildId)) {
+                    guard.invalid = true
+                    guard.gapped = true
+                }
+            for (const entry of this.#entries.values()) if (affects(entry.value.guildId)) this.#remove(entry)
+        }
         this.#schedule()
     }
 

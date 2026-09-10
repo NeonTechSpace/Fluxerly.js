@@ -662,6 +662,45 @@ export class RestOwner {
         return this.#manage(token, "delete", target, undefined, options, async () => {})
     }
 
+    deleteAttachment(
+        token: Redacted.Redacted<string>,
+        target: MessageReference,
+        attachmentId: string,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            if (!reference(target) || !identifier(attachmentId))
+                return Effect.fail(new RestFailure("input", "notDispatched"))
+            const ref = { channelId: target.channelId, id: target.id }
+            return this.#execute(
+                token,
+                {
+                    method: "DELETE",
+                    channel: ref.channelId,
+                    target: ref.id,
+                    path: `/channels/${ref.channelId}/messages/${ref.id}/attachments/${attachmentId}`,
+                    body: undefined,
+                    status: 204,
+                    decode: async () => {},
+                },
+                options,
+            )
+        }).pipe(
+            mapFailureCause((error) =>
+                error instanceof RestFailure
+                    ? new MessageOperationError(
+                          "deleteAttachment",
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                      )
+                    : error,
+            ),
+        )
+    }
+
     deleteMany(
         token: Redacted.Redacted<string>,
         channelId: string,

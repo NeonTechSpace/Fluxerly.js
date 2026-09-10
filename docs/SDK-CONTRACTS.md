@@ -27,7 +27,7 @@ Never include credentials, private payloads or arbitrary upstream errors in defa
 ## Connection and recovery
 
 Creation validates local configuration without opening sockets or starting background work.
-The client owns its credential reference, session, recovery loop and retained lifetime outcome.
+The client owns its credential reference, per-shard sessions and recovery loops, and one retained lifetime outcome.
 Connection readiness requires authentication and the required READY processing, not merely an open socket
 
 Startup, a managed run and an outcome observer have distinct ownership.
@@ -37,10 +37,18 @@ An expected standalone startup failure permits reuse only after cleanup, while a
 Cancellation of one outcome observer must not consume the retained outcome or stop other observers.
 Coordinate initial state delivery with subscription setup, and keep public state observation bounded rather than treating it as a lossless transition log
 
-Use separate startup and established-session retry policies, with one recovery loop rather than nested startup loops.
+Use separate startup and established-session retry policies, with one recovery loop per assigned shard rather than nested startup loops.
 Respect server-required waits and stop on permanent failures, cancellation or SDK defects.
 Do not count socket-cleanup time as healthy connected time when resetting recovery backoff.
 Attempt session resumption before fresh identification when the protocol permits it, without treating successful replay as lossless delivery
+
+The [client owner](/projects/sdk/src/internal/client.ts) supervises assigned sessions as one lifetime and paces actual Identify sends within that client.
+The immutable [shard plan](/projects/sdk/src/internal/sharding.ts) owns guild routing; do not infer ownership from cache contents or discovery sizing hints.
+Session state, sequence, heartbeat timing and reconnect backoff belong to one shard; REST admission, event-subscription budgets and cache limits belong to the client
+
+Keep a healthy shard's work independent of another shard's transient gap, while awaiting every assigned shard for initial readiness.
+Group startup has one deadline, including Identify waits, and terminal supervision must preserve sibling cleanup failures.
+Cross-process assignment, Identify coordination and distributed REST limits remain application-owned
 
 Shutdown stops startup and recovery, shares cleanup across concurrent callers and awaits actual resource release.
 Do not report timeout or cancellation completion while abandoning an owned socket
@@ -124,6 +132,10 @@ Fluxer is the source of truth, not the optional client-owned memory cache.
 [Cache intake](/projects/sdk/src/internal/cache.ts) integrates REST and gateway observations before subscriber dispatch.
 Bound retained data and conflict metadata, and clear pre-gap observations even after session resumption
 
+Known guild ownership scopes gap invalidation to its shard; known private-conversation observations belong to shard zero.
+Unknown ownership remains conservative, including channel-only in-flight reads, without adding an unbounded channel-to-guild index.
+Pre-gap requests must neither repopulate invalid snapshots nor evict healthy post-gap observations on late completion
+
 [Cache reporting](/projects/sdk/src/internal/cache-reports.ts) owns native context and one active custom report per client.
 Neither retention nor reporting failure may change a successful REST result or event delivery
 
@@ -132,7 +144,9 @@ Neither retention nor reporting failure may change a successful REST result or e
 The [collector owner](/projects/sdk/src/internal/collector.ts) selects the channel before buffering and runs synchronous filters outside gateway decoding.
 It owns separate pending-input and retained-result budgets, without REST or cache reads
 
-Observe internal lifecycle transitions rather than the coalescing public state stream so a brief gap cannot be missed
+Observe internal lifecycle transitions rather than the coalescing public state stream so a brief gap cannot be missed.
+Caller-supplied guild context selects the owning shard's lifecycle and source-filtered event intake; channel-only collectors retain aggregate gap handling.
+Validate that context locally without hidden REST or cache reads, and discard conflicting source events before buffering
 
 Optional progress work runs in a collector-owned fiber under the client scope, with the registration context.
 Client shutdown and registration-scope closure wait for that work, while stopping intake prevents later callbacks
@@ -141,6 +155,17 @@ Terminal cleanup releases intake, state and signal listeners, timers, queued pay
 Application-held successful results may outlive collector cleanup
 
 Do not change existing subscription recovery behavior or imply atomic registration and remote sending
+
+## Gateway request ownership
+
+The [gateway request budget](/projects/sdk/src/internal/gateway-requests.ts) is client-wide, not multiplied by local shard count.
+The [count owner](/projects/sdk/src/internal/counts.ts) holds one logical admission lease across shard fragments and releases every fragment on terminal failure or interruption.
+Provider omissions are result data, not a substitute for local routing, readiness or transport failures
+
+The [member-chunk owner](/projects/sdk/src/internal/member-chunks.ts) permits one active stream per client and fails it only for its owning shard's gap or client closure
+
+The [presence owner](/projects/sdk/src/internal/presence.ts) retains shared caller intent and bounded member selections, with per-shard transports and write pacing.
+No gateway request path retains a roster or adds a distributed coordinator
 
 ## Logging
 

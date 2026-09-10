@@ -39,6 +39,7 @@ export interface Diagnostic {
     readonly delayMs?: number
     readonly mode?: "identify" | "resume"
     readonly failure?: string
+    readonly shardId?: number
 }
 
 export class ClientLogging {

@@ -39,6 +39,7 @@ export interface GuildRequest<A> {
 }
 
 const nullableText = (value: unknown) => value === undefined || value === null || typeof value === "string"
+const positiveIdentifier = (value: unknown): value is string => identifier(value) && value !== "0"
 const int32 = (value: unknown): value is number =>
     typeof value === "number" && Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
 const nonNegativeInt32 = (value: unknown): value is number => int32(value) && value >= 0
@@ -369,6 +370,42 @@ export function memberNicknameEdit(
         method: "PATCH",
         status: 200,
         json: JSON.stringify({ nick: nickname }),
+        decode: (value) => {
+            const member = decodeMember(value, guildId)
+            return member?.userId === userId ? member : undefined
+        },
+    }
+}
+
+/** Build the complete role-set PATCH for one member without reading or merging an existing role set */
+export function memberRolesSet(
+    target: MemberReference,
+    roleIds: readonly string[],
+): GuildRequest<GuildMember> | undefined {
+    if (
+        !record(target) ||
+        !positiveIdentifier(target.guildId) ||
+        !positiveIdentifier(target.userId) ||
+        !Array.isArray(roleIds) ||
+        roleIds.length > 250
+    )
+        return undefined
+    const roles = [...roleIds]
+    if (
+        !roles.every(positiveIdentifier) ||
+        new Set(roles).size !== roles.length ||
+        roles.some((roleId) => roleId === target.guildId)
+    )
+        return undefined
+    const { guildId, userId } = target
+    return {
+        guildId,
+        bucket: "guild:member:roles:set",
+        cache: { selection: { kind: "members", guildId, id: userId }, mutation: true },
+        path: `/guilds/${guildId}/members/${userId}`,
+        method: "PATCH",
+        status: 200,
+        json: JSON.stringify({ roles }),
         decode: (value) => {
             const member = decodeMember(value, guildId)
             return member?.userId === userId ? member : undefined

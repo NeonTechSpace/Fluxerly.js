@@ -6,6 +6,13 @@ import type { MessageReaction, ReactionEmojiInput } from "./reactions.js"
 
 /** Settings for one bounded, future-message collection in one channel. No history or automatic connection */
 export interface CollectorOptions extends EventBufferOptions {
+    /**
+     * Optional positive uint64 owning guild for shard-local gateway intake, for example `{ guildId: "123" }`.
+     * The caller must supply the guild that owns the channel. Fluxerly delegates source-shard filtering to gateway intake and does not fetch, cache or otherwise verify channel membership.
+     * A known conflicting event guild is discarded. Events without guild context are not proof that the channel is private.
+     * Omission retains conservative aggregate recovery for a channel with unknown guild scope: any gateway recovery ends this collector
+     */
+    readonly guildId?: string
     /** Accepted message count that completes successfully. Positive safe integer, default 1 */
     readonly maxMessages?: number
     /** Total listening lifetime in milliseconds, not renewed by replies. Integer 1 through 2,147,483,647, default 30,000 */
@@ -43,6 +50,13 @@ export interface CollectorResult {
 
 /** Future addition observations for one message, not existing reactors or current vote totals */
 export interface ReactionCollectorOptions extends EventBufferOptions {
+    /**
+     * Optional positive uint64 owning guild for shard-local gateway intake, for example `{ guildId: "123" }`.
+     * The caller must supply the guild that owns the target message's channel. Fluxerly delegates source-shard filtering to gateway intake and does not fetch, cache or otherwise verify membership.
+     * A known conflicting event guild is discarded. Events without guild context are not proof that the message is private.
+     * Omission retains conservative aggregate recovery for a target with unknown guild scope: any gateway recovery ends this collector
+     */
+    readonly guildId?: string
     /** Select one emoji before filter and onReaction; omission permits any emoji.
      * Uses addReaction's literal Unicode or { name, id } input, copied at registration.
      * Unicode matches exact text with no custom ID, without variation-selector or skin-tone normalization.
@@ -95,7 +109,10 @@ export class CollectorError extends Error {
     /** Stable discriminator for collector-local failures */
     readonly _tag = "CollectorError"
     constructor(
-        /** Registration requires Connected. Any later recovery ends collection. Filter and budget failures are permanent */
+        /**
+         * Registration requires Connected. With guildId, its owned shard must be Connected; without it, the aggregate gateway must be Connected.
+         * A later recovery of the selected scope ends collection. Filter and budget failures are permanent
+         */
         readonly reason: "notConnected" | "connectionLost" | "filter" | "handler" | "overflow",
         /** Exceeded budget, or null for a non-budget failure */
         readonly limit: "maxBytes" | "maxPendingMessages" | "maxPendingBytes" | null = null,

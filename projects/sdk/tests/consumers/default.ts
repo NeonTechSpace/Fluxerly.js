@@ -11,6 +11,8 @@ import {
     type GuildChannel,
     type Client,
     type ConnectionState,
+    type ShardState,
+    type ShardingOptions,
     type Message,
     type MessageHistoryQuery,
     type MessageSearchContext,
@@ -35,6 +37,20 @@ import {
     type RoleHierarchyInput,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+export function shardingTypes(client: Client) {
+    const plan: ShardingOptions = { totalShards: 2, shardIds: [0, 1] }
+    const states: readonly ShardState[] = client.shards
+    // @ts-expect-error Client shard snapshots cannot be replaced
+    client.shards = []
+    // @ts-expect-error Snapshot arrays cannot be mutated
+    states.push({ shardId: 2, state: "Connected", gatewayLatencyMs: null })
+    // @ts-expect-error Shard totals are numeric
+    createClient({ token: "fixture-only", sharding: { totalShards: "2" } })
+    client.messages.collect("20", { guildId: "40" })
+    client.messages.collectReactions({ id: "10", channelId: "20" }, { guildId: "40" })
+    return createClient({ token: "fixture-only", sharding: plan })
+}
 
 export async function useConsumerFeatures(client: Client, channelId: string, source: MessageReference, userId: string) {
     const input: ForwardMessageInput = { source, attachmentIds: [], embedIndices: [0] }

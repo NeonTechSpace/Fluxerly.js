@@ -206,28 +206,37 @@ function fitsGatewayMemberPayload(guildId: string, members: readonly string[]) {
     )
 }
 
+type MemberSelection = { readonly members: readonly string[]; readonly shardId: number }
+
+type PresenceSession = {
+    readonly shardId: number
+    readonly send: (update: GatewayPresenceUpdate) => void
+    readonly sendMemberSubscriptions: ((subscriptions: GatewayPresenceMemberSubscriptions) => void) | undefined
+    sentVersion: number
+    nextSendAt: number
+    timer: unknown
+    readonly memberDirty: Set<string>
+    nextMemberSendAt: number
+    memberTimer: unknown
+}
+
 /**
- * Owns outgoing bot status and bounded caller-selected member subscriptions, each with one coalescing timer.
- * Outgoing status writes are separated by 4,000 ms per connection; member replacement frames by 125 ms.
- * Touched guild IDs survive resumable gaps so an uncertain empty clear can be retried without retaining member snapshots
+ * Owns one desired bot presence and bounded caller-selected member subscriptions across ready gateway shards.
+ * Status and member-write spacing are per ready connection. Member selections and uncertain clears retain their owning shard
  */
 export class PresenceOwner implements PresenceGatewayOwner {
     #intent: FrozenPresence | undefined
     #version = 0
-    #sentVersion = 0
-    #nextSendAt = 0
-    #send: ((update: GatewayPresenceUpdate) => void) | undefined
-    #timer: unknown
-    #memberSelections = new Map<string, readonly string[]>()
+    #sessions = new Map<number, PresenceSession>()
+    #memberSelections = new Map<string, MemberSelection>()
     #memberCount = 0
-    #memberTouched = new Set<string>()
-    #memberDirty = new Set<string>()
-    #sendMemberSubscriptions: ((subscriptions: GatewayPresenceMemberSubscriptions) => void) | undefined
-    #memberTimer: unknown
-    #nextMemberSendAt = 0
+    #memberTouched = new Map<string, number>()
     #closed = false
 
-    constructor(private readonly timer: PresenceTimer = clock) {}
+    constructor(
+        private readonly timer: PresenceTimer = clock,
+        private readonly routeGuild: (guildId: string) => number | undefined = () => 0,
+    ) {}
 
     /** Accept, freeze and coalesce a valid local intent. False means invalid input or permanent owner closure */
     set(value: unknown): boolean {
@@ -239,42 +248,55 @@ export class PresenceOwner implements PresenceGatewayOwner {
                 ? Object.freeze({ status: next.status, customStatus: this.#intent.customStatus })
                 : next
         this.#version += 1
-        this.#schedule()
+        for (const session of this.#sessions.values()) this.#schedule(session)
         return true
     }
 
     /**
-     * Attaches one ready gateway session. A fresh identify has no retained provider subscriptions; a resumed session
-     * conservatively replays previously attempted empty clears because local socket completion is not a provider acknowledgement
+     * Attaches one ready gateway shard. A replacement detaches only that shard's timers and does not affect other shards.
+     * A fresh identify drops its prior clear intents, while a resume retries the latest attempted clear on the owning shard
      */
     attach(
         send: (update: GatewayPresenceUpdate) => void,
         sendMemberSubscriptions?: (subscriptions: GatewayPresenceMemberSubscriptions) => void,
         mode: "identify" | "resume" = "identify",
+        shardId = 0,
     ): void {
-        if (this.#closed) return
-        this.#cancel()
-        this.#cancelMemberTimer()
-        this.#send = send
-        this.#sentVersion = 0
-        this.#nextSendAt = 0
-        this.#schedule()
-        this.#sendMemberSubscriptions = sendMemberSubscriptions
-        this.#nextMemberSendAt = 0
-        if (mode === "identify") this.#memberTouched.clear()
-        this.#memberDirty.clear()
-        for (const guildId of this.#memberSelections.keys()) this.#memberDirty.add(guildId)
-        if (mode === "resume") for (const guildId of this.#memberTouched) this.#memberDirty.add(guildId)
-        this.#scheduleMembers()
+        if (this.#closed || !validShard(shardId)) return
+        this.detach(shardId)
+        const session: PresenceSession = {
+            shardId,
+            send,
+            sendMemberSubscriptions,
+            sentVersion: 0,
+            nextSendAt: 0,
+            timer: undefined,
+            memberDirty: new Set(),
+            nextMemberSendAt: 0,
+            memberTimer: undefined,
+        }
+        this.#sessions.set(shardId, session)
+        this.#schedule(session)
+        if (mode === "identify") {
+            for (const [guildId, ownerShard] of this.#memberTouched)
+                if (ownerShard === shardId) this.#memberTouched.delete(guildId)
+        }
+        for (const [guildId, selection] of this.#memberSelections)
+            if (selection.shardId === shardId) session.memberDirty.add(guildId)
+        if (mode === "resume")
+            for (const [guildId, ownerShard] of this.#memberTouched)
+                if (ownerShard === shardId) session.memberDirty.add(guildId)
+        this.#scheduleMembers(session)
     }
 
-    detach(): void {
-        this.#cancel()
-        this.#cancelMemberTimer()
-        this.#send = undefined
-        this.#sendMemberSubscriptions = undefined
-        this.#nextSendAt = 0
-        this.#nextMemberSendAt = 0
+    /** Detach one shard or all currently attached shards without releasing global presence intent */
+    detach(shardId?: number): void {
+        if (shardId === undefined) {
+            for (const session of [...this.#sessions.values()]) this.#detachSession(session)
+            return
+        }
+        const session = this.#sessions.get(shardId)
+        if (session) this.#detachSession(session)
     }
 
     /** Release retained presence and member-selection intent with outstanding timers during client shutdown */
@@ -286,7 +308,6 @@ export class PresenceOwner implements PresenceGatewayOwner {
         this.#memberSelections.clear()
         this.#memberCount = 0
         this.#memberTouched.clear()
-        this.#memberDirty.clear()
     }
 
     /**
@@ -299,9 +320,14 @@ export class PresenceOwner implements PresenceGatewayOwner {
         if (members === undefined)
             return Array.isArray(memberIds) && memberIds.length > maxMembersPerGuild ? "limit" : "input"
         if (!fitsGatewayMemberPayload(guildId, members)) return "limit"
+        const routedShard = this.routeGuild(guildId)
+        if (!validShard(routedShard)) return "input"
 
         const previous = this.#memberSelections.get(guildId)
-        if (members.length > 0 && this.#memberCount - (previous?.length ?? 0) + members.length > maxSelectedMemberIds)
+        if (
+            members.length > 0 &&
+            this.#memberCount - (previous?.members.length ?? 0) + members.length > maxSelectedMemberIds
+        )
             return "limit"
         if (
             members.length > 0 &&
@@ -314,92 +340,128 @@ export class PresenceOwner implements PresenceGatewayOwner {
         if (members.length === 0) {
             if (previous !== undefined) {
                 this.#memberSelections.delete(guildId)
-                this.#memberCount -= previous.length
+                this.#memberCount -= previous.members.length
             }
-            if (this.#memberTouched.has(guildId)) this.#memberDirty.add(guildId)
-            else this.#memberDirty.delete(guildId)
+            const ownerShard = previous?.shardId ?? this.#memberTouched.get(guildId) ?? routedShard
+            if (this.#memberTouched.has(guildId)) this.#markMemberDirty(ownerShard, guildId)
+            else this.#sessions.get(ownerShard)?.memberDirty.delete(guildId)
         } else {
-            this.#memberSelections.set(guildId, members)
-            this.#memberCount += members.length - (previous?.length ?? 0)
-            this.#memberDirty.add(guildId)
+            this.#memberSelections.set(guildId, { members, shardId: routedShard })
+            this.#memberCount += members.length - (previous?.members.length ?? 0)
+            this.#markMemberDirty(routedShard, guildId)
         }
-        this.#scheduleMembers()
         return undefined
     }
 
     /** Replays the latest selected or cleared guild intent after its gateway snapshot becomes available without retaining a guild inventory */
     guildCreate(guildId: string): void {
-        if (!this.#memberSelections.has(guildId) && !this.#memberTouched.has(guildId)) return
-        this.#memberDirty.add(guildId)
-        this.#scheduleMembers()
+        const shardId = this.#memberSelections.get(guildId)?.shardId ?? this.#memberTouched.get(guildId)
+        if (shardId !== undefined) this.#markMemberDirty(shardId, guildId)
     }
 
     /** Drops intent only after an independently confirmed membership departure */
     forgetMembers(guildId: string): void {
-        const previous = this.#memberSelections.get(guildId)
-        if (previous !== undefined) {
+        const selection = this.#memberSelections.get(guildId)
+        const touchedShard = this.#memberTouched.get(guildId)
+        if (selection !== undefined) {
             this.#memberSelections.delete(guildId)
-            this.#memberCount -= previous.length
+            this.#memberCount -= selection.members.length
+            this.#sessions.get(selection.shardId)?.memberDirty.delete(guildId)
         }
-        this.#memberTouched.delete(guildId)
-        this.#memberDirty.delete(guildId)
+        if (touchedShard !== undefined) {
+            this.#memberTouched.delete(guildId)
+            this.#sessions.get(touchedShard)?.memberDirty.delete(guildId)
+        }
     }
 
-    #schedule() {
-        if (!this.#send || !this.#intent || this.#sentVersion === this.#version || this.#timer !== undefined) return
-        const delay = Math.max(0, this.#nextSendAt - this.timer.now())
-        this.#timer = this.timer.set(() => {
-            this.#timer = undefined
-            this.#flush()
+    #detachSession(session: PresenceSession) {
+        this.#cancel(session)
+        this.#cancelMemberTimer(session)
+        if (this.#sessions.get(session.shardId) === session) this.#sessions.delete(session.shardId)
+    }
+
+    #schedule(session: PresenceSession) {
+        if (
+            this.#sessions.get(session.shardId) !== session ||
+            !this.#intent ||
+            session.sentVersion === this.#version ||
+            session.timer !== undefined
+        )
+            return
+        const delay = Math.max(0, session.nextSendAt - this.timer.now())
+        session.timer = this.timer.set(() => {
+            session.timer = undefined
+            this.#flush(session)
         }, delay)
     }
 
-    #flush() {
-        const send = this.#send
+    #flush(session: PresenceSession) {
         const intent = this.#intent
-        if (!send || !intent || this.#sentVersion === this.#version) return
-        const version = this.#version
-        send(presenceUpdate(activePresence(intent)))
-        this.#sentVersion = version
-        this.#nextSendAt = this.timer.now() + presenceIntervalMs
-        this.#schedule()
+        if (this.#sessions.get(session.shardId) !== session || !intent || session.sentVersion === this.#version) return
+        session.send(presenceUpdate(activePresence(intent)))
+        session.sentVersion = this.#version
+        session.nextSendAt = this.timer.now() + presenceIntervalMs
+        this.#schedule(session)
     }
 
-    #cancel() {
-        if (this.#timer === undefined) return
-        this.timer.clear(this.#timer)
-        this.#timer = undefined
+    #cancel(session: PresenceSession) {
+        if (session.timer === undefined) return
+        this.timer.clear(session.timer)
+        session.timer = undefined
     }
 
     #trackedGuilds() {
-        return new Set([...this.#memberSelections.keys(), ...this.#memberTouched]).size
+        return new Set([...this.#memberSelections.keys(), ...this.#memberTouched.keys()]).size
     }
 
-    #scheduleMembers() {
-        if (!this.#sendMemberSubscriptions || this.#memberDirty.size === 0 || this.#memberTimer !== undefined) return
-        const delay = Math.max(0, this.#nextMemberSendAt - this.timer.now())
-        this.#memberTimer = this.timer.set(() => {
-            this.#memberTimer = undefined
-            this.#flushMembers()
+    #markMemberDirty(shardId: number, guildId: string) {
+        const session = this.#sessions.get(shardId)
+        if (!session) return
+        session.memberDirty.add(guildId)
+        this.#scheduleMembers(session)
+    }
+
+    #scheduleMembers(session: PresenceSession) {
+        if (
+            this.#sessions.get(session.shardId) !== session ||
+            !session.sendMemberSubscriptions ||
+            session.memberDirty.size === 0 ||
+            session.memberTimer !== undefined
+        )
+            return
+        const delay = Math.max(0, session.nextMemberSendAt - this.timer.now())
+        session.memberTimer = this.timer.set(() => {
+            session.memberTimer = undefined
+            this.#flushMembers(session)
         }, delay)
     }
 
-    #flushMembers() {
-        const send = this.#sendMemberSubscriptions
-        const guildId = this.#memberDirty.values().next().value as string | undefined
-        if (!send || guildId === undefined) return
-        this.#memberDirty.delete(guildId)
-        this.#memberTouched.add(guildId)
-        send(memberSubscriptions(guildId, this.#memberSelections.get(guildId) ?? []))
-        this.#nextMemberSendAt = this.timer.now() + memberSelectionIntervalMs
-        this.#scheduleMembers()
+    #flushMembers(session: PresenceSession) {
+        const guildId = session.memberDirty.values().next().value as string | undefined
+        if (
+            this.#sessions.get(session.shardId) !== session ||
+            !session.sendMemberSubscriptions ||
+            guildId === undefined
+        )
+            return
+        session.memberDirty.delete(guildId)
+        this.#memberTouched.set(guildId, session.shardId)
+        session.sendMemberSubscriptions(
+            memberSubscriptions(guildId, this.#memberSelections.get(guildId)?.members ?? []),
+        )
+        session.nextMemberSendAt = this.timer.now() + memberSelectionIntervalMs
+        this.#scheduleMembers(session)
     }
 
-    #cancelMemberTimer() {
-        if (this.#memberTimer === undefined) return
-        this.timer.clear(this.#memberTimer)
-        this.#memberTimer = undefined
+    #cancelMemberTimer(session: PresenceSession) {
+        if (session.memberTimer === undefined) return
+        this.timer.clear(session.memberTimer)
+        session.memberTimer = undefined
     }
+}
+
+function validShard(value: unknown): value is number {
+    return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 }
 
 function activePresence(intent: FrozenPresence): FrozenPresence {
