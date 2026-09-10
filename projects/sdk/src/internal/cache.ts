@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util"
+import type { CacheDiagnostic } from "#sdk/client"
 import type { Message, MessageReference } from "#sdk/messages"
 import type { CachePolicyErrorReport } from "#sdk/cache"
 import { validAge, type CacheConfiguration } from "./configuration.js"
@@ -20,15 +21,47 @@ export class MessageCache {
     #generation = 0
     #timer: ReturnType<typeof setTimeout> | undefined
     #closed = false
+    readonly #limits: { readonly maxEntries: number; readonly maxBytes: number } | undefined
 
     constructor(
         private settings: CacheConfiguration | undefined,
         private report: (report: CachePolicyErrorReport) => void,
         private readonly now: () => number,
-    ) {}
+    ) {
+        this.#limits = settings && Object.freeze({ maxEntries: settings.maxEntries, maxBytes: settings.maxBytes })
+    }
 
     get generation() {
         return this.#generation
+    }
+
+    diagnostics(): CacheDiagnostic {
+        this.#purge()
+        this.#schedule()
+        return {
+            configured: this.#limits !== undefined,
+            retainedEntries: this.#entries.size,
+            accountedBytes: this.#bytes,
+            maxEntries: this.#limits?.maxEntries ?? null,
+            maxBytes: this.#limits?.maxBytes ?? null,
+        }
+    }
+
+    entries(limit: number): readonly Message[] {
+        this.#purge()
+        this.#schedule()
+        const entries: Message[] = []
+        for (const entry of this.#entries.values()) {
+            entries.push(entry.message)
+            if (entries.length === limit) break
+        }
+        return Object.freeze(entries)
+    }
+
+    /** Release only this client's retained snapshots and block reads that began before this point from refilling them */
+    clear() {
+        if (this.#closed) return
+        this.gap()
     }
 
     get(target: MessageReference): Message | undefined {

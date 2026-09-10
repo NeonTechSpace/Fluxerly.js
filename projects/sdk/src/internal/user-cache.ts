@@ -1,4 +1,5 @@
 import type { ResourceCacheSettings } from "#sdk/cache"
+import type { CacheDiagnostic } from "#sdk/client"
 import type { DirectMessageChannel, User } from "#sdk/users"
 
 export type UserResources = { users: User; directMessages: DirectMessageChannel }
@@ -46,6 +47,33 @@ export class UserCache {
     get<K extends Kind>(kind: K, id: string): UserResources[K] | undefined {
         this.#expire()
         return this.#entries[kind].get(id)?.value as UserResources[K] | undefined
+    }
+    diagnostics(kind: Kind): CacheDiagnostic {
+        this.#expire()
+        this.#schedule()
+        const settings = this.settings[kind]
+        return {
+            configured: settings !== undefined,
+            retainedEntries: this.#entries[kind].size,
+            accountedBytes: [...this.#entries[kind].values()].reduce((total, entry) => total + entry.bytes, 0),
+            maxEntries: settings?.maxEntries ?? null,
+            maxBytes: settings?.maxBytes ?? null,
+        }
+    }
+    entries<K extends Kind>(kind: K, limit: number): readonly UserResources[K][] {
+        this.#expire()
+        this.#schedule()
+        const entries: UserResources[K][] = []
+        for (const entry of this.#entries[kind].values()) {
+            entries.push(entry.value as UserResources[K])
+            if (entries.length === limit) break
+        }
+        return Object.freeze(entries)
+    }
+    /** Release retained account/conversation observations and make reads begun earlier ineligible to restore them */
+    clear() {
+        if (this.#closed) return
+        this.gap()
     }
     invalidate(kind: Kind) {
         this.#generation[kind]++

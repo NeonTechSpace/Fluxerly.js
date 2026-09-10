@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util"
 import type { ResourceCacheSettings } from "#sdk/cache"
+import type { CacheDiagnostic } from "#sdk/client"
 import type { GuildChannel } from "#sdk/channels"
 import type { EventMap, EventName } from "#sdk/events"
 import { identifier, record } from "./message.js"
@@ -60,6 +61,35 @@ export class ChannelCache {
         this.#entries.delete(channelId)
         this.#entries.set(channelId, entry)
         return entry.value
+    }
+
+    diagnostics(): CacheDiagnostic {
+        this.#purge()
+        this.#schedule()
+        return {
+            configured: true,
+            retainedEntries: this.#entries.size,
+            accountedBytes: this.#bytes,
+            maxEntries: this.settings.maxEntries,
+            maxBytes: this.settings.maxBytes,
+        }
+    }
+
+    entries(limit: number): readonly GuildChannel[] {
+        this.#purge()
+        this.#schedule()
+        const entries: GuildChannel[] = []
+        for (const entry of this.#entries.values()) {
+            entries.push(entry.value)
+            if (entries.length === limit) break
+        }
+        return Object.freeze(entries)
+    }
+
+    /** Release all retained channels and invalidate requests that could otherwise reintroduce an earlier observation */
+    clear() {
+        if (this.#closed) return
+        this.gap()
     }
 
     begin(request: ChannelCacheRequest): ChannelCacheGuard {

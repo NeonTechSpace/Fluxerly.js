@@ -38,6 +38,8 @@ export class ConfigurationError extends Error {
             | "maxEntries"
             | "maxBytes"
             | "maxAgeMs"
+            | "kind"
+            | "limit"
             | "collectorOptions"
             | "channelId"
             | "guildId"
@@ -49,7 +51,13 @@ export class ConfigurationError extends Error {
             | "maxMessages"
             | "maxReactions"
             | "message"
-            | "timeoutMs",
+            | "timeoutMs"
+            | "commands"
+            | "prefix"
+            | "parser"
+            | "command"
+            | "aliases"
+            | "cooldown",
         message: string,
     ) {
         super(message)
@@ -61,6 +69,7 @@ export class ConfigurationError extends Error {
 export type Operation =
     | "presence.set"
     | "presence.setMembers"
+    | "cache.entries"
     | "directMessages.send"
     | import("./application.js").BotApplicationOperation
     | import("./counts.js").CountOperation
@@ -72,6 +81,7 @@ export type Operation =
     | import("./guilds.js").GuildOperation
     | import("./pagination.js").PaginationOperation
     | "createClient"
+    | "commands"
     | "connect"
     | "run"
     | "waitForClose"
@@ -87,6 +97,7 @@ export type Operation =
     | "fetch"
     | "get"
     | "fetchHistory"
+    | "previewCleanup"
     | "search"
     | "fetchReactionUsers"
     | "pin"
@@ -101,6 +112,7 @@ export type Operation =
     | "delete"
     | "deleteAttachment"
     | "deleteMany"
+    | "cleanup"
     | "subscription.waitForClose"
     | "collect"
     | "collector.waitForClose"
@@ -217,6 +229,7 @@ export type DefectReason =
               | import("./message-errors.js").EventReadError
               | import("./message-errors.js").MessageError
               | import("./message-errors.js").MessageOperationError
+              | import("./message-cleanup.js").MessageCleanupError
               | import("./guilds.js").GuildOperationError
               | import("./channels.js").ChannelOperationError
               | import("./webhooks.js").WebhookOperationError

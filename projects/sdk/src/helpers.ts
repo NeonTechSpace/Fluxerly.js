@@ -81,12 +81,21 @@ export class HelperError extends Error {
             | "snowflakes.createdAt"
             | "snowflakes.boundary"
             | "permissionBits.has"
+            | "permissionBits.from"
+            | "permissionBits.hasAll"
+            | "permissionBits.hasAny"
+            | "permissionBits.missing"
+            | "permissionBits.inspect"
             | "permissionBits.toDecimal"
+            | "colors.parse"
+            | "colors.toHex"
+            | "colors.toRgb"
+            | "text.split"
             | "links.channel"
             | "links.message"
             | "links.installation",
-        /** Whether the ID, markup, time, bitfield, or route context was invalid */
-        readonly reason: "id" | "markup" | "time" | "permissionBits" | "link",
+        /** Invalid input category, without retaining the rejected value */
+        readonly reason: "id" | "markup" | "time" | "permissionBits" | "link" | "color" | "text" | "limit",
     ) {
         super(`Invalid input for ${operation}`)
         this.name = this._tag
@@ -95,6 +104,35 @@ export class HelperError extends Error {
 
 /** One known Fluxer permission name, mapped to the raw unsigned-64-bit `Permissions` constant */
 export type PermissionName = keyof typeof Permissions
+
+/** Frozen raw-bit inspection, without Administrator expansion or an authorization decision */
+export interface PermissionBitInspection {
+    /** Present known names in Permissions declaration order, not sorted by display label */
+    readonly names: readonly PermissionName[]
+    /** Present bits without a known name, preserved exactly rather than discarded */
+    readonly unknownBits: bigint
+}
+
+const permissionNames = Object.freeze(Object.keys(Permissions) as PermissionName[])
+const knownPermissionBits = Object.values(Permissions).reduce((bits, flag) => bits | flag, 0n)
+
+function validPermissionBits(bits: unknown): bits is bigint {
+    return typeof bits === "bigint" && bits >= 0n && bits <= largestPermissionBits
+}
+
+function namedPermissions(
+    names: readonly PermissionName[],
+    operation: HelperError["operation"],
+): Result<bigint, HelperError> {
+    if (!Array.isArray(names)) return err(helperError(operation, "permissionBits"))
+    let bits = 0n
+    for (const name of names) {
+        if (typeof name !== "string" || !Object.hasOwn(Permissions, name))
+            return err(helperError(operation, "permissionBits"))
+        bits |= Permissions[name as PermissionName]
+    }
+    return ok(bits)
+}
 
 const timestampStyleValues = new Set<string>(Object.values(TimestampStyles))
 
@@ -286,8 +324,12 @@ export const display = Object.freeze({
     },
 })
 
-/** Pure named permission-bit membership and wire-serialization helpers. They do not calculate effective permissions or authorise an action */
+/** Pure raw permission-set helpers. They never expand Administrator, calculate effective permissions, or authorize an action */
 export const permissionBits = Object.freeze({
+    /** Combine known names into an unsigned-64-bit bitfield. Empty input gives zero and duplicate names have no extra effect. Unknown names fail without coercion */
+    from(names: readonly PermissionName[]): Result<bigint, HelperError> {
+        return namedPermissions(names, "permissionBits.from")
+    },
     /** Check whether one named Fluxer permission is present in a valid unsigned-64-bit raw bitfield */
     has(bits: bigint, permission: PermissionName): Result<boolean, HelperError> {
         if (typeof bits !== "bigint" || bits < 0n || bits > largestPermissionBits)
@@ -296,6 +338,35 @@ export const permissionBits = Object.freeze({
             return err(helperError("permissionBits.has", "permissionBits"))
         const flag = Permissions[permission as PermissionName]
         return ok((bits & flag) === flag)
+    },
+    /** Test every requested known name against valid raw bits. Empty input succeeds. Unknown bits remain untouched and all names are validated even after a missing flag */
+    hasAll(bits: bigint, names: readonly PermissionName[]): Result<boolean, HelperError> {
+        if (!validPermissionBits(bits)) return err(helperError("permissionBits.hasAll", "permissionBits"))
+        return namedPermissions(names, "permissionBits.hasAll").map((required) => (bits & required) === required)
+    },
+    /** Test whether at least one requested known name is present in valid raw bits. Empty input is false and all names are validated even after a matching flag */
+    hasAny(bits: bigint, names: readonly PermissionName[]): Result<boolean, HelperError> {
+        if (!validPermissionBits(bits)) return err(helperError("permissionBits.hasAny", "permissionBits"))
+        return namedPermissions(names, "permissionBits.hasAny").map((required) => (bits & required) !== 0n)
+    },
+    /** Return missing requested names once each, in first-requested order. Input must contain valid raw bits and only known names. The frozen result never changes caller data */
+    missing(bits: bigint, names: readonly PermissionName[]): Result<readonly PermissionName[], HelperError> {
+        if (!validPermissionBits(bits)) return err(helperError("permissionBits.missing", "permissionBits"))
+        const required = namedPermissions(names, "permissionBits.missing")
+        if (required.isErr()) return err(required.error)
+        return ok(Object.freeze([...new Set(names)].filter((name) => (bits & Permissions[name]) !== Permissions[name])))
+    },
+    /** Inspect valid raw bits as a frozen known-name list and exact unknownBits. Neither unnamed flags nor Administrator are interpreted as additional grants */
+    inspect(bits: bigint): Result<PermissionBitInspection, HelperError> {
+        if (!validPermissionBits(bits)) return err(helperError("permissionBits.inspect", "permissionBits"))
+        return ok(
+            Object.freeze({
+                names: Object.freeze(
+                    permissionNames.filter((name) => (bits & Permissions[name]) === Permissions[name]),
+                ),
+                unknownBits: bits & (largestPermissionBits ^ knownPermissionBits),
+            }),
+        )
     },
     /** Serialize one valid unsigned-64-bit raw bitfield as Fluxer's canonical decimal JSON/path value */
     toDecimal(bits: bigint): Result<string, HelperError> {

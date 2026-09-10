@@ -80,6 +80,7 @@ describe("client creation through both public entry points", () => {
             expect(JSON.stringify(client)).not.toContain(token)
             expect(Object.keys(client)).toEqual([
                 "presence",
+                "cache",
                 "application",
                 "users",
                 "directMessages",
@@ -97,6 +98,7 @@ describe("client creation through both public entry points", () => {
                 "messages",
                 "on",
                 "events",
+                "diagnostics",
                 "state",
                 "gatewayLatencyMs",
                 "shards",

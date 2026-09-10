@@ -16,6 +16,9 @@ The documentation website remains a scaffold
 | --- | --- |
 | [index.ts](/projects/sdk/src/index.ts) | Default public API and member documentation |
 | [effect.ts](/projects/sdk/src/effect.ts) | Effect-native public API and member documentation |
+| [helpers.ts](/projects/sdk/src/helpers.ts), [colors.ts](/projects/sdk/src/colors.ts) and [text.ts](/projects/sdk/src/text.ts) | Pure markup, raw permission sets, color conversion and lossless text splitting without client or network ownership |
+| [builders.ts](/projects/sdk/src/builders.ts) | Optional fluent construction of plain embed and message inputs, with request validation left to message operations |
+| [commands.ts](/projects/sdk/src/internal/commands.ts) | Optional prefix parsing, immutable command registration and bounded local cooldowns, dispatched through existing client subscriptions |
 | [client.ts](/projects/sdk/src/internal/client.ts) | Client lifetime, per-shard recovery supervision and shared Identify pacing |
 | [sharding.ts](/projects/sdk/src/internal/sharding.ts) | Immutable local shard-plan validation and guild ownership calculation |
 | [application.ts](/projects/sdk/src/internal/application.ts) | Current bot-token application allowlist projection, using shared REST without retention or application management |
@@ -43,6 +46,8 @@ The documentation website remains a scaffold
 | [message-search.ts](/projects/sdk/src/internal/message-search.ts) | Contextual indexed message-search validation and immutable page projection without cache admission |
 | [message-search-workflow.ts](/projects/sdk/src/internal/message-search-workflow.ts) | Bounded opaque-cursor message-search traversal, including explicit indexing and progress failures |
 | [permissions.ts](/projects/sdk/src/internal/permissions.ts) | Local permission-bit calculation and explicit fresh-resource composition, not action authorization |
+| [role-hierarchy-workflow.ts](/projects/sdk/src/internal/role-hierarchy-workflow.ts) | Fresh guild, bot member, target member and role reads for a hierarchy check, not action authorization |
+| [message-cleanup.ts](/projects/sdk/src/internal/message-cleanup.ts) | Bounded cleanup previews and one-use exact deletion plans, with partial submission reports |
 | [user-cache.ts](/projects/sdk/src/internal/user-cache.ts) | Optional account/private-conversation retention, conflicting reads and lifecycle invalidation |
 | [presence.ts](/projects/sdk/src/internal/presence.ts) | Bot presence intent, bounded member selections, reconnect restoration and incoming presence projection without a cache |
 | [counts.ts](/projects/sdk/src/internal/counts.ts) | Fresh guild/channel count requests, shard scatter/gather, private nonce correlation and interruption/gap cleanup without count retention |
@@ -176,11 +181,13 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live` | Hosted protocol discovery, readiness and heartbeats | No server-content changes |
 | `test:live:sdk` | Built default/native client connection and shutdown | No server-content changes |
 | `test:live:application` | Built default/native current-bot application allowlist and hosted installation-link construction | Read-only; no navigation, authorization, or server-content changes |
+| `test:live:diagnostics` | Built default/native diagnostics and cache clearing across a delayed live guild read | Read-only with the shared sandbox lock, no gateway connection or remote mutation |
 | `test:live:consumer-operations` | Account-banner URLs, attachment deletion, exact bot-role replacement and fresh gateway counts through both built APIs | Temporary channel/messages and one zero-permission role assigned only to the test bot, plus test-owned response loss and socket interruption |
 | `test:live:member-chunks` | Streamed member selection, optional presence, full-list readback and failure/recovery through both built APIs | Read-only guild/member requests, test-owned reply drops and one socket interruption per mode, no server-content changes |
 | `test:live:sharding` | Two-shard readiness, member routing, isolated recovery and partial-startup cancellation through both built APIs | Read-only sandbox requests, one test-owned shard-socket interruption and one cancelled startup per mode, no content or account-presence changes |
 | `test:live:presence` | Interactive selected-guild member presence delivery, Op14 restore after a test-owned socket interruption and cleanup through both built APIs | No account-state changes by the harness; the authorized participant performs visible status transitions and the harness interrupts only its own socket |
 | `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
+| `test:live:optional-tools` | Builder-composed bot-command reply, local cooldown rejection and explicit router unsubscription through both built APIs | Temporary channel and test-bot command/reply messages; no human or member actions |
 | `test:live:consumer-features` | Forward snapshots, attachment-backed embeds, retained file metadata, non-voice flags, bot profile reads and lost-response reconciliation through both APIs | Journaled temporary channel/messages and uploads, test-owned response loss; profile GET may trigger provider expired-premium cleanup |
 | `test:live:typing` | One-shot typing, scoped refresh and completion/cancellation cleanup through both APIs | Temporary channel/messages and ephemeral typing notices; does not prove inbound typing delivery |
 | `test:live:typing:interactive` | Human-visible outgoing typing and selected-member inbound events through both APIs | Temporary channel and typing notices, with awaited refresh shutdown and verified channel removal |
@@ -208,6 +215,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:guild-events` | Bot-session guild create delivery after READY | Read-only gateway connection to the existing sandbox guild; fails when it is unavailable or the bounded event wait expires |
 | `test:live:channels` | Guild channel management, permission overwrites, inheritance, events/cache and recovery | Temporary channels/categories, overwrites targeting only the bot and test guild's everyone role, test-socket termination and test-owned response loss |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
+| `test:live:cleanup` | REST guild summaries, bot-self hierarchy and bounded message cleanup through both APIs | Temporary channel and test-bot messages, with one lost batch response. Uses the existing channel recovery journal and verifies test-owned cleanup |
 | `test:live:search` | Bounded contextual indexed-message search, explicit indexing and cache exclusion | Temporary channel/messages; may report a hosted indexing timeout |
 | `test:live:pagination` | History/member/reactor/pin traversal, early exit, read recovery and cancellation cleanup | Temporary channel/messages, reactions and pins, plus test-owned transient read failure and delayed response delivery |
 | `test:live:cache` | Cache intake, expiry and recovery invalidation | Temporary channel/messages and test-socket termination |

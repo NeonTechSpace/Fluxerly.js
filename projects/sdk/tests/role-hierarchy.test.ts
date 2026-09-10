@@ -1,6 +1,7 @@
-import { Effect } from "effect"
+import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 import {
+    SdkDefect,
     canManageHierarchy,
     compareHierarchy,
     createClient,
@@ -8,6 +9,7 @@ import {
     type RoleHierarchyInput,
 } from "../src/index.js"
 import {
+    createClient as createNative,
     canManageHierarchy as canManageNativeHierarchy,
     compareHierarchy as compareNativeHierarchy,
     isAboveInHierarchy as isAboveNativeHierarchy,
@@ -50,16 +52,24 @@ const wireRole = (id: string, position: number) => ({
     mentionable: false,
 })
 
+function responseWithCleanupFailure(status: number, cleanup: unknown, cancelled?: () => void): Response {
+    return new Response(
+        new ReadableStream({
+            cancel: () => {
+                cancelled?.()
+                throw cleanup
+            },
+        }),
+        { status },
+    )
+}
+
 afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
 })
 
-function value<A>(result: {
-    readonly isOk: () => boolean
-    readonly value?: A
-    readonly error?: GuildOperationError
-}): A {
+function value<A>(result: { readonly isOk: () => boolean; readonly value?: A; readonly error?: unknown }): A {
     if (!result.isOk()) throw result.error
     return result.value as A
 }
@@ -175,3 +185,151 @@ test("defers native snapshot validation until the Effect runs", async () => {
     expect(await Effect.runPromise(comparison)).toBe(1)
     expect(accessed).toBeGreaterThan(0)
 })
+
+test.each(["default", "native"] as const)(
+    "%s fetchHierarchyCheck reads four fresh inputs concurrently without cache authority",
+    async (mode) => {
+        const calls: string[] = []
+        const releases: Array<(response: Response) => void> = []
+        vi.stubGlobal("fetch", (url: string) => {
+            const path = new URL(url).pathname
+            calls.push(path)
+            return new Promise<Response>((resolve) => releases.push(resolve))
+        })
+        const response = (path: string) => {
+            if (path.endsWith("/guilds/20"))
+                return Response.json({ id: "20", owner_id: "99", name: "fixture", features: [] })
+            if (path.endsWith("/members/@me"))
+                return Response.json({
+                    user: { id: "2", username: "bot", bot: true },
+                    roles: ["100"],
+                    joined_at: "2026-09-08T12:00:00Z",
+                })
+            if (path.endsWith("/members/3"))
+                return Response.json({
+                    user: { id: "3", username: "target" },
+                    roles: ["101"],
+                    joined_at: "2026-09-08T12:00:00Z",
+                })
+            if (path.endsWith("/roles"))
+                return Response.json([wireRole("20", 0), wireRole("100", 2), wireRole("101", 1)])
+            throw Error(`Unexpected request ${path}`)
+        }
+        const run = async () => {
+            if (mode === "default") {
+                const client = value(createClient({ token: "fixture" }))
+                try {
+                    return value(await client.members.fetchHierarchyCheck({ guildId: "20", userId: "3" }))
+                } finally {
+                    value(await client.shutdown())
+                }
+            }
+            return Effect.runPromise(
+                Effect.scoped(
+                    Effect.gen(function* () {
+                        const client = yield* createNative({ token: "fixture" })
+                        return yield* client.members.fetchHierarchyCheck({ guildId: "20", userId: "3" })
+                    }),
+                ),
+            )
+        }
+        const pending = run()
+        await vi.waitFor(() => expect(calls).toHaveLength(4))
+        for (let index = 0; index < releases.length; index++) releases[index]!(response(calls[index]!))
+        await expect(pending).resolves.toBe(true)
+        expect(new Set(calls)).toEqual(
+            new Set(["/v1/guilds/20", "/v1/guilds/20/members/@me", "/v1/guilds/20/members/3", "/v1/guilds/20/roles"]),
+        )
+    },
+)
+
+test.each(["default", "native"] as const)(
+    "%s fetchHierarchyCheck keeps a mapped remote failure with a sibling response-cleanup defect",
+    async (mode) => {
+        const cleanup = new Error("private hierarchy sibling cleanup defect")
+        let releaseGuild!: (response: Response) => void
+        let releaseSibling!: (response: Response) => void
+        let observeSiblingAbort!: () => void
+        const siblingAborted = new Promise<void>((resolve) => {
+            observeSiblingAbort = resolve
+        })
+        let ready!: () => void
+        const started = new Promise<void>((resolve) => {
+            ready = resolve
+        })
+        vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+            const path = new URL(url).pathname
+            if (path.endsWith("/guilds/20")) return new Promise<Response>((resolve) => (releaseGuild = resolve))
+            if (path.endsWith("/members/@me"))
+                return new Promise<Response>((resolve) => {
+                    releaseSibling = resolve
+                    init.signal?.addEventListener("abort", observeSiblingAbort, { once: true })
+                    ready()
+                })
+            if (path.endsWith("/members/3"))
+                return Promise.resolve(
+                    Response.json({
+                        user: { id: "3", username: "target" },
+                        roles: ["101"],
+                        joined_at: "2026-09-08T12:00:00Z",
+                    }),
+                )
+            return Promise.resolve(Response.json([wireRole("20", 0), wireRole("100", 2), wireRole("101", 1)]))
+        })
+        if (mode === "default") {
+            const client = value(createClient({ token: "fixture" }))
+            try {
+                const result = Promise.resolve(client.members.fetchHierarchyCheck({ guildId: "20", userId: "3" }))
+                await started
+                releaseGuild(new Response(null, { status: 401 }))
+                await siblingAborted
+                releaseSibling(responseWithCleanupFailure(200, cleanup))
+                await expect(result).rejects.toMatchObject({
+                    name: "SdkDefect",
+                    operation: "members.fetchHierarchyCheck",
+                    reasons: expect.arrayContaining([
+                        {
+                            kind: "Failure",
+                            failure: expect.objectContaining({
+                                _tag: "GuildOperationError",
+                                operation: "members.fetchHierarchyCheck",
+                                status: 401,
+                            }),
+                        },
+                        { kind: "Defect" },
+                    ]),
+                } satisfies Partial<SdkDefect>)
+            } finally {
+                value(await client.shutdown())
+            }
+        } else {
+            const scope = Scope.makeUnsafe()
+            const client = await Effect.runPromise(createNative({ token: "fixture" }).pipe(Scope.provide(scope)))
+            try {
+                const result = Effect.runPromiseExit(client.members.fetchHierarchyCheck({ guildId: "20", userId: "3" }))
+                await started
+                releaseGuild(new Response(null, { status: 401 }))
+                await siblingAborted
+                releaseSibling(responseWithCleanupFailure(200, cleanup))
+                const exit = await result
+                expect(Exit.isFailure(exit)).toBe(true)
+                if (Exit.isFailure(exit))
+                    expect(exit.cause.reasons).toEqual(
+                        expect.arrayContaining([
+                            expect.objectContaining({
+                                _tag: "Fail",
+                                error: expect.objectContaining({
+                                    _tag: "GuildOperationError",
+                                    operation: "members.fetchHierarchyCheck",
+                                    status: 401,
+                                }),
+                            }),
+                            expect.objectContaining({ _tag: "Die", defect: cleanup }),
+                        ]),
+                    )
+            } finally {
+                await Effect.runPromise(Scope.close(scope, Exit.void))
+            }
+        }
+    },
+)

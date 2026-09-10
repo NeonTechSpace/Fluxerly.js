@@ -124,6 +124,7 @@ async function defaultOutcome<A>(operation: ResultAsync<A, unknown>): Promise<Ou
 
 interface Driver {
     readonly state: () => string
+    diagnostics(): import("../src/index.js").ClientDiagnostics
     getGuild(id: string): Promise<unknown>
     getChannel(id: string): Promise<unknown>
     guild(ids: readonly string[], options?: unknown): Promise<Outcome<import("../src/counts.js").GuildCountsResult>>
@@ -151,6 +152,7 @@ async function driver(
         const client = createClient({ token: "fixture-only", ...options })._unsafeUnwrap()
         return {
             state: () => client.state,
+            diagnostics: () => client.diagnostics(),
             getGuild: async (id) => {
                 const result = client.guilds.get(id)
                 return result.isOk() ? result.value : result.error
@@ -191,6 +193,7 @@ async function driver(
     let stopped = false
     return {
         state: () => client.state,
+        diagnostics: () => client.diagnostics(),
         getGuild: (id) => Effect.runPromise(client.guilds.get(id)),
         getChannel: (id) => Effect.runPromise(client.channels.get(id)),
         guild: (ids, options) =>
@@ -233,6 +236,31 @@ function command(fixture: Awaited<ReturnType<typeof gatewayFixture>>, op: 15 | 1
 }
 
 for (const mode of ["default", "native"] as const) {
+    test(`${mode} exposes one shared active gateway count request in local diagnostics`, async () => {
+        const fixture = await gatewayFixture()
+        const client = await driver(mode)
+        try {
+            await connected(fixture, client)
+            const pending = client.guild(["2"])
+            await vi.waitFor(() => expect(fixture.commands.some((entry) => entry.op === 15)).toBe(true), {
+                interval: 5,
+            })
+            expect(client.diagnostics()).toMatchObject({
+                gatewayRequests: { activeRequests: 1, activeCapacity: expect.any(Number) },
+            })
+            const frame = command(fixture, 15)
+            fixture.dispatch("GUILD_COUNTS_UPDATE", {
+                nonce: frame.nonce,
+                counts: [{ guild_id: "2", member_count: 9, online_count: 4 }],
+            })
+            expect(await pending).toMatchObject({ kind: "success" })
+            expect(client.diagnostics().gatewayRequests.activeRequests).toBe(0)
+        } finally {
+            await client.shutdown()
+            await fixture.close()
+        }
+    })
+
     test(`${mode} returns ordered partial and empty count results without caching`, async () => {
         const fixture = await gatewayFixture()
         const client = await driver(mode, { cache: { guilds: true, channels: true } })

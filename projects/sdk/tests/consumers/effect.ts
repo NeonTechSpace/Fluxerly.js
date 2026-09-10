@@ -1,11 +1,20 @@
 import { Context, Effect, type Scope } from "effect"
 import {
     createClient,
+    colors,
+    permissionBits,
+    text,
+    type ColorInput,
+    type RgbColor,
+    type PermissionBitInspection,
+    type TextSplitOptions,
     canManageHierarchy,
     compareHierarchy,
     ChannelType,
     Permissions,
     MessageFlags,
+    builders,
+    commands,
     type ForwardMessageInput,
     type MessageSnapshot,
     type UserProfile,
@@ -39,6 +48,27 @@ import {
     type RoleHierarchyInput,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+const CommandService = Context.Service<{ readonly enabled: true }>("command-service")
+
+export const pureHelperTypes = (bits: bigint) =>
+    Effect.gen(function* () {
+        const input: ColorInput = [255, 136, 0]
+        const rgb: RgbColor = [255, 136, 0]
+        const options: TextSplitOptions = { maxLength: 2_000 }
+        const snapshot: PermissionBitInspection = yield* permissionBits.inspect(bits)
+        // @ts-expect-error Inspection names are immutable
+        snapshot.names.push("ManageRoles")
+        // @ts-expect-error RGB channels are immutable
+        rgb[0] = 0
+        // @ts-expect-error Permission names are checked by the public type
+        permissionBits.from(["UnknownPermission"])
+        return {
+            color: yield* colors.parse(input),
+            hex: yield* colors.toHex(0xff8800),
+            rgb: yield* colors.toRgb(0xff8800),
+            chunks: yield* text.split("text", options),
+        }
+    })
 
 export function shardingTypes(client: Client) {
     const plan: ShardingOptions = { totalShards: 2, shardIds: [0, 1] }
@@ -52,6 +82,32 @@ export function shardingTypes(client: Client) {
     client.messages.collect("20", { guildId: "40" })
     client.messages.collectReactions({ id: "10", channelId: "20" }, { guildId: "40" })
     return createClient({ token: "fixture-only", sharding: plan })
+}
+
+/** Packed native command routers keep registered service requirements while earlier snapshots remain service-free */
+export function optionalCommandTypes(client: Client) {
+    const empty = builders.message()
+    // @ts-expect-error Empty builders cannot build a message payload
+    empty.build()
+    // @ts-expect-error Empty variadic calls do not select a message body
+    empty.addEmbeds()
+    // @ts-expect-error Empty variadic calls do not select a message body
+    empty.addAttachments()
+    // @ts-expect-error Empty variadic calls do not select a message body
+    empty.addStickers()
+    return Effect.gen(function* () {
+        const original = yield* commands.create({ prefix: "!" })
+        const extended = yield* original.register({
+            name: "service",
+            execute: () => Effect.service(CommandService),
+        })
+        const originalAttachment: Effect.Effect<unknown, unknown> = Effect.scoped(original.attach(client))
+        void originalAttachment
+        const needsService = Effect.scoped(extended.attach(client))
+        // @ts-expect-error Registered command services remain required until the caller provides CommandService
+        Effect.runPromise(needsService)
+        return Effect.provideService(needsService, CommandService, { enabled: true })
+    })
 }
 
 export const useConsumerFeatures = (client: Client, channelId: string, source: MessageReference, userId: string) =>
@@ -199,6 +255,23 @@ export function readCachedSnapshot(client: Client): Effect.Effect<Message | unde
         }
         return snapshot
     })
+}
+
+/** Typechecked local occupancy, lazy enumeration and synchronous release through the packed native package */
+export function inspectCache(client: Client): Effect.Effect<Message | undefined, ConfigurationError> {
+    const diagnostics: import("@neontechspace/fluxerly/effect").ClientDiagnostics = client.diagnostics()
+    const options: import("@neontechspace/fluxerly/effect").CacheEntriesOptions = { limit: 10 }
+    client.cache.clear()
+    return client.cache.entries("messages", options).pipe(
+        Effect.map((entries) => {
+            const snapshots: readonly import("@neontechspace/fluxerly/effect").CachedResources["messages"][] = entries
+            const capacity: number = diagnostics.gatewayRequests.activeCapacity
+            void capacity
+            // @ts-expect-error Enumerated arrays are readonly
+            snapshots.push(entries[0]!)
+            return snapshots[0]
+        }),
+    )
 }
 
 export const managed = Effect.scoped(
@@ -461,4 +534,22 @@ export function watchPresenceRecovery(client: Client) {
 /** Typechecked explicit selected-member presence intent through the packed Effect entry point */
 export function selectMemberPresence(client: Client, guildId: string, memberId: string) {
     return client.presence.setMembers(guildId, [memberId])
+}
+
+/** Typechecked fresh hierarchy, optional guild-list fields, and exact cleanup-plan use through the packed Effect entry point */
+export function previewModerationCleanup(client: Client, guildId: string, channelId: string, authorId: string) {
+    return Effect.gen(function* () {
+        const hierarchy = yield* client.members.fetchHierarchyCheck({ guildId, userId: authorId })
+        const memberships = yield* client.guilds.fetchPage({ withCounts: true })
+        const permissions: bigint | undefined = memberships[0]?.permissions
+        const plan = yield* client.messages.previewCleanup(channelId, {
+            authorId,
+            filter: (message) => message.attachments.length > 0,
+            maxScanned: 500,
+            maxSelected: 200,
+        })
+        const report = yield* client.messages.cleanup(plan, { onProgress: (event) => void event.batch.batchIndex })
+        void permissions
+        return { hierarchy, report }
+    })
 }

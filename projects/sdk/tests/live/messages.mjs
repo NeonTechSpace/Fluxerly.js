@@ -38,8 +38,10 @@ const pins = process.argv[3] === "--pins"
 const guilds = process.argv[3] === "--guilds"
 const channels = process.argv[3] === "--channels"
 const batchDelete = process.argv[3] === "--batch-delete"
+const cleanupCheck = process.argv[3] === "--cleanup"
 const moderation = process.argv[3] === "--moderation"
 const search = process.argv[3] === "--search"
+const optionalTools = process.argv[3] === "--optional-tools"
 // This probe verifies outbound REST lifetime through both APIs, not delivery of the bot's own typing notices
 const typing = process.argv[3] === "--typing"
 let moderationUserId = process.env.FLUXER_TEST_MODERATION_USER_ID
@@ -190,6 +192,116 @@ async function api(method, path, body) {
         return { status: response.status, data }
     }
     throw new Error("Sandbox request budget exhausted")
+}
+
+async function waitForCondition(matches, deadlineMessage) {
+    const deadline = performance.now() + 10_000
+    while (!matches()) {
+        assert.ok(performance.now() < deadline, deadlineMessage)
+        await sleep(20)
+    }
+}
+
+async function verifyOptionalTools(ops, channelId, botId) {
+    const marker = `optional-tools-${randomUUID().replaceAll("-", "")}`
+    const commandName = `verify-${marker}`
+    const invocation = `!${commandName}`
+    const responseContent = `${marker} response`
+    const embedTitle = `${marker} builder`
+    const response = ops.builders
+        .message()
+        .content(responseContent)
+        .embed(ops.builders.embed().title(embedTitle).field("Mode", "live", true))
+        .build()
+    const claims = []
+    const executions = []
+    const replies = []
+    const cooldown = await ops.cooldowns(claims)
+
+    stage = "optional_tools_router_attachment"
+    await ops.assertConnected()
+    const initial = await ops.create({ prefix: "!", ignoreBots: false })
+    const router = await ops.register(initial, {
+        name: commandName,
+        guard: ops.guard(
+            (message) =>
+                message.channelId === channelId && message.author.id === botId && message.content === invocation,
+        ),
+        cooldown: { store: cooldown.store, durationMs: 60_000 },
+        execute: ops.execute(async (message) => {
+            executions.push(message.id)
+            replies.push(await ops.reply(message, response))
+        }),
+    })
+    assert.notEqual(router, initial)
+    let subscription = await ops.attach(router)
+    try {
+        stage = "optional_tools_command_dispatch"
+        const first = await ops.send({ content: invocation })
+        await waitForCondition(() => replies.length === 1, "Optional command reply deadline")
+        assert.deepEqual(executions, [first.id])
+        const reply = replies[0]
+        report(stage, true)
+
+        stage = "optional_tools_builder_raw_readback"
+        const rawReply = await api("GET", `/channels/${channelId}/messages/${reply.id}`)
+        assert.equal(rawReply.status, 200)
+        assert.equal(rawReply.data?.channel_id, channelId)
+        assert.equal(rawReply.data?.content, responseContent)
+        assert.equal(rawReply.data?.embeds?.[0]?.title, embedTitle)
+        assert.equal(rawReply.data?.embeds?.[0]?.fields?.[0]?.name, "Mode")
+        assert.equal(rawReply.data?.message_reference?.message_id, first.id)
+        assert.equal(rawReply.data?.mention_everyone, false)
+        assert.deepEqual(rawReply.data?.mentions, [])
+        report(stage, true)
+
+        stage = "optional_tools_local_cooldown"
+        const second = await ops.send({ content: invocation })
+        await waitForCondition(() => claims.length === 2, "Optional command cooldown deadline")
+        assert.deepEqual(
+            claims.map((claim) => claim._tag),
+            ["CooldownAcquired", "CooldownActive"],
+        )
+        assert.deepEqual(executions, [first.id])
+        report(stage, true)
+
+        stage = "optional_tools_unsubscribe"
+        await ops.close(subscription)
+        subscription = undefined
+        await cooldown.clear()
+        const observed = []
+        const observer = await ops.observe((message) => {
+            if (message.channelId === channelId && message.author.id === botId && message.content === invocation)
+                observed.push(message.id)
+        })
+        try {
+            const afterUnsubscribe = await ops.send({ content: invocation })
+            await waitForCondition(
+                () => observed.includes(afterUnsubscribe.id),
+                "Optional command post-unsubscribe gateway deadline",
+            )
+            await sleep(250)
+            assert.deepEqual(executions, [first.id])
+            assert.equal(claims.length, 2)
+            const rawHistory = await api("GET", `/channels/${channelId}/messages?limit=10`)
+            assert.equal(rawHistory.status, 200)
+            assert.ok(Array.isArray(rawHistory.data))
+            assert.deepEqual(
+                rawHistory.data
+                    .filter((message) =>
+                        [first.id, second.id, afterUnsubscribe.id].includes(message?.message_reference?.message_id),
+                    )
+                    .map((message) => message.id),
+                [reply.id],
+            )
+        } finally {
+            await observer.close()
+        }
+        report(stage, true)
+        report("optional_tools", true)
+    } finally {
+        if (subscription !== undefined) await ops.close(subscription)
+    }
 }
 
 async function verifyGuildMembers(ops, channelId, botId, interrupt) {
@@ -1718,6 +1830,93 @@ async function verifyBatchDeletion(ops, channelId, botId) {
     }
 }
 
+async function verifyCleanup(ops, channelId, botId) {
+    const marker = `cleanup-${randomUUID()}`
+    const seed = async (suffix) => ops.send({ content: `${marker}-${suffix}` })
+    stage = "cleanup_preview_exact_plan"
+    const first = await seed("first")
+    const second = await seed("second")
+    const plan = await ops.preview({
+        authorId: botId,
+        filter: (message) => message.content.startsWith(marker),
+        maxScanned: 500,
+        maxSelected: 200,
+    })
+    assert.deepEqual(new Set(plan.selectedMessages.map((message) => message.id)), new Set([first.id, second.id]))
+    const late = await seed("late")
+    const progress = []
+    const cleanupReport = await ops.cleanup(plan, { onProgress: (event) => progress.push(event.state) })
+    assert.deepEqual(new Set(cleanupReport.selectedMessageIds), new Set([first.id, second.id]))
+    assert.equal(cleanupReport.submittedBatches.length, 1)
+    assert.deepEqual(progress, ["submitting", "submitted"])
+    for (const message of [first, second])
+        assert.equal((await api("GET", `/channels/${channelId}/messages/${message.id}`)).status, 404)
+    assert.equal((await api("GET", `/channels/${channelId}/messages/${late.id}`)).status, 200)
+    report(stage, true)
+
+    stage = "cleanup_partial_response_loss"
+    const partialMarker = `cleanup-loss-${randomUUID()}`
+    for (let index = 0; index < 101; index++) await ops.send({ content: `${partialMarker}-${index}` })
+    const partialPlan = await ops.preview({
+        authorId: botId,
+        filter: (message) => message.content.startsWith(partialMarker),
+        maxScanned: 500,
+        maxSelected: 150,
+    })
+    assert.equal(partialPlan.selectedMessages.length, 101)
+    let submissions = 0
+    globalThis.fetch = async (url, init) => {
+        if (String(url) === `https://api.fluxer.app/v1/channels/${channelId}/messages/bulk-delete`) {
+            submissions++
+            const response = await rawFetch(url, init)
+            if (submissions === 2 && response.status === 204) {
+                await response.body?.cancel()
+                throw new Error("Test-owned cleanup response loss")
+            }
+            return response
+        }
+        return rawFetch(url, init)
+    }
+    let failure
+    try {
+        await assert.rejects(ops.cleanup(partialPlan), (error) => {
+            failure = error
+            return error?._tag === "MessageCleanupError" && error.reason === "network" && error.outcome === "unknown"
+        })
+    } finally {
+        globalThis.fetch = rawFetch
+    }
+    assert.equal(submissions, 2)
+    assert.equal(failure?.submittedBatches.length, 1)
+    const terminalIds = partialPlan.selectedMessages.slice(100).map((message) => message.id)
+    const earlierBatchIds = partialPlan.selectedMessages.slice(0, 100).map((message) => message.id)
+    assert.deepEqual(failure?.terminalBatchIds, terminalIds)
+    for (const id of terminalIds) assert.equal((await api("GET", `/channels/${channelId}/messages/${id}`)).status, 404)
+    stage = "cleanup_partial_raw_readback"
+    assert.equal((await api("GET", `/channels/${channelId}/messages/${earlierBatchIds[0]}`)).status, 404)
+    const boundedHistory = await api("GET", `/channels/${channelId}/messages?limit=100`)
+    assert.equal(boundedHistory.status, 200)
+    assert.ok(Array.isArray(boundedHistory.data))
+    assert.ok(!boundedHistory.data.some((message) => message.content?.startsWith(partialMarker)))
+    report(stage, true)
+}
+
+async function verifyWorkflowReads(ops, botId) {
+    stage = "workflow_guild_list_readonly"
+    const page = await ops.guildList()
+    const membership = page.find((guild) => guild.id === guildId)
+    assert.ok(membership)
+    if (membership.permissions !== undefined) assert.equal(typeof membership.permissions, "bigint")
+    if (membership.approximateMemberCount !== undefined)
+        assert.ok(Number.isSafeInteger(membership.approximateMemberCount))
+    if (membership.approximatePresenceCount !== undefined)
+        assert.ok(Number.isSafeInteger(membership.approximatePresenceCount))
+    report(stage, true)
+    stage = "workflow_hierarchy_self_readonly"
+    assert.equal(await ops.hierarchy({ guildId, userId: botId }), true)
+    report(stage, true)
+}
+
 async function prepareManagement(channelId, botId) {
     stage = "management_seed"
     const content = `manage-${randomUUID()}`
@@ -2446,8 +2645,10 @@ try {
                     guilds ||
                     channels ||
                     batchDelete ||
+                    cleanupCheck ||
                     moderation ||
                     search ||
+                    optionalTools ||
                     typing)),
     )
     stage = "sandbox_lock"
@@ -2525,7 +2726,7 @@ try {
     if (forceRecovery) gatewayProbe = observeGateway()
     stage = "sdk_receive_and_reply"
     if (mode === "default") {
-        const { createClient } = await import("@neontechspace/fluxerly")
+        const { builders, commands, createClient } = await import("@neontechspace/fluxerly")
         const created = createClient({
             token,
             ...(cache || typing || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
@@ -2801,6 +3002,81 @@ try {
                             return async () => {
                                 subscription.unsubscribe()
                                 await run(subscription.waitForClose())
+                            }
+                        },
+                    },
+                    channel.id,
+                    user.id,
+                )
+            }
+            if (cleanupCheck) {
+                const run = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) throw result.error
+                    return result.value
+                }
+                await verifyWorkflowReads(
+                    {
+                        guildList: () => run(client.guilds.fetchPage({ withCounts: true })),
+                        hierarchy: (target) => run(client.members.fetchHierarchyCheck(target)),
+                    },
+                    user.id,
+                )
+                await verifyCleanup(
+                    {
+                        send: (input) => run(client.messages.send(channel.id, input)),
+                        preview: (selection) => run(client.messages.previewCleanup(channel.id, selection)),
+                        cleanup: (plan, options) => run(client.messages.cleanup(plan, options)),
+                    },
+                    channel.id,
+                    user.id,
+                )
+            }
+            if (optionalTools) {
+                const run = async (operation) => {
+                    const result = await operation
+                    if (result.isErr()) throw result.error
+                    return result.value
+                }
+                await verifyOptionalTools(
+                    {
+                        builders,
+                        assertConnected: async () => assert.equal(client.state, "Connected"),
+                        create: (options) => run(Promise.resolve(commands.create(options))),
+                        register: (router, command) => run(Promise.resolve(router.register(command))),
+                        attach: (router) => run(Promise.resolve(router.attach(client))),
+                        send: (input) => run(client.messages.send(channel.id, input)),
+                        reply: (message, input) => run(client.messages.reply(message, input)),
+                        cooldowns: async (claims) => {
+                            const store = await run(Promise.resolve(commands.memoryCooldowns({ maxEntries: 4 })))
+                            return {
+                                store: {
+                                    claim(input) {
+                                        const claim = store.claim(input)
+                                        if (claim.isOk()) claims.push(claim.value)
+                                        return claim
+                                    },
+                                },
+                                clear: () => store.clear(),
+                            }
+                        },
+                        guard: (matches) => {
+                            return ({ message }) => matches(message)
+                        },
+                        execute: (runCommand) => {
+                            return async ({ message }) => runCommand(message)
+                        },
+                        close: async (subscription) => {
+                            subscription.unsubscribe()
+                            await run(subscription.waitForClose())
+                        },
+                        observe: async (receive) => {
+                            const observer = await run(client.on("messageCreate", receive))
+                            return {
+                                close: async () => {
+                                    observer.unsubscribe()
+                                    await run(observer.waitForClose())
+                                },
                             }
                         },
                     },
@@ -3164,7 +3440,7 @@ try {
         }
     } else {
         const { Deferred, Effect, Exit, Fiber, Scope, Stream } = await import("effect")
-        const { createClient } = await import("@neontechspace/fluxerly/effect")
+        const { builders, commands, createClient } = await import("@neontechspace/fluxerly/effect")
         const exit = await Effect.runPromiseExit(
             Effect.scoped(
                 Effect.gen(function* () {
@@ -3443,6 +3719,95 @@ try {
                                         return async () => {
                                             await run(subscription.unsubscribe())
                                             await run(subscription.waitForClose())
+                                        }
+                                    },
+                                },
+                                channel.id,
+                                user.id,
+                            ),
+                        )
+                    }
+                    if (cleanupCheck) {
+                        const run = async (operation) => {
+                            const result = await Effect.runPromise(Effect.result(operation))
+                            if (result._tag === "Failure") throw result.failure
+                            return result.success
+                        }
+                        yield* Effect.promise(() =>
+                            verifyWorkflowReads(
+                                {
+                                    guildList: () => run(client.guilds.fetchPage({ withCounts: true })),
+                                    hierarchy: (target) => run(client.members.fetchHierarchyCheck(target)),
+                                },
+                                user.id,
+                            ),
+                        )
+                        yield* Effect.promise(() =>
+                            verifyCleanup(
+                                {
+                                    send: (input) => run(client.messages.send(channel.id, input)),
+                                    preview: (selection) => run(client.messages.previewCleanup(channel.id, selection)),
+                                    cleanup: (plan, options) => run(client.messages.cleanup(plan, options)),
+                                },
+                                channel.id,
+                                user.id,
+                            ),
+                        )
+                    }
+                    if (optionalTools) {
+                        const scope = yield* Effect.scope
+                        const run = async (operation) => {
+                            const result = await Effect.runPromise(Effect.result(operation))
+                            if (result._tag === "Failure") throw result.failure
+                            return result.success
+                        }
+                        yield* Effect.promise(() =>
+                            verifyOptionalTools(
+                                {
+                                    builders,
+                                    assertConnected: async () => assert.equal(client.state, "Connected"),
+                                    create: (options) => run(commands.create(options)),
+                                    register: (router, command) => run(router.register(command)),
+                                    attach: (router) => run(router.attach(client).pipe(Scope.provide(scope))),
+                                    send: (input) => run(client.messages.send(channel.id, input)),
+                                    reply: (message, input) => run(client.messages.reply(message, input)),
+                                    cooldowns: async (claims) => {
+                                        const store = await run(commands.memoryCooldowns({ maxEntries: 4 }))
+                                        const recordClaim = (claim) => Effect.sync(() => claims.push(claim))
+                                        return {
+                                            store: {
+                                                claim: (input) => store.claim(input).pipe(Effect.tap(recordClaim)),
+                                            },
+                                            clear: () => run(store.clear()),
+                                        }
+                                    },
+                                    guard: (matches) => {
+                                        return ({ message }) => Effect.sync(() => matches(message))
+                                    },
+                                    execute: (runCommand) => {
+                                        return ({ message }) => Effect.promise(() => runCommand(message))
+                                    },
+                                    close: (subscription) =>
+                                        run(
+                                            Effect.gen(function* () {
+                                                yield* subscription.unsubscribe()
+                                                yield* subscription.waitForClose()
+                                            }),
+                                        ),
+                                    observe: async (receive) => {
+                                        const observer = await run(
+                                            client
+                                                .on("messageCreate", (message) => Effect.sync(() => receive(message)))
+                                                .pipe(Scope.provide(scope)),
+                                        )
+                                        return {
+                                            close: () =>
+                                                run(
+                                                    Effect.gen(function* () {
+                                                        yield* observer.unsubscribe()
+                                                        yield* observer.waitForClose()
+                                                    }),
+                                                ),
                                         }
                                     },
                                 },

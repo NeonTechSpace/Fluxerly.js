@@ -1,5 +1,31 @@
 import assert from "node:assert/strict"
-import { createWebhookClient } from "@neontechspace/fluxerly/effect"
+import { createWebhookClient, colors, text, permissionBits, builders, commands } from "@neontechspace/fluxerly/effect"
+
+assert.equal(await Effect.runPromise(colors.parse("#ff8800")), 0xff8800)
+assert.equal(await Effect.runPromise(colors.toHex(1)), "#000001")
+assert.deepEqual(await Effect.runPromise(colors.toRgb(0xff8800)), [255, 136, 0])
+assert.deepEqual(await Effect.runPromise(text.split("A🦊B", { maxLength: 2 })), ["A", "🦊", "B"])
+assert.deepEqual(await Effect.runPromise(permissionBits.inspect(1n << 63n)), { names: [], unknownBits: 1n << 63n })
+
+assert.deepEqual(builders.message().content("packed").embed(builders.embed().title("Title")).build(), {
+    content: "packed",
+    embeds: [{ title: "Title" }],
+})
+await Effect.runPromise(
+    Effect.gen(function* () {
+        const store = yield* commands.memoryCooldowns({ maxEntries: 1 })
+        const claim = store.claim({ key: "packed", durationMs: 60_000 })
+        assert.equal(store.size, 0)
+        assert.equal((yield* claim)._tag, "CooldownAcquired")
+        assert.equal((yield* claim)._tag, "CooldownActive")
+        yield* store.clear()
+        assert.equal(store.size, 0)
+        const router = yield* commands.create({ prefix: "!" })
+        const registered = yield* router.register({ name: "ping", execute: () => Effect.void })
+        assert.notEqual(registered, router)
+        assert.ok(Object.isFrozen(registered))
+    }),
+)
 
 await Effect.runPromise(
     Effect.scoped(
@@ -75,7 +101,7 @@ assert.deepEqual(
 const client = await Effect.runPromise(
     Effect.scoped(
         Effect.gen(function* () {
-            const client = yield* createClient({ token: "fixture-only-not-a-credential" })
+            const client = yield* createClient({ token: "fixture-only-not-a-credential", cache: { messages: true } })
             assert.equal(client.state, "Disconnected")
             const chunks = yield* Effect.flip(client.members.iterateChunks("20", { all: true }).pipe(Stream.runDrain))
             assert.ok(chunks instanceof MemberChunkError)
@@ -105,6 +131,16 @@ const client = await Effect.runPromise(
             )
             assert.equal((yield* client.users.fetchProfile("bad").pipe(Effect.flip)).operation, "users.fetchProfile")
             assert.equal((yield* client.messages.deleteMany("20", []).pipe(Effect.flip)).operation, "deleteMany")
+            assert.equal(
+                (yield* client.members.fetchHierarchyCheck({ guildId: "bad", userId: "30" }).pipe(Effect.flip))
+                    .operation,
+                "members.fetchHierarchyCheck",
+            )
+            assert.equal(
+                (yield* client.messages.previewCleanup("20", { maxScanned: 1, maxSelected: 1 }).pipe(Effect.flip))._tag,
+                "MessageCleanupError",
+            )
+            assert.equal((yield* client.messages.cleanup({}).pipe(Effect.flip))._tag, "MessageCleanupError")
             assert.equal(
                 (yield* client.members.timeout({ guildId: "20", userId: "30" }, 0).pipe(Effect.flip)).operation,
                 "members.timeout",
@@ -170,6 +206,13 @@ const client = await Effect.runPromise(
             const edited = yield* client.messages.edit(fetched, { content: "Updated" })
             assert.equal(edited.content, "Updated")
             assert.ok(Object.isFrozen(edited.author))
+            const diagnostics = client.diagnostics()
+            assert.ok(Object.isFrozen(diagnostics))
+            assert.equal(diagnostics.caches.messages.configured, true)
+            const entries = yield* client.cache.entries("messages", { limit: 1 })
+            assert.equal(entries[0]?.content, "Updated")
+            client.cache.clear()
+            assert.deepEqual(yield* client.cache.entries("messages"), [])
             assert.equal(yield* client.messages.delete(edited), undefined)
             assert.deepEqual(requests, ["GET", "PATCH", "DELETE"])
             globalThis.fetch = async (url, init) => {
@@ -187,6 +230,15 @@ const client = await Effect.runPromise(
                 .pipe(Effect.flip)
             assert.ok(invalidHistory instanceof MessageOperationError)
             assert.equal(invalidHistory.operation, "fetchHistory")
+            globalThis.fetch = async (url, init) => {
+                assert.equal(url, "https://api.fluxer.app/v1/users/@me/guilds?limit=200&with_counts=true")
+                assert.equal(init.method, "GET")
+                return Response.json([
+                    { id: "20", name: "Packed guild", owner_id: "30", features: [], permissions: "0" },
+                ])
+            }
+            const guildList = yield* client.guilds.fetchPage({ withCounts: true })
+            assert.equal(guildList[0]?.permissions, 0n)
             // Constructing a stream must not acquire a subscription or open a connection
             client.events("messageCreate", { maxPendingMessages: 8 })
             return client

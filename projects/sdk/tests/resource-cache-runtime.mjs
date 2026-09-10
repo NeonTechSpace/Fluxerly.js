@@ -54,6 +54,8 @@ async function client(mode, settings) {
         guild: () => run(c.guilds.fetch(guildId)),
         roles: () => run(c.roles.fetchAll(guildId)),
         get: (index) => run(c.members.get({ guildId, userId: userId(index) })),
+        diagnostics: () => c.diagnostics(),
+        clear: () => c.cache.clear(),
         close: async () => {
             await run(c.shutdown())
             await Effect.runPromise(Scope.close(scope, Exit.void))
@@ -106,6 +108,24 @@ try {
         } finally {
             await expiring.close()
         }
+        const cleared = await client(mode, true)
+        try {
+            const weak = await weakSnapshots(cleared)
+            cleared.clear()
+            const diagnostics = cleared.diagnostics()
+            for (const kind of ["guilds", "members", "roles"])
+                assert.deepEqual(diagnostics.caches[kind], {
+                    configured: true,
+                    retainedEntries: 0,
+                    accountedBytes: 0,
+                    maxEntries: 1000,
+                    maxBytes: 4194304,
+                })
+            await collect(weak)
+        } finally {
+            await cleared.close()
+        }
+        console.log(JSON.stringify({ mode, check: "resource_cache_clear_release", passed: true }))
         const closing = await client(mode, true)
         const weak = await weakSnapshots(closing)
         await closing.close()

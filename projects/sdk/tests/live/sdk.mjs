@@ -7,6 +7,7 @@ import WebSocket from "ws"
 const mode = process.argv[2]
 const cancelRecovery = process.argv[3] === "--cancel-recovery"
 const applicationCheck = process.argv[3] === "--application"
+const diagnosticsCheck = process.argv[3] === "--diagnostics"
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, ...details }))
 let stage = "configuration"
@@ -118,6 +119,67 @@ function verifyInstallationLink(link, applicationId) {
     assert.equal([...url.searchParams.keys()].sort().join(","), "client_id,permissions,scope")
 }
 
+async function verifyDiagnostics(client, guildId, token, run) {
+    stage = "diagnostics_live_snapshot"
+    const held = await run(client.guilds.fetch(guildId))
+    assert.equal(held.id, guildId)
+    assert.ok(Object.isFrozen(held))
+    assert.equal((await run(client.cache.entries("guilds", { limit: 1 })))[0], held)
+    const snapshot = client.diagnostics()
+    assert.equal(snapshot.caches.guilds.retainedEntries, 1)
+    assert.equal(snapshot.caches.guilds.configured, true)
+    assert.ok(snapshot.caches.guilds.accountedBytes > 0)
+    assert.ok(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.caches.guilds))
+    const encoded = JSON.stringify(snapshot)
+    assert.ok(!encoded.includes(token) && !encoded.includes(guildId))
+    report(stage, { passed: true, remoteMutations: false })
+
+    stage = "diagnostics_clear_during_live_read"
+    const originalFetch = globalThis.fetch
+    let release
+    const barrier = new Promise((resolve) => {
+        release = resolve
+    })
+    let received = false
+    let pending
+    globalThis.fetch = async (url, init) => {
+        const response = await originalFetch(url, init)
+        if (new URL(String(url)).pathname === `/v1/guilds/${guildId}`) {
+            received = true
+            await barrier
+        }
+        return response
+    }
+    try {
+        // Capture failure immediately without logging the upstream error or response
+        pending = run(client.guilds.fetch(guildId)).then(
+            (value) => ({ value }),
+            () => ({ failed: true }),
+        )
+        const deadline = performance.now() + 15_000
+        while (!received) {
+            assert.ok(performance.now() < deadline)
+            await sleep(5)
+        }
+        assert.equal(client.diagnostics().rest.activeRequests, 1)
+        client.cache.clear()
+        assert.deepEqual(await run(client.cache.entries("guilds")), [])
+        assert.equal(held.id, guildId)
+        release()
+        const late = await pending
+        assert.equal(late.value?.id, guildId)
+        assert.deepEqual(await run(client.cache.entries("guilds")), [])
+        assert.equal(client.diagnostics().rest.activeRequests, 0)
+    } finally {
+        release()
+        if (pending) await pending
+        globalThis.fetch = originalFetch
+    }
+    await run(client.guilds.fetch(guildId))
+    assert.equal(client.diagnostics().caches.guilds.retainedEntries, 1)
+    report(stage, { passed: true, callerSnapshotPreserved: true, staleReadNotRetained: true })
+}
+
 // A watchdog is failure containment, never evidence of successful cleanup
 // Keep it unreferenced so a successful check must exit naturally
 setTimeout(() => {
@@ -127,7 +189,7 @@ setTimeout(() => {
 
 try {
     assert.ok(mode === "default" || mode === "effect")
-    assert.ok(process.argv[3] === undefined || cancelRecovery || applicationCheck)
+    assert.ok(process.argv[3] === undefined || cancelRecovery || applicationCheck || diagnosticsCheck)
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
     writeSync(lock, String(process.pid))
@@ -155,14 +217,20 @@ try {
     if (mode === "default") {
         const { createClient, links } = await import("@neontechspace/fluxerly")
         stage = "creation"
-        const created = createClient({ token })
+        const created = createClient({ token, ...(diagnosticsCheck ? { cache: { guilds: true } } : {}) })
         assert.ok(created.isOk())
         client = created.value
         assert.equal(client.state, "Disconnected")
         const controller = new AbortController()
         let running
         try {
-            if (applicationCheck) {
+            if (diagnosticsCheck) {
+                await verifyDiagnostics(client, guildId, token, async (operation) => {
+                    const result = await operation
+                    assert.ok(result.isOk())
+                    return result.value
+                })
+            } else if (applicationCheck) {
                 stage = "current_application"
                 const current = await client.application.fetchCurrent()
                 assert.ok(current.isOk())
@@ -211,9 +279,11 @@ try {
             Effect.scoped(
                 Effect.gen(function* () {
                     stage = "creation"
-                    client = yield* createClient({ token })
+                    client = yield* createClient({ token, ...(diagnosticsCheck ? { cache: { guilds: true } } : {}) })
                     assert.equal(client.state, "Disconnected")
-                    if (applicationCheck) {
+                    if (diagnosticsCheck) {
+                        yield* Effect.promise(() => verifyDiagnostics(client, guildId, token, Effect.runPromise))
+                    } else if (applicationCheck) {
                         stage = "current_application"
                         const current = yield* client.application.fetchCurrent()
                         verifyCurrentApplication(current, applicationId, application)
@@ -249,6 +319,14 @@ try {
     }
     assert.equal(client.state, "Closed")
     assert.equal(client.gatewayLatencyMs, null)
+    if (diagnosticsCheck) {
+        const closed = client.diagnostics()
+        assert.equal(closed.caches.guilds.configured, true)
+        assert.equal(closed.caches.guilds.retainedEntries, 0)
+        assert.equal(closed.caches.guilds.accountedBytes, 0)
+        assert.equal(closed.rest.activeRequests, 0)
+        report("diagnostics_closed_release", { passed: true })
+    }
     if (cancelRecovery) {
         stage = "cancelled_recovery_cleanup"
         await gatewayProbe.verifyClosed()

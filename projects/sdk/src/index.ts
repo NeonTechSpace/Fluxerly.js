@@ -34,6 +34,10 @@ export type {
     ChannelMemberCountsResult,
 } from "./counts.js"
 import { assets as sharedAssets } from "./assets.js"
+import { colors as sharedColors } from "./colors.js"
+import { text as sharedText } from "./text.js"
+export type { ColorInput, RgbColor } from "./colors.js"
+export type { TextSplitOptions } from "./text.js"
 import {
     display as sharedDisplay,
     format as sharedFormat,
@@ -50,12 +54,13 @@ export type {
     InstallationLinkOptions,
     Mention,
     PermissionName,
+    PermissionBitInspection,
     TimestampMarkup,
     TimestampStyle,
 } from "./helpers.js"
-import type { GuildListQuery } from "./guilds.js"
+import type { GuildListQuery, GuildListSummary } from "./guilds.js"
 import type { GuildIterationQuery } from "./pagination.js"
-export type { GuildListQuery } from "./guilds.js"
+export type { GuildListQuery, GuildListSummary } from "./guilds.js"
 export type { GuildIterationQuery } from "./pagination.js"
 import { guildList } from "#sdk/internal/guild-lifecycle"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
@@ -64,6 +69,7 @@ export type { PermissionInput, PermissionTarget } from "./permissions.js"
 export { canManageHierarchy, compareHierarchy, isAboveInHierarchy } from "./role-hierarchy.js"
 export type { RoleHierarchyInput } from "./role-hierarchy.js"
 import { calculatePermissions, fetchPermissions } from "#sdk/internal/permissions"
+import { fetchHierarchyCheck } from "#sdk/internal/role-hierarchy-workflow"
 
 /**
  * Pure Fluxer markup helpers with no client, network, cache, or notification-state ownership.
@@ -77,8 +83,31 @@ export const snowflakes = sharedSnowflakes
 /** Pure user/member display-name fallback with no remote or cache lookup */
 export const display = sharedDisplay
 
-/** Pure named raw-permission membership and decimal serialization helpers, not an authorisation decision */
+/** Pure raw-permission composition, membership, missing-name inspection and decimal serialization, not an authorization decision */
 export const permissionBits = sharedPermissionBits
+
+/** Pure validated numeric RGB, six-digit hex and RGB-tuple conversions. Fallible calls return Result without coercion or network work */
+export const colors = sharedColors
+
+/**
+ * Pure lossless splitting into bounded UTF-16 pieces. Results are frozen. Sending and Markdown handling remain explicit
+ *
+ * @example
+ * ```ts
+ * import { permissionBits, colors, text } from "@neontechspace/fluxerly"
+ *
+ * export function pureHelpersExample(bits: bigint, content: string) {
+ *     return {
+ *         required: permissionBits.from(["ManageRoles", "ManageMessages"]),
+ *         missing: permissionBits.missing(bits, ["ManageRoles", "ManageMessages"]),
+ *         inspection: permissionBits.inspect(bits),
+ *         color: colors.parse("#ff8800"),
+ *         chunks: text.split(content, { maxLength: 2_000 }),
+ *     }
+ * }
+ * ```
+ */
+export const text = sharedText
 
 /** Pure hosted Fluxer guild-channel, direct-message, message, and bot-installation link helpers. Fallible route validation returns `Result` */
 export const links = sharedLinks
@@ -369,10 +398,65 @@ export type {
     MessageReactionEmojiRemoval,
 } from "./reactions.js"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
+export { builders, EmbedBuilder, MessageBuilder } from "./builders.js"
+export type {
+    CommandCooldownClaim,
+    CommandCooldownRequest,
+    MemoryCooldownOptions,
+    PrefixCommandDefinition,
+    PrefixCommandParse,
+    PrefixCommandParseInput,
+    PrefixCommandPrefix,
+    PrefixCommandsOptions,
+} from "./commands.js"
+export type {
+    DefaultCooldownStore,
+    MemoryCooldownStore,
+    DefaultPrefixCommand,
+    DefaultPrefixCommandContext,
+    DefaultPrefixCommandCooldown,
+    DefaultPrefixCommandRouter,
+} from "./default-commands.js"
+import { defaultCommands } from "./default-commands.js"
+
+/**
+ * Optional builders and prefix-command routing above direct client primitives.
+ * Builders return independent plain payload snapshots. Command routing remains inactive until attach and reuses one existing bounded messageCreate subscription without connecting the client.
+ * Guards, cooldown keys and handlers remain application-owned. Commands do not fetch permissions, send replies or retry failures
+ *
+ * @example
+ * ```ts
+ * import { builders, commands, type Client } from "@neontechspace/fluxerly"
+ *
+ * export function installPing(client: Client) {
+ *     const created = commands.create({ prefix: "!" })
+ *     if (created.isErr()) return created
+ *     const router = created.value
+ *     const registered = router.register({
+ *         name: "ping",
+ *         execute: async ({ client, message }) => {
+ *             const sent = await client.messages.reply(message, builders.message().content("Pong").build())
+ *             if (sent.isErr()) throw sent.error
+ *         },
+ *     })
+ *     return registered.isErr() ? registered : registered.value.attach(client)
+ * }
+ * ```
+ */
+export const commands = defaultCommands
 export type { LoggingOptions, DefaultLoggingOptions, DefaultLogger } from "./logging.js"
 export type { CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"
-import type { ClientState, ClientOptions, ConnectionState, OperationOptions } from "./client.js"
+import type {
+    CacheEntriesOptions,
+    CachedResources,
+    CacheKind,
+    ClientDiagnostics,
+    ClientState,
+    ClientOptions,
+    ConnectionState,
+    OperationOptions,
+} from "./client.js"
 import type {
     PermissionOverwrite,
     GuildChannel,
@@ -508,6 +592,15 @@ import {
     type RegistrationError,
     type SendError,
 } from "./message-errors.js"
+import {
+    MessageCleanupError,
+    type MessageCleanupFailure,
+    type MessageCleanupPlan,
+    type MessageCleanupReport,
+    type MessageCleanupSelection,
+    type DefaultMessageCleanupOptions,
+} from "./message-cleanup.js"
+import { cleanup, previewCleanup } from "#sdk/internal/message-cleanup"
 import type {
     EditMessageInput,
     ForwardMessageInput,
@@ -522,8 +615,23 @@ import type {
 import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
+export { MessageCleanupError } from "./message-cleanup.js"
 export { MessageFlags } from "./messages.js"
 export type { EventReadError, RegistrationError, SendError, MessageOperationFailure } from "./message-errors.js"
+export type {
+    MessageCleanupBatch,
+    MessageCleanupErrorReason,
+    MessageCleanupFailure,
+    MessageCleanupFailureMetadata,
+    MessageCleanupOptions,
+    MessageCleanupOutcome,
+    MessageCleanupPlan,
+    MessageCleanupProgress,
+    MessageCleanupReport,
+    MessageCleanupSelection,
+    MessageCleanupStopReason,
+    DefaultMessageCleanupOptions,
+} from "./message-cleanup.js"
 export type {
     Message,
     ForwardMessageInput,
@@ -1185,6 +1293,45 @@ export interface Messages {
         query?: MessageHistoryQuery,
         options?: DefaultMessageOperationOptions,
     ): ResultAsync<readonly Message[], MessageOperationFailure | CancelledError>
+    /** Preview one bounded exact cleanup selection without deleting, rereading cache, or requiring a gateway connection.
+     * maxScanned and maxSelected are each required integers from 1 through 10,000. Supply authorId, a synchronous filter, or both as combined criteria
+     *
+     * History is read newest first without prefetch until an empty page, scan bound, or selection bound. A short page is not exhaustion.
+     * Underlying history reads can populate an enabled message cache.
+     * The returned in-memory plan owns frozen selected snapshots and can only be consumed once by this client. It cannot be JSON-rebuilt or used by another client
+     *
+     * A filter throw, non-boolean result, or thenable fails with MessageCleanupError before deletion. A blocking synchronous filter cannot be preempted.
+     * This call uses one 30,000 ms default deadline across its history reads. Cancellation returns CancelledError and no cleanup request is submitted
+     */
+    previewCleanup(
+        channelId: string,
+        selection: MessageCleanupSelection,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<MessageCleanupPlan, MessageCleanupFailure | CancelledError>
+    /** Submit one prior plan's exact IDs in sequential batches of at most 100, without rereading history or rerunning selection criteria.
+     * A plan is single-use even after an error or cancellation, preventing accidental replay. Preview again or use explicit deleteMany for journaled reconciliation.
+     * One 30,000 ms default deadline covers all batch submissions. submittedBatches in a report or MessageCleanupError records only earlier HTTP-success submissions.
+     * A terminal rejected or unknown batch is reported separately. No report proves individual deletion, a deletion count, atomicity, or safe retry.
+     * onProgress is synchronous best effort. Callback throws and thenable rejections are ignored. Cancellation remains CancelledError and can leave a submitting batch unknown.
+     * Batches use deleteMany's confirmed rate-limit rejection retries, never automatic replay after an unknown outcome
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function cleanupWorkflowExample(client: Client, channelId: string, authorId: string) {
+     *     const preview = await client.messages.previewCleanup(channelId, {
+     *         authorId,
+     *         filter: message => message.attachments.length > 0,
+     *         maxScanned: 500,
+     *         maxSelected: 200,
+     *     })
+     *     return preview.isErr() ? preview : client.messages.cleanup(preview.value)
+     * }
+     * ```
+     */
+    cleanup(
+        plan: MessageCleanupPlan,
+        options?: DefaultMessageCleanupOptions,
+    ): ResultAsync<MessageCleanupReport, MessageCleanupFailure | CancelledError>
     /**
      * Replace text/embeds/files and return the frozen updated snapshot after the API response, without waiting for a gateway event.
      * Existing stickers are preserved; sticker replacement is not supported by this edit operation.
@@ -1293,7 +1440,16 @@ export interface ReactionCollector {
     waitForClose(options?: OperationOptions): ResultAsync<ReactionCollectorResult, CollectorFailure | CancelledError>
 }
 
-export type { ClientOptions, ConnectionState, OperationOptions } from "./client.js"
+export type {
+    CacheDiagnostic,
+    CacheEntriesOptions,
+    CachedResources,
+    CacheKind,
+    ClientDiagnostics,
+    ClientOptions,
+    ConnectionState,
+    OperationOptions,
+} from "./client.js"
 export {
     AuthenticationError,
     ShardConnectionError,
@@ -1597,24 +1753,36 @@ export interface Guilds {
         guildIds: readonly string[],
         options?: DefaultCountOperationOptions,
     ): ResultAsync<GuildCountsResult, CountOperationFailure | CancelledError>
-    /** Fetch one remote membership page for this bot, ordered by ascending guild ID.
+    /** Fetch one fresh remote membership page for this bot, ordered by ascending guild ID.
      * limit defaults to 200 (1–200); before/after are mutually exclusive existing-membership cursors.
-     * A removed cursor can cause Fluxer to restart the page. Counts and permissions are not projected.
-     * Returns frozen Guild observations without populating the guild cache or claiming a complete membership inventory.
+     * withCounts defaults to false. Fluxer can omit permission bits or requested approximate counts. Missing means unavailable, not zero.
+     * A removed cursor can cause Fluxer to restart the page. Returns frozen summaries without populating or reading the guild cache.
+     * Summaries are REST-only observations and do not claim a complete membership inventory or gateway consistency.
      * Uses this group's deadlines, retries and failures; no gateway connection or background traversal required
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function guildListExample(client: Client) {
+     *     const page = await client.guilds.fetchPage({ withCounts: true })
+     *     if (page.isErr()) return page
+     *     return page.value.map(({ id, permissions, approximateMemberCount }) => ({ id, permissions, approximateMemberCount }))
+     * }
+     * ```
      */
     fetchPage(
         query?: GuildListQuery,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly Guild[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly GuildListSummary[], GuildOperationFailure | CancelledError>
     /** Lazily traverse ascending guild IDs, retaining one page and never prefetching.
      * maxItems is required; pageSize defaults to 200 and maxPages to 100. Stop at maxItems or an empty page, not a short page
      *
      * Repeated/backward IDs after a removed cursor fail with PaginationError cursorStalled before that page is delivered.
      * Other pagination failures are input/pageLimit; remote failures preserve fetchPage's error and per-page timeout.
      * Each consumption copies inputs and yields Ok guilds or one terminal Err; abort yields CancelledError after request cleanup.
-     * break/return releases the page; abort the signal to interrupt a pending next. Client closure releases the page and fails the next pull.
-     * No cache hydration or consistent-inventory guarantee. Previously delivered values remain caller-owned
+     * break/return releases the page; abort the signal to interrupt a pending next. Client closure releases the page and fails the next pull
+     *
+     * withCounts applies to every page. Fluxer can omit permission bits or requested counts. Missing means unavailable, not zero.
+     * No cache hydration, gateway requirement or consistent-inventory guarantee. Previously delivered values remain caller-owned
      * @example
      * ```ts
      * import type { Client } from "@neontechspace/fluxerly"
@@ -1626,7 +1794,7 @@ export interface Guilds {
     iterate(
         query: GuildIterationQuery,
         options?: DefaultGuildOperationOptions,
-    ): AsyncIterable<Result<Guild, GuildOperationFailure | PaginationError | CancelledError>>
+    ): AsyncIterable<Result<GuildListSummary, GuildOperationFailure | PaginationError | CancelledError>>
     /** Leave the named guild as the authenticated bot, explicitly preserving authored messages.
      * HTTP 204 completes membership removal, not gateway delivery. The client stays usable for other guilds.
      * Fluxer rejects owners and restricted memberships. Only confirmed 429 rejection is retried; cancellation or a lost
@@ -2078,6 +2246,22 @@ export interface Members {
         guildId: string,
         options?: DefaultGuildOperationOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    /** Fetch fresh guild, authenticated-bot member, target member and role observations in parallel, then evaluate canManageHierarchy.
+     * One 30,000 ms default deadline covers the whole composition. Sibling cleanup is awaited on failure or cancellation.
+     * This never reads a guild cache, retains no helper snapshot, evaluates no permissions or MFA, and does not authorize or perform an action.
+     * Like its underlying explicit fetches, enabled guild-resource caches can receive these fresh responses.
+     * A true result is only the hierarchy rule over four independently observed resources, which can change before an endpoint request
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export const hierarchyCheckExample = (client: Client, guildId: string, userId: string) =>
+     *     client.members.fetchHierarchyCheck({ guildId, userId })
+     * ```
+     */
+    fetchHierarchyCheck(
+        target: MemberReference,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<boolean, GuildOperationFailure | CancelledError>
     /** Fetch an ascending user-ID page; default limit 100, range 1–1000.
      * Use the last userId as after. An empty page ends traversal; separate pages are not a consistent snapshot.
      * No hasMore guarantee, automatic traversal or partial malformed page. Input is copied when this call starts
@@ -2318,6 +2502,32 @@ export interface WebhookClient {
     shutdown(): Promise<void>
 }
 
+/** Local cache controls. They never fetch, refresh, mutate remote resources, or expose diagnostics through callbacks */
+export interface ClientCache {
+    /**
+     * Return up to limit already-observed frozen projections from one configured cache category in current eviction order.
+     * Users/directMessages use observation order. Other categories use least-to-most-recent order
+     *
+     * Omit limit for 100 entries. A positive safe integer from 1 through 1,000 is required.
+     * Expired entries are released before the snapshot. Enumeration does not refresh data or change the eviction order.
+     * The frozen array can be partial because retention, expiry, conflicts, gaps, clear and shutdown discard observations.
+     * Entries contain the requested cached data, unlike client.diagnostics. No network request or remote completeness claim is made.
+     * A closed client returns an empty array. Invalid kind or limit returns ConfigurationError without exposing the rejected value.
+     * It takes no cancellation signal and completes synchronously
+     */
+    entries<K extends CacheKind>(
+        kind: K,
+        options?: CacheEntriesOptions,
+    ): Result<readonly CachedResources[K][], ConfigurationError>
+    /**
+     * Release every SDK-held cache observation without changing cache configuration, caller-held frozen projections, requests or remote resources.
+     * In-flight reads that began before this call cannot repopulate cleared observations. Later reads can cache normally.
+     * Existing mutation guards retain their conservative invalidation behavior. Safe to repeat, including after closure.
+     * It takes no cancellation signal and completes synchronously
+     */
+    clear(): void
+}
+
 /**
  * Default client with SDK-owned execution of asynchronous operations.
  * Expected failures use ResultAsync Err values, while SDK defects reject with SdkDefect.
@@ -2357,6 +2567,8 @@ export interface Client extends ClientState {
     readonly members: Members
     /** REST, local lookup and live collection owned by this client */
     readonly messages: Messages
+    /** Local cache enumeration and release controls. Caching remains opt-in through ClientOptions.cache */
+    readonly cache: ClientCache
     /**
      * Register a callback for one EventMap event before or after connect. No cached history or REST-generated events.
      * Enabled cache changes happen before user dispatch, independently of subscriptions and their overflow.
@@ -2384,6 +2596,13 @@ export interface Client extends ClientState {
      * Local errors use Result and defects throw SdkDefect
      */
     events<K extends EventName>(event: K, options?: EventBufferOptions): Result<EventSubscription<K>, RegistrationError>
+    /**
+     * Read an immutable point-in-time local occupancy snapshot without network work, telemetry, persistence, tokens, remote routes, resource IDs or payloads.
+     * Counts cover this client's owned shards and admitted local work only. Accounted bytes are cache/queue budgets, not heap, process memory or remote storage.
+     * Configured cache bounds remain visible after closure, while retained counts report actual owner release progress. This does not establish remote completeness or readiness.
+     * It takes no cancellation signal and completes synchronously
+     */
+    diagnostics(): ClientDiagnostics
     /**
      * Connect and complete after every locally assigned shard authenticates and completes READY.
      * Readiness does not wait for GUILD_CREATE, a guild roster, or every resource to load
@@ -2477,6 +2696,7 @@ const executeOperation = <
         | EventReadError
         | MessageError
         | MessageOperationError
+        | MessageCleanupError
         | CollectorError
         | GuildOperationError
         | ChannelOperationError
@@ -2618,6 +2838,7 @@ function fromExit<
         | EventReadError
         | MessageError
         | MessageOperationError
+        | MessageCleanupError
         | CollectorError
         | GuildOperationError
         | ChannelOperationError
@@ -2910,6 +3131,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             | EventReadError
             | MessageError
             | MessageOperationError
+            | MessageCleanupError
             | CollectorError
             | GuildOperationError
             | ChannelOperationError
@@ -3038,12 +3260,27 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         if (reason?._tag === "Fail") return err(reason.error)
         throw new SdkDefect(operation)
     }
+    const cacheEntries = <K extends CacheKind>(
+        kind: K,
+        options?: CacheEntriesOptions,
+    ): Result<readonly CachedResources[K][], ConfigurationError> => {
+        const exit = Effect.runSyncExit(owner.cacheEntries(kind, options))
+        if (Exit.isSuccess(exit)) return ok(exit.value)
+        if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause)) throw new SdkDefect("cache.entries")
+        const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
+        if (failure?._tag === "Fail") return err(failure.error)
+        throw new SdkDefect("cache.entries")
+    }
     return ok(
         Object.freeze({
             presence: Object.freeze({
                 set: (input: PresenceInput) => lookup(owner.setPresence(input), "presence.set"),
                 setMembers: (guildId: string, memberIds: readonly string[]) =>
                     lookup(owner.setPresenceMembers(guildId, memberIds), "presence.setMembers"),
+            }),
+            cache: Object.freeze({
+                entries: <K extends CacheKind>(kind: K, options?: CacheEntriesOptions) => cacheEntries(kind, options),
+                clear: () => owner.clearCache(),
             }),
             application: Object.freeze({
                 fetchCurrent: (options?: DefaultBotApplicationOperationOptions) =>
@@ -3521,6 +3758,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         "members.fetchSelf",
                         options,
                     ),
+                fetchHierarchyCheck: (target: MemberReference, options?: DefaultGuildOperationOptions) =>
+                    execute(fetchHierarchyCheck(owner, target, options), "members.fetchHierarchyCheck", options),
                 fetchPage: (id: string, query?: MemberQuery, options?: DefaultGuildOperationOptions) =>
                     execute(
                         owner.guild("members.fetchPage", () => memberPage(id, query), options),
@@ -3766,6 +4005,13 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     query?: MessageHistoryQuery,
                     options?: DefaultMessageOperationOptions,
                 ) => execute(owner.fetchHistory(channelId, query, options), "fetchHistory", options),
+                previewCleanup: (
+                    channelId: string,
+                    selection: MessageCleanupSelection,
+                    options?: DefaultMessageOperationOptions,
+                ) => execute(previewCleanup(owner, channelId, selection, options), "previewCleanup", options),
+                cleanup: (plan: MessageCleanupPlan, options?: DefaultMessageCleanupOptions) =>
+                    execute(cleanup(owner, plan, options), "cleanup", options),
                 edit: (target: MessageReference, input: EditMessageInput, options?: DefaultMessageOperationOptions) =>
                     execute(owner.edit(target, input, options), "edit", options),
                 delete: (target: MessageReference, options?: DefaultMessageOperationOptions) =>
@@ -3843,6 +4089,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     ),
                     "events",
                 ),
+            diagnostics: () => owner.diagnostics(),
             get state() {
                 return owner.state
             },

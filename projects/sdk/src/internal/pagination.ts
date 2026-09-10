@@ -21,6 +21,7 @@ interface Settings {
     readonly pageSize: number
     readonly cursor: string | undefined
     readonly options: MessageOperationOptions
+    readonly withCounts?: boolean
 }
 interface Source<A, E> {
     readonly load: (cursor: string | undefined, limit: number) => Effect.Effect<Page<A>, E>
@@ -148,12 +149,22 @@ function prepare<A, E>(
     defaultSize: number,
     maximumSize: number,
     build: (settings: Settings) => Source<A, E> | undefined,
+    supportsCounts = false,
 ): Effect.Effect<Pagination<A, E>, PaginationError> {
     return Effect.suspend(() => {
         const invalid = () => Effect.fail(new PaginationError(operation, "input"))
         if (
             !record(query) ||
-            Object.keys(query).some((key) => !["maxItems", "maxPages", "pageSize", cursorKey].includes(key))
+            Object.keys(query).some(
+                (key) =>
+                    ![
+                        "maxItems",
+                        "maxPages",
+                        "pageSize",
+                        cursorKey,
+                        ...(supportsCounts ? ["withCounts"] : []),
+                    ].includes(key),
+            )
         )
             return invalid()
         const maxItems = query.maxItems,
@@ -167,12 +178,14 @@ function prepare<A, E>(
         if (timeout !== undefined && (!positive(timeout) || timeout > 2_147_483_647)) return invalid()
         const cursor = query[cursorKey]
         if (cursor !== undefined && typeof cursor !== "string") return invalid()
+        if (supportsCounts && query.withCounts !== undefined && typeof query.withCounts !== "boolean") return invalid()
         const settings = {
             maxItems,
             maxPages,
             pageSize,
             cursor,
             options: timeout === undefined ? {} : { timeoutMs: timeout },
+            ...(supportsCounts ? { withCounts: query.withCounts === true } : {}),
         }
         const source = build(settings)
         return source ? Effect.succeed(new Pagination(owner, operation, settings, source)) : invalid()
@@ -221,21 +234,35 @@ export const memberPagination = (
     })
 
 export const guildPagination = (owner: ClientOwner, query: unknown, options?: MessageOperationOptions) =>
-    prepare(owner, "guilds.iterate", query, options, "after", 200, 200, (settings) => {
-        if (!guildList(cursorQuery("after", settings.cursor, settings.pageSize))) return undefined
-        return {
-            load: (cursor, limit) =>
-                owner
-                    .guild("guilds.fetchPage", () => guildList(cursorQuery("after", cursor, limit)), settings.options)
-                    .pipe(
-                        Effect.flatMap((items) =>
-                            cursor !== undefined && items.some((guild) => BigInt(guild.id) <= BigInt(cursor))
-                                ? Effect.fail(new PaginationError("guilds.iterate", "cursorStalled"))
-                                : Effect.succeed({ items, next: items.at(-1)?.id ?? null }),
+    prepare(
+        owner,
+        "guilds.iterate",
+        query,
+        options,
+        "after",
+        200,
+        200,
+        (settings) => {
+            const pageQuery = (cursor: string | undefined, limit: number) => ({
+                ...cursorQuery("after", cursor, limit),
+                ...(settings.withCounts ? { withCounts: true } : {}),
+            })
+            if (!guildList(pageQuery(settings.cursor, settings.pageSize))) return undefined
+            return {
+                load: (cursor, limit) =>
+                    owner
+                        .guild("guilds.fetchPage", () => guildList(pageQuery(cursor, limit)), settings.options)
+                        .pipe(
+                            Effect.flatMap((items) =>
+                                cursor !== undefined && items.some((guild) => BigInt(guild.id) <= BigInt(cursor))
+                                    ? Effect.fail(new PaginationError("guilds.iterate", "cursorStalled"))
+                                    : Effect.succeed({ items, next: items.at(-1)?.id ?? null }),
+                            ),
                         ),
-                    ),
-        }
-    })
+            }
+        },
+        true,
+    )
 
 export const reactionUserPagination = (
     owner: ClientOwner,

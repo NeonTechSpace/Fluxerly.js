@@ -1,12 +1,37 @@
 import assert from "node:assert/strict"
 import {
     createWebhookClient,
+    builders,
+    commands,
+    colors,
+    text,
+    permissionBits,
     assets,
     CountOperationError,
     MemberChunkError,
     ShardConnectionError,
     AuthenticationError,
 } from "@neontechspace/fluxerly"
+
+assert.equal(colors.parse("#ff8800")._unsafeUnwrap(), 0xff8800)
+assert.equal(colors.toHex(1)._unsafeUnwrap(), "#000001")
+assert.deepEqual(colors.toRgb(0xff8800)._unsafeUnwrap(), [255, 136, 0])
+assert.deepEqual(text.split("A🦊B", { maxLength: 2 })._unsafeUnwrap(), ["A", "🦊", "B"])
+assert.deepEqual(permissionBits.inspect(1n << 63n)._unsafeUnwrap(), { names: [], unknownBits: 1n << 63n })
+
+assert.deepEqual(builders.message().content("packed").embed(builders.embed().title("Title")).build(), {
+    content: "packed",
+    embeds: [{ title: "Title" }],
+})
+const commandStore = commands.memoryCooldowns({ maxEntries: 1 })._unsafeUnwrap()
+assert.equal(commandStore.claim({ key: "packed", durationMs: 60_000 })._unsafeUnwrap()._tag, "CooldownAcquired")
+assert.equal(commandStore.claim({ key: "packed", durationMs: 60_000 })._unsafeUnwrap()._tag, "CooldownActive")
+commandStore.clear()
+assert.equal(commandStore.size, 0)
+const commandRouter = commands.create({ prefix: "!" })._unsafeUnwrap()
+const registeredRouter = commandRouter.register({ name: "ping", execute() {} })._unsafeUnwrap()
+assert.notEqual(registeredRouter, commandRouter)
+assert.ok(Object.isFrozen(registeredRouter))
 
 const webhookClient = createWebhookClient({ id: "100", token: "fixture_only" })
 assert.ok(webhookClient.isOk())
@@ -84,6 +109,15 @@ assert.equal(
 )
 assert.equal((await result.value.users.fetchProfile("bad")).error.operation, "users.fetchProfile")
 assert.equal((await result.value.messages.deleteMany("20", [])).error.operation, "deleteMany")
+assert.equal(
+    (await result.value.members.fetchHierarchyCheck({ guildId: "bad", userId: "30" })).error.operation,
+    "members.fetchHierarchyCheck",
+)
+assert.equal(
+    (await result.value.messages.previewCleanup("20", { maxScanned: 1, maxSelected: 1 })).error._tag,
+    "MessageCleanupError",
+)
+assert.equal((await result.value.messages.cleanup({})).error._tag, "MessageCleanupError")
 assert.equal(
     (await result.value.members.timeout({ guildId: "20", userId: "30" }, 0)).error.operation,
     "members.timeout",
@@ -169,6 +203,14 @@ assert.ok(cached.isOk())
 assert.equal(cached.value?.content, "Updated")
 assert.ok(Object.isFrozen(cached.value))
 assert.equal(Reflect.set(cached.value, "content", "overwritten"), false)
+const diagnostics = result.value.diagnostics()
+assert.ok(Object.isFrozen(diagnostics))
+assert.equal(diagnostics.caches.messages.configured, true)
+const entries = result.value.cache.entries("messages", { limit: 1 })
+assert.ok(entries.isOk())
+assert.equal(entries.value[0]?.content, "Updated")
+result.value.cache.clear()
+assert.deepEqual(result.value.cache.entries("messages")._unsafeUnwrap(), [])
 const deleted = await result.value.messages.delete(edited.value)
 assert.ok(deleted.isOk())
 assert.equal(deleted.value, undefined)
@@ -187,6 +229,14 @@ assert.ok(Object.isFrozen(history.value) && Object.isFrozen(history.value[0].aut
 const invalidHistory = await result.value.messages.fetchHistory("20", { limit: 101 })
 assert.ok(invalidHistory.error instanceof MessageOperationError)
 assert.equal(invalidHistory.error.operation, "fetchHistory")
+globalThis.fetch = async (url, init) => {
+    assert.equal(url, "https://api.fluxer.app/v1/users/@me/guilds?limit=200&with_counts=true")
+    assert.equal(init.method, "GET")
+    return Response.json([{ id: "20", name: "Packed guild", owner_id: "30", features: [], permissions: "0" }])
+}
+const guildList = await result.value.guilds.fetchPage({ withCounts: true })
+assert.ok(guildList.isOk())
+assert.equal(guildList.value[0]?.permissions, 0n)
 globalThis.fetch = async (url, init) => {
     assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages/11")
     assert.equal(init.method, "GET")

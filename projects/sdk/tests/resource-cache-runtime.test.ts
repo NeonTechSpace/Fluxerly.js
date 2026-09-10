@@ -19,4 +19,5 @@ test("built resource caches bound dense member pages and release snapshots witho
     expect(
         reports.filter((report) => report.check === "resource_cache_active_expiry_and_shutdown" && report.passed),
     ).toHaveLength(2)
+    expect(reports.filter((report) => report.check === "resource_cache_clear_release" && report.passed)).toHaveLength(2)
 }, 30_000)

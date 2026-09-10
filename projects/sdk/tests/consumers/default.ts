@@ -1,10 +1,19 @@
 import {
     createClient,
+    colors,
+    permissionBits,
+    text,
+    type ColorInput,
+    type RgbColor,
+    type PermissionBitInspection,
+    type TextSplitOptions,
     canManageHierarchy,
     compareHierarchy,
     ChannelType,
     Permissions,
     MessageFlags,
+    builders,
+    commands,
     type ForwardMessageInput,
     type MessageSnapshot,
     type UserProfile,
@@ -27,6 +36,11 @@ import {
     type PresenceUpdate,
     type PresenceUpdateBulk,
     type CachePolicyErrorReport,
+    type CacheDiagnostic,
+    type CacheEntriesOptions,
+    type CachedResources,
+    type CacheKind,
+    type ClientDiagnostics,
     type MessageCacheOptions,
     type MessageCacheSettings,
     type Collector,
@@ -37,6 +51,28 @@ import {
     type RoleHierarchyInput,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+export function pureHelperTypes(bits: bigint) {
+    const input: ColorInput = [255, 136, 0]
+    const rgb: RgbColor = [255, 136, 0]
+    const options: TextSplitOptions = { maxLength: 2_000 }
+    const inspected = permissionBits.inspect(bits)
+    if (inspected.isOk()) {
+        const snapshot: PermissionBitInspection = inspected.value
+        // @ts-expect-error Inspection names are immutable
+        snapshot.names.push("ManageRoles")
+    }
+    // @ts-expect-error RGB channels are immutable
+    rgb[0] = 0
+    // @ts-expect-error Permission names are checked by the public type
+    permissionBits.from(["UnknownPermission"])
+    return {
+        color: colors.parse(input),
+        hex: colors.toHex(0xff8800),
+        rgb: colors.toRgb(0xff8800),
+        chunks: text.split("text", options),
+    }
+}
 
 export function shardingTypes(client: Client) {
     const plan: ShardingOptions = { totalShards: 2, shardIds: [0, 1] }
@@ -50,6 +86,23 @@ export function shardingTypes(client: Client) {
     client.messages.collect("20", { guildId: "40" })
     client.messages.collectReactions({ id: "10", channelId: "20" }, { guildId: "40" })
     return createClient({ token: "fixture-only", sharding: plan })
+}
+
+/** Packed optional tools preserve default Result handling and reject empty body-builder variadics */
+export function optionalCommandTypes(client: Client) {
+    const empty = builders.message()
+    // @ts-expect-error Empty builders cannot build a message payload
+    empty.build()
+    // @ts-expect-error Empty variadic calls do not select a message body
+    empty.addEmbeds()
+    // @ts-expect-error Empty variadic calls do not select a message body
+    empty.addAttachments()
+    // @ts-expect-error Empty variadic calls do not select a message body
+    empty.addStickers()
+    const created = commands.create({ prefix: "!" })
+    if (created.isErr()) return created
+    const extended = created.value.register({ name: "ping", execute: () => undefined })
+    return extended.isErr() ? extended : extended.value.attach(client)
 }
 
 export async function useConsumerFeatures(client: Client, channelId: string, source: MessageReference, userId: string) {
@@ -215,6 +268,29 @@ export function readCachedSnapshot(client: Client): Message | undefined {
     // @ts-expect-error Cache lookup accepts MessageReference, not a message ID
     client.messages.get("10")
     return snapshot
+}
+
+/** Typechecked local occupancy, bounded enumeration and synchronous cache release through the packed default package */
+export function inspectCache(client: Client): Message | undefined {
+    const diagnostics: ClientDiagnostics = client.diagnostics()
+    const messageDiagnostic: CacheDiagnostic = diagnostics.caches.messages
+    const kind: CacheKind = "messages"
+    const options: CacheEntriesOptions = { limit: 10 }
+    const entries = client.cache.entries(kind, options)
+    client.cache.clear()
+    if (entries.isErr()) return undefined
+    const snapshots: readonly CachedResources["messages"][] = entries.value
+    const activeCapacity: number = diagnostics.rest.activeCapacity
+    const configured: boolean = messageDiagnostic.configured
+    void activeCapacity
+    void configured
+    // @ts-expect-error Enumerated arrays are readonly
+    snapshots.push(entries.value[0]!)
+    // @ts-expect-error Cache categories are a closed public union
+    client.cache.entries("unknown")
+    // @ts-expect-error Cache enumeration limits are numeric
+    client.cache.entries("messages", { limit: "10" })
+    return snapshots[0]
 }
 
 export async function manageClient(token: string): Promise<void> {
@@ -478,4 +554,25 @@ export function watchPresenceRecovery(client: Client) {
 /** Typechecked explicit selected-member presence intent through the packed default entry point */
 export function selectMemberPresence(client: Client, guildId: string, memberId: string) {
     return client.presence.setMembers(guildId, [memberId])
+}
+
+/** Typechecked fresh hierarchy, optional guild-list fields, and exact cleanup-plan use through the packed default entry point */
+export async function previewModerationCleanup(client: Client, guildId: string, channelId: string, authorId: string) {
+    const hierarchy = await client.members.fetchHierarchyCheck({ guildId, userId: authorId })
+    const memberships = await client.guilds.fetchPage({ withCounts: true })
+    if (memberships.isOk()) {
+        const permissions: bigint | undefined = memberships.value[0]?.permissions
+        void permissions
+    }
+    const preview = await client.messages.previewCleanup(channelId, {
+        authorId,
+        filter: (message) => message.attachments.length > 0,
+        maxScanned: 500,
+        maxSelected: 200,
+    })
+    if (preview.isErr()) return preview
+    const report = await client.messages.cleanup(preview.value, { onProgress: (event) => void event.batch.batchIndex })
+    // @ts-expect-error A cleanup selection must be bounded
+    client.messages.previewCleanup(channelId, { authorId })
+    return { hierarchy, report }
 }

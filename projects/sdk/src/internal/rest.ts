@@ -59,6 +59,8 @@ type Pending = {
     resume: (effect: Effect.Effect<() => void, RestFailure | ClientClosedError>) => void
 }
 type Bucket = { remaining: number; until: number }
+const activeRequestCapacity = 4
+const queuedRequestCapacity = 256
 const queuedJsonMaxBytes = 4_194_304
 type Outcome = MessageOperationError["outcome"]
 type Request<A> = {
@@ -156,6 +158,19 @@ export class RestOwner {
     #controllers = new Set<AbortController>()
     #operations = new Set<Deferred.Deferred<void>>()
 
+    diagnostics() {
+        return {
+            activeRequests: this.#active,
+            activeCapacity: activeRequestCapacity,
+            queuedRequests: this.#pending.length,
+            queuedCapacity: queuedRequestCapacity,
+            queuedJsonBytes: this.#bytes,
+            queuedJsonByteCapacity: queuedJsonMaxBytes,
+            reservedUploadBytes: this.#uploadBytes,
+            uploadByteCapacity: this.uploadMaxBytes,
+        }
+    }
+
     #pump() {
         if (this.#timer !== undefined) clearTimeout(this.#timer)
         this.#timer = undefined
@@ -163,7 +178,7 @@ export class RestOwner {
         for (const [key, bucket] of this.#buckets) if (bucket.until <= now) this.#buckets.delete(key)
         if (this.#closed) return
         let earliest = Infinity
-        for (let index = 0; index < this.#pending.length && this.#active < 4;) {
+        for (let index = 0; index < this.#pending.length && this.#active < activeRequestCapacity;) {
             const item = this.#pending[index]!
             const bucket = this.#buckets.get(item.route)
             const until = Math.max(item.until, this.#globalUntil, bucket && bucket.remaining <= 0 ? bucket.until : 0)
@@ -186,7 +201,7 @@ export class RestOwner {
                 }),
             )
         }
-        if (earliest !== Infinity && this.#active < 4)
+        if (earliest !== Infinity && this.#active < activeRequestCapacity)
             this.#timer = setTimeout(() => this.#pump(), Math.min(2_147_483_647, Math.max(1, earliest - now)))
     }
 
@@ -197,7 +212,7 @@ export class RestOwner {
                 return
             }
             // A new request may enter directly when there is no backlog and a slot is available
-            if (this.#pending.length >= 256 || bytes > queuedJsonMaxBytes - this.#bytes) {
+            if (this.#pending.length >= queuedRequestCapacity || bytes > queuedJsonMaxBytes - this.#bytes) {
                 resume(Effect.fail(new RestFailure("busy", "notDispatched")))
                 return
             }
@@ -1440,7 +1455,7 @@ export class RestOwner {
             if (!Number.isSafeInteger(uploadBytes) || uploadBytes > owner.uploadMaxBytes - owner.#uploadBytes)
                 return Effect.fail(new RestFailure("busy", "notDispatched"))
             // Check JSON/count admission before allocating binary snapshots, then reserve before any wait
-            if (owner.#pending.length >= 256 || bytes > queuedJsonMaxBytes - owner.#bytes)
+            if (owner.#pending.length >= queuedRequestCapacity || bytes > queuedJsonMaxBytes - owner.#bytes)
                 return Effect.fail(new RestFailure("busy", "notDispatched"))
             owner.#uploadBytes += uploadBytes
             try {

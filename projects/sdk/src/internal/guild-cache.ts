@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util"
+import type { CacheDiagnostic } from "#sdk/client"
 import type { Guild, GuildMember, GuildRole } from "#sdk/guilds"
 import type { GuildEmoji, GuildSticker } from "#sdk/expressions"
 import type { EventMap, EventName } from "#sdk/events"
@@ -66,6 +67,36 @@ export class GuildCache {
         entries.delete(key(selection))
         entries.set(key(selection), entry)
         return entry.value as Resources[K]
+    }
+
+    diagnostics(kind: ResourceKind): CacheDiagnostic {
+        this.#purge()
+        this.#schedule()
+        const settings = this.settings[kind]
+        return {
+            configured: settings !== undefined,
+            retainedEntries: this.#entries[kind].size,
+            accountedBytes: this.#bytes[kind],
+            maxEntries: settings?.maxEntries ?? null,
+            maxBytes: settings?.maxBytes ?? null,
+        }
+    }
+
+    entries<K extends ResourceKind>(kind: K, limit: number): readonly Resources[K][] {
+        this.#purge()
+        this.#schedule()
+        const entries: Resources[K][] = []
+        for (const entry of this.#entries[kind].values()) {
+            entries.push(entry.value as Resources[K])
+            if (entries.length === limit) break
+        }
+        return Object.freeze(entries)
+    }
+
+    /** Release all retained resource observations and prevent earlier reads from restoring them */
+    clear() {
+        if (this.#closed) return
+        this.gap()
     }
 
     #peek(selection: Selection) {

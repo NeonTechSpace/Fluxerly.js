@@ -306,7 +306,20 @@ export interface MemberQuery {
     readonly after?: string
 }
 
-/** One remote page of the authenticated bot's guild memberships, without approximate counts */
+/** One fresh authenticated-bot guild-membership summary from the REST list endpoint.
+ * This is not a cached Guild and does not update a cached Guild. permissions and approximate counts remain absent
+ * when Fluxer omits them, including provider lookup failures. Absence is not zero or a complete-membership claim
+ */
+export interface GuildListSummary extends Guild {
+    /** Raw unsigned permission bits that Fluxer made available for this membership. Omission is unavailable, not zero */
+    readonly permissions?: bigint
+    /** Provider-supplied approximate member count when withCounts was requested and Fluxer could obtain it */
+    readonly approximateMemberCount?: number
+    /** Provider-supplied approximate presence count when withCounts was requested and Fluxer could obtain it */
+    readonly approximatePresenceCount?: number
+}
+
+/** One remote page of the authenticated bot's guild memberships */
 export interface GuildListQuery {
     /** Page size, integer 1–200, default 200 */
     readonly limit?: number
@@ -318,6 +331,10 @@ export interface GuildListQuery {
      * If the cursor membership no longer exists, Fluxer can restart the page from the beginning
      */
     readonly after?: string
+    /** Request provider-supplied approximate member and presence counts. Defaults to false.
+     * Fluxer can omit requested counts and permissions, so omitted fields remain unavailable rather than zero
+     */
+    readonly withCounts?: boolean
 }
 
 /** Settings shared by remote guild, member and role operations */
@@ -523,6 +540,7 @@ export type GuildOperation =
     | "members.kick"
     | "members.fetch"
     | "members.fetchSelf"
+    | "members.fetchHierarchyCheck"
     | "members.fetchPage"
     | "members.editSelf"
     | "members.setNickname"

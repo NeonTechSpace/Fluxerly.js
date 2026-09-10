@@ -96,7 +96,7 @@ test.each(modes)("%s guild pages are bounded, frozen, and do not populate a memb
         { limit: 201 },
         { limit: null },
         { before: "1", after: "2" },
-        { withCounts: true },
+        { withCounts: "yes" },
     ])
         await expect(api.page(query as GuildListQuery)).rejects.toMatchObject({
             reason: "input",
@@ -107,6 +107,59 @@ test.each(modes)("%s guild pages are bounded, frozen, and do not populate a memb
         vi.stubGlobal("fetch", async () => Response.json(response))
         await expect(api.page()).rejects.toMatchObject({ reason: "response" })
     }
+})
+
+test.each(modes)(
+    "%s guild pages preserve available list permissions and optional approximate counts without cache admission",
+    async (mode) => {
+        const api = await setup(mode)
+        const calls: URL[] = []
+        vi.stubGlobal("fetch", async (url: string) => {
+            calls.push(new URL(url))
+            return Response.json([
+                {
+                    ...wireGuild("20"),
+                    permissions: "18446744073709551615",
+                    approximate_member_count: 0,
+                    approximate_presence_count: 4,
+                },
+                { ...wireGuild("21"), permissions: "0" },
+            ])
+        })
+        const page = await api.page({ withCounts: true })
+        expect(page).toMatchObject([
+            {
+                id: "20",
+                permissions: 18_446_744_073_709_551_615n,
+                approximateMemberCount: 0,
+                approximatePresenceCount: 4,
+            },
+            { id: "21", permissions: 0n },
+        ])
+        expect("approximateMemberCount" in page[1]!).toBe(false)
+        expect(await api.getGuild("20")).toBeUndefined()
+        expect(Object.fromEntries(calls[0]!.searchParams)).toEqual({ limit: "200", with_counts: "true" })
+        for (const permissions of ["-1", "18446744073709551616", "9".repeat(21), null]) {
+            vi.stubGlobal("fetch", async () => Response.json([{ ...wireGuild("20"), permissions }]))
+            await expect(api.page({ withCounts: true })).rejects.toMatchObject({ reason: "response" })
+        }
+    },
+)
+
+test.each(modes)("%s guild iteration forwards withCounts to every remote page", async (mode) => {
+    const api = await setup(mode)
+    const calls: URL[] = []
+    vi.stubGlobal("fetch", async (url: string) => {
+        const request = new URL(url)
+        calls.push(request)
+        return Response.json(
+            request.searchParams.has("after") ? [] : [{ ...wireGuild("20"), approximate_member_count: 5 }],
+        )
+    })
+    const page = await gather(api.iterate({ maxItems: 2, pageSize: 2, withCounts: true }))
+    expect(page).toMatchObject([{ id: "20", approximateMemberCount: 5 }])
+    expect(calls).toHaveLength(2)
+    expect(calls.every((request) => request.searchParams.get("with_counts") === "true")).toBe(true)
 })
 
 test.each(modes)(

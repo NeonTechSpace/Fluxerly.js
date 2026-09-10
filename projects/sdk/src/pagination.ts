@@ -33,6 +33,10 @@ export interface UserIterationQuery extends PaginationQuery {
 export interface GuildIterationQuery extends PaginationQuery {
     /** Exclusive starting guild ID. A removed cursor that causes repeated results fails with cursorStalled */
     readonly after?: string
+    /** Request provider-supplied approximate member and presence counts for every page. Defaults to false.
+     * Fluxer can omit requested counts and permissions, so each omitted summary field remains unavailable
+     */
+    readonly withCounts?: boolean
 }
 
 /** Descending pin-time traversal, emitting each message ID at most once per consumption.

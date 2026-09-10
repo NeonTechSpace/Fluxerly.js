@@ -1,6 +1,11 @@
 import type { MessageCacheOptions, ResourceCacheSettings } from "./cache.js"
+import type { GuildChannel } from "./channels.js"
+import type { GuildEmoji, GuildSticker } from "./expressions.js"
+import type { Guild, GuildMember, GuildRole } from "./guilds.js"
 import type { DefaultLoggingOptions } from "./logging.js"
+import type { Message } from "./messages.js"
 import type { ShardingOptions, ShardState } from "./sharding.js"
+import type { DirectMessageChannel, User } from "./users.js"
 
 /**
  * Options accepted when creating a disconnected client
@@ -120,6 +125,67 @@ export interface ClientOptions {
  * Healthy-shard work can continue during aggregate Recovering. Closing means permanent cleanup, and Closed cannot restart
  */
 export type ConnectionState = "Disconnected" | "Connecting" | "Connected" | "Recovering" | "Closing" | "Closed"
+
+/** One local cache category. Categories identify SDK-held observation types, not remote collections or identifiers */
+export type CacheKind =
+    "messages" | "guilds" | "members" | "roles" | "channels" | "users" | "directMessages" | "emojis" | "stickers"
+
+/** Frozen projection type retained by each cache category when that category is configured */
+export interface CachedResources {
+    readonly messages: Message
+    readonly guilds: Guild
+    readonly members: GuildMember
+    readonly roles: GuildRole
+    readonly channels: GuildChannel
+    readonly users: User
+    readonly directMessages: DirectMessageChannel
+    readonly emojis: GuildEmoji
+    readonly stickers: GuildSticker
+}
+
+/** Bounds one local cache enumeration. Omit limit for 100 snapshots. Values from 1 through 1,000 are accepted */
+export interface CacheEntriesOptions {
+    readonly limit?: number
+}
+
+/** Point-in-time local retention accounting for one cache category */
+export interface CacheDiagnostic {
+    /** Whether this category was configured when the client was created. A Closing/Closed client accepts no further snapshots */
+    readonly configured: boolean
+    /** SDK-held observations after expiry pruning, never a remote-resource count or completeness guarantee */
+    readonly retainedEntries: number
+    /** UTF-8 JSON bytes accounted by this cache, not JavaScript heap, process memory or caller-held projections */
+    readonly accountedBytes: number
+    /** Configured client-wide entry bound, or null when this category was disabled */
+    readonly maxEntries: number | null
+    /** Configured client-wide accounted-byte bound, or null when this category was disabled */
+    readonly maxBytes: number | null
+}
+
+/** Point-in-time local client occupancy with no token, remote route, resource ID or cached payload */
+export interface ClientDiagnostics {
+    /** Current aggregate client lifecycle state, not an event history or a readiness promise */
+    readonly state: ConnectionState
+    /** Current aggregate heartbeat latency with the same availability rules as ClientState.gatewayLatencyMs */
+    readonly gatewayLatencyMs: number | null
+    /** Current locally owned shard state only, in configured local order */
+    readonly shards: readonly ShardState[]
+    /** Shared local HTTP scheduler occupancy. Queued JSON bytes exclude uploads and do not bound heap or process memory */
+    readonly rest: {
+        readonly activeRequests: number
+        readonly activeCapacity: number
+        readonly queuedRequests: number
+        readonly queuedCapacity: number
+        readonly queuedJsonBytes: number
+        readonly queuedJsonByteCapacity: number
+    }
+    /** SDK-reserved transfer bytes across queued and active work, currently including copied upload inputs but not caller buffers or remote temporary storage */
+    readonly uploads: { readonly reservedBytes: number; readonly byteCapacity: number }
+    /** Shared local gateway count/member-request occupancy, not Fluxer's worker or a distributed quota */
+    readonly gatewayRequests: { readonly activeRequests: number; readonly activeCapacity: number }
+    /** Local cache accounting. Configured bounds survive closure, while released observations disappear from retained counts */
+    readonly caches: Readonly<Record<CacheKind, CacheDiagnostic>>
+}
 
 /** Properties shared by default and native clients */
 export interface ClientState {

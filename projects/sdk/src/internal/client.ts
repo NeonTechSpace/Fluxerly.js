@@ -1,5 +1,12 @@
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Queue, Random, Redacted, Scope, Semaphore, Stream } from "effect"
-import type { ConnectionState } from "#sdk/client"
+import type {
+    CacheDiagnostic,
+    CacheEntriesOptions,
+    CachedResources,
+    CacheKind,
+    ClientDiagnostics,
+    ConnectionState,
+} from "#sdk/client"
 import type { ShardState } from "#sdk/sharding"
 import { guildShardId, type ShardPlan } from "./sharding.js"
 import type { CachePolicyErrorReport } from "#sdk/cache"
@@ -34,9 +41,9 @@ import {
     ClientClosedError,
     ConnectionError,
     ConnectionTimeoutError,
+    ConfigurationError,
     RateLimitError,
     ShardConnectionError,
-    type ConfigurationError,
     type ConnectError,
     type ConnectionFailure,
 } from "#sdk/errors"
@@ -76,6 +83,36 @@ import type {
     MessageReference,
     SendOptions,
 } from "#sdk/messages"
+
+const cacheKinds = [
+    "messages",
+    "guilds",
+    "members",
+    "roles",
+    "channels",
+    "users",
+    "directMessages",
+    "emojis",
+    "stickers",
+] as const satisfies readonly CacheKind[]
+const emptyEntries = Object.freeze([])
+const disabledCacheDiagnostic: CacheDiagnostic = Object.freeze({
+    configured: false,
+    retainedEntries: 0,
+    accountedBytes: 0,
+    maxEntries: null,
+    maxBytes: null,
+})
+const freezeCacheDiagnostic = (diagnostic: CacheDiagnostic | undefined): CacheDiagnostic =>
+    diagnostic === undefined
+        ? disabledCacheDiagnostic
+        : Object.freeze({
+              configured: diagnostic.configured,
+              retainedEntries: diagnostic.retainedEntries,
+              accountedBytes: diagnostic.accountedBytes,
+              maxEntries: diagnostic.maxEntries,
+              maxBytes: diagnostic.maxBytes,
+          })
 
 const typingRefreshMs = 8_000
 
@@ -199,6 +236,82 @@ export class ClientOwner {
                 }),
             ),
         )
+    }
+    diagnostics(): ClientDiagnostics {
+        const rest = this.rest.diagnostics()
+        const caches = Object.freeze({
+            messages: freezeCacheDiagnostic(this.cache?.diagnostics()),
+            guilds: freezeCacheDiagnostic(this.resources?.diagnostics("guilds")),
+            members: freezeCacheDiagnostic(this.resources?.diagnostics("members")),
+            roles: freezeCacheDiagnostic(this.resources?.diagnostics("roles")),
+            channels: freezeCacheDiagnostic(this.channelCache?.diagnostics()),
+            users: freezeCacheDiagnostic(this.userCache.diagnostics("users")),
+            directMessages: freezeCacheDiagnostic(this.userCache.diagnostics("directMessages")),
+            emojis: freezeCacheDiagnostic(this.resources?.diagnostics("emojis")),
+            stickers: freezeCacheDiagnostic(this.resources?.diagnostics("stickers")),
+        })
+        return Object.freeze({
+            state: this.state,
+            gatewayLatencyMs: this.gatewayLatencyMs,
+            shards: this.shards,
+            rest: Object.freeze({
+                activeRequests: rest.activeRequests,
+                activeCapacity: rest.activeCapacity,
+                queuedRequests: rest.queuedRequests,
+                queuedCapacity: rest.queuedCapacity,
+                queuedJsonBytes: rest.queuedJsonBytes,
+                queuedJsonByteCapacity: rest.queuedJsonByteCapacity,
+            }),
+            uploads: Object.freeze({ reservedBytes: rest.reservedUploadBytes, byteCapacity: rest.uploadByteCapacity }),
+            gatewayRequests: Object.freeze(this.#gatewayRequests.diagnostics()),
+            caches,
+        })
+    }
+    cacheEntries<K extends CacheKind>(
+        kind: K,
+        options?: CacheEntriesOptions,
+    ): Effect.Effect<readonly CachedResources[K][], ConfigurationError> {
+        return Effect.suspend(() => {
+            if (!cacheKinds.includes(kind))
+                return Effect.fail(new ConfigurationError("kind", "Cache entry kind must name a supported cache"))
+            if (
+                options !== undefined &&
+                (typeof options !== "object" ||
+                    options === null ||
+                    Array.isArray(options) ||
+                    Object.keys(options).some((key) => key !== "limit"))
+            )
+                return Effect.fail(new ConfigurationError("limit", "Cache entry options must contain only limit"))
+            const limit = options?.limit === undefined ? 100 : options.limit
+            if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 1_000)
+                return Effect.fail(
+                    new ConfigurationError("limit", "Cache entry limit must be a safe integer from 1 through 1,000"),
+                )
+            return Effect.succeed(this.#cacheEntries(kind, limit))
+        })
+    }
+    clearCache() {
+        this.cache?.clear()
+        this.resources?.clear()
+        this.channelCache?.clear()
+        this.userCache.clear()
+    }
+    #cacheEntries<K extends CacheKind>(kind: K, limit: number): readonly CachedResources[K][] {
+        switch (kind) {
+            case "messages":
+                return (this.cache?.entries(limit) ?? emptyEntries) as readonly CachedResources[K][]
+            case "guilds":
+            case "members":
+            case "roles":
+            case "emojis":
+            case "stickers":
+                return (this.resources?.entries(kind, limit) ?? emptyEntries) as readonly CachedResources[K][]
+            case "channels":
+                return (this.channelCache?.entries(limit) ?? emptyEntries) as readonly CachedResources[K][]
+            case "users":
+            case "directMessages":
+                return this.userCache.entries(kind, limit) as readonly CachedResources[K][]
+        }
     }
     shardIdForGuild(guildId: string): number | undefined {
         const id = guildShardId(guildId, this.#plan.totalShards)

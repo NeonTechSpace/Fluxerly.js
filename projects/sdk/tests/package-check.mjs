@@ -85,6 +85,7 @@ try {
             "messages",
             "events",
             "message-errors",
+            "message-cleanup",
             "collectors",
             "pagination",
             "logging",
@@ -105,10 +106,16 @@ try {
             "member-search",
             "messages",
             "helpers",
+            "colors",
+            "text",
             "message-search",
             "role-hierarchy",
             "assets",
             "application",
+            "builders",
+            "commands",
+            "default-commands",
+            "native-commands",
             "counts",
             "member-chunks",
             "sharding",
@@ -158,6 +165,9 @@ try {
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
         const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
         const publicExamples = examples(publicSource)
+        const optionalExamples = publicExamples.filter((example) => /(?:function|const) installPing/.test(example))
+        assert.equal(optionalExamples.length, 1)
+        writeFileSync(join(consumer, "optional-tools-example.ts"), optionalExamples[0])
         for (const name of [
             "forwardExample",
             "profileExample",
@@ -166,6 +176,7 @@ try {
             "attachmentDeleteExample",
             "memberChunksExample",
             "shardingExample",
+            "pureHelpersExample",
         ]) {
             const matched = publicExamples.filter((example) => example.includes(`function ${name}(`))
             assert.equal(matched.length, 1)
@@ -181,6 +192,15 @@ try {
         )
         assert.equal(hierarchyExamples.length, 1)
         writeFileSync(join(consumer, "hierarchy-example.ts"), hierarchyExamples[0])
+        const hierarchyWorkflowExamples = publicExamples.filter((example) => /hierarchyCheckExample/.test(example))
+        assert.equal(hierarchyWorkflowExamples.length, 1)
+        writeFileSync(join(consumer, "hierarchy-workflow-example.ts"), hierarchyWorkflowExamples[0])
+        const cleanupWorkflowExamples = publicExamples.filter((example) => /cleanupWorkflowExample/.test(example))
+        assert.equal(cleanupWorkflowExamples.length, 1)
+        writeFileSync(join(consumer, "cleanup-workflow-example.ts"), cleanupWorkflowExamples[0])
+        const guildListExamples = publicExamples.filter((example) => /guildListExample/.test(example))
+        assert.equal(guildListExamples.length, 1)
+        writeFileSync(join(consumer, "guild-list-example.ts"), guildListExamples[0])
         const guildMembershipExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]
