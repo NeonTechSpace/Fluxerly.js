@@ -5,6 +5,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { commands, createClient, SdkDefect, type Client, type DefaultPrefixCommand } from "../src/index.js"
 import { commands as nativeCommands, createClient as createNative } from "../src/effect.js"
 import { WebSocketServer } from "ws"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "", socket: undefined as import("ws").WebSocket | undefined }))
 vi.mock("ws", async (original) => {
@@ -20,8 +21,6 @@ vi.mock("ws", async (original) => {
     }
 })
 
-const realFetch = globalThis.fetch
-
 afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
@@ -36,12 +35,7 @@ function value<A, E>(result: { isErr(): boolean; value?: A; error?: E }): A {
 async function fixture() {
     let sequence = 0
     const sockets: import("ws").WebSocket[] = []
-    const server = createServer((request, response) => {
-        if (request.url === "/v1/gateway/bot")
-            return void response.end(JSON.stringify({ url: "wss://gateway.fluxer.app" }))
-        response.statusCode = 404
-        response.end()
-    })
+    const server = createServer()
     const gateway = new WebSocketServer({ server })
     gateway.on("connection", (socket) => {
         sockets.push(socket)
@@ -58,9 +52,9 @@ async function fixture() {
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Fixture port missing")
     transport.url = `ws://127.0.0.1:${address.port}`
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
-        realFetch(url.replace("https://api.fluxer.app", `http://127.0.0.1:${address.port}`), init),
-    )
+    stubFetchWithHostedDiscovery((url) => {
+        throw new Error(`Unexpected command fixture HTTP request ${url}`)
+    })
     onTestFinished(async () => {
         for (const socket of sockets) socket.terminate()
         await new Promise<void>((resolve) => gateway.close(() => resolve()))

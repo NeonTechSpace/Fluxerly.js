@@ -12,6 +12,7 @@ import {
     type PresenceUpdateBulk,
 } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "" }))
 vi.mock("ws", async (original) => {
@@ -119,7 +120,7 @@ async function fixture() {
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing fixture port")
     transport.url = `ws://127.0.0.1:${address.port}`
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         realFetch(url.replace("https://api.fluxer.app", `http://127.0.0.1:${address.port}`), init),
     )
     onTestFinished(async () => {
@@ -262,7 +263,7 @@ test("default callbacks and pull subscriptions route frozen updates and deletion
     const waiting = pull.next({ signal: controller.signal })
     controller.abort()
     expect((await waiting).isErr()).toBe(true)
-    expect(server.requests).toBe(1)
+    expect(server.requests).toBe(0)
     value(await client.shutdown())
     expect(value(await pull.next())).toBeNull()
 })
@@ -274,7 +275,7 @@ test("default and native message subscriptions preserve supplied metadata withou
     value(await defaultClient.connect())
     defaultServer.dispatch("MESSAGE_CREATE", metadataWire())
     expectMetadata(value(await defaultEvents.next())!)
-    expect(defaultServer.requests).toBe(1)
+    expect(defaultServer.requests).toBe(0)
 
     const nativeServer = await fixture()
     const nativeEvents: Message[] = []
@@ -296,7 +297,7 @@ test("default and native message subscriptions preserve supplied metadata withou
         ),
     )
     expectMetadata(nativeEvents[0]!)
-    expect(nativeServer.requests).toBe(1)
+    expect(nativeServer.requests).toBe(0)
 })
 
 test("partial metadata preserves omissions and explicit nulls, while malformed supplied metadata closes the connection", async () => {
@@ -360,7 +361,7 @@ test("native callbacks preserve caller context and streams route single and bulk
                 yield* Effect.promise(() => vi.waitFor(() => expect(received).toHaveLength(1)))
                 yield* update.unsubscribe()
                 yield* update.waitForClose()
-                expect(server.requests).toBe(1)
+                expect(server.requests).toBe(0)
             }),
         ).pipe(Effect.annotateLogs("fixture", "events")),
     )

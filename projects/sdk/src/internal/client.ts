@@ -48,7 +48,7 @@ import {
     type ConnectionFailure,
 } from "#sdk/errors"
 import { type Configuration, validateConfiguration } from "./configuration.js"
-import { discoverGateway } from "./discovery.js"
+import { gatewayUrl, InstanceResolver } from "./instance.js"
 import { mapFailureCause, withDeadline } from "./effect-failures.js"
 import { CountOwner } from "./counts.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
@@ -83,6 +83,7 @@ import type {
     MessageReference,
     SendOptions,
 } from "#sdk/messages"
+import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "#sdk/attachments"
 
 const cacheKinds = [
     "messages",
@@ -123,6 +124,8 @@ interface ShardRuntime {
     session: Session
 }
 
+type GuildBuild<A> = () => GuildRequest<A> | undefined
+
 export class ClientOwner {
     readonly presence: PresenceOwner
     readonly #gatewayRequests = new GatewayRequestBudget()
@@ -157,6 +160,8 @@ export class ClientOwner {
     readonly logging: ClientLogging
     readonly events = new EventBus()
     readonly rest: RestOwner
+    /** One owner-scoped immutable discovery result, independent of credentials and REST admission state */
+    readonly instance: InstanceResolver
     readonly cache: MessageCache | undefined
     readonly resources: GuildCache | undefined
     readonly channelCache: ChannelCache | undefined
@@ -206,12 +211,14 @@ export class ClientOwner {
             : undefined
         this.channelCache = configuration.channelCache ? new ChannelCache(configuration.channelCache, now) : undefined
         this.userCache = new UserCache(configuration.userCache, now)
+        this.instance = new InstanceResolver(configuration.instance, scope)
         this.rest = new RestOwner(
             this.cache,
             configuration.uploadMaxBytes,
             this.resources,
             this.channelCache,
             this.userCache,
+            () => this.instance.resolve(),
         )
     }
     get state(): ConnectionState {
@@ -523,7 +530,7 @@ export class ClientOwner {
         )
     }
 
-    guild<A>(operation: GuildOperation, build: () => GuildRequest<A> | undefined, options?: GuildOperationOptions) {
+    guild<A>(operation: GuildOperation, build: GuildBuild<A>, options?: GuildOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.guild(this.#configuration.token, operation, build, options)
@@ -586,6 +593,16 @@ export class ClientOwner {
                 ? (this.reports?.start() ?? Effect.void).pipe(
                       Effect.andThen(this.rest.send(this.#configuration.token, channelId, input, options)),
                   )
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+    downloadAttachment(
+        attachment: Attachment,
+        options?: AttachmentDownloadOptions,
+    ): Effect.Effect<Uint8Array, AttachmentDownloadFailure> {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.download(attachment, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -799,6 +816,7 @@ export class ClientOwner {
         this.rest.stop()
         return Effect.all(
             [
+                Effect.exit(this.instance.shutdown()),
                 Effect.exit(this.events.shutdown()),
                 Effect.exit(this.rest.shutdown()),
                 Effect.exit(this.reports?.shutdown() ?? Effect.void),
@@ -928,6 +946,7 @@ export class ClientOwner {
             let connectedAt: number | undefined
             let disconnectedAt: number | undefined
             let url: string | undefined
+            let inviteBase: string | undefined
             while (true) {
                 attempts += 1
                 const phase = established ? "recovery" : "startup"
@@ -937,11 +956,13 @@ export class ClientOwner {
                 const attempt = Effect.gen(function* () {
                     const attemptDeadline = now() + budget
                     if (!url) {
-                        url = yield* discoverGateway(configuration.token).pipe(
+                        const endpoint = yield* owner.instance.resolve().pipe(
                             mapFailureCause(
                                 (error) =>
                                     new AttemptFailure(
-                                        error,
+                                        error instanceof ClientClosedError
+                                            ? new ConnectionError("discovery", "closed")
+                                            : error,
                                         error instanceof RateLimitError ||
                                             (error instanceof ConnectionError &&
                                                 error.reason === "network" &&
@@ -950,6 +971,8 @@ export class ClientOwner {
                             ),
                             withDeadline(budget, () => new AttemptFailure(new ConnectionTimeoutError(budget), true)),
                         )
+                        url = gatewayUrl(endpoint.gateway)
+                        inviteBase = endpoint.invite
                     }
                     return yield* runGateway(
                         url,
@@ -1046,6 +1069,7 @@ export class ClientOwner {
                                       }),
                                   )
                             : undefined,
+                        inviteBase,
                     )
                 })
                 const result = yield* Effect.uninterruptibleMask((restore) =>

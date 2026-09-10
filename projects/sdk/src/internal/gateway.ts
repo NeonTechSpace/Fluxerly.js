@@ -121,6 +121,7 @@ export const runGateway = (
     memberChunks?: Pick<MemberChunkOwner, "attach" | "detach" | "receive" | "rateLimited">,
     shard?: readonly [number, number],
     identify?: (send: () => void) => Effect.Effect<void>,
+    inviteBase = "https://fluxer.gg",
 ) =>
     Effect.scoped(
         Effect.gen(function* () {
@@ -347,7 +348,7 @@ export const runGateway = (
                                         Buffer.byteLength(data.toString()),
                                     )
                                 } else if (payload.t === "INVITE_CREATE") {
-                                    const invite = decodeInviteMetadata(body)
+                                    const invite = decodeInviteMetadata(body, inviteBase)
                                     if (!invite) {
                                         protocolFailure()
                                         return

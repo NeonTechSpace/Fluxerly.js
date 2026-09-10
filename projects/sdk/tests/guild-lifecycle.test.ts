@@ -3,6 +3,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import type { Result } from "neverthrow"
 import { createClient, type GuildListQuery, type GuildIterationQuery, type Guild } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const wireGuild = (id: string) => ({ id, name: "fixture", owner_id: "90", features: [] })
@@ -81,7 +82,7 @@ async function gather<A>(values: AsyncIterable<A>) {
 test.each(modes)("%s guild pages are bounded, frozen, and do not populate a membership cache", async (mode) => {
     const api = await setup(mode)
     const calls: URL[] = []
-    vi.stubGlobal("fetch", async (url: string) => {
+    stubFetchWithHostedDiscovery(async (url: string) => {
         calls.push(new URL(url))
         return Response.json([wireGuild("20")])
     })
@@ -104,7 +105,7 @@ test.each(modes)("%s guild pages are bounded, frozen, and do not populate a memb
         })
     expect(calls).toHaveLength(1)
     for (const response of [[wireGuild("20"), wireGuild("20")], [wireGuild("30"), wireGuild("20")], [{ id: "20" }]]) {
-        vi.stubGlobal("fetch", async () => Response.json(response))
+        stubFetchWithHostedDiscovery(async () => Response.json(response))
         await expect(api.page()).rejects.toMatchObject({ reason: "response" })
     }
 })
@@ -114,7 +115,7 @@ test.each(modes)(
     async (mode) => {
         const api = await setup(mode)
         const calls: URL[] = []
-        vi.stubGlobal("fetch", async (url: string) => {
+        stubFetchWithHostedDiscovery(async (url: string) => {
             calls.push(new URL(url))
             return Response.json([
                 {
@@ -140,7 +141,7 @@ test.each(modes)(
         expect(await api.getGuild("20")).toBeUndefined()
         expect(Object.fromEntries(calls[0]!.searchParams)).toEqual({ limit: "200", with_counts: "true" })
         for (const permissions of ["-1", "18446744073709551616", "9".repeat(21), null]) {
-            vi.stubGlobal("fetch", async () => Response.json([{ ...wireGuild("20"), permissions }]))
+            stubFetchWithHostedDiscovery(async () => Response.json([{ ...wireGuild("20"), permissions }]))
             await expect(api.page({ withCounts: true })).rejects.toMatchObject({ reason: "response" })
         }
     },
@@ -149,7 +150,7 @@ test.each(modes)(
 test.each(modes)("%s guild iteration forwards withCounts to every remote page", async (mode) => {
     const api = await setup(mode)
     const calls: URL[] = []
-    vi.stubGlobal("fetch", async (url: string) => {
+    stubFetchWithHostedDiscovery(async (url: string) => {
         const request = new URL(url)
         calls.push(request)
         return Response.json(
@@ -167,7 +168,7 @@ test.each(modes)(
     async (mode) => {
         const api = await setup(mode)
         const calls: URL[] = []
-        vi.stubGlobal("fetch", async (url: string) => {
+        stubFetchWithHostedDiscovery(async (url: string) => {
             const request = new URL(url)
             calls.push(request)
             return Response.json(request.searchParams.has("after") ? [] : [wireGuild("20")])
@@ -180,7 +181,7 @@ test.each(modes)(
         calls.length = 0
         for await (const _guild of iterable) break
         expect(calls).toHaveLength(1)
-        vi.stubGlobal("fetch", async () => Response.json([wireGuild("20")]))
+        stubFetchWithHostedDiscovery(async () => Response.json([wireGuild("20")]))
         const iterator = api.iterate({ maxItems: 4, pageSize: 1 })[Symbol.asyncIterator]()
         expect((await iterator.next()).value?.id).toBe("20")
         await expect(iterator.next()).rejects.toMatchObject({ reason: "cursorStalled" })
@@ -193,7 +194,7 @@ test.each(modes)("%s leave invalidates channel/message observations and their in
     const api = await setup(mode)
     let hold = false
     const releases: Array<() => void> = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         if (init.method === "DELETE") return new Response(null, { status: 204 })
         if (hold) await new Promise<void>((resolve) => releases.push(resolve))
         return Response.json(
@@ -224,7 +225,7 @@ test.each(modes)("%s leave rejects bad IDs locally and never retries an uncertai
         if (init.method === "DELETE") throw new TypeError("private transport failure")
         return Response.json(wireGuild("20"))
     })
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     await expect(api.leave("bad/id")).rejects.toMatchObject({
         operation: "guilds.leave",
         reason: "input",
@@ -249,7 +250,7 @@ test.each(modes)("%s only a successful explicit leave releases member-selection 
         _tag: "PresenceError",
         reason: "limit",
     })
-    vi.stubGlobal("fetch", async () => {
+    stubFetchWithHostedDiscovery(async () => {
         throw new TypeError("Test-owned lost response")
     })
     await expect(api.leave("20")).rejects.toMatchObject({ outcome: "unknown" })
@@ -257,7 +258,7 @@ test.each(modes)("%s only a successful explicit leave releases member-selection 
         _tag: "PresenceError",
         reason: "limit",
     })
-    vi.stubGlobal("fetch", async () => new Response(null, { status: 204 }))
+    stubFetchWithHostedDiscovery(async () => new Response(null, { status: 204 }))
     await api.leave("20")
     await api.setMembers("200", ["1"])
 })
@@ -282,7 +283,7 @@ test.each(modes)(
             entered = resolve
         })
         const writes: { path: string; body: unknown }[] = []
-        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
             const request = new URL(url)
             if (init.method === "DELETE") {
                 writes.push({ path: request.pathname + request.search, body: init.body })

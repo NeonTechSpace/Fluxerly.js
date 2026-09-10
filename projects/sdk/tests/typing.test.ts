@@ -13,6 +13,7 @@ import {
     type TypingStart,
 } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const gatewayTransport = vi.hoisted(() => ({ url: "" }))
 vi.mock("ws", async (original) => {
@@ -47,7 +48,7 @@ function defaultApi(): Client {
 function typingFetch(statuses: readonly number[] = [204]) {
     const requests: Request[] = []
     let index = 0
-    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string | URL, init?: RequestInit) => {
         requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body })
         return new Response(null, { status: statuses[Math.min(index++, statuses.length - 1)]! })
     })
@@ -55,7 +56,7 @@ function typingFetch(statuses: readonly number[] = [204]) {
 }
 
 async function settled() {
-    for (let index = 0; index < 12; index++) await Promise.resolve()
+    for (let index = 0; index < 64; index++) await Promise.resolve()
 }
 
 test("default typing uses Fluxer's one-shot channel route without a body or local state", async () => {
@@ -140,7 +141,7 @@ test("default keepTyping refreshes at a bounded rate, never overlaps a held refr
     vi.useFakeTimers()
     const requests: Request[] = []
     let held: (() => void) | undefined
-    vi.stubGlobal("fetch", (url: string | URL, init?: RequestInit) => {
+    stubFetchWithHostedDiscovery((url: string | URL, init?: RequestInit) => {
         requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body })
         if (requests.length === 2)
             return new Promise<Response>((resolve) => {
@@ -159,8 +160,10 @@ test("default keepTyping refreshes at a bounded rate, never overlaps a held refr
     )
 
     await settled()
+    await vi.advanceTimersByTimeAsync(100)
+    await settled()
     expect(requests).toHaveLength(1)
-    await vi.advanceTimersByTimeAsync(7_999)
+    await vi.advanceTimersByTimeAsync(7_900)
     expect(requests).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(1)
     await settled()
@@ -196,6 +199,8 @@ test("default cancellation aborts application work and waits for its cooperative
         { signal: controller.signal },
     )
     await settled()
+    await vi.advanceTimersByTimeAsync(100)
+    await settled()
     expect(finish).toBeTypeOf("function")
     controller.abort()
     await settled()
@@ -228,6 +233,7 @@ test("default cancellation retains a task defect that arrives during cleanup", a
     )
 
     await settled()
+    await vi.waitFor(() => expect(rejectTask).toBeTypeOf("function"))
     controller.abort()
     await settled()
     rejectTask!(new Error("late task failure"))
@@ -270,7 +276,7 @@ test("native interruption stops refresh work before the caller scope continues",
         ),
     )
     const fiber = await Effect.runPromise(Deferred.await(ready))
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(100)
     await settled()
     expect(requests).toHaveLength(1)
     await Effect.runPromise(Fiber.interrupt(fiber))
@@ -292,6 +298,8 @@ test("typing refresh and task failures retain both native causes and default saf
                 rejectTask = reject
             }),
     )
+    await settled()
+    await vi.advanceTimersByTimeAsync(100)
     await settled()
     await vi.advanceTimersByTimeAsync(8_000)
     await settled()
@@ -321,6 +329,8 @@ test("typing refresh and task failures retain both native causes and default saf
         ),
     )
     await settled()
+    await vi.advanceTimersByTimeAsync(100)
+    await settled()
     await vi.advanceTimersByTimeAsync(8_000)
     await settled()
     expect(nativeRequests).toHaveLength(2)
@@ -348,6 +358,8 @@ test("client shutdown stops and awaits refreshes without claiming to cancel defa
                 finish = resolve
             }),
     )
+    await settled()
+    await vi.advanceTimersByTimeAsync(100)
     await settled()
     expect(finish).toBeTypeOf("function")
     const shutdown = client.shutdown()
@@ -381,7 +393,7 @@ async function gatewayFixture() {
     if (!address || typeof address === "string") throw new Error("Missing loopback address")
     gatewayTransport.url = `ws://127.0.0.1:${address.port}`
     const discoveryRequests: Request[] = []
-    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string | URL, init?: RequestInit) => {
         discoveryRequests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body })
         return new Response(JSON.stringify({ url: "wss://gateway.fluxer.app" }), { status: 200 })
     })
@@ -418,9 +430,7 @@ test("typingStart is frozen delivery-only gateway data, including valid partial 
     const full = await Effect.runPromise(Deferred.await(received))
     expect(full).toEqual({ channelId: "20", userId: "30", timestamp: 1_700_000_000, guildId: "40" })
     expect(Object.isFrozen(full)).toBe(true)
-    expect(gateway.discoveryRequests).toEqual([
-        { url: "https://api.fluxer.app/v1/gateway/bot", method: "GET", body: undefined },
-    ])
+    expect(gateway.discoveryRequests).toEqual([])
 
     const partial = Deferred.makeUnsafe<TypingStart>()
     const second = client.on("typingStart", (event) => {

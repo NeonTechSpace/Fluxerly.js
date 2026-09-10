@@ -6,6 +6,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer, WebSocket } from "ws"
 import { createClient, SdkDefect, type ClientOptions } from "../src/index.js"
 import { createClient as createNative, fromEffectLogger } from "../src/effect.js"
+import { hostedDiscoveryDocument } from "./hosted-discovery.js"
 import { startServer } from "./transport/server.js"
 
 const transport = vi.hoisted(() => ({ url: "", sockets: [] as import("ws").WebSocket[] }))
@@ -22,8 +23,6 @@ vi.mock("ws", async (original) => {
         },
     }
 })
-const realFetch = globalThis.fetch
-
 function capturedLogs(throws = false) {
     const entries: { message: unknown; cause: unknown; annotation: unknown; span: unknown }[] = []
     const logger = Logger.make((entry) => {
@@ -239,20 +238,10 @@ async function fixture(
         retryAfter?: number
     } = {},
 ) {
-    let requests = 0
+    let discoveryRequests = 0
     const commands: { op: number; d: Record<string, unknown> | number | null }[] = []
     const sockets: WebSocket[] = []
-    const server = createServer((_request, response) => {
-        requests += 1
-        response.writeHead(options.httpStatus ?? 200, { "Content-Type": "application/json" })
-        response.end(
-            JSON.stringify(
-                options.httpStatus === 429
-                    ? { retry_after: options.retryAfter ?? 0.001 }
-                    : { url: "wss://gateway.fluxer.app" },
-            ),
-        )
-    })
+    const server = createServer()
     const gateway = new WebSocketServer({ server })
     gateway.on("connection", (socket) => {
         sockets.push(socket)
@@ -290,10 +279,14 @@ async function fixture(
     transport.url = `ws://127.0.0.1:${address.port}`
     vi.stubGlobal(
         "fetch",
-        vi.fn((url: string, init: RequestInit) => {
-            expect(url).toBe("https://api.fluxer.app/v1/gateway/bot")
-            expect(init.redirect).toBe("error")
-            return realFetch(`http://127.0.0.1:${address.port}`, init)
+        vi.fn(async (url: string, init: RequestInit) => {
+            expect(url).toBe("https://fluxer.app/.well-known/fluxer")
+            expect(init).toMatchObject({ method: "GET", redirect: "manual" })
+            discoveryRequests++
+            if (options.httpStatus === 429)
+                return Response.json({ retry_after: options.retryAfter ?? 0.001 }, { status: options.httpStatus })
+            if (options.httpStatus) return new Response(null, { status: options.httpStatus })
+            return Response.json(hostedDiscoveryDocument)
         }),
     )
     onTestFinished(async () => {
@@ -303,7 +296,7 @@ async function fixture(
         server.closeAllConnections()
         await new Promise<void>((resolve) => server.close(() => resolve()))
     })
-    return { sockets, commands, requests: () => requests, options }
+    return { sockets, commands, discoveryRequests: () => discoveryRequests, options }
 }
 
 function defaultApi(connection?: ClientOptions["connection"], logging?: ClientOptions["logging"]) {
@@ -433,7 +426,7 @@ test("a server wait exceeding the startup budget is returned rather than retried
     const error = (await client.connect())._unsafeUnwrapErr()
     expect(error._tag).toBe("RateLimitError")
     if (error._tag === "RateLimitError") expect(error.retryAfterMs).toBe(750)
-    expect(server.requests()).toBe(1)
+    expect(server.discoveryRequests()).toBe(1)
     expect(server.sockets).toHaveLength(0)
 })
 
@@ -562,7 +555,7 @@ test("shutdown waits five seconds for an uncooperative peer, then terminates and
     const server = await startServer({ holdClose: true })
     onTestFinished(() => server.close())
     transport.url = server.socketUrl
-    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ url: "wss://gateway.fluxer.app" })))
+    vi.stubGlobal("fetch", async () => Response.json(hostedDiscoveryDocument))
     const client = defaultApi()
     const connecting = client.connect()
     await server.upgraded
@@ -592,7 +585,7 @@ test("startup retries transient HTTP failures only within its total attempt limi
     const server = await fixture({ httpStatus: 503 })
     const client = defaultApi({ maxStartupAttempts: 3 })
     expect((await client.connect())._unsafeUnwrapErr()._tag).toBe("ConnectionError")
-    expect(server.requests()).toBe(3)
+    expect(server.discoveryRequests()).toBe(3)
     expect(client.state).toBe("Disconnected")
 }, 5000)
 
@@ -614,7 +607,7 @@ test("an already-aborted run does not acquire or close a disconnected client", a
     const client = defaultApi()
     expect((await client.run({ signal: AbortSignal.abort() }))._unsafeUnwrapErr()._tag).toBe("CancelledError")
     expect(client.state).toBe("Disconnected")
-    expect(server.requests()).toBe(0)
+    expect(server.discoveryRequests()).toBe(0)
     expect((await client.connect()).isOk()).toBe(true)
 })
 

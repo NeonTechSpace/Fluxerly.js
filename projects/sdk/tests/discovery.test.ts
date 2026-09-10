@@ -3,6 +3,7 @@ import type { ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, DiscoveryCategories } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 afterEach(() => vi.unstubAllGlobals())
@@ -54,7 +55,7 @@ test.each(modes)(
         const fetch = vi.fn(async () =>
             Response.json({ code: "DISCOVERY_ERROR", message: "Private application detail" }, { status }),
         )
-        vi.stubGlobal("fetch", fetch)
+        stubFetchWithHostedDiscovery(fetch)
         for (status of [400, 403, 404]) {
             let failure: unknown
             try {
@@ -79,8 +80,7 @@ test.each(modes)(
 test.each(modes)("%s aborts discovery writes at their deadline and cleans up for subsequent reads", async (mode) => {
     const client = await setup(mode)
     let aborted = false
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         (_url: string, init: RequestInit) =>
             new Promise((_resolve, reject) => {
                 const abort = () => {
@@ -96,7 +96,9 @@ test.each(modes)("%s aborts discovery writes at their deadline and cleans up for
         outcome: "unknown",
     })
     expect(aborted).toBe(true)
-    vi.stubGlobal("fetch", async () => Response.json({ application: null, eligible: true, min_member_count: 100 }))
+    stubFetchWithHostedDiscovery(async () =>
+        Response.json({ application: null, eligible: true, min_member_count: 100 }),
+    )
     expect((await settle(client.discovery.fetchStatus("200"))).application).toBeNull()
 })
 
@@ -108,7 +110,7 @@ test.each(modes)("%s reads categories and complete status remotely without cachi
             ? Response.json([{ id: 4, name: "Science & Technology", private_field: "drop" }])
             : Response.json({ application: app, eligible: false, min_member_count: 100 }),
     )
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const categories = await settle(client.discovery.fetchCategories())
     expect(categories).toEqual([{ id: DiscoveryCategories.ScienceAndTechnology, name: "Science & Technology" }])
     expect(Object.isFrozen(categories) && Object.isFrozen(categories[0])).toBe(true)
@@ -144,7 +146,7 @@ test.each(modes)("%s submits required fields, normalizes tags and patches withou
     const client = await setup(mode)
     const bodies: unknown[] = [],
         methods: string[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         expect(url).toBe("https://api.fluxer.app/v1/guilds/200/discovery")
         methods.push(init.method!)
         if (init.method === "DELETE") return new Response(null, { status: 204 })
@@ -174,7 +176,7 @@ test.each(modes)("%s submits required fields, normalizes tags and patches withou
 test.each(modes)("%s rejects invalid applications and empty patches before dispatch", async (mode) => {
     const client = await setup(mode)
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const valid = { description: "Fixture community description", categoryId: 4 }
     for (const input of [
         undefined,
@@ -209,7 +211,7 @@ test.each(modes)("%s rejects invalid applications and empty patches before dispa
 test.each(modes)("%s rejects malformed collections and cross-guild application responses", async (mode) => {
     const client = await setup(mode)
     let response: unknown
-    vi.stubGlobal("fetch", async () => Response.json(response))
+    stubFetchWithHostedDiscovery(async () => Response.json(response))
     for (response of [
         [
             { id: 4, name: "A" },
@@ -241,7 +243,7 @@ test.each(modes)("%s retries reads but not uncertain submission or withdrawal", 
     const client = await setup(mode)
     let reads = 0,
         writes = 0
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (init.method === "GET") {
             if (++reads === 1) return new Response(null, { status: 503 })
             return Response.json({ application: null, eligible: true, min_member_count: 100 })
@@ -278,7 +280,7 @@ test.each(modes)(
         const held = new Promise<void>((resolve) => {
             release = resolve
         })
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             if (init.method === "GET") {
                 entered()
                 await held

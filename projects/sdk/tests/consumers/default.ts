@@ -49,8 +49,29 @@ import {
     type CollectorResult,
     type MemberReference,
     type RoleHierarchyInput,
+    type InstanceOptions,
+    type ResolvedInstance,
+    type AttachmentFileSource,
+    type AttachmentInput,
+    type AttachmentStreamSource,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+const structuralAttachmentStream: AttachmentStreamSource = {
+    getReader(_options?: { readonly mode?: "byob" }) {
+        return {
+            read: async () => ({ done: true as const }),
+            cancel: async () => undefined,
+            releaseLock: () => undefined,
+        }
+    },
+}
+
+const structuralAttachmentFile: AttachmentFileSource = {
+    size: 2,
+    slice: () => structuralAttachmentFile,
+    stream: () => structuralAttachmentStream,
+}
 
 export function pureHelperTypes(bits: bigint) {
     const input: ColorInput = [255, 136, 0]
@@ -73,7 +94,17 @@ export function pureHelperTypes(bits: bigint) {
         chunks: text.split("text", options),
     }
 }
-
+/** Packed declaration coverage for explicit self-hosted selection and lifetime discovery */
+export async function resolveSelectedInstance(client: Client) {
+    const selected: InstanceOptions = { url: "https://community.example" }
+    const created = createClient({ token: "fixture-only", instance: selected })
+    const result = await client.instance.resolve()
+    if (result.isErr()) return result
+    const resolved: ResolvedInstance = result.value
+    const link = resolved.links.channel({ id: "20" })
+    const asset = resolved.assets.defaultAvatar("20")
+    return { resolved, link, asset, created }
+}
 export function shardingTypes(client: Client) {
     const plan: ShardingOptions = { totalShards: 2, shardIds: [0, 1] }
     const states: readonly ShardState[] = client.shards
@@ -161,9 +192,16 @@ export async function useChannels(client: Client, guildId: string, channelId: st
 
 export async function useAttachments(client: Client, channelId: string) {
     const file = { data: new Uint8Array([1, 2]), filename: "fixture.bin" }
-    const sent = await client.messages.send(channelId, { attachments: [file] })
+    const sources = [
+        { file: structuralAttachmentFile, filename: "sized.bin" },
+        { stream: structuralAttachmentStream, size: 2, filename: "streamed.bin" },
+    ] as const satisfies readonly AttachmentInput[]
+    const sent = await client.messages.send(channelId, { attachments: [file, ...sources] })
     if (sent.isErr()) return sent
     const attachment = sent.value.attachments[0]!
+    const downloaded = await client.attachments.download(attachment, { maxBytes: 1_024, timeoutMs: 5_000 })
+    if (downloaded.isErr()) return downloaded
+    const bytes: Uint8Array = downloaded.value
     await client.messages.reply(sent.value, { attachments: [file] })
     await client.messages.edit(sent.value, { attachments: [{ id: attachment.id }, file] })
     await client.messages.edit(sent.value, { content: "Cleared", attachments: [] })
@@ -171,9 +209,15 @@ export async function useAttachments(client: Client, channelId: string) {
     client.messages.send(channelId, { attachments: [{ id: attachment.id }] })
     // @ts-expect-error Paths are not file bytes
     client.messages.send(channelId, { attachments: [{ data: "path", filename: "x" }] })
+    // @ts-expect-error Stream uploads need an exact byte size
+    client.messages.send(channelId, { attachments: [{ stream: structuralAttachmentStream, filename: "unknown.bin" }] })
+    // @ts-expect-error Bounded downloads require maxBytes
+    client.attachments.download(attachment, {})
+    // @ts-expect-error Attachment input lists remain readonly
+    sources.push({ file: structuralAttachmentFile, filename: "later.bin" })
     // @ts-expect-error Received metadata is immutable
     attachment.filename = "renamed"
-    return attachment.url
+    return { url: attachment.url, bytes }
 }
 
 export async function useEmbeds(client: Client, channelId: string) {

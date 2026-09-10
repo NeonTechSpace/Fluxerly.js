@@ -4,6 +4,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 import type { BotApplication } from "../src/application.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 
@@ -63,7 +64,7 @@ async function setup(mode: (typeof modes)[number]) {
 
 test.each(modes)("%s projects a frozen current-bot application allowlist without cache hydration", async (mode) => {
     const calls: { path: string; method: string; authorization: string | null }[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         calls.push({
             path: new URL(url).pathname,
             method: init.method ?? "GET",
@@ -108,7 +109,7 @@ test.each(modes)("%s projects a frozen current-bot application allowlist without
 test.each(modes)("%s validates current-app fields and ignores excluded response fields", async (mode) => {
     const api = await setup(mode)
     let response: unknown = wire()
-    vi.stubGlobal("fetch", async () => Response.json(response))
+    stubFetchWithHostedDiscovery(async () => Response.json(response))
 
     await expect(api.fetchCurrent()).resolves.toMatchObject({ icon: null, description: null })
     for (const malformed of [
@@ -134,7 +135,7 @@ test.each(modes)("%s validates current-app fields and ignores excluded response 
 test.each(modes)("%s retries transient app reads without exposing private provider bodies", async (mode) => {
     const api = await setup(mode)
     let calls = 0
-    vi.stubGlobal("fetch", async () => {
+    stubFetchWithHostedDiscovery(async () => {
         calls += 1
         return calls === 1 ? Response.json({ message: "bot-secret response" }, { status: 503 }) : Response.json(wire())
     })
@@ -143,7 +144,7 @@ test.each(modes)("%s retries transient app reads without exposing private provid
     expect(calls).toBe(2)
 
     calls = 0
-    vi.stubGlobal("fetch", async () => {
+    stubFetchWithHostedDiscovery(async () => {
         calls += 1
         return Response.json({ message: "bot-secret response" }, { status: 403 })
     })
@@ -161,7 +162,7 @@ test.each(modes)("%s retries transient app reads without exposing private provid
 test.each(modes)("%s rejects invalid options before dispatch and waits for request cancellation", async (mode) => {
     const api = await setup(mode)
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     await expect(api.fetchCurrent({ timeoutMs: 0 })).rejects.toMatchObject({
         _tag: "BotApplicationOperationError",
         reason: "input",
@@ -175,8 +176,7 @@ test.each(modes)("%s rejects invalid options before dispatch and waits for reque
     expect(fetch).not.toHaveBeenCalled()
 
     let started = false
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         (_url: string, init: RequestInit) =>
             new Promise<Response>((_resolve, reject) => {
                 started = true

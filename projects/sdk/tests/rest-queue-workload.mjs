@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { registerHooks } from "node:module"
 import { setTimeout as sleep, setImmediate as turn } from "node:timers/promises"
+import { withHostedDiscovery } from "./hosted-discovery.mjs"
 
 // Compare only the queue-byte ceiling in isolated processes; never edit generated or production files
 const child = process.argv.includes("--child")
@@ -90,7 +91,7 @@ if (!child) {
     const queueTimes = []
     const nonces = new Map()
     const rawFetch = globalThis.fetch
-    globalThis.fetch = async (url, init) => {
+    globalThis.fetch = withHostedDiscovery(async (url, init) => {
         assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages")
         assert.equal(init.method, "POST")
         const body = JSON.parse(init.body)
@@ -122,7 +123,7 @@ if (!child) {
         } finally {
             active--
         }
-    }
+    })
     const effect = await import("effect")
     const scope = effect.Scope.makeUnsafe()
     const client =

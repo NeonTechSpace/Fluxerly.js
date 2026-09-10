@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
+import { withHostedDiscovery } from "./hosted-discovery.mjs"
 
 const mode = process.argv[2]
 const child = process.argv.includes("--child")
@@ -30,7 +31,7 @@ if (!child) {
     const rawFetch = globalThis.fetch
     let offset = 0
     let requests = 0
-    globalThis.fetch = async (input, init) => {
+    globalThis.fetch = withHostedDiscovery(async (input, init) => {
         const url = new URL(input)
         assert.equal(url.origin, "https://api.fluxer.app")
         assert.equal(url.pathname, `/v1/channels/${channelId}/messages`)
@@ -52,7 +53,7 @@ if (!child) {
         })
         offset += pageSize
         return Response.json(rows)
-    }
+    })
 
     try {
         const configuration = {

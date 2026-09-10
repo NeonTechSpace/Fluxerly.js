@@ -9,6 +9,7 @@ import {
     type PermissionTarget,
 } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const allPermissions = (1n << 64n) - 1n
@@ -65,7 +66,7 @@ async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Pro
     return result.success
 }
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) => handler(url, init))
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) => handler(url, init))
 }
 async function setup(mode: (typeof modes)[number]) {
     const scope = Scope.makeUnsafe()

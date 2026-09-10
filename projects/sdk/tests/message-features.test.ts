@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import { createClient, MessageFlags, type ForwardMessageInput } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 import { decodeMessage, encodeEdit, encodeForward } from "../src/internal/message.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -36,7 +37,7 @@ const forwardedMessage = () =>
 
 function fixture() {
     const requests: { url: string; method: string; body: Record<string, unknown> }[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>
         requests.push({ url, method: init.method ?? "GET", body })
         const reference = body.message_reference as Record<string, unknown> | undefined
@@ -203,7 +204,7 @@ test.each(apiSurfaces)(
     "forward retries a confirmed rate limit with the same nonce through the %s API",
     async (surface) => {
         const requests: Record<string, unknown>[] = []
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             const body = JSON.parse(String(init.body)) as Record<string, unknown>
             requests.push(body)
             if (requests.length === 1) return Response.json({ retry_after: 0.01 }, { status: 429 })
@@ -230,7 +231,7 @@ test.each(apiSurfaces)(
     "forward does not retry after a dispatched request loses its response through the %s API",
     async (surface) => {
         const requests: Record<string, unknown>[] = []
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             requests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
             throw new TypeError("fixture lost response")
         })
@@ -243,7 +244,7 @@ test.each(apiSurfaces)(
 test("forward copies selectors before waiting for REST admission", async () => {
     type HeldRequest = { body: Record<string, unknown>; resolve(response: Response): void }
     const held: HeldRequest[] = []
-    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery((_url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>
         return new Promise<Response>((resolve) => {
             held.push({ body, resolve })

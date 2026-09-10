@@ -1,6 +1,7 @@
 const tags = new Set([
     "MessageError",
     "MessageOperationError",
+    "AttachmentDownloadError",
     "CollectorError",
     "ConfigurationError",
     "ClientClosedError",
@@ -20,6 +21,8 @@ const reasons = new Set([
     "connectionLost",
     "overflow",
     "filter",
+    "tooLarge",
+    "untrustedUrl",
 ])
 const outcomes = new Set(["notSent", "notDispatched", "rejected", "unknown"])
 const codes = new Set([
@@ -40,7 +43,16 @@ const codes = new Set([
 /** Project known classifications only, never arbitrary messages, stacks, causes or response bodies */
 export function safeFailure(error) {
     try {
-        const result = { type: tags.has(error?._tag) ? error._tag : "unclassified" }
+        const result = {
+            type: tags.has(error?._tag) ? error._tag : error?.name === "SdkDefect" ? "SdkDefect" : "unclassified",
+        }
+        if (result.type === "SdkDefect" && Array.isArray(error.reasons))
+            result.reasons = error.reasons.slice(0, 8).map((reason) => ({
+                kind: ["Failure", "Defect", "Interruption"].includes(reason?.kind) ? reason.kind : "unclassified",
+                ...(reason?.kind === "Failure" && tags.has(reason.failure?._tag)
+                    ? { failure: reason.failure._tag }
+                    : {}),
+            }))
         if (reasons.has(error?.reason)) result.reason = error.reason
         const outcome = error?.outcome ?? error?.delivery
         if (outcomes.has(outcome)) result.outcome = outcome

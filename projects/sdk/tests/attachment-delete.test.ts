@@ -2,6 +2,7 @@ import { Effect, Exit, Fiber, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const target = { id: "10", channelId: "20" }
@@ -17,7 +18,7 @@ const wire = (message = target) => ({
 afterEach(() => vi.unstubAllGlobals())
 
 function mockRest(handler: (url: string, init: RequestInit) => Promise<Response> | Response) {
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => handler(url, init))
+    stubFetchWithHostedDiscovery(async (url, init) => handler(url, init))
 }
 
 function unwrap<A, E>(result: { isErr(): boolean; value?: A; error?: E }): A {

@@ -408,3 +408,20 @@ export const links = Object.freeze({
         return ok(`https://fluxer.app/oauth2/authorize?${query}`)
     },
 })
+
+/**
+ * Bind the pure application-link helpers to one validated instance web-app base
+ *
+ * The hosted `links` export remains a no-network compatibility helper. This
+ * factory preserves its local validation while replacing only the fixed hosted
+ * application origin in successful URLs
+ */
+export function createInstanceLinks(webapp: string): typeof links {
+    const project = (value: Result<string, HelperError>): Result<string, HelperError> =>
+        value.map((url) => `${webapp}${url.slice("https://fluxer.app".length)}`)
+    return Object.freeze({
+        channel: (...input: Parameters<typeof links.channel>) => project(links.channel(...input)),
+        message: (...input: Parameters<typeof links.message>) => project(links.message(...input)),
+        installation: (...input: Parameters<typeof links.installation>) => project(links.installation(...input)),
+    })
+}

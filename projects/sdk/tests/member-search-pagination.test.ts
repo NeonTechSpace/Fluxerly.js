@@ -2,6 +2,7 @@ import { Effect, Exit, Scope, Stream } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type MemberSearchQuery, type MemberSearchIterationLimits } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 afterEach(() => vi.unstubAllGlobals())
@@ -64,7 +65,7 @@ async function collect(source: ReturnType<Awaited<ReturnType<typeof setup>>["ite
 test.each(modes)("%s search traversal advances offsets and deduplicates changing index pages", async (mode) => {
     const api = await setup(mode),
         requests: { offset: number; limit: number }[] = []
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body))
         requests.push(body)
         return body.offset === 0
@@ -84,11 +85,11 @@ test.each(modes)("%s search traversal advances offsets and deduplicates changing
 
 test.each(modes)("%s search traversal exposes indexing, stalls and page budgets", async (mode) => {
     const api = await setup(mode)
-    vi.stubGlobal("fetch", async () => page([], 0, true))
+    stubFetchWithHostedDiscovery(async () => page([], 0, true))
     await expect(collect(api.iterate({}, { maxItems: 10 }))).rejects.toMatchObject({ reason: "indexing" })
-    vi.stubGlobal("fetch", async () => page([], 10))
+    stubFetchWithHostedDiscovery(async () => page([], 10))
     await expect(collect(api.iterate({}, { maxItems: 10 }))).rejects.toMatchObject({ reason: "cursorStalled" })
-    vi.stubGlobal("fetch", async () => page(["301"], 10))
+    stubFetchWithHostedDiscovery(async () => page(["301"], 10))
     await expect(collect(api.iterate({}, { maxItems: 10, maxPages: 1 }))).rejects.toMatchObject({ reason: "pageLimit" })
 })
 
@@ -96,7 +97,7 @@ test.each(modes)("%s search traversal is lazy, reusable and copies filters at co
     const api = await setup(mode),
         sent: unknown[] = []
     const filters = { roleIds: ["401"] }
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         sent.push(JSON.parse(String(init.body)))
         filters.roleIds[0] = "403"
         return page(["301"], 10)
@@ -113,7 +114,7 @@ test.each(modes)("%s search traversal is lazy, reusable and copies filters at co
 test.each(modes)("%s rejects invalid traversal before requests", async (mode) => {
     const api = await setup(mode),
         fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     for (const limits of [{ maxItems: 0 }, { maxItems: 3, pageSize: 101 }, { maxItems: 3, maxPages: 0 }])
         await expect(collect(api.iterate({}, limits))).rejects.toMatchObject({ reason: "input" })
     await expect(collect(api.iterate({ limit: 2 } as never, { maxItems: 2 }))).rejects.toMatchObject({

@@ -4,6 +4,7 @@ import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 import { SdkDefect, createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const target = { id: "10", channelId: "20" }
 const modes = ["default", "native"] as const
@@ -31,7 +32,7 @@ test.each(modes)("%s preserves REST rejection and response-cleanup defects witho
         const cleanup = new Error("private REST cleanup detail")
         let cancellations = 0
         const fetch = vi.fn(async () => responseWithCleanupFailure(status, cleanup, () => cancellations++))
-        vi.stubGlobal("fetch", fetch)
+        stubFetchWithHostedDiscovery(fetch)
 
         if (mode === "default") {
             const client = createClient({ token: "fixture" })._unsafeUnwrap()
@@ -84,7 +85,7 @@ test.each(modes)("%s preserves REST rejection and response-cleanup defects witho
     }
 })
 
-test.each(modes)("%s preserves gateway authentication failure and response-cleanup defects", async (mode) => {
+test.each(modes)("%s preserves discovery HTTP failure and response-cleanup defects", async (mode) => {
     const cleanup = new Error("private discovery cleanup detail")
     let cancellations = 0
     const fetch = vi.fn(async () => responseWithCleanupFailure(401, cleanup, () => cancellations++))
@@ -99,7 +100,15 @@ test.each(modes)("%s preserves gateway authentication failure and response-clean
             expect(error).toMatchObject({
                 operation: "connect",
                 reasons: [
-                    { kind: "Failure", failure: expect.objectContaining({ _tag: "AuthenticationError" }) },
+                    {
+                        kind: "Failure",
+                        failure: expect.objectContaining({
+                            _tag: "ConnectionError",
+                            phase: "discovery",
+                            reason: "network",
+                            status: 401,
+                        }),
+                    },
                     { kind: "Defect" },
                 ],
             })
@@ -120,7 +129,12 @@ test.each(modes)("%s preserves gateway authentication failure and response-clean
                 const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
                 expect(failure).toMatchObject({
                     _tag: "Fail",
-                    error: expect.objectContaining({ _tag: "AuthenticationError" }),
+                    error: expect.objectContaining({
+                        _tag: "ConnectionError",
+                        phase: "discovery",
+                        reason: "network",
+                        status: 401,
+                    }),
                 })
                 const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
                 expect(defect).toMatchObject({ _tag: "Die" })
@@ -134,8 +148,7 @@ test.each(modes)("%s preserves gateway authentication failure and response-clean
     expect(cancellations).toBe(1)
 })
 
-test.each(modes)("%s aborts a pending gateway body read before reporting interruption", async (mode) => {
-    let bodyUsed = false
+test.each(modes)("%s aborts a pending discovery body read before reporting interruption", async (mode) => {
     let startedRead!: () => void
     const reading = new Promise<void>((resolve) => {
         startedRead = resolve
@@ -145,34 +158,32 @@ test.each(modes)("%s aborts a pending gateway body read before reporting interru
         observedAbort = resolve
     })
     let cancellations = 0
+    let cancellationAfterAbort = false
     const fetch = vi.fn((_url: string, init: RequestInit) =>
-        Promise.resolve({
-            status: 200,
-            ok: true,
-            headers: new Headers(),
-            get bodyUsed() {
-                return bodyUsed
-            },
-            body: {
-                cancel: async () => {
-                    cancellations++
-                },
-            },
-            json: () => {
-                bodyUsed = true
-                startedRead()
-                return new Promise((_resolve, reject) => {
-                    init.signal?.addEventListener(
-                        "abort",
-                        () => {
-                            observedAbort()
-                            reject(new Error("test body aborted"))
-                        },
-                        { once: true },
-                    )
-                })
-            },
-        } as Response),
+        Promise.resolve(
+            new Response(
+                new ReadableStream({
+                    pull: () => {
+                        startedRead()
+                        return new Promise<void>((_resolve, reject) => {
+                            init.signal?.addEventListener(
+                                "abort",
+                                () => {
+                                    observedAbort()
+                                    reject(new Error("test body aborted"))
+                                },
+                                { once: true },
+                            )
+                        })
+                    },
+                    cancel: () => {
+                        cancellations++
+                        cancellationAfterAbort = init.signal?.aborted === true
+                    },
+                }),
+                { status: 200 },
+            ),
+        ),
     )
     vi.stubGlobal("fetch", fetch)
 
@@ -207,10 +218,11 @@ test.each(modes)("%s aborts a pending gateway body read before reporting interru
         }
     }
     expect(fetch).toHaveBeenCalledTimes(1)
-    expect(cancellations).toBe(0)
+    expect(cancellations).toBe(1)
+    expect(cancellationAfterAbort).toBe(true)
 })
 
-test.each(modes)("%s retains a foreign late gateway abort defect with interruption", async (mode) => {
+test.each(modes)("%s retains a foreign late discovery abort defect with interruption", async (mode) => {
     const cleanup = new DOMException("private late discovery cleanup detail", "AbortError")
     let resolveFetch!: (response: Response) => void
     let observedAbort!: () => void
@@ -289,7 +301,7 @@ test.each(modes)("%s retains a foreign late gateway abort defect with interrupti
     expect(cancellations).toBe(1)
 })
 
-test.each(modes)("%s ignores only its own late gateway abort reason", async (mode) => {
+test.each(modes)("%s ignores only its own late discovery abort reason", async (mode) => {
     let resolveFetch!: (response: Response) => void
     let observedAbort!: () => void
     const aborted = new Promise<void>((resolve) => {
@@ -315,18 +327,17 @@ test.each(modes)("%s ignores only its own late gateway abort reason", async (mod
             await vi.waitFor(() => expect(resolveFetch).toBeTypeOf("function"))
             controller.abort()
             await aborted
-            resolveFetch({
-                status: 200,
-                ok: true,
-                headers: new Headers(),
-                bodyUsed: false,
-                body: {
-                    cancel: async () => {
-                        cancellations++
-                        throw responseSignal!.reason
-                    },
-                },
-            } as unknown as Response)
+            resolveFetch(
+                new Response(
+                    new ReadableStream({
+                        cancel: () => {
+                            cancellations++
+                            throw responseSignal!.reason
+                        },
+                    }),
+                    { status: 200 },
+                ),
+            )
             const outcome = await result
             expect(outcome.isErr()).toBe(true)
             if (outcome.isErr()) expect(outcome.error).toMatchObject({ _tag: "CancelledError" })
@@ -342,18 +353,17 @@ test.each(modes)("%s ignores only its own late gateway abort reason", async (mod
             await vi.waitFor(() => expect(resolveFetch).toBeTypeOf("function"))
             controller.abort()
             await aborted
-            resolveFetch({
-                status: 200,
-                ok: true,
-                headers: new Headers(),
-                bodyUsed: false,
-                body: {
-                    cancel: async () => {
-                        cancellations++
-                        throw responseSignal!.reason
-                    },
-                },
-            } as unknown as Response)
+            resolveFetch(
+                new Response(
+                    new ReadableStream({
+                        cancel: () => {
+                            cancellations++
+                            throw responseSignal!.reason
+                        },
+                    }),
+                    { status: 200 },
+                ),
+            )
             const exit = await result
             expect(Exit.isFailure(exit)).toBe(true)
             if (Exit.isFailure(exit)) {
@@ -381,8 +391,7 @@ test.each(cleanupRaceCases)(
         const cancellingStarted = new Promise<void>((resolve) => {
             cancelling = resolve
         })
-        vi.stubGlobal(
-            "fetch",
+        const fetch = vi.fn(
             async () =>
                 new Response(
                     new ReadableStream({
@@ -396,6 +405,8 @@ test.each(cleanupRaceCases)(
                     { status: 401 },
                 ),
         )
+        if (owner === "rest") stubFetchWithHostedDiscovery(fetch)
+        else vi.stubGlobal("fetch", fetch)
 
         const configuration =
             owner === "rest" ? { token: "fixture" } : { token: "fixture", connection: { maxStartupAttempts: 2 } }
@@ -403,7 +414,12 @@ test.each(cleanupRaceCases)(
         const authenticationFailure =
             owner === "rest"
                 ? expect.objectContaining({ _tag: "MessageOperationError", operation: "fetch", status: 401 })
-                : expect.objectContaining({ _tag: "AuthenticationError" })
+                : expect.objectContaining({
+                      _tag: "ConnectionError",
+                      phase: "discovery",
+                      reason: "network",
+                      status: 401,
+                  })
 
         if (mode === "default") {
             const client = createClient(configuration)._unsafeUnwrap()
@@ -498,8 +514,7 @@ test.each(cleanupRaceCases)(
         const cancellingStarted = new Promise<void>((resolve) => {
             cancelling = resolve
         })
-        vi.stubGlobal(
-            "fetch",
+        const fetch = vi.fn(
             async () =>
                 new Response(
                     new ReadableStream({
@@ -512,11 +527,13 @@ test.each(cleanupRaceCases)(
                     { status: 401 },
                 ),
         )
+        if (owner === "rest") stubFetchWithHostedDiscovery(fetch)
+        else vi.stubGlobal("fetch", fetch)
 
         const configuration =
             owner === "rest"
                 ? { token: "fixture" }
-                : { token: "fixture", connection: { maxStartupAttempts: 2, startupTimeoutMs: 1 } }
+                : { token: "fixture", connection: { maxStartupAttempts: 2, startupTimeoutMs: 100 } }
         const operation = owner === "rest" ? "fetch" : "connect"
         const timeoutFailure =
             owner === "rest"
@@ -525,16 +542,21 @@ test.each(cleanupRaceCases)(
         const authenticationFailure =
             owner === "rest"
                 ? expect.objectContaining({ _tag: "MessageOperationError", operation: "fetch", status: 401 })
-                : expect.objectContaining({ _tag: "AuthenticationError" })
+                : expect.objectContaining({
+                      _tag: "ConnectionError",
+                      phase: "discovery",
+                      reason: "network",
+                      status: 401,
+                  })
 
         if (mode === "default") {
             const client = createClient(configuration)._unsafeUnwrap()
             try {
                 const result = Promise.resolve(
-                    owner === "rest" ? client.messages.fetch(target, { timeoutMs: 1 }) : client.connect(),
+                    owner === "rest" ? client.messages.fetch(target, { timeoutMs: 100 }) : client.connect(),
                 )
                 await cancellingStarted
-                await new Promise((resolve) => setTimeout(resolve, 20))
+                await new Promise((resolve) => setTimeout(resolve, 120))
                 release()
                 const error = await result.catch((error) => error)
                 expect(error).toBeInstanceOf(SdkDefect)
@@ -563,11 +585,11 @@ test.each(cleanupRaceCases)(
             try {
                 const request: Effect.Effect<void, unknown> =
                     owner === "rest"
-                        ? client.messages.fetch(target, { timeoutMs: 1 }).pipe(Effect.asVoid)
+                        ? client.messages.fetch(target, { timeoutMs: 100 }).pipe(Effect.asVoid)
                         : client.connect()
                 const result = Effect.runPromiseExit(request)
                 await cancellingStarted
-                await new Promise((resolve) => setTimeout(resolve, 20))
+                await new Promise((resolve) => setTimeout(resolve, 120))
                 release()
                 const exit = await result
                 expect(Exit.isFailure(exit)).toBe(true)
@@ -610,7 +632,7 @@ test.each(modes)("%s waits for a late response cleanup and retains interruption 
                 init.signal?.addEventListener("abort", observedAbort, { once: true })
             }),
     )
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
 
     if (mode === "default") {
         const client = createClient({ token: "fixture" })._unsafeUnwrap()
@@ -689,7 +711,7 @@ test("cancels an unread real-fetch 401 response before aborting its controller",
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing fixture port")
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         realFetch(url.replace("https://api.fluxer.app", `http://127.0.0.1:${address.port}`), init),
     )
     const client = createClient({ token: "fixture" })._unsafeUnwrap()
@@ -724,11 +746,13 @@ test.each(modes)("%s retains a cleanup defect after a successful presigned uploa
                 })),
             })
         }
-        if (url === "https://uploads.fluxer.app/fixture-upload")
+        if (url === "https://uploads.fluxer.app/fixture-upload") {
+            await new Response(init.body).arrayBuffer()
             return responseWithCleanupFailure(200, cleanup, () => cancellations++)
+        }
         throw new Error(`Unexpected request ${url}`)
     })
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const input = { attachments: [{ data: new Uint8Array([1]), filename: "fixture.bin" }] }
 
     if (mode === "default") {

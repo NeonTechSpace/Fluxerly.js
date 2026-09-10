@@ -6,20 +6,26 @@ import type { DefaultLoggingOptions } from "./logging.js"
 import type { Message } from "./messages.js"
 import type { ShardingOptions, ShardState } from "./sharding.js"
 import type { DirectMessageChannel, User } from "./users.js"
+import type { InstanceOptions } from "./instance.js"
 
 /**
- * Options accepted when creating a disconnected client
- *
- * Hosted Fluxer only; self-hosted instances and custom REST or gateway endpoints are not supported
+ * Options accepted when creating a disconnected client.
+ * The selected hosted or self-hosted instance is resolved lazily and independently for this client
  */
 export interface ClientOptions {
+    /**
+     * Explicit hosted or self-hosted instance selection. Omit it for hosted Fluxer.
+     * Creation validates this root locally without a request. The client reads its unauthenticated well-known document only when REST, gateway, or `instance.resolve` needs it, then retains that immutable endpoint map until shutdown.
+     * HTTPS and WSS are required by default. Set `allowInsecure: true` only for an explicitly selected HTTP/WS local or self-hosted deployment
+     */
+    readonly instance?: InstanceOptions
     /** Client-local upload admission, copied and validated at creation */
     readonly uploads?: {
-        /** Maximum SDK-owned file bytes across queued and active operations, as a positive safe integer.
+        /** Maximum reserved attachment transfer bytes across queued and active operations, as a positive safe integer.
          * Defaults to 104,857,600 (100 MiB), separate from the 4 MiB queued JSON budget.
-         * A full budget rejects with busy before copying, rather than waiting while retaining unbounded inputs.
+         * Reservations use accepted byte-array length, file size or declared stream size and reject with busy before a new operation waits.
          * Reservations remain held across rate-limit retries and release after transport cleanup.
-         * Caller buffers, metadata and runtime overhead are excluded; this is not a process-memory ceiling
+         * This does not measure copied heap, caller buffers, metadata or runtime overhead and is not a process-memory ceiling
          */
         readonly maxBytes?: number
     }

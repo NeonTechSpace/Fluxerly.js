@@ -6,6 +6,7 @@ export class ConfigurationError extends Error {
         /** The invalid option or containing object, including unsupported cache keys, without its rejected value */
         readonly field:
             | "configuration"
+            | "instance"
             | "logging"
             | "development"
             | "minimumLevel"
@@ -67,6 +68,9 @@ export class ConfigurationError extends Error {
 
 /** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
 export type Operation =
+    | "attachments.download"
+    | "instance.resolve"
+    | "attachments.download"
     | "presence.set"
     | "presence.setMembers"
     | "cache.entries"
@@ -144,11 +148,11 @@ export class ConnectionError extends Error {
     }
 }
 
-/** Readiness did not complete within the connection budget, with owned-resource cleanup still awaited */
+/** Gateway readiness or explicit instance discovery did not complete within its caller-owned budget, with cleanup still awaited */
 export class ConnectionTimeoutError extends Error {
     readonly _tag = "ConnectionTimeoutError"
     constructor(
-        /** Connection budget in milliseconds, not a guarantee of completion before cleanup finishes */
+        /** Connection or discovery budget in milliseconds, not a guarantee of completion before cleanup finishes */
         readonly timeoutMs: number,
     ) {
         super("Fluxer connection did not become ready within its time budget")
@@ -240,6 +244,7 @@ export type DefectReason =
               | import("./presence.js").PresenceError
               | import("./pagination.js").PaginationError
               | import("./collectors.js").CollectorError
+              | import("./attachments.js").AttachmentDownloadFailure
       }
     | { readonly kind: "Defect" }
     | { readonly kind: "Interruption" }

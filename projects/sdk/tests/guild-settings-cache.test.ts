@@ -3,6 +3,7 @@ import type { ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 afterEach(() => vi.unstubAllGlobals())
@@ -47,7 +48,7 @@ test.each(modes)("%s invalidates channels and pending reads when a settings patc
     const held = new Promise<void>((resolve) => {
         release = resolve
     })
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         if (init.method === "GET") {
             if (hold) {
                 started()
@@ -80,7 +81,7 @@ test.each(modes)(
     "%s leaves channel observations alone for a server rename or retained flexible names",
     async (mode) => {
         const client = await setup(mode)
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) =>
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) =>
             Response.json(
                 init.method === "GET"
                     ? { id: "100", guild_id: "200", type: 0, name: "Flexible Name" }

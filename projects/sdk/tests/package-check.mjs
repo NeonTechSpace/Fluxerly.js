@@ -91,6 +91,7 @@ try {
             "logging",
             "embeds",
             "attachments",
+            "instance",
             "reactions",
             "pins",
             "guilds",
@@ -168,6 +169,9 @@ try {
         const optionalExamples = publicExamples.filter((example) => /(?:function|const) installPing/.test(example))
         assert.equal(optionalExamples.length, 1)
         writeFileSync(join(consumer, "optional-tools-example.ts"), optionalExamples[0])
+        const instanceExamples = publicExamples.filter((example) => /(?:function|const) instanceExample/.test(example))
+        assert.equal(instanceExamples.length, 1)
+        writeFileSync(join(consumer, "instance-example.ts"), instanceExamples[0])
         for (const name of [
             "forwardExample",
             "profileExample",
@@ -498,8 +502,14 @@ try {
                 .map((line) => line.replace(/^\s*\* ?/, ""))
                 .join("\n"),
         )
-        assert.equal(attachmentExamples.length, 1)
-        writeFileSync(join(consumer, "attachment-example.ts"), attachmentExamples[0])
+        assert.equal(attachmentExamples.length, 2)
+        for (const [index, example] of attachmentExamples.entries())
+            writeFileSync(
+                join(consumer, `attachment-example-${index}.ts`),
+                kind === "default"
+                    ? example
+                    : example.replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"'),
+            )
         const messageSource = readFileSync(join(sdk, "src/messages.ts"), "utf8")
         const messageMetadataExamples = [...messageSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>

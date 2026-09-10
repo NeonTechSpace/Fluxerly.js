@@ -2,6 +2,7 @@ import { Effect, Exit, Scope, Stream } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type AuditLogIterationQuery } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const response = (ids: string[]) =>
@@ -34,7 +35,7 @@ async function fixture(mode: (typeof modes)[number]) {
             return response((before === null ? ["13", "12"] : before === "12" ? ["11"] : []).slice(0, limit))
         },
     }
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const parsed = new URL(url)
         requests.push(parsed)
         expect(parsed.pathname).toBe("/v1/guilds/20/audit-logs")

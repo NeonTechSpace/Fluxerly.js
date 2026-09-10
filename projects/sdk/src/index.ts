@@ -202,7 +202,7 @@ export type {
 } from "./audit-logs.js"
 import type { GuildEdit, GuildVanityUrl, GuildVanityUrlUsage } from "./guilds.js"
 export type { GuildEdit, GuildVanityUrl, GuildVanityUrlUsage } from "./guilds.js"
-import { vanityUrlFetch, vanityUrlEdit } from "#sdk/internal/vanity-url"
+import { vanityUrlEdit, vanityUrlFetch } from "#sdk/internal/vanity-url"
 export {
     GuildSystemChannelFlags,
     GuildDefaultMessageNotifications,
@@ -224,7 +224,7 @@ export type {
 import { guildEdit } from "#sdk/internal/guild-settings"
 import type { Invite, InviteCreate, InviteMetadata } from "./invites.js"
 export type { Invite, InviteCreate, InviteMetadata } from "./invites.js"
-import { inviteFetch, inviteCreate, inviteList, inviteDelete } from "#sdk/internal/invites"
+import { inviteCreate, inviteDelete, inviteFetch, inviteList } from "#sdk/internal/invites"
 import type {
     GuildEmoji,
     GuildSticker,
@@ -384,7 +384,24 @@ export type {
     EmbedField,
 } from "./embeds.js"
 export type { MessageBody } from "./messages.js"
-export type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
+export { AttachmentDownloadError } from "./attachments.js"
+export type {
+    Attachment,
+    AttachmentBytesInput,
+    AttachmentDownloadFailure,
+    AttachmentDownloadOptions,
+    AttachmentFileInput,
+    AttachmentFileSource,
+    AttachmentInput,
+    AttachmentReference,
+    AttachmentStreamInput,
+    AttachmentStreamReadResult,
+    AttachmentStreamReader,
+    AttachmentStreamReaderOptions,
+    AttachmentStreamSource,
+    DefaultAttachmentDownloadOptions,
+} from "./attachments.js"
+import type { Attachment, AttachmentDownloadFailure, DefaultAttachmentDownloadOptions } from "./attachments.js"
 import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "./reactions.js"
 export type {
     ReactionEmojiInput,
@@ -457,6 +474,7 @@ import type {
     ConnectionState,
     OperationOptions,
 } from "./client.js"
+import type { InstanceResolveError, InstanceResolveOptions, ResolvedInstance } from "./instance.js"
 import type {
     PermissionOverwrite,
     GuildChannel,
@@ -699,6 +717,19 @@ export interface EventHandlerOptions extends HandlerOptions {
     readonly onError?: (report: HandlerErrorReport) => void | Promise<void>
 }
 
+/** Bounded remote attachment retrieval without a gateway, cache, proxy URL or credential-bearing request */
+export interface Attachments {
+    /** Download attachment.url after matching it against this instance's discovered media `/attachments/` base path.
+     * maxBytes is required and caps returned bytes at 50 MiB. Packing can briefly retain response chunks beside that result, so it is not a total heap limit. The SDK sends no Authorization header, follows no redirect, caches nothing and never falls back to proxyUrl.
+     * timeoutMs defaults to 30,000 across endpoint resolution, local four-slot media admission and GET. Media shares that slot limit but does not wait for bot API rate limits. AbortSignal cancellation awaits response-reader cleanup and cannot undo already received bytes.
+     * URL expiry metadata is not an availability check. Failures contain a safe reason/status, including local busy, without a URL or response body
+     */
+    download(
+        attachment: Attachment,
+        options: DefaultAttachmentDownloadOptions,
+    ): ResultAsync<Uint8Array, AttachmentDownloadFailure | CancelledError>
+}
+
 /**
  * Client-owned message operations. REST and local lookup work without a gateway connection.
  * Collection with guildId requires its locally owned shard to be ready; channel-only collection requires aggregate Connected.
@@ -714,6 +745,7 @@ export interface EventHandlerOptions extends HandlerOptions {
  * Cancellation fails this operation with CancelledError. Client closure fails pending/new operations with ClientClosedError.
  * Neither failure proves that a dispatched mutation was undone
  */
+
 export interface Messages {
     /** Traverse remote history newest-to-oldest, without connecting or prefetching another page.
      * Returns a reusable AsyncIterable, not a started request. Each consumption copies inputs and owns independent progress
@@ -1450,6 +1482,13 @@ export type {
     ConnectionState,
     OperationOptions,
 } from "./client.js"
+export type {
+    InstanceEndpoints,
+    InstanceOptions,
+    InstanceResolveError,
+    InstanceResolveOptions,
+    ResolvedInstance,
+} from "./instance.js"
 export {
     AuthenticationError,
     ShardConnectionError,
@@ -2471,6 +2510,8 @@ export interface Webhooks {
 export interface WebhookClient {
     /** Credential identity, never a token-bearing URL */
     readonly id: string
+    /** Immutable endpoint discovery and pure URL helpers for this webhook client's selected instance */
+    readonly instance: Instance
     /** Send with wait=true and return the created message. Mentions default off. Files use bounded multipart streaming, with 50 MiB maximum per file.
      * Image/thumbnail attachment URLs match a new upload in this request. flags accepts only the two non-voice MessageFlags bits.
      * Snapshot inputs at execution, including admitted file bytes. Never retry an uncertain send, which may already have posted */
@@ -2535,6 +2576,8 @@ export interface ClientCache {
  * Use run for a managed lifetime, or pair connect with waitForClose and shutdown
  */
 export interface Client extends ClientState {
+    /** Immutable endpoint discovery and pure URL helpers for this client's selected instance */
+    readonly instance: Instance
     /** Public server-directory management, not gateway service discovery or directory joining */
     readonly discovery: Discovery
     /** Process-local requested presence, restored after gateway reconnects and never stored across process restarts */
@@ -2565,6 +2608,8 @@ export interface Client extends ClientState {
     readonly channels: Channels
     /** Remote member reads, moderation and targeted role assignment */
     readonly members: Members
+    /** Bounded attachment downloads from this instance's discovered media base path */
+    readonly attachments: Attachments
     /** REST, local lookup and live collection owned by this client */
     readonly messages: Messages
     /** Local cache enumeration and release controls. Caching remains opt-in through ClientOptions.cache */
@@ -2689,10 +2734,43 @@ export interface Client extends ClientState {
     observeState(listener: (state: ConnectionState) => void | Promise<void>): () => void
 }
 
+/**
+ * One client's selected instance discovery result
+ *
+ * `resolve` starts the unauthenticated well-known request only when needed and
+ * shares it with concurrent callers. Cancellation releases only this caller;
+ * the last departing caller waits for discovery cleanup. A successful result is
+ * immutable and retained without refresh until client shutdown
+ *
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * export async function instanceExample(client: Client) {
+ *     const resolved = await client.instance.resolve({ timeoutMs: 10_000 })
+ *     if (resolved.isErr()) return resolved
+ *     const channel = resolved.value.links.channel({ id: "1750000000000000000" })
+ *     return channel.isErr() ? channel : { api: resolved.value.endpoints.apiPublic, channel: channel.value }
+ * }
+ * ```
+ */
+export interface Instance {
+    /** Resolve this client's immutable selected-instance endpoint map and pure asset/link helpers.
+     * This unauthenticated bootstrap has a 30,000 ms caller-local deadline unless overridden. Abort interrupts only this wait; another resolve, REST request or gateway connection can keep the shared read alive.
+     * Expected document, rate-limit, timeout, closure and local timeout-option failures are returned as Err. A cleanup defect rejects with SdkDefect and retains its accompanying failure or interruption
+     */
+    resolve(
+        options?: DefaultInstanceResolveOptions,
+    ): ResultAsync<ResolvedInstance, InstanceResolveError | CancelledError>
+}
+
+/** Default selected-instance resolution settings. Abort cancels only this caller's wait */
+export interface DefaultInstanceResolveOptions extends InstanceResolveOptions, OperationOptions {}
+
 const executeOperation = <
     A,
     E extends
         | ConnectError
+        | InstanceResolveError
         | EventReadError
         | MessageError
         | MessageOperationError
@@ -2706,7 +2784,8 @@ const executeOperation = <
         | CountOperationError
         | MemberChunkError
         | PresenceError
-        | PaginationError,
+        | PaginationError
+        | AttachmentDownloadFailure,
 >(
     effect: Effect.Effect<A, E>,
     operation: Operation,
@@ -2848,7 +2927,8 @@ function fromExit<
         | CountOperationError
         | MemberChunkError
         | PresenceError
-        | PaginationError,
+        | PaginationError
+        | AttachmentDownloadFailure,
 >(exit: Exit.Exit<A, E>, operation: Operation): Result<A, E | CancelledError> {
     if (Exit.isSuccess(exit)) return ok(exit.value)
     if (Cause.hasDies(exit.cause)) {
@@ -2864,7 +2944,7 @@ function fromExit<
 }
 
 /**
- * Create a webhook-only client for hosted Fluxer, from { id, token } or redacted creation credentials.
+ * Create a webhook-only client for hosted Fluxer or an explicitly selected self-hosted instance, from { id, token } or redacted creation credentials.
  * Validate locally without requests, copying the credential into an independently owned redacted reference.
  * Creation is synchronous and callers must await shutdown in finally.
  * No token storage, gateway or bot authentication. Keep one client per credential for shared admission and rate waits.
@@ -2894,6 +2974,10 @@ export function createWebhookClient(options: WebhookClientOptions): Result<Webho
     return ok(
         Object.freeze({
             id: owner.id,
+            instance: Object.freeze({
+                resolve: (options?: DefaultInstanceResolveOptions) =>
+                    execute(owner.instance.resolveInfo(options), "instance.resolve", options),
+            }),
             send: (input: WebhookMessageInput, options?: DefaultMessageOperationOptions) =>
                 execute(
                     owner.run("webhooks.send", () => webhookSend(owner.id, input), options),
@@ -3092,7 +3176,8 @@ export interface DirectMessages {
 /**
  * Create a Disconnected client without sockets, timers or process-signal handlers
  *
- * Hosted Fluxer only; self-hosted instances and custom REST or gateway endpoints are not supported
+ * Omit `instance` for hosted Fluxer, or select a self-hosted root whose unauthenticated well-known document supplies REST, gateway and projection endpoints lazily.
+ * HTTPS and WSS are required unless that explicit instance sets `allowInsecure: true` for a local or self-hosted HTTP/WS deployment
  *
  * Validate configuration locally without authenticating the token
  *
@@ -3128,6 +3213,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         A,
         E extends
             | ConnectError
+            | InstanceResolveError
             | EventReadError
             | MessageError
             | MessageOperationError
@@ -3141,7 +3227,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             | CountOperationError
             | MemberChunkError
             | PresenceError
-            | PaginationError,
+            | PaginationError
+            | AttachmentDownloadFailure,
     >(
         effect: Effect.Effect<A, E>,
         operation: Operation,
@@ -3273,6 +3360,10 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     }
     return ok(
         Object.freeze({
+            instance: Object.freeze({
+                resolve: (options?: DefaultInstanceResolveOptions) =>
+                    execute(owner.instance.resolveInfo(options), "instance.resolve", options),
+            }),
             presence: Object.freeze({
                 set: (input: PresenceInput) => lookup(owner.setPresence(input), "presence.set"),
                 setMembers: (guildId: string, memberIds: readonly string[]) =>
@@ -3832,6 +3923,10 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         "roles.reorder",
                         options,
                     ),
+            }),
+            attachments: Object.freeze({
+                download: (attachment: Attachment, options: DefaultAttachmentDownloadOptions) =>
+                    execute(owner.downloadAttachment(attachment, options), "attachments.download", options),
             }),
             messages: Object.freeze({
                 iterateHistory: (id: string, query: HistoryIterationQuery, options?: DefaultMessageOperationOptions) =>

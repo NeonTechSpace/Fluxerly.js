@@ -14,6 +14,7 @@ import { MessageCache } from "../src/internal/cache.js"
 import { ChannelCache } from "../src/internal/channel-cache.js"
 import { GuildCache } from "../src/internal/guild-cache.js"
 import { UserCache } from "../src/internal/user-cache.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 type Mode = (typeof modes)[number]
@@ -83,10 +84,7 @@ afterEach(() => {
 test.each(modes)("%s exposes deeply frozen payload-free diagnostics and bounded cache entries", async (mode) => {
     const privateToken = "private-token-for-diagnostics"
     const privateBody = "private cached body"
-    vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => Response.json(wire("1000000000000000000", privateBody))),
-    )
+    stubFetchWithHostedDiscovery(vi.fn(async () => Response.json(wire("1000000000000000000", privateBody))))
     const api = await driver(mode, {
         token: privateToken,
         cache: { messages: { maxEntries: 2, maxBytes: 10_000 } },
@@ -148,7 +146,7 @@ test.each(modes)(
     async (mode) => {
         let requests = 0
         let release!: () => void
-        vi.stubGlobal("fetch", () => {
+        stubFetchWithHostedDiscovery(() => {
             requests++
             if (requests === 1) return Promise.resolve(Response.json(wire("1000000000000000000", "caller-held")))
             if (requests === 2)
@@ -200,8 +198,7 @@ test.each(modes)(
 
 test.each(modes)("%s reports local REST queue and upload occupancy until owned cleanup releases it", async (mode) => {
     const queuedResponses: ((response: Response) => void)[] = []
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         () =>
             new Promise<Response>((resolve) => {
                 queuedResponses.push(resolve)
@@ -233,8 +230,7 @@ test.each(modes)("%s reports local REST queue and upload occupancy until owned c
     }
 
     let release!: (response: Response) => void
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         () =>
             new Promise<Response>((resolve) => {
                 release = resolve
@@ -265,8 +261,7 @@ test.each(modes)("%s reports local REST queue and upload occupancy until owned c
 
 test.each(modes)("%s applies the public cache-entry default and cap", async (mode) => {
     let identifier = 0
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         vi.fn(async () =>
             Response.json(wire((1000000000000000000n + BigInt(identifier++)).toString(), "bounded snapshot")),
         ),

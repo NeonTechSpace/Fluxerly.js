@@ -1,5 +1,6 @@
 import { registerHooks } from "node:module"
 import { Effect, Exit, Cause } from "effect"
+import { withHostedDiscovery } from "../hosted-discovery.mjs"
 
 const [mode, url] = process.argv.slice(2)
 // Redirect only the external ws constructor, leaving the built public SDK and real loopback I/O intact
@@ -13,7 +14,9 @@ registerHooks({
         return next(specifier, context)
     },
 })
-globalThis.fetch = async () => new Response(JSON.stringify({ url: "wss://gateway.fluxer.app" }))
+globalThis.fetch = withHostedDiscovery(async (url) => {
+    throw new Error(`Unexpected operation request ${url}`)
+})
 const controller = new AbortController()
 const stop = Promise.withResolvers()
 process.on("message", (message) => {

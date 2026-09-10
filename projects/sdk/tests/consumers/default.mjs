@@ -32,7 +32,31 @@ const commandRouter = commands.create({ prefix: "!" })._unsafeUnwrap()
 const registeredRouter = commandRouter.register({ name: "ping", execute() {} })._unsafeUnwrap()
 assert.notEqual(registeredRouter, commandRouter)
 assert.ok(Object.isFrozen(registeredRouter))
+const hostedDiscoveryDocument = {
+    api_code_version: 1,
+    endpoints: {
+        api_public: "https://api.fluxer.app",
+        gateway: "wss://gateway.fluxer.app",
+        media: "https://fluxerusercontent.com",
+        static_cdn: "https://fluxerstatic.com",
+        webapp: "https://fluxer.app",
+        invite: "https://fluxer.gg",
+    },
+    features: { presigned_attachment_uploads: true },
+}
 
+function installHostedFetch(handler) {
+    globalThis.fetch = async (url, init = {}) => {
+        const target = typeof url === "string" ? url : url instanceof URL ? url.href : url.url
+        if (target === "https://fluxer.app/.well-known/fluxer") {
+            assert.equal(init.method, "GET")
+            assert.equal(init.redirect, "manual")
+            assert.equal(new Headers(init.headers).has("authorization"), false)
+            return Response.json(hostedDiscoveryDocument)
+        }
+        return handler(target, init)
+    }
+}
 const webhookClient = createWebhookClient({ id: "100", token: "fixture_only" })
 assert.ok(webhookClient.isOk())
 assert.equal((await webhookClient.value.send({ content: "x" }, { timeoutMs: 0 })).error._tag, "WebhookOperationError")
@@ -181,7 +205,7 @@ const invalidEdit = await result.value.messages.edit({ channelId: "20", id: "10"
 assert.ok(invalidEdit.error instanceof MessageOperationError)
 assert.equal(invalidEdit.error.outcome, "notDispatched")
 const requests = []
-globalThis.fetch = async (url, init) => {
+installHostedFetch(async (url, init) => {
     assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages/10")
     requests.push(init.method)
     return init.method === "DELETE"
@@ -192,7 +216,7 @@ globalThis.fetch = async (url, init) => {
               content: init.body ? JSON.parse(init.body).content : "Original",
               author: { id: "30", username: "fixture" },
           })
-}
+})
 const fetched = await result.value.messages.fetch({ channelId: "20", id: "10" })
 assert.ok(fetched.isOk())
 const edited = await result.value.messages.edit(fetched.value, { content: "Updated" })
@@ -215,13 +239,13 @@ const deleted = await result.value.messages.delete(edited.value)
 assert.ok(deleted.isOk())
 assert.equal(deleted.value, undefined)
 assert.deepEqual(requests, ["GET", "PATCH", "DELETE"])
-globalThis.fetch = async (url, init) => {
+installHostedFetch(async (url, init) => {
     assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages?limit=2&before=11")
     assert.equal(init.method, "GET")
     return Response.json([
         { id: "10", channel_id: "20", content: "History", author: { id: "30", username: "fixture" } },
     ])
-}
+})
 const history = await result.value.messages.fetchHistory("20", { limit: 2, before: "11" })
 assert.ok(history.isOk())
 assert.equal(history.value[0].content, "History")
@@ -237,7 +261,7 @@ globalThis.fetch = async (url, init) => {
 const guildList = await result.value.guilds.fetchPage({ withCounts: true })
 assert.ok(guildList.isOk())
 assert.equal(guildList.value[0]?.permissions, 0n)
-globalThis.fetch = async (url, init) => {
+installHostedFetch(async (url, init) => {
     assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages/11")
     assert.equal(init.method, "GET")
     return Response.json({
@@ -246,7 +270,7 @@ globalThis.fetch = async (url, init) => {
         content: "Policy failure retains no snapshot",
         author: { id: "30", username: "fixture" },
     })
-}
+})
 const policyFailure = await result.value.messages.fetch({ id: "11", channelId: "20" })
 assert.ok(policyFailure.isOk())
 await cacheReported

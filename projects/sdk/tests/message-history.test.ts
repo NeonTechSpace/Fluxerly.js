@@ -4,6 +4,7 @@ import { Effect, Fiber } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type Client, type MessageHistoryQuery } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const wire = (id: string, channel = "20") => ({
     id,
@@ -36,7 +37,7 @@ async function fixture() {
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing fixture port")
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
         expect(url.startsWith("https://api.fluxer.app/v1/channels/")).toBe(true)
         expect(init.redirect).toBe("error")
         expect(init.body).toBeUndefined()

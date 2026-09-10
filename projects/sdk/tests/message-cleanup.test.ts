@@ -2,6 +2,7 @@ import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { SdkDefect, createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const configuration = { token: "fixture-only-not-a-credential" }
@@ -60,7 +61,7 @@ test.each(modes)(
     async (mode) => {
         const posts: string[] = []
         let reads = 0
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             if (init.method === "POST") {
                 posts.push(String(init.body))
                 return new Response(null, { status: 204 })
@@ -131,7 +132,7 @@ test.each(modes)("%s cleanup retains submitted and terminal batch knowledge with
     const source = Array.from({ length: 101 }, (_, index) => wire(String(1_000 - index)))
     let reads = 0
     let writes = 0
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (init.method === "POST") {
             writes++
             if (writes === 2) throw new TypeError("private lost response")
@@ -191,7 +192,7 @@ test.each(modes)("%s cleanup retains submitted and terminal batch knowledge with
 })
 
 test("cleanup rejects a different client's in-memory plan before dispatch", async () => {
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) =>
         init.method === "POST" ? new Response(null, { status: 204 }) : Response.json([wire("30")]),
     )
     const first = createClient(configuration)
@@ -219,7 +220,7 @@ test.each(modes)(
         const calls: URL[] = []
         const pages = [[wire("30"), wire("29", "31")], [wire("27"), wire("26")], []]
         let posts = 0
-        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
             calls.push(new URL(url))
             if (init.method === "POST") {
                 posts++
@@ -262,7 +263,7 @@ test.each(modes)("%s rejects throwing, nonboolean, and thenable cleanup filters 
     ]
     for (const filter of filters) {
         const calls: RequestInit[] = []
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             calls.push(init)
             return Response.json([wire("30")])
         })
@@ -295,7 +296,7 @@ test.each(modes)("%s permits at most one concurrent cleanup execution for an own
         release = resolve
     })
     let posts = 0
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (init.method === "POST") {
             posts++
             await posted
@@ -338,7 +339,7 @@ test.each(modes)(
         let posts = 0
         const events: string[] = []
         const controller = new AbortController()
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             if (init.method === "POST") {
                 posts++
                 return new Response(null, { status: 204 })
@@ -401,7 +402,7 @@ test.each(modes)(
         const aborted = new Promise<void>((resolve) => {
             observeAbort = resolve
         })
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             if (init.method === "POST") {
                 posts++
                 if (posts === 1) {
@@ -450,7 +451,7 @@ test.each(modes)("%s preserves cleanup expected failures alongside response clea
     const cleanup = new Error("private cleanup response defect")
     let stage: "preview" | "cleanup" = "preview"
     let cancellations = 0
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (stage === "preview") return responseWithCleanupFailure(503, cleanup, () => cancellations++)
         if (init.method === "POST") return responseWithCleanupFailure(503, cleanup, () => cancellations++)
         return Response.json([wire("30")])
@@ -550,8 +551,7 @@ test.each(modes)("%s keeps cancellation and a cleanup defect together at the cle
     const aborted = new Promise<void>((resolve) => {
         observeAbort = resolve
     })
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         (_url: string, init: RequestInit) =>
             new Promise<Response>((resolve) => {
                 resolveFetch = resolve

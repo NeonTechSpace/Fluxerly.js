@@ -2,6 +2,7 @@ import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type ClientOptions, type GuildMember, type MemberReference } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const target: MemberReference = { guildId: "20", userId: "31" }
@@ -61,7 +62,7 @@ afterEach(() => {
 
 test.each(modes)("%s replaces roles with one PATCH and returns Fluxer's frozen actual role set", async (mode) => {
     const calls: { path: string; method: string; body: Record<string, unknown> }[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>
         calls.push({ path: new URL(url).pathname, method: init.method!, body })
         return Response.json(wireMember(Array.isArray(body.roles) && body.roles.length === 0 ? [] : ["61"]))
@@ -88,7 +89,7 @@ test.each(modes)("%s replaces roles with one PATCH and returns Fluxer's frozen a
 
 test.each(modes)("%s rejects invalid full role sets before dispatch", async (mode) => {
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const api = await setup(mode)
     const tooMany = Array.from({ length: 251 }, (_, index) => String(index + 1000))
 
@@ -115,7 +116,7 @@ test.each(modes)("%s rejects invalid full role sets before dispatch", async (mod
 
 test.each(modes)("%s copies role IDs at its default or native execution boundary", async (mode) => {
     const bodies: unknown[] = []
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body))
         bodies.push(body)
         return Response.json(wireMember(body.roles))
@@ -137,7 +138,7 @@ test.each(modes)("%s copies role IDs at its default or native execution boundary
 })
 
 test.each(modes)("%s rejects a mismatched member response and evicts its uncertain cached write", async (mode) => {
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) =>
         init.method === "GET" ? Response.json(wireMember()) : Response.json(wireMember(["50"], "32")),
     )
     const api = await setup(mode)
@@ -155,7 +156,7 @@ test.each(modes)("%s rejects a mismatched member response and evicts its uncerta
 
 test.each(modes)("%s never replays an uncertain role replacement but retries a confirmed rate limit", async (mode) => {
     let attempts = 0
-    vi.stubGlobal("fetch", async () => {
+    stubFetchWithHostedDiscovery(async () => {
         attempts++
         return new Response("private provider response", { status: 503 })
     })
@@ -171,7 +172,7 @@ test.each(modes)("%s never replays an uncertain role replacement but retries a c
     expect(attempts).toBe(1)
 
     attempts = 0
-    vi.stubGlobal("fetch", async () => {
+    stubFetchWithHostedDiscovery(async () => {
         attempts++
         if (attempts === 1)
             return Response.json({ retry_after: 0.001 }, { status: 429, headers: { "retry-after": "0.001" } })
@@ -183,10 +184,15 @@ test.each(modes)("%s never replays an uncertain role replacement but retries a c
 
 test.each(modes)("%s applies the shared deadline to an active role replacement and awaits cleanup", async (mode) => {
     let active = 0
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+        markStarted = resolve
+    })
     const fetch = vi.fn(
         async (_url: string, init: RequestInit) =>
             new Promise<Response>((_resolve, reject) => {
                 active++
+                markStarted()
                 init.signal!.addEventListener(
                     "abort",
                     () =>
@@ -198,10 +204,12 @@ test.each(modes)("%s applies the shared deadline to an active role replacement a
                 )
             }),
     )
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const api = await setup(mode)
 
-    await expect(api.setRoles(target, ["50"], { timeoutMs: 1 })).rejects.toMatchObject({
+    const pending = api.setRoles(target, ["50"], { timeoutMs: 100 })
+    await started
+    await expect(pending).rejects.toMatchObject({
         _tag: "GuildOperationError",
         operation: "members.setRoles",
         reason: "timeout",
@@ -213,8 +221,7 @@ test.each(modes)("%s applies the shared deadline to an active role replacement a
 
 test.each(modes)("%s cancellation interrupts the role replacement and awaits transport cleanup", async (mode) => {
     let active = 0
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         (_url: string, init: RequestInit) =>
             new Promise<Response>((_resolve, reject) => {
                 active++

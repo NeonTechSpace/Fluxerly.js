@@ -9,6 +9,7 @@ import {
     type DefaultMessageOperationOptions,
 } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 type Kind = "history" | "members" | "reactors" | "pins"
@@ -81,7 +82,7 @@ async function fixture(mode: (typeof modes)[number], caching = false) {
             )
         },
     }
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const parsed = new URL(url)
         expect(parsed.origin).toBe("https://api.fluxer.app")
         expect(init.method).toBe("GET")

@@ -3,6 +3,7 @@ import type { ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 afterEach(() => vi.unstubAllGlobals())
@@ -38,7 +39,7 @@ test.each(modes)("%s preserves remote rejection details without retrying or reta
     const fetch = vi.fn(async () =>
         Response.json({ code: "INPUT_VALIDATION_ERROR", message: "private-code details" }, { status }),
     )
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     for (status of [400, 403, 404]) {
         let failure: unknown
         try {
@@ -55,7 +56,7 @@ test.each(modes)("%s preserves remote rejection details without retrying or reta
 test.each(modes)("%s retries only confirmed rate-limit rejection of a vanity write", async (mode) => {
     const client = await setup(mode)
     let attempts = 0
-    vi.stubGlobal("fetch", async () =>
+    stubFetchWithHostedDiscovery(async () =>
         ++attempts === 1
             ? Response.json({ retry_after: 0.001, global: false }, { status: 429, headers: { "retry-after": "0.001" } })
             : Response.json({ code: "fixture-code" }),
@@ -67,8 +68,7 @@ test.each(modes)("%s retries only confirmed rate-limit rejection of a vanity wri
 test.each(modes)("%s aborts the transport at the vanity deadline and remains usable", async (mode) => {
     const client = await setup(mode)
     let aborted = false
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         (_url: string, init: RequestInit) =>
             new Promise((_resolve, reject) => {
                 const abort = () => {
@@ -84,7 +84,7 @@ test.each(modes)("%s aborts the transport at the vanity deadline and remains usa
         outcome: "unknown",
     })
     expect(aborted).toBe(true)
-    vi.stubGlobal("fetch", async () => Response.json({ code: null, uses: 0 }))
+    stubFetchWithHostedDiscovery(async () => Response.json({ code: null, uses: 0 }))
     expect((await settle(client.guilds.fetchVanityUrl("200"))).code).toBeNull()
 })
 
@@ -92,7 +92,7 @@ test.each(modes)("%s reads remote vanity state and edits without fetching counts
     const client = await setup(mode)
     let code: string | null = null
     const requests: { method: string; body: unknown }[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         expect(url).toBe("https://api.fluxer.app/v1/guilds/200/vanity-url")
         requests.push({ method: init.method!, body: init.body ? JSON.parse(init.body as string) : undefined })
         if (init.method === "GET") return Response.json({ code, uses: code ? 3 : 0, private_field: "dropped" })
@@ -118,7 +118,7 @@ test.each(modes)("%s reads remote vanity state and edits without fetching counts
 test.each(modes)("%s rejects invalid codes and omitted removal before dispatch", async (mode) => {
     const client = await setup(mode)
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     for (const code of [
         undefined,
         "",
@@ -150,7 +150,7 @@ test.each(modes)("%s rejects malformed or mismatched observations without leakin
     const client = await setup(mode)
     let response: unknown
     const fetch = vi.fn(async () => Response.json(response))
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     for (response of [
         { code: null },
         { code: 42, uses: 0 },
@@ -176,7 +176,7 @@ test.each(modes)("%s retries a transient vanity read but never replays an uncert
     const client = await setup(mode)
     let reads = 0,
         writes = 0
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (init.method === "GET") {
             if (++reads === 1) return new Response(null, { status: 503 })
             return Response.json({ code: null, uses: 0 })
@@ -205,7 +205,7 @@ test.each(modes)("%s invalidates cached guilds and pending reads after a vanity 
     const held = new Promise<void>((resolve) => {
         release = resolve
     })
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (init.method === "GET") {
             if (hold) {
                 entered()

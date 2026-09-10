@@ -5,6 +5,8 @@ import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
 
+const hostedInvite = "https://fluxer.gg"
+
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max
 const timestamp = (value: unknown): value is string =>
@@ -17,7 +19,7 @@ const codeValue = (value: unknown): value is string =>
     value !== "." &&
     value !== ".."
 
-function decode(value: unknown): Invite | undefined {
+function decode(value: unknown, inviteBase = hostedInvite): Invite | undefined {
     if (
         !record(value) ||
         !codeValue(value.code) ||
@@ -44,7 +46,7 @@ function decode(value: unknown): Invite | undefined {
         return undefined
     return Object.freeze({
         code: value.code,
-        url: `https://fluxer.gg/${encodeURIComponent(value.code)}`,
+        url: `${inviteBase}/${encodeURIComponent(value.code)}`,
         type: value.type === 0 ? "guild" : "group",
         channel: Object.freeze({
             id: value.channel.id,
@@ -69,8 +71,8 @@ function decode(value: unknown): Invite | undefined {
     })
 }
 
-function metadata(value: unknown): InviteMetadata | undefined {
-    const base = decode(value)
+function metadata(value: unknown, inviteBase = hostedInvite): InviteMetadata | undefined {
+    const base = decode(value, inviteBase)
     if (
         !base ||
         !record(value) ||
@@ -90,8 +92,8 @@ function metadata(value: unknown): InviteMetadata | undefined {
 }
 
 /** Decode the complete metadata emitted by INVITE_CREATE without retaining it */
-export function decodeInviteMetadata(value: unknown): InviteMetadata | undefined {
-    return metadata(value)
+export function decodeInviteMetadata(value: unknown, inviteBase = hostedInvite): InviteMetadata | undefined {
+    return metadata(value, inviteBase)
 }
 
 /** Decode INVITE_DELETE's intentionally smaller terminal identity without retaining it */
@@ -110,7 +112,7 @@ export function decodeInviteDelete(value: unknown): InviteDeleteEvent | undefine
     })
 }
 
-export function inviteFetch(code: string): GuildRequest<Invite> | undefined {
+export function inviteFetch(code: string, inviteBase = hostedInvite): GuildRequest<Invite> | undefined {
     if (!codeValue(code)) return undefined
     return {
         guildId: "invites",
@@ -119,8 +121,8 @@ export function inviteFetch(code: string): GuildRequest<Invite> | undefined {
         method: "GET",
         status: 200,
         // Fluxer can resolve a vanity code using a lowercase fallback
-        decode: (value) => {
-            const item = decode(value)
+        decode: (value, instance) => {
+            const item = decode(value, instance?.invite ?? inviteBase)
             return item && (item.code === code || item.code === code.toLowerCase()) ? item : undefined
         },
     }
@@ -129,6 +131,7 @@ export function inviteFetch(code: string): GuildRequest<Invite> | undefined {
 export function inviteList(
     kind: "guilds" | "channels",
     id: string,
+    inviteBase = hostedInvite,
 ): GuildRequest<readonly InviteMetadata[]> | undefined {
     if (!identifier(id)) return undefined
     return {
@@ -137,12 +140,12 @@ export function inviteList(
         path: `/${kind}/${id}/invites`,
         method: "GET",
         status: 200,
-        decode: (value) => {
+        decode: (value, instance) => {
             if (!Array.isArray(value)) return undefined
             const result: InviteMetadata[] = []
             const codes = new Set<string>()
             for (const entry of value) {
-                const item = metadata(entry)
+                const item = metadata(entry, instance?.invite ?? inviteBase)
                 if (
                     !item ||
                     codes.has(item.code) ||
@@ -161,9 +164,10 @@ export function inviteCreate(
     channelId: string,
     input?: InviteCreate,
     options?: ModerationOptions,
+    inviteBase = hostedInvite,
 ): GuildRequest<InviteMetadata> | undefined {
     const value = input === undefined ? {} : input
-    const base = inviteList("channels", channelId)
+    const base = inviteList("channels", channelId, inviteBase)
     const audit = auditSettings(options)
     if (
         !base ||
@@ -188,15 +192,19 @@ export function inviteCreate(
         ...audit,
         method: "POST",
         json: JSON.stringify({ max_age: maxAgeSeconds, max_uses: maxUses, unique, temporary }),
-        decode: (value) => {
-            const item = metadata(value)
+        decode: (value, instance) => {
+            const item = metadata(value, instance?.invite ?? inviteBase)
             return item?.channel.id === channelId ? item : undefined
         },
     }
 }
 
-export function inviteDelete(code: string, options?: ModerationOptions): GuildRequest<void> | undefined {
-    const base = inviteFetch(code)
+export function inviteDelete(
+    code: string,
+    options?: ModerationOptions,
+    inviteBase = hostedInvite,
+): GuildRequest<void> | undefined {
+    const base = inviteFetch(code, inviteBase)
     const audit = auditSettings(options)
     if (!base || !audit) return undefined
     return { ...base, ...audit, method: "DELETE", status: 204, decode: () => undefined }

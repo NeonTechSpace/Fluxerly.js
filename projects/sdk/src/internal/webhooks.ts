@@ -1,4 +1,4 @@
-import { Effect, Redacted } from "effect"
+import { Cause, Effect, Exit, Redacted, Scope } from "effect"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import { MessageError } from "#sdk/message-errors"
 import type { Message, MessageOperationOptions } from "#sdk/messages"
@@ -17,6 +17,7 @@ import type {
 import { record, identifier, decodeMessage, encodeMessage, encodeEdit } from "./message.js"
 import type { EncodedBody } from "./attachments.js"
 import { RestOwner } from "./rest.js"
+import { InstanceResolver, type InstanceConfiguration, instanceConfiguration } from "./instance.js"
 
 export type WebhookRequest<A> = {
     majorId: string
@@ -252,13 +253,18 @@ export function webhookMessageDelete(id: string, messageId: string): WebhookRequ
 class WebhookOwner {
     #token: Redacted.Redacted<string> | undefined
     readonly rest: RestOwner
+    /** Token-only clients still own an independent immutable instance result and discovery worker */
+    readonly instance: InstanceResolver
+    readonly #scope = Scope.makeUnsafe()
     constructor(
         readonly id: string,
         token: string,
         maxBytes: number,
+        instance: InstanceConfiguration,
     ) {
         this.#token = Redacted.make(token)
-        this.rest = new RestOwner(undefined, maxBytes)
+        this.instance = new InstanceResolver(instance, this.#scope)
+        this.rest = new RestOwner(undefined, maxBytes, undefined, undefined, undefined, () => this.instance.resolve())
     }
     run<A>(operation: WebhookOperation, build: () => WebhookRequest<A> | undefined, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
@@ -272,7 +278,14 @@ class WebhookOwner {
             Effect.suspend(() => {
                 const token = this.#token
                 this.#token = undefined
-                return this.rest.shutdown().pipe(
+                return Effect.all([Effect.exit(this.instance.shutdown()), Effect.exit(this.rest.shutdown())], {
+                    concurrency: "unbounded",
+                }).pipe(
+                    Effect.flatMap((exits) => {
+                        const reasons = exits.flatMap((exit) => (Exit.isFailure(exit) ? exit.cause.reasons : []))
+                        return reasons.length ? Effect.failCause(Cause.fromReasons<never>(reasons)) : Effect.void
+                    }),
+                    Effect.ensuring(Scope.close(this.#scope, Exit.void)),
                     Effect.ensuring(
                         Effect.sync(() => {
                             if (token) Redacted.wipeUnsafe(token)
@@ -288,7 +301,9 @@ export function makeWebhookClient(options: WebhookClientOptions): Effect.Effect<
     return Effect.suspend(() => {
         if (
             !record(options) ||
-            Object.keys(options).some((key) => !["id", "token", "revealToken", "uploadMaxBytes"].includes(key)) ||
+            Object.keys(options).some(
+                (key) => !["id", "token", "revealToken", "uploadMaxBytes", "instance"].includes(key),
+            ) ||
             !identifier(options.id)
         )
             return Effect.fail(new ConfigurationError("configuration", "Invalid webhook client configuration"))
@@ -299,6 +314,8 @@ export function makeWebhookClient(options: WebhookClientOptions): Effect.Effect<
         const maxBytes = options.uploadMaxBytes === undefined ? 104_857_600 : options.uploadMaxBytes
         if (typeof maxBytes !== "number" || !Number.isSafeInteger(maxBytes) || maxBytes <= 0)
             return Effect.fail(new ConfigurationError("uploads", "Invalid webhook upload budget"))
-        return Effect.succeed(new WebhookOwner(options.id, token, maxBytes))
+        const instance = instanceConfiguration(options.instance)
+        if (instance instanceof ConfigurationError) return Effect.fail(instance)
+        return Effect.succeed(new WebhookOwner(options.id, token, maxBytes, instance))
     })
 }

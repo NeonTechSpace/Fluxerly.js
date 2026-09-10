@@ -3,6 +3,7 @@ import type { Result, ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { type GuildMemberJoinSourceType, GuildMemberJoinSourceTypes, createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 
@@ -96,7 +97,7 @@ test.each(modes)(
     async (mode) => {
         const client = await setup(mode, true)
         const requests: Array<{ path: string; method: string | undefined; body: unknown }> = []
-        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
             requests.push({ path: new URL(url).pathname, method: init.method, body: init.body })
             return Response.json(page())
         })
@@ -169,7 +170,7 @@ test.each(modes)("%s preflights ManageGuild before sending sensitive filters", a
     const requests: Array<{ path: string; method: string | undefined; body: unknown }> = []
     const joinSourceTypes: GuildMemberJoinSourceType[] = [GuildMemberJoinSourceTypes.InstantInvite]
     const sourceInviteCodes = ["fixture-invite"]
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const path = new URL(url).pathname
         requests.push({ path, method: init.method, body: init.body })
         if (path === "/v1/guilds/20/members/@me") {
@@ -207,7 +208,7 @@ test.each(modes)(
     async (mode) => {
         const client = await setup(mode)
         const requests: string[] = []
-        vi.stubGlobal("fetch", async (url: string) => {
+        stubFetchWithHostedDiscovery(async (url: string) => {
             const path = new URL(url).pathname
             requests.push(path)
             if (path === "/v1/guilds/20/members/@me") return Response.json(selfMember)
@@ -240,7 +241,7 @@ test.each(modes)(
 
 test.each(modes)("%s rejects malformed pages without caching an invented member", async (mode) => {
     const client = await setup(mode, true)
-    vi.stubGlobal("fetch", async () => Response.json(page([hit()], { page_result_count: 0 })))
+    stubFetchWithHostedDiscovery(async () => Response.json(page([hit()], { page_result_count: 0 })))
 
     let failure: unknown
     try {
@@ -256,7 +257,7 @@ test.each(modes)("%s rejects malformed pages without caching an invented member"
 test.each(modes)("%s keeps unknown POST failures single-attempt but retries confirmed rate limits", async (mode) => {
     const client = await setup(mode)
     const fetch = vi.fn(async () => new Response(null, { status: 503 }))
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
 
     let failure: unknown
     try {

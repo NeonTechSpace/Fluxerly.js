@@ -3,6 +3,7 @@ import type { Result, ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 
@@ -57,7 +58,7 @@ test.each(modes)(
     async (mode) => {
         const client = await setup(mode, true)
         const requests: Array<{ path: string; method: string | undefined; body: string | null | undefined }> = []
-        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
             requests.push({
                 path: new URL(url).pathname,
                 method: init.method,
@@ -118,7 +119,7 @@ test.each(modes)(
 test.each(modes)("%s cancellation interrupts search without retrying or polling", async (mode) => {
     const client = await setup(mode)
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const controller = new AbortController()
     controller.abort()
     if (mode === "default") {
@@ -134,8 +135,7 @@ test.each(modes)("%s cancellation interrupts search without retrying or polling"
             signal: controller.signal,
         })
         expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
-        expect(fetch).toHaveBeenCalledTimes(1)
-        expect((fetch.mock.calls[0]?.[1] as RequestInit).signal?.aborted).toBe(true)
+        expect(fetch).not.toHaveBeenCalled()
         return
     }
     expect(fetch).not.toHaveBeenCalled()
@@ -146,7 +146,7 @@ test.each(modes)(
     async (mode) => {
         const client = await setup(mode)
         const fetch = vi.fn(async () => Response.json({ indexing: true }))
-        vi.stubGlobal("fetch", fetch)
+        stubFetchWithHostedDiscovery(fetch)
         expect(await settle(client.messages.search({ channelId: "20" }))).toEqual({ indexing: true })
 
         let invalid: unknown
@@ -174,7 +174,7 @@ test.each(modes)(
 test.each(modes)("%s preserves an empty provider cursor without inventing a page cursor", async (mode) => {
     const client = await setup(mode)
     const sent: unknown[] = []
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         sent.push(JSON.parse(String(init.body)))
         return Response.json(page([], { total: 0 }))
     })
@@ -185,7 +185,7 @@ test.each(modes)("%s preserves an empty provider cursor without inventing a page
 
 test.each(modes)("%s projects nameless DM channels and cursor pages beyond request page 400", async (mode) => {
     const client = await setup(mode)
-    vi.stubGlobal("fetch", async () =>
+    stubFetchWithHostedDiscovery(async () =>
         Response.json(page([], { channels: [{ id: "20", type: 1 }], total: 0, page: 401 })),
     )
     const result = await settle(client.messages.search({ channelId: "20" }))
@@ -200,7 +200,7 @@ test.each(modes)(
     async (mode) => {
         const client = await setup(mode)
         const fetch = vi.fn(async () => new Response(null, { status: 503 }))
-        vi.stubGlobal("fetch", fetch)
+        stubFetchWithHostedDiscovery(fetch)
         await expect(settle(client.messages.search({ channelId: "20" }))).rejects.toMatchObject({
             operation: "search",
             reason: "rejected",

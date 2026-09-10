@@ -1,6 +1,17 @@
 import type { FilePart } from "./attachments.js"
 import { record } from "./message.js"
 
+/** Bounded response parsing completed, but releasing its owned reader failed */
+export class UploadResponseCleanupError extends Error {
+    constructor(
+        readonly cause: unknown,
+        readonly status: number,
+    ) {
+        super("Attachment upload response cleanup failed", { cause })
+        this.name = "UploadResponseCleanupError"
+    }
+}
+
 export type UploadPlan = {
     id: number
     filename: string
@@ -13,14 +24,16 @@ export type UploadPlan = {
 const text = (value: unknown, max: number): value is string =>
     typeof value === "string" && value.length > 0 && value.length <= max
 
-function destination(value: unknown): value is string {
+function destination(value: unknown, allowInsecure: boolean): value is string {
     if (!text(value, 8192)) return false
     try {
         const url = new URL(value)
-        // The hosted upload relay was verified separately from the authenticated API origin
-        // Fail closed on new destinations rather than sending private bytes to an arbitrary response URL
+        // Signed plan URLs are authenticated upload capabilities. Preserve their query, do not send bot auth, and never follow redirects
         return (
-            url.origin === "https://uploads.fluxer.app" && url.username === "" && url.password === "" && url.hash === ""
+            (url.protocol === "https:" || (allowInsecure && url.protocol === "http:")) &&
+            url.username === "" &&
+            url.password === "" &&
+            url.hash === ""
         )
     } catch {
         return false
@@ -28,7 +41,11 @@ function destination(value: unknown): value is string {
 }
 
 /** Validate the complete plan before dispatching any file bytes; unknown response properties are discarded */
-export function decodeUploadPlans(value: unknown, files: readonly FilePart[]): UploadPlan[] | undefined {
+export function decodeUploadPlans(
+    value: unknown,
+    files: readonly FilePart[],
+    allowInsecure: boolean,
+): UploadPlan[] | undefined {
     if (!record(value) || !Array.isArray(value.attachments) || value.attachments.length !== files.length)
         return undefined
     const plans: UploadPlan[] = []
@@ -40,7 +57,7 @@ export function decodeUploadPlans(value: unknown, files: readonly FilePart[]): U
         const item = matches[0]!
         if (
             !record(item) ||
-            item.file_size !== file.data.byteLength ||
+            item.file_size !== file.size ||
             !text(item.filename, 255) ||
             /[\x00-\x1f\x7f/\\]/.test(item.filename) ||
             !text(item.content_type, 255) ||
@@ -58,8 +75,8 @@ export function decodeUploadPlans(value: unknown, files: readonly FilePart[]): U
             parts: [],
         }
         if (item.upload_mode === "singlepart") {
-            if (!destination(item.upload_url) || item.file_size > 10_485_760) return undefined
-            plan.parts.push({ url: item.upload_url, offset: 0, size: file.data.byteLength })
+            if (!destination(item.upload_url, allowInsecure) || item.file_size > 10_485_760) return undefined
+            plan.parts.push({ url: item.upload_url, offset: 0, size: file.size })
         } else if (item.upload_mode === "multipart") {
             if (
                 !text(item.upload_id, 1024) ||
@@ -70,18 +87,19 @@ export function decodeUploadPlans(value: unknown, files: readonly FilePart[]): U
                 !Array.isArray(item.parts) ||
                 item.parts.length === 0 ||
                 item.parts.length > 10_000 ||
-                item.parts.length !== Math.ceil(file.data.byteLength / item.part_size)
+                item.parts.length !== Math.ceil(file.size / item.part_size)
             )
                 return undefined
             plan.uploadId = item.upload_id
             for (let index = 0; index < item.parts.length; index++) {
                 const part = item.parts[index]
-                if (!record(part) || part.part_number !== index + 1 || !destination(part.upload_url)) return undefined
+                if (!record(part) || part.part_number !== index + 1 || !destination(part.upload_url, allowInsecure))
+                    return undefined
                 const offset = index * item.part_size
                 plan.parts.push({
                     url: part.upload_url,
                     offset,
-                    size: Math.min(item.part_size, file.data.byteLength - offset),
+                    size: Math.min(item.part_size, file.size - offset),
                 })
             }
         } else return undefined
@@ -117,48 +135,18 @@ export async function readUploadJson(response: Response): Promise<unknown> {
     } catch {
         return undefined
     } finally {
-        if (!ended) await reader.cancel()
-        reader.releaseLock()
-    }
-}
-
-/** One bounded view stream per PUT attempt, without concatenating or copying the owned file */
-export function uploadBody(data: Uint8Array, offset: number, size: number) {
-    let retained: Uint8Array | undefined = data
-    const end = offset + size
-    let controller: ReadableStreamDefaultController<Uint8Array>
-    let ended = false
-    const body = new ReadableStream<Uint8Array>(
-        {
-            start(value) {
-                controller = value
-            },
-            pull(value) {
-                if (offset === end) {
-                    ended = true
-                    retained = undefined
-                    value.close()
-                    return
-                }
-                const next = Math.min(offset + 65_536, end)
-                value.enqueue(retained!.subarray(offset, next))
-                offset = next
-            },
-            cancel() {
-                ended = true
-                retained = undefined
-            },
-        },
-        { highWaterMark: 0 },
-    )
-    return {
-        body,
-        stop() {
-            retained = undefined
-            if (!ended) {
-                ended = true
-                controller.error(new Error("Upload body closed"))
+        const failures: unknown[] = []
+        for (const action of [...(!ended ? [() => reader.cancel()] : []), () => reader.releaseLock()]) {
+            try {
+                await action()
+            } catch (error) {
+                failures.push(error)
             }
-        },
+        }
+        if (failures.length)
+            throw new UploadResponseCleanupError(
+                failures.length === 1 ? failures[0] : new AggregateError(failures, "Upload response cleanup failed"),
+                response.status,
+            )
     }
 }

@@ -4,6 +4,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 import { GuildCache } from "../src/internal/guild-cache.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const image = "aW1hZ2U="
@@ -47,7 +48,7 @@ async function setup(mode: (typeof modes)[number], cache = true) {
 test.each(modes)("%s manages expressions, projects allowlisted metadata and preserves explicit purge", async (mode) => {
     const client = await setup(mode)
     const requests: { path: string; method: string; body: any; audit: string | null }[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const path = new URL(url).pathname
         const body = init.body ? JSON.parse(String(init.body)) : undefined
         requests.push({
@@ -106,7 +107,7 @@ test.each(modes)("%s manages expressions, projects allowlisted metadata and pres
 test.each(modes)("%s validates expressions before HTTP, without leaking rejected input", async (mode) => {
     const client = await setup(mode)
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     for (const op of [
         () => client.emojis.create("../200", { name: "Fixture", image }),
         () => client.emojis.create("200", { name: "invalid name", image }),
@@ -141,7 +142,7 @@ test.each(modes)("%s accepts parameterized image data URIs without weakening bas
         expect(JSON.parse(String(init.body)).image).toBe("data:image/png;charset=utf-8;base64,aW1hZ2U=")
         return Response.json(wire(url.includes("stickers")))
     })
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const input = { name: "Fixture", image: "data:image/png;charset=utf-8;base64,aW1hZ2U=" }
     await settle(client.emojis.create("200", input))
     await settle(client.stickers.create("200", input))
@@ -161,7 +162,7 @@ test.each(modes)(
     async (mode) => {
         const client = await setup(mode)
         let writes = 0
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             if (init.method === "GET") return Response.json([wire()])
             writes++
             throw Error("private transport detail")
@@ -180,7 +181,7 @@ test.each(modes)(
 test.each(modes)("%s rejects mismatched and malformed expression responses", async (mode) => {
     const client = await setup(mode, false)
     let response: unknown = { ...wire(), id: "999" }
-    vi.stubGlobal("fetch", async () => Response.json(response))
+    stubFetchWithHostedDiscovery(async () => Response.json(response))
     await expect(settle(client.emojis.edit(target, { name: "Renamed" }))).rejects.toMatchObject({
         reason: "response",
         outcome: "unknown",
@@ -201,7 +202,7 @@ test.each(modes)("%s rejects mismatched and malformed expression responses", asy
 test.each(modes)("%s uses fetched emoji snapshots directly in reaction operations", async (mode) => {
     const client = await setup(mode)
     const requests: string[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         requests.push(url)
         return init.method === "GET" ? Response.json([wire()]) : new Response(null, { status: 204 })
     })

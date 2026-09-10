@@ -26,6 +26,15 @@ Never include credentials, private payloads or arbitrary upstream errors in defa
 
 ## Connection and recovery
 
+The [instance resolver](/projects/sdk/src/internal/instance.ts) owns one immutable endpoint map per client, including webhook-only clients.
+Discovery is lazy, unauthenticated and shared by concurrent REST, gateway and explicit resolution callers.
+Each caller keeps its own deadline and cancellation, and the last departing caller awaits shared request cleanup
+
+An explicitly selected instance is trusted to advertise service origins that receive its credential.
+Require HTTPS and WSS unless that instance explicitly permits plaintext, validate bootstrap redirects and reject credentialed service redirects
+
+Pure instance-bound URLs use the advertised bases without refreshing discovery or performing requests
+
 Creation validates local configuration without opening sockets or starting background work.
 The client owns its credential reference, per-shard sessions and recovery loops, and one retained lifetime outcome.
 Connection readiness requires authentication and the required READY processing, not merely an open socket
@@ -79,6 +88,16 @@ Mutations retry only confirmed rate-limit rejection; eligible reads use the boun
 Cancellation or a lost response after dispatch cannot establish non-delivery or rollback
 
 Byte budgets bound the accounted data, not total JavaScript heap or process memory
+
+Attachment byte inputs are copied before waiting, while sized files and finite streams remain caller-owned until readers are acquired.
+The [transfer source](/projects/sdk/src/internal/transfer-source.ts) verifies exact byte counts and awaits acquired reader cleanup without buffering unknown-length streams
+
+Presigned upload plans authorize individual destinations without sending bot credentials to them.
+Inline fallback is limited to a disabled presigned-upload feature or its explicit planning rejection, not a failed PUT or uncertain message request.
+Only copied byte sources may replay after an inline rate-limit rejection.
+Failed operations may leave provider-owned temporary uploads, and cancellation cannot roll back a dispatched message
+
+Downloads accept only the selected instance's media attachment URLs, enforce a caller-provided output limit and send no credential or cookie
 
 ## Message-management boundaries
 

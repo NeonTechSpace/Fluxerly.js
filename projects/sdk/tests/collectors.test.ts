@@ -7,6 +7,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
 import { createClient, SdkDefect, type CollectorResult, type DefaultCollectorOptions } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "", sockets: [] as import("ws").WebSocket[] }))
 vi.mock("ws", async (original) => {
@@ -121,7 +122,7 @@ async function fixture() {
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing fixture port")
     transport.url = `ws://127.0.0.1:${address.port}`
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         realFetch(url.replace("https://api.fluxer.app", `http://127.0.0.1:${address.port}`), init),
     )
     onTestFinished(async () => {
@@ -268,7 +269,7 @@ test.each(modes)(
         ).toBe(true)
         await collector.stop()
         expect(await collector.wait()).toBe(result)
-        expect(server.requests).toEqual(["/v1/gateway/bot", "/v1/channels/20/messages"])
+        expect(server.requests).toEqual(["/v1/channels/20/messages"])
     },
 )
 

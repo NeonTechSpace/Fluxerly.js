@@ -1,14 +1,76 @@
-import type { Attachment } from "#sdk/attachments"
+import type { Attachment, AttachmentFileSource, AttachmentStreamSource } from "#sdk/attachments"
 import { identifier, record } from "./message.js"
 
-export type FilePart = { id: number; filename: string; contentType: string; data: Uint8Array }
+const attachmentMaxBytes = 52_428_800
+
+export type FileSource =
+    | { readonly kind: "bytes"; readonly data: Uint8Array }
+    | { readonly kind: "file"; readonly file: AttachmentFileSource }
+    | { readonly kind: "stream"; readonly stream: AttachmentStreamSource }
+
+export type FilePart = {
+    id: number
+    filename: string
+    contentType: string
+    size: number
+    source: FileSource
+}
 export type EncodedBody = { json: string; files: FilePart[] }
 
-/** Validate without copying binary bytes; admission owns the subsequent snapshot */
+function filename(value: unknown): value is string {
+    return typeof value === "string" && value.length >= 1 && value.length <= 255 && !/[\x00-\x1f\x7f/\\]/.test(value)
+}
+
+function contentType(value: unknown): value is string {
+    return typeof value === "string" && /^[\x20-\x7e]{1,255}$/.test(value)
+}
+
+function metadata(item: Record<string, unknown>, id: number, values: Record<string, unknown>[]): string | undefined {
+    if (!filename(item.filename)) return undefined
+    const providedContentType = item.contentType
+    if (providedContentType !== undefined && !contentType(providedContentType)) return undefined
+    for (const [key, max] of [
+        ["title", 1024],
+        ["description", 4096],
+    ] as const)
+        if (
+            item[key] !== undefined &&
+            (typeof item[key] !== "string" || item[key].length < 1 || item[key].length > max)
+        )
+            return undefined
+    if (item.spoiler !== undefined && typeof item.spoiler !== "boolean") return undefined
+    values.push({
+        id,
+        filename: item.filename,
+        ...(providedContentType === undefined ? {} : { content_type: providedContentType }),
+        ...(item.title === undefined ? {} : { title: item.title }),
+        ...(item.description === undefined ? {} : { description: item.description }),
+        flags: item.spoiler === true ? 8 : 0,
+    })
+    return providedContentType ?? "application/octet-stream"
+}
+
+function fileSource(value: unknown): value is AttachmentFileSource {
+    return (
+        record(value) &&
+        typeof value.size === "number" &&
+        Number.isSafeInteger(value.size) &&
+        value.size >= 0 &&
+        value.size <= attachmentMaxBytes &&
+        typeof value.slice === "function" &&
+        typeof value.stream === "function"
+    )
+}
+
+function streamSource(value: unknown): value is AttachmentStreamSource {
+    return record(value) && typeof value.getReader === "function"
+}
+
+/** Validate attachment structure without reading caller files or streams. Admission later snapshots byte arrays and reserves exact source sizes */
 export function encodeAttachments(value: unknown, edit: boolean) {
     if (value === undefined) return { metadata: undefined, files: [] as FilePart[], uploadedFilenames: [] as string[] }
     if (!Array.isArray(value)) return undefined
-    const metadata: Record<string, unknown>[] = []
+    const metadataValues: Record<string, unknown>[] = []
     const files: FilePart[] = []
     const uploadedFilenames: string[] = []
     const retained = new Set<string>()
@@ -33,71 +95,65 @@ export function encodeAttachments(value: unknown, edit: boolean) {
                 )
                     return undefined
             retained.add(item.id)
-            metadata.push({
+            metadataValues.push({
                 id: item.id,
                 ...(item.title === undefined ? {} : { title: item.title }),
                 ...(item.description === undefined ? {} : { description: item.description }),
             })
             continue
         }
-        if (
-            Object.keys(item).some(
-                (key) => !["data", "filename", "contentType", "title", "description", "spoiler"].includes(key),
-            )
-        )
-            return undefined
-        if (
-            !(item.data instanceof Uint8Array) ||
-            !(item.data.buffer instanceof ArrayBuffer) ||
-            item.data.byteLength > 52_428_800
-        )
-            return undefined
-        // Detached buffers cannot be snapshotted, even when their reported length is zero
-        try {
-            new Uint8Array(item.data.buffer, item.data.byteOffset, item.data.byteLength)
-        } catch {
-            return undefined
-        }
-        if (
-            typeof item.filename !== "string" ||
-            item.filename.length < 1 ||
-            item.filename.length > 255 ||
-            /[\x00-\x1f\x7f/\\]/.test(item.filename)
-        )
-            return undefined
-        uploadedFilenames.push(item.filename)
-        if (
-            item.contentType !== undefined &&
-            (typeof item.contentType !== "string" || !/^[\x20-\x7e]{1,255}$/.test(item.contentType))
-        )
-            return undefined
-        for (const [key, max] of [
-            ["title", 1024],
-            ["description", 4096],
-        ] as const)
+        const id = metadataValues.length
+        let source: FileSource
+        let size: number
+        if (Object.prototype.hasOwnProperty.call(item, "data")) {
             if (
-                item[key] !== undefined &&
-                (typeof item[key] !== "string" || item[key].length < 1 || item[key].length > max)
+                Object.keys(item).some(
+                    (key) => !["data", "filename", "contentType", "title", "description", "spoiler"].includes(key),
+                ) ||
+                !(item.data instanceof Uint8Array) ||
+                !(item.data.buffer instanceof ArrayBuffer) ||
+                item.data.byteLength > attachmentMaxBytes
             )
                 return undefined
-        if (item.spoiler !== undefined && typeof item.spoiler !== "boolean") return undefined
-        const id = metadata.length
-        metadata.push({
-            id,
-            filename: item.filename,
-            ...(item.contentType === undefined ? {} : { content_type: item.contentType }),
-            ...(item.title === undefined ? {} : { title: item.title }),
-            ...(item.description === undefined ? {} : { description: item.description }),
-            flags: item.spoiler === true ? 8 : 0,
-        })
-        files.push({
-            id,
-            filename: item.filename,
-            contentType: item.contentType ?? "application/octet-stream",
-            data: item.data,
-        })
+            try {
+                new Uint8Array(item.data.buffer, item.data.byteOffset, item.data.byteLength)
+            } catch {
+                return undefined
+            }
+            source = { kind: "bytes", data: item.data }
+            size = item.data.byteLength
+        } else if (Object.prototype.hasOwnProperty.call(item, "file")) {
+            if (
+                Object.keys(item).some(
+                    (key) => !["file", "filename", "contentType", "title", "description", "spoiler"].includes(key),
+                ) ||
+                !fileSource(item.file)
+            )
+                return undefined
+            source = { kind: "file", file: item.file }
+            size = item.file.size
+        } else if (Object.prototype.hasOwnProperty.call(item, "stream")) {
+            if (
+                Object.keys(item).some(
+                    (key) =>
+                        !["stream", "size", "filename", "contentType", "title", "description", "spoiler"].includes(key),
+                ) ||
+                !streamSource(item.stream) ||
+                typeof item.size !== "number" ||
+                !Number.isSafeInteger(item.size) ||
+                item.size < 0 ||
+                item.size > attachmentMaxBytes
+            )
+                return undefined
+            source = { kind: "stream", stream: item.stream }
+            size = item.size
+        } else return undefined
+        const acceptedContentType = metadata(item, id, metadataValues)
+        if (acceptedContentType === undefined || !filename(item.filename)) return undefined
+        uploadedFilenames.push(item.filename)
+        files.push({ id, filename: item.filename, contentType: acceptedContentType, size, source })
     }
-    return { metadata, files, uploadedFilenames }
+    return { metadata: metadataValues, files, uploadedFilenames }
 }
 
 export function decodeAttachments(value: unknown): readonly Attachment[] | undefined {

@@ -1,9 +1,23 @@
-import { Effect, Exit, Scope } from "effect"
+import { Cause, Effect, Exit, Scope } from "effect"
+import { once } from "node:events"
+import { createServer, type ServerResponse } from "node:http"
 import { setImmediate as turn } from "node:timers/promises"
 import { Session } from "node:inspector"
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { openAsBlob } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import type { Result } from "neverthrow"
-import { createClient, type MessageInput, type EditMessageInput, type ClientOptions } from "../src/index.js"
+import {
+    createClient,
+    type Attachment,
+    type AttachmentFileSource,
+    type ClientOptions,
+    type EditMessageInput,
+    type MessageInput,
+    SdkDefect,
+} from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 
 afterEach(() => vi.unstubAllGlobals())
@@ -26,7 +40,7 @@ const wire = (attachments: unknown = [attachment]) => ({
 })
 async function driver(
     mode: (typeof modes)[number],
-    options: Pick<ClientOptions, "uploads"> = {},
+    options: Pick<ClientOptions, "instance" | "uploads"> = {},
     cacheBytes = 1_000_000,
 ) {
     const scope = Scope.makeUnsafe()
@@ -70,6 +84,20 @@ async function driver(
                 : run(native!.messages.fetchHistory("20")),
         get: async () =>
             defaultApi ? defaultApi.messages.get(target)._unsafeUnwrap() : run(native!.messages.get(target)),
+        download: async (input: Attachment, maxBytes = 1024, signal?: AbortSignal) =>
+            defaultApi
+                ? unwrap(
+                      await defaultApi.attachments.download(input, {
+                          maxBytes,
+                          timeoutMs: 2000,
+                          ...(signal ? { signal } : {}),
+                      }),
+                  )
+                : run(native!.attachments.download(input, { maxBytes, timeoutMs: 2000 }), signal),
+        downloadOptions: async (input: Attachment, options: { maxBytes: number; timeoutMs?: number }) =>
+            defaultApi
+                ? unwrap(await defaultApi.attachments.download(input, options))
+                : run(native!.attachments.download(input, options)),
         native,
     }
 }
@@ -78,19 +106,99 @@ async function readBytes(init: RequestInit) {
     return new Uint8Array(await new Response(init.body).arrayBuffer())
 }
 
+function instanceDocument(presignedAttachmentUploads: boolean) {
+    return {
+        api_code_version: 1,
+        endpoints: {
+            api_public: "https://api.fluxer.app",
+            gateway: "wss://gateway.fluxer.app",
+            media: "https://media.fluxer.app",
+            static_cdn: "https://cdn.fluxer.app",
+            webapp: "https://web.fluxer.app",
+            invite: "https://fluxer.app",
+        },
+        features: { presigned_attachment_uploads: presignedAttachmentUploads },
+    }
+}
+
+async function loopbackDownloadFixture(handleAttachment: (response: ServerResponse) => void) {
+    let origin = ""
+    const server = createServer((request, response) => {
+        const target = new URL(request.url ?? "/", origin)
+        if (target.pathname === "/.well-known/fluxer") {
+            response.writeHead(200, { "content-type": "application/json" })
+            response.end(
+                JSON.stringify({
+                    api_code_version: 1,
+                    endpoints: {
+                        api_public: origin,
+                        gateway: origin.replace("http:", "ws:"),
+                        media: origin,
+                        static_cdn: origin,
+                        webapp: origin,
+                        invite: origin,
+                    },
+                    features: { presigned_attachment_uploads: true },
+                }),
+            )
+            return
+        }
+        if (target.pathname.startsWith("/attachments/")) return void handleAttachment(response)
+        response.statusCode = 404
+        response.end()
+    })
+    server.listen(0, "127.0.0.1")
+    await once(server, "listening")
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("Missing loopback download fixture address")
+    origin = `http://127.0.0.1:${address.port}`
+    return {
+        origin,
+        async close() {
+            server.closeAllConnections()
+            await new Promise<void>((resolve) => server.close(() => resolve()))
+        },
+    }
+}
+
+async function requestJson(init: RequestInit, headers: Headers): Promise<any> {
+    if (!headers.get("content-type")?.startsWith("multipart/form-data;")) return JSON.parse(String(init.body))
+    const text = new TextDecoder().decode(await readBytes(init))
+    const payload = /name="payload_json"\r\nContent-Type: application\/json\r\n\r\n([\s\S]*?)\r\n--/.exec(text)?.[1]
+    if (!payload) throw new Error("Missing multipart payload JSON")
+    return JSON.parse(payload)
+}
+
 function transport(
     handlers: {
         put?: (init: RequestInit) => Promise<Response>
         message?: (json: any, init: RequestInit) => Promise<Response>
-        plan?: (value: any) => unknown
+        plan?: (value: any) => unknown | Promise<unknown>
         complete?: (value: any) => unknown
+        download?: (url: string, init: RequestInit) => Promise<Response>
+        presignedAttachmentUploads?: boolean
+        discovery?: () => Promise<Response>
     } = {},
 ) {
     let sequence = 0
     const fetch = vi.fn(async (url: string, init: RequestInit) => {
         const headers = new Headers(init.headers)
+        if (url === "https://fluxer.app/.well-known/fluxer") {
+            expect(init.method).toBe("GET")
+            expect(headers.has("authorization")).toBe(false)
+            expect(init.redirect).toBe("manual")
+            return handlers.discovery
+                ? handlers.discovery()
+                : Response.json(instanceDocument(handlers.presignedAttachmentUploads ?? true))
+        }
         expect(init.redirect).toBe("error")
-        if (url.startsWith("https://uploads.fluxer.app/")) {
+        if (url.startsWith("https://media.fluxer.app/attachments/")) {
+            expect(headers.has("authorization")).toBe(false)
+            expect(init.method).toBe("GET")
+            if (!handlers.download) throw new Error("Missing download handler")
+            return handlers.download(url, init)
+        }
+        if (url.startsWith("https://") && !url.startsWith("https://api.fluxer.app/")) {
             expect(headers.has("authorization")).toBe(false)
             expect(init.method).toBe("PUT")
             if (handlers.put) return handlers.put(init)
@@ -99,7 +207,7 @@ function transport(
         }
         expect(url.startsWith("https://api.fluxer.app/v1/")).toBe(true)
         expect(headers.get("authorization")).toBe("Bot fixture-only-not-a-credential")
-        const json = JSON.parse(String(init.body))
+        const json = await requestJson(init, headers)
         if (url.endsWith("/attachments")) {
             const value = {
                 attachments: json.attachments.map((file: any) => {
@@ -119,15 +227,22 @@ function transport(
                           }
                 }),
             }
-            const response = handlers.plan ? handlers.plan(value) : value
-            return response instanceof Response ? response : Response.json(response)
+            const response = handlers.plan ? await handlers.plan(value) : value
+            return response instanceof Response ||
+                (typeof response === "object" && response !== null && "status" in response)
+                ? (response as Response)
+                : Response.json(response)
         }
         if (url.endsWith("/attachments/complete")) {
             const value = { uploads: json.uploads.map((item: any) => ({ upload_filename: item.upload_filename })) }
             const response = handlers.complete ? handlers.complete(value) : value
-            return response instanceof Response ? response : Response.json(response)
+            return response instanceof Response ||
+                (typeof response === "object" && response !== null && "status" in response)
+                ? (response as Response)
+                : Response.json(response)
         }
-        expect(headers.get("content-type")).toBe("application/json")
+        if (!headers.get("content-type")?.startsWith("multipart/form-data;"))
+            expect(headers.get("content-type")).toBe("application/json")
         return handlers.message ? handlers.message(json, init) : Response.json(wire())
     })
     vi.stubGlobal("fetch", fetch)
@@ -427,7 +542,15 @@ test.each(modes)("%s validates metadata and projects nullable fields across fetc
             ignored: "omit",
         },
     ]
-    vi.stubGlobal("fetch", async (url: string) => Response.json(url.includes("?") ? [wire(payload)] : wire(payload)))
+    vi.stubGlobal("fetch", async (url: string) =>
+        Response.json(
+            url === "https://fluxer.app/.well-known/fluxer"
+                ? instanceDocument(true)
+                : url.includes("?")
+                  ? [wire(payload)]
+                  : wire(payload),
+        ),
+    )
     const api = await driver(mode)
     const value = (await api.fetch()).attachments[0]!
     expect(value).toEqual({
@@ -525,7 +648,7 @@ test.each(modes)(
         await expect(api.send({ attachments: [{ ...valid, data: new Uint8Array(52_428_801) }] })).rejects.toBeDefined()
         expect(fetch).not.toHaveBeenCalled()
         await api.send({ attachments: [{ ...valid, data: new Uint8Array(52_428_800) }] })
-        expect(fetch).toHaveBeenCalledTimes(8)
+        expect(fetch).toHaveBeenCalledTimes(9)
         expect(parts).toBe(5)
         expect(fileBytes).toBe(52_428_800)
     },
@@ -637,8 +760,6 @@ test.each(modes)("%s rejects untrusted upload plans before disclosing file bytes
         },
         ...[
             "http://uploads.fluxer.app/file",
-            "https://uploads.fluxer.app.evil.invalid/file",
-            "https://127.0.0.1/file",
             "https://user@uploads.fluxer.app/file",
             "https://uploads.fluxer.app/file#fragment",
         ].map((url) => (value: any) => {
@@ -652,7 +773,9 @@ test.each(modes)("%s rejects untrusted upload plans before disclosing file bytes
             },
         })
         await expect(api.send(input)).rejects.toMatchObject({ reason: "response", delivery: "notSent" })
-        expect(fetch).toHaveBeenCalledTimes(1)
+        expect(
+            fetch.mock.calls.filter(([url]) => new URL(url).pathname === "/v1/channels/20/attachments"),
+        ).toHaveLength(1)
     }
 })
 
@@ -662,6 +785,7 @@ test.each(modes)("%s stops before message mutation when multipart completion is 
     const fetch = transport({ complete: () => ({ uploads: [{ upload_filename: "wrong-key" }] }) })
     await expect(api.edit(input)).rejects.toMatchObject({ reason: "response", outcome: "notDispatched" })
     expect(fetch.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+        "/.well-known/fluxer",
         "/v1/channels/20/attachments",
         "/fixture-0/0",
         "/fixture-0/1",
@@ -701,7 +825,9 @@ test.each(modes)("%s rejects malformed part ranges before uploading and bounds p
             },
         })
         await expect(api.send(input)).rejects.toMatchObject({ reason: "response", delivery: "notSent" })
-        expect(fetch).toHaveBeenCalledTimes(1)
+        expect(
+            fetch.mock.calls.filter(([url]) => new URL(url).pathname === "/v1/channels/20/attachments"),
+        ).toHaveLength(1)
     }
 })
 
@@ -846,7 +972,8 @@ test.each(modes)("%s releases upload storage after network/rejection failures wi
 test.each(modes)("%s shutdown settles active and queued upload operations", async (mode) => {
     const api = await driver(mode, { uploads: { maxBytes: 5 } })
     let active = 0
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        if (url === "https://fluxer.app/.well-known/fluxer") return Response.json(instanceDocument(true))
         active++
         await new Promise<void>((resolve) => init.signal!.addEventListener("abort", () => resolve(), { once: true }))
         active--
@@ -872,7 +999,11 @@ test.each(modes)("%s cache budgets measure attachment metadata rather than remot
         author: { id: "30", username: "fixture", isBot: true },
     }
     const size = Buffer.byteLength(JSON.stringify(projected))
-    vi.stubGlobal("fetch", async () => Response.json(wire(projected.attachments)))
+    vi.stubGlobal("fetch", async (url: string) =>
+        Response.json(
+            url === "https://fluxer.app/.well-known/fluxer" ? instanceDocument(true) : wire(projected.attachments),
+        ),
+    )
     const exact = await driver(mode, {}, size)
     const small = await driver(mode, {}, size - 1)
     await exact.fetch()
@@ -943,4 +1074,959 @@ test.each(modes)("%s default upload budget admits two 50 MiB files without consu
         await Promise.all([first, second])
     }
     expect(active).toBe(0)
+})
+
+test.each(modes)(
+    "%s streams structural exact-size sources with source backpressure and reader release",
+    async (mode) => {
+        let reads = 0
+        let released = false
+        let cancelled = false
+        const source = {
+            getReader: () => ({
+                read: async () => {
+                    reads++
+                    return reads === 1 ? { value: new Uint8Array(130_000).fill(7) } : { done: true as const }
+                },
+                cancel: async () => {
+                    cancelled = true
+                },
+                releaseLock: () => {
+                    released = true
+                },
+            }),
+        }
+        const chunks: number[] = []
+        transport({
+            put: async (init) => {
+                for await (const chunk of init.body as ReadableStream<Uint8Array>) chunks.push(chunk.byteLength)
+                return new Response(null, { status: 200 })
+            },
+        })
+        const api = await driver(mode)
+        await api.send({ attachments: [{ stream: source, size: 130_000, filename: "stream.bin" }] })
+        expect(chunks).toEqual([65_536, 64_464])
+        expect(reads).toBe(2)
+        expect(released).toBe(true)
+        expect(cancelled).toBe(false)
+    },
+)
+
+test.each(modes)("%s preserves a raw stream across multipart upload ranges", async (mode) => {
+    const boundary = 10_485_760
+    const bytes = new Uint8Array(boundary + 1)
+    bytes[0] = 7
+    bytes[boundary - 1] = 8
+    bytes[boundary] = 9
+    let reads = 0
+    let released = false
+    const source = {
+        getReader: () => ({
+            read: async () => (reads++ === 0 ? { value: bytes } : { done: true as const }),
+            cancel: async () => {},
+            releaseLock: () => {
+                released = true
+            },
+        }),
+    }
+    const parts: Uint8Array[] = []
+    transport({
+        put: async (init) => {
+            parts.push(await readBytes(init))
+            return new Response(null, { status: 200 })
+        },
+    })
+    const api = await driver(mode)
+    await api.send({ attachments: [{ stream: source, size: bytes.byteLength, filename: "multipart.bin" }] })
+    expect(parts.map((part) => part.byteLength)).toEqual([boundary, 1])
+    expect([parts[0]![0], parts[0]![boundary - 1], parts[1]![0]]).toEqual([7, 8, 9])
+    expect(reads).toBe(2)
+    expect(released).toBe(true)
+})
+
+test.each(modes)(
+    "%s stops early EOF and overrun streams before message mutation and releases their readers",
+    async (mode) => {
+        for (const variant of ["eof", "overrun"] as const) {
+            let cancelled = false
+            let released = false
+            let calls = 0
+            const source = {
+                getReader: () => ({
+                    read: async () =>
+                        variant === "eof"
+                            ? { done: true as const }
+                            : { done: false as const, value: new Uint8Array([1, 2]) },
+                    cancel: async () => {
+                        cancelled = true
+                    },
+                    releaseLock: () => {
+                        released = true
+                    },
+                }),
+            }
+            transport({
+                put: async (init) => {
+                    calls++
+                    await readBytes(init)
+                    return new Response(null, { status: 200 })
+                },
+                message: async () => {
+                    calls++
+                    return Response.json(wire())
+                },
+            })
+            const api = await driver(mode)
+            if (mode === "default") {
+                const error = await api
+                    .send({ attachments: [{ stream: source, size: 1, filename: "stream.bin" }] })
+                    .catch((error) => error)
+                expect(error).toMatchObject({ _tag: "MessageError", reason: "network", delivery: "notSent" })
+            } else {
+                const exit = await Effect.runPromiseExit(
+                    api.native!.messages.send("20", {
+                        attachments: [{ stream: source, size: 1, filename: "stream.bin" }],
+                    }),
+                )
+                expect(Exit.isFailure(exit)).toBe(true)
+                if (Exit.isFailure(exit)) {
+                    expect(Cause.hasDies(exit.cause)).toBe(false)
+                    expect(exit.cause.reasons).toContainEqual(
+                        expect.objectContaining({
+                            _tag: "Fail",
+                            error: expect.objectContaining({
+                                _tag: "MessageError",
+                                reason: "network",
+                                delivery: "notSent",
+                            }),
+                        }),
+                    )
+                }
+            }
+            expect(calls).toBe(1)
+            expect(cancelled).toBe(true)
+            expect(released).toBe(true)
+        }
+    },
+)
+
+test.each(modes)("%s fails a stream upload when its acquired reader cannot release", async (mode) => {
+    let messages = 0
+    let reads = 0
+    const source = {
+        getReader: () => ({
+            read: async () => (reads++ === 0 ? { value: new Uint8Array([1]) } : { done: true as const }),
+            cancel: async () => {},
+            releaseLock: () => {
+                throw new Error("fixture release failure")
+            },
+        }),
+    }
+    transport({
+        put: async (init) => {
+            await readBytes(init)
+            return new Response(null, { status: 200 })
+        },
+        message: async () => {
+            messages++
+            return Response.json(wire())
+        },
+    })
+    const api = await driver(mode)
+    if (mode === "default")
+        await expect(
+            api.send({ attachments: [{ stream: source, size: 1, filename: "release.bin" }] }),
+        ).rejects.toMatchObject({ operation: "send", reasons: [{ kind: "Defect" }] })
+    else {
+        const exit = await Effect.runPromiseExit(
+            api.native!.messages.send("20", { attachments: [{ stream: source, size: 1, filename: "release.bin" }] }),
+        )
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.hasDies(exit.cause)).toBe(true)
+    }
+    expect(messages).toBe(0)
+})
+
+test.each(modes)(
+    "%s keeps inline stream failures expected, cleanup failures defective and both retained",
+    async (mode) => {
+        for (const variant of ["eof", "eof-release", "release"] as const) {
+            let cancelled = false
+            let released = false
+            let reads = 0
+            const source = {
+                getReader: () => ({
+                    read: async () =>
+                        variant === "eof" || variant === "eof-release"
+                            ? { done: true as const }
+                            : reads++ === 0
+                              ? { value: new Uint8Array([1]) }
+                              : { done: true as const },
+                    cancel: async () => {
+                        cancelled = true
+                    },
+                    releaseLock: () => {
+                        released = true
+                        if (variant === "eof-release" || variant === "release")
+                            throw new Error("fixture inline release failure")
+                    },
+                }),
+            }
+            let messages = 0
+            transport({
+                presignedAttachmentUploads: false,
+                message: async () => {
+                    messages++
+                    return Response.json(wire())
+                },
+            })
+            const api = await driver(mode)
+            const input = { attachments: [{ stream: source, size: 1, filename: "inline-reader.bin" }] }
+            if (mode === "default") {
+                const error = await api.send(input).catch((error) => error)
+                if (variant === "eof") {
+                    expect(error).toMatchObject({ _tag: "MessageError", reason: "network", delivery: "unknown" })
+                } else {
+                    expect(error).toMatchObject({ operation: "send" })
+                    expect((error as SdkDefect).reasons.map((reason) => reason.kind)).toEqual(
+                        variant === "eof-release" ? ["Failure", "Defect"] : ["Defect"],
+                    )
+                }
+            } else {
+                const exit = await Effect.runPromiseExit(api.native!.messages.send("20", input))
+                expect(Exit.isFailure(exit)).toBe(true)
+                if (Exit.isFailure(exit)) {
+                    expect(Cause.hasDies(exit.cause)).toBe(variant !== "eof")
+                    if (variant === "eof" || variant === "eof-release")
+                        expect(exit.cause.reasons).toContainEqual(
+                            expect.objectContaining({
+                                _tag: "Fail",
+                                error: expect.objectContaining({
+                                    _tag: "MessageError",
+                                    reason: "network",
+                                    delivery: "unknown",
+                                }),
+                            }),
+                        )
+                }
+            }
+            expect(messages).toBe(0)
+            expect(cancelled).toBe(variant !== "release")
+            expect(released).toBe(true)
+        }
+    },
+)
+
+test.each(modes)("%s retains a bounded upload response failure with reader cleanup defects", async (mode) => {
+    for (const stage of ["plan", "complete"] as const) {
+        let cancelled = false
+        let released = false
+        const cleanupResponse = () =>
+            ({
+                status: 200,
+                ok: true,
+                headers: new Headers(),
+                bodyUsed: false,
+                body: {
+                    getReader: () => ({
+                        read: async () => ({ done: false as const, value: new Uint8Array(1_048_577) }),
+                        cancel: async () => {
+                            cancelled = true
+                            throw new Error("fixture upload reader cancel failure")
+                        },
+                        releaseLock: () => {
+                            released = true
+                            throw new Error("fixture upload reader release failure")
+                        },
+                    }),
+                },
+            }) as unknown as Response
+        let messages = 0
+        transport({
+            ...(stage === "plan" ? { plan: cleanupResponse } : { complete: cleanupResponse }),
+            message: async () => {
+                messages++
+                return Response.json(wire())
+            },
+        })
+        const api = await driver(mode)
+        const input = {
+            attachments: [{ data: new Uint8Array(stage === "complete" ? 10_485_761 : 1), filename: "reader.bin" }],
+        }
+        if (mode === "default") {
+            const error = await api.send(input).catch((error) => error)
+            expect(error).toBeInstanceOf(SdkDefect)
+            expect((error as SdkDefect).operation).toBe("send")
+            expect((error as SdkDefect).reasons.map((reason) => reason.kind)).toEqual(["Failure", "Defect"])
+            expect((error as SdkDefect).reasons[0]).toMatchObject({
+                failure: { _tag: "MessageError", reason: "response", delivery: "notSent" },
+            })
+        } else {
+            const exit = await Effect.runPromiseExit(api.native!.messages.send("20", input))
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit)) {
+                expect(Cause.hasDies(exit.cause)).toBe(true)
+                expect(exit.cause.reasons).toContainEqual(
+                    expect.objectContaining({
+                        _tag: "Fail",
+                        error: expect.objectContaining({
+                            _tag: "MessageError",
+                            reason: "response",
+                            delivery: "notSent",
+                        }),
+                    }),
+                )
+            }
+        }
+        expect(messages).toBe(0)
+        expect(cancelled).toBe(true)
+        expect(released).toBe(true)
+    }
+})
+
+test.each(modes)("%s leaves no owned REST work when opening a file source throws", async (mode) => {
+    const file: AttachmentFileSource = {
+        size: 1,
+        slice() {
+            throw new Error("fixture file slice failure")
+        },
+        stream() {
+            throw new Error("fixture file stream failure")
+        },
+    }
+    let puts = 0
+    transport({
+        put: async () => {
+            puts++
+            return new Response(null, { status: 200 })
+        },
+    })
+    const api = await driver(mode)
+    await expect(api.send({ attachments: [{ file, filename: "broken.bin" }] })).rejects.toBeDefined()
+    expect(puts).toBe(0)
+    await expect(api.close()).resolves.toBeUndefined()
+})
+
+test.each(modes)("%s stops and releases short and excess file slices without creating a message", async (mode) => {
+    for (const variant of ["short", "excess"] as const) {
+        let cancelled = false
+        let released = false
+        let reads = 0
+        const stream = {
+            getReader: () => ({
+                read: async () =>
+                    variant === "short"
+                        ? { done: true as const }
+                        : reads++ === 0
+                          ? { value: new Uint8Array([1, 2]) }
+                          : { done: true as const },
+                cancel: async () => {
+                    cancelled = true
+                },
+                releaseLock: () => {
+                    released = true
+                },
+            }),
+        }
+        const file: AttachmentFileSource = {
+            size: 1,
+            slice: () => ({ stream: () => stream }) as AttachmentFileSource,
+            stream: () => stream,
+        }
+        let puts = 0
+        let messages = 0
+        transport({
+            put: async (init) => {
+                puts++
+                await readBytes(init)
+                return new Response(null, { status: 200 })
+            },
+            message: async () => {
+                messages++
+                return Response.json(wire())
+            },
+        })
+        const api = await driver(mode)
+        const input = { attachments: [{ file, filename: `${variant}.bin` }] }
+        if (mode === "default") {
+            const error = await api.send(input).catch((error) => error)
+            expect(error).toMatchObject({ _tag: "MessageError", reason: "network", delivery: "notSent" })
+        } else {
+            const exit = await Effect.runPromiseExit(api.native!.messages.send("20", input))
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit)) {
+                expect(Cause.hasDies(exit.cause)).toBe(false)
+                expect(exit.cause.reasons).toContainEqual(
+                    expect.objectContaining({
+                        _tag: "Fail",
+                        error: expect.objectContaining({
+                            _tag: "MessageError",
+                            reason: "network",
+                            delivery: "notSent",
+                        }),
+                    }),
+                )
+            }
+        }
+        expect(puts).toBe(1)
+        expect(messages).toBe(0)
+        expect(cancelled).toBe(true)
+        expect(released).toBe(true)
+    }
+})
+
+test.each(modes)("%s reports Node openAsBlob file mutation without dispatching a message", async (mode) => {
+    const directory = await mkdtemp(join(tmpdir(), "fluxerly-attachment-source-"))
+    onTestFinished(() => rm(directory, { recursive: true, force: true }))
+    const path = join(directory, "source.bin")
+    await writeFile(path, new Uint8Array([1, 2, 3]))
+    const file = await openAsBlob(path)
+    let messages = 0
+    transport({
+        plan: async (value) => {
+            await appendFile(path, new Uint8Array([4]))
+            return value
+        },
+        message: async () => {
+            messages++
+            return Response.json(wire())
+        },
+    })
+    const api = await driver(mode)
+    if (mode === "default") {
+        const error = await api.send({ attachments: [{ file, filename: "source.bin" }] }).catch((error) => error)
+        expect(error).toBeInstanceOf(SdkDefect)
+        expect((error as SdkDefect).operation).toBe("send")
+        expect((error as SdkDefect).reasons.map((reason) => reason.kind)).toEqual(["Failure", "Defect"])
+    } else {
+        const exit = await Effect.runPromiseExit(
+            api.native!.messages.send("20", { attachments: [{ file, filename: "source.bin" }] }),
+        )
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+            expect(Cause.hasFails(exit.cause)).toBe(true)
+            expect(Cause.hasDies(exit.cause)).toBe(true)
+        }
+    }
+    expect(messages).toBe(0)
+})
+
+test.each(modes)("%s accepts direct HTTPS plan destinations without bot credentials", async (mode) => {
+    let uploaded: Uint8Array | undefined
+    transport({
+        plan: (value) => {
+            value.attachments[0].upload_url = "https://storage.example.test/signed-upload?capability=fixture"
+            return value
+        },
+        put: async (init) => {
+            uploaded = await readBytes(init)
+            return new Response(null, { status: 200 })
+        },
+    })
+    const api = await driver(mode)
+    await api.send({ attachments: [{ data: new Uint8Array([9, 8]), filename: "direct.bin" }] })
+    expect(uploaded).toEqual(new Uint8Array([9, 8]))
+})
+
+test.each(modes)("%s streams inline multipart when discovery disables preuploads", async (mode) => {
+    let messages = 0
+    transport({
+        presignedAttachmentUploads: false,
+        message: async (json, init) => {
+            messages++
+            expect(new Headers(init.headers).get("content-type")).toMatch(/^multipart\/form-data;/)
+            expect(json.attachments).toEqual([
+                { id: 0, filename: "inline.bin", content_type: "application/octet-stream", flags: 0 },
+            ])
+            return Response.json(wire())
+        },
+    })
+    const api = await driver(mode)
+    await api.send({ attachments: [{ data: new Uint8Array([1, 2, 3]), filename: "inline.bin" }] })
+    expect(messages).toBe(1)
+})
+
+test.each(modes)("%s falls back once to inline multipart for the exact temporary-preupload rejection", async (mode) => {
+    let messages = 0
+    transport({
+        plan: () => Response.json({ code: "FEATURE_TEMPORARILY_DISABLED" }, { status: 403 }),
+        message: async (_json, init) => {
+            messages++
+            expect(new Headers(init.headers).get("content-type")).toMatch(/^multipart\/form-data;/)
+            return Response.json(wire())
+        },
+    })
+    const api = await driver(mode)
+    await api.send({ attachments: [{ data: new Uint8Array([1]), filename: "temporary.bin" }] })
+    expect(messages).toBe(1)
+})
+
+test.each(modes)("%s does not reread a finite stream after an inline multipart rate limit", async (mode) => {
+    let calls = 0
+    let reads = 0
+    const source = {
+        getReader: () => ({
+            read: async () => (reads++ === 0 ? { value: new Uint8Array([1]) } : { done: true as const }),
+            cancel: async () => {},
+            releaseLock: () => {},
+        }),
+    }
+    transport({
+        presignedAttachmentUploads: false,
+        message: async () => {
+            calls++
+            return Response.json({ retry_after: 0.001 }, { status: 429 })
+        },
+    })
+    const api = await driver(mode)
+    await expect(
+        api.send({ attachments: [{ stream: source, size: 1, filename: "one-use.bin" }] }),
+    ).rejects.toMatchObject({ reason: "rateLimit" })
+    expect(calls).toBe(1)
+    expect(reads).toBe(2)
+})
+
+test.each(modes)("%s recreates copied inline bytes when a 429 arrives before multipart consumption", async (mode) => {
+    let attempts = 0
+    const observed: Uint8Array[] = []
+    const fetch = vi.fn(async (url: string, init: RequestInit) => {
+        if (url === "https://fluxer.app/.well-known/fluxer") return Response.json(instanceDocument(false))
+        expect(url).toBe("https://api.fluxer.app/v1/channels/20/messages")
+        expect(new Headers(init.headers).get("content-type")).toMatch(/^multipart\/form-data; boundary=/)
+        if (++attempts === 1) return Response.json({ retry_after: 0.001 }, { status: 429 })
+        const headers = new Headers(init.headers)
+        const body = await new Response(init.body).arrayBuffer()
+        const form = await new Response(body, { headers }).formData()
+        observed.push(new Uint8Array(await (form.get("files[0]") as File).arrayBuffer()))
+        return Response.json(wire())
+    })
+    vi.stubGlobal("fetch", fetch)
+    const api = await driver(mode)
+    const bytes = new Uint8Array([1, 2, 3])
+    const pending = api.send({ attachments: [{ data: bytes, filename: "early-429.bin" }] })
+    bytes.fill(9)
+    await pending
+    expect(attempts).toBe(2)
+    expect(observed).toEqual([new Uint8Array([1, 2, 3])])
+})
+
+test.each(modes)("%s does not fall back for other preupload rejections", async (mode) => {
+    let messages = 0
+    transport({
+        plan: () => Response.json({ code: "OTHER" }, { status: 403 }),
+        message: async () => {
+            messages++
+            return Response.json(wire())
+        },
+    })
+    const api = await driver(mode)
+    await expect(
+        api.send({ attachments: [{ data: new Uint8Array([1]), filename: "rejected.bin" }] }),
+    ).rejects.toBeDefined()
+    expect(messages).toBe(0)
+})
+
+test.each(modes)("%s bounds trusted attachment downloads without proxy fallback or authorization", async (mode) => {
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 3,
+        flags: 0,
+        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        proxyUrl: "https://untrusted.example.test/proxy",
+    }
+    transport({
+        download: async () => new Response(new Uint8Array([4, 5, 6]), { status: 200 }),
+    })
+    const api = await driver(mode)
+    await expect(api.download(input, 3)).resolves.toEqual(new Uint8Array([4, 5, 6]))
+    await expect(api.download(input, 2)).rejects.toMatchObject({ _tag: "AttachmentDownloadError", reason: "tooLarge" })
+    const { url: _url, ...withoutUrl } = input
+    await expect(api.download(withoutUrl, 3)).rejects.toMatchObject({
+        _tag: "AttachmentDownloadError",
+        reason: "untrustedUrl",
+    })
+})
+
+test.each(modes)("%s keeps a real declared-size download rejection expected after body cleanup", async (mode) => {
+    let closed = false
+    const fixture = await loopbackDownloadFixture((response) => {
+        response.writeHead(200, { "content-length": "8" })
+        response.flushHeaders()
+        response.write("body")
+        response.once("close", () => {
+            closed = true
+        })
+    })
+    const api = await driver(mode, { instance: { url: fixture.origin, allowInsecure: true } })
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 8,
+        flags: 0,
+        url: `${fixture.origin}/attachments/20/40/fixture.bin?capability=fixture`,
+    }
+    try {
+        if (mode === "default") {
+            await expect(api.download(input, 3)).rejects.toMatchObject({
+                _tag: "AttachmentDownloadError",
+                reason: "tooLarge",
+            })
+        } else {
+            const exit = await Effect.runPromiseExit(api.native!.attachments.download(input, { maxBytes: 3 }))
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit)) {
+                const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
+                expect(failure).toMatchObject({ _tag: "Fail" })
+                if (failure?._tag === "Fail")
+                    expect(failure.error).toMatchObject({ _tag: "AttachmentDownloadError", reason: "tooLarge" })
+                expect(Cause.hasDies(exit.cause)).toBe(false)
+            }
+        }
+        await vi.waitFor(() => expect(closed).toBe(true))
+    } finally {
+        await api.close()
+        await fixture.close()
+    }
+})
+
+test.each(modes)("%s keeps real response-reader cancellation free of cleanup defects", async (mode) => {
+    let sent!: () => void
+    const sentFirstBodyBytes = new Promise<void>((resolve) => {
+        sent = resolve
+    })
+    let closed = false
+    const fixture = await loopbackDownloadFixture((response) => {
+        response.writeHead(200, { "content-length": "8" })
+        response.flushHeaders()
+        response.write("body", sent)
+        response.once("close", () => {
+            closed = true
+        })
+    })
+    const api = await driver(mode, { instance: { url: fixture.origin, allowInsecure: true } })
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 8,
+        flags: 0,
+        url: `${fixture.origin}/attachments/20/40/fixture.bin?capability=fixture`,
+    }
+    const controller = new AbortController()
+    try {
+        if (mode === "default") {
+            const pending = api.download(input, 8, controller.signal)
+            await sentFirstBodyBytes
+            await turn()
+            controller.abort()
+            await expect(pending).rejects.toMatchObject({ _tag: "CancelledError" })
+        } else {
+            const pending = Effect.runPromiseExit(
+                api.native!.attachments.download(input, { maxBytes: 8, timeoutMs: 2000 }),
+                { signal: controller.signal },
+            )
+            await sentFirstBodyBytes
+            await turn()
+            controller.abort()
+            const exit = await pending
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit)) {
+                expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+                expect(Cause.hasDies(exit.cause)).toBe(false)
+            }
+        }
+        await vi.waitFor(() => expect(closed).toBe(true))
+    } finally {
+        await api.close()
+        await fixture.close()
+    }
+})
+
+test.each(modes)("%s preserves a foreign download-body cancellation defect", async (mode) => {
+    const foreign = new DOMException("fixture foreign abort", "AbortError")
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 3,
+        flags: 0,
+        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+    }
+    transport({
+        download: async () =>
+            ({
+                status: 200,
+                ok: true,
+                headers: new Headers({ "content-length": "3" }),
+                bodyUsed: false,
+                body: { cancel: () => Promise.reject(foreign) },
+            }) as unknown as Response,
+    })
+    const api = await driver(mode)
+    if (mode === "default") {
+        const thrown: unknown = await api.download(input, 2).catch((error) => error)
+        expect(thrown).toBeInstanceOf(SdkDefect)
+        if (!(thrown instanceof SdkDefect)) throw new Error("Expected foreign download cleanup defect")
+        const error = thrown
+        expect(error).toMatchObject({ operation: "attachments.download" })
+        const failure = error.reasons.find((reason) => reason.kind === "Failure")
+        expect(failure).toMatchObject({ kind: "Failure" })
+        if (failure?.kind === "Failure")
+            expect(failure.failure).toMatchObject({ _tag: "AttachmentDownloadError", reason: "tooLarge" })
+        expect(error.reasons.some((reason) => reason.kind === "Defect")).toBe(true)
+    } else {
+        const exit = await Effect.runPromiseExit(api.native!.attachments.download(input, { maxBytes: 2 }))
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+            const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
+            expect(defect).toMatchObject({ _tag: "Die" })
+            if (defect?._tag === "Die") {
+                expect(defect.defect).toBeInstanceOf(AggregateError)
+                expect((defect.defect as AggregateError).errors).toContain(foreign)
+            }
+        }
+    }
+})
+
+test.each(modes)("%s snapshots attachment download URL and output budget before discovery", async (mode) => {
+    const original = "https://media.fluxer.app/attachments/20/40/original.bin?capability=fixture"
+    const input = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 3,
+        flags: 0,
+        url: original,
+    }
+    const options = { maxBytes: 2, timeoutMs: 2000 }
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+        release = resolve
+    })
+    let requested = ""
+    transport({
+        discovery: async () => {
+            await held
+            return Response.json(instanceDocument(true))
+        },
+        download: async (url) => {
+            requested = url
+            return new Response(new Uint8Array([4, 5, 6]), { status: 200 })
+        },
+    })
+    const api = await driver(mode)
+    const pending = api.downloadOptions(input, options)
+    await turn()
+    input.url = "https://media.fluxer.app/attachments/20/40/mutated.bin?capability=fixture"
+    options.maxBytes = Infinity
+    release()
+    await expect(pending).rejects.toMatchObject({ _tag: "AttachmentDownloadError", reason: "tooLarge" })
+    expect(requested).toBe(original)
+})
+
+test.each(modes)(
+    "%s queues bounded downloads with media-only concurrency and releases a cancelled waiter",
+    async (mode) => {
+        const input: Attachment = {
+            id: "40",
+            filename: "fixture.bin",
+            size: 3,
+            flags: 0,
+            url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        }
+        let release!: () => void
+        const held = new Promise<void>((resolve) => (release = resolve))
+        let active = 0
+        let starts = 0
+        transport({
+            download: async () => {
+                starts++
+                active++
+                await held
+                active--
+                return new Response(new Uint8Array([4, 5, 6]), { status: 200 })
+            },
+        })
+        const api = await driver(mode)
+        const downloads = Array.from({ length: 4 }, () => api.download(input, 3))
+        try {
+            await vi.waitFor(() => expect(active).toBe(4))
+            const controller = new AbortController()
+            const queued = api.download(input, 3, controller.signal)
+            await turn()
+            expect(starts).toBe(4)
+            controller.abort()
+            await expect(queued).rejects.toBeDefined()
+            expect(starts).toBe(4)
+        } finally {
+            release()
+            await Promise.all(downloads)
+        }
+        expect(active).toBe(0)
+        await expect(api.download(input, 3)).resolves.toEqual(new Uint8Array([4, 5, 6]))
+    },
+)
+
+test.each(modes)(
+    "%s admits held discovery through the local request limit and removes cancelled waiters",
+    async (mode) => {
+        let release!: () => void
+        const held = new Promise<void>((resolve) => (release = resolve))
+        let discoveryCalls = 0
+        let messages = 0
+        transport({
+            discovery: async () => {
+                discoveryCalls++
+                await held
+                return Response.json(instanceDocument(true))
+            },
+            message: async () => {
+                messages++
+                return Response.json(wire())
+            },
+        })
+        const api = await driver(mode)
+        const admitted = Array.from({ length: 4 }, () => api.send({ content: "held discovery" }))
+        try {
+            await vi.waitFor(() => expect(discoveryCalls).toBe(1))
+            const controller = new AbortController()
+            const queued = api.send({ content: "cancelled discovery waiter" }, 2000, controller.signal)
+            await turn()
+            expect(messages).toBe(0)
+            controller.abort()
+            await expect(queued).rejects.toBeDefined()
+            expect(messages).toBe(0)
+        } finally {
+            release()
+            await Promise.all(admitted)
+        }
+        expect(messages).toBe(4)
+    },
+)
+
+test.each(modes)("%s waits for a late cancelled download response before releasing its media slot", async (mode) => {
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 3,
+        flags: 0,
+        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+    }
+    let starts = 0
+    let resolveFirst!: (response: Response) => void
+    const resolveOther: ((response: Response) => void)[] = []
+    let firstCancelled = false
+    let firstResolved = false
+    let draining = false
+    transport({
+        download: async () => {
+            starts++
+            if (draining) return new Response(new Uint8Array([4, 5, 6]), { status: 200 })
+            return new Promise<Response>((resolve) => {
+                if (starts === 1) resolveFirst = resolve
+                else resolveOther.push(resolve)
+            })
+        },
+    })
+    const api = await driver(mode)
+    const controller = new AbortController()
+    const first = api.download(input, 3, controller.signal)
+    const other = Array.from({ length: 3 }, () => api.download(input, 3))
+    let queued: Promise<Uint8Array> | undefined
+    try {
+        await vi.waitFor(() => expect(starts).toBe(4))
+        controller.abort()
+        queued = api.download(input, 3)
+        await turn()
+        expect(starts).toBe(4)
+        firstResolved = true
+        resolveFirst(
+            new Response(
+                new ReadableStream<Uint8Array>({
+                    cancel() {
+                        firstCancelled = true
+                    },
+                }),
+            ),
+        )
+        await expect(first).rejects.toBeDefined()
+        await vi.waitFor(() => expect(starts).toBe(5))
+        expect(firstCancelled).toBe(true)
+    } finally {
+        draining = true
+        if (!firstResolved && resolveFirst) resolveFirst(new Response(new Uint8Array([4, 5, 6]), { status: 200 }))
+        for (const resolve of resolveOther) resolve(new Response(new Uint8Array([4, 5, 6]), { status: 200 }))
+        await Promise.allSettled([...other, first, ...(queued ? [queued] : [])])
+    }
+})
+
+test.each(modes)("%s cancels and releases a reader after data before admitting the next download", async (mode) => {
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 3,
+        flags: 0,
+        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+    }
+    let started = 0
+    let yielded!: () => void
+    const yieldedData = new Promise<void>((resolve) => (yielded = resolve))
+    let resolveRead!: (value: ReadableStreamReadResult<Uint8Array>) => void
+    let cancelled = false
+    let released = false
+    let reads = 0
+    const held: ((response: Response) => void)[] = []
+    transport({
+        download: async () => {
+            started++
+            if (started === 1)
+                return {
+                    status: 200,
+                    ok: true,
+                    headers: new Headers(),
+                    bodyUsed: false,
+                    body: {
+                        getReader: () => ({
+                            read: async () => {
+                                if (reads++ === 0) {
+                                    yielded()
+                                    return { done: false as const, value: new Uint8Array([4, 5, 6]) }
+                                }
+                                return new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+                                    resolveRead = resolve
+                                })
+                            },
+                            cancel: async () => {
+                                cancelled = true
+                                resolveRead({ done: true, value: undefined })
+                            },
+                            releaseLock: () => {
+                                released = true
+                            },
+                        }),
+                    },
+                } as unknown as Response
+            if (started === 5) return new Response(new Uint8Array([4, 5, 6]), { status: 200 })
+            return new Promise<Response>((resolve) => held.push(resolve))
+        },
+    })
+    const api = await driver(mode)
+    const controller = new AbortController()
+    const first = api.download(input, 3, controller.signal)
+    const others = Array.from({ length: 3 }, () => api.download(input, 3))
+    let queued: Promise<Uint8Array> | undefined
+    try {
+        await yieldedData
+        await vi.waitFor(() => expect(started).toBe(4))
+        queued = api.download(input, 3)
+        await turn()
+        expect(started).toBe(4)
+        controller.abort()
+        await expect(first).rejects.toBeDefined()
+        await vi.waitFor(() => expect(started).toBe(5))
+        expect(cancelled).toBe(true)
+        expect(released).toBe(true)
+        await expect(queued).resolves.toEqual(new Uint8Array([4, 5, 6]))
+    } finally {
+        for (const resolve of held) resolve(new Response(new Uint8Array([4, 5, 6]), { status: 200 }))
+        await Promise.allSettled([first, ...others, ...(queued ? [queued] : [])])
+    }
 })

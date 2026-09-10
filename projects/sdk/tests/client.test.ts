@@ -79,6 +79,7 @@ describe("client creation through both public entry points", () => {
             expect(inspect(client)).not.toContain(token)
             expect(JSON.stringify(client)).not.toContain(token)
             expect(Object.keys(client)).toEqual([
+                "instance",
                 "presence",
                 "cache",
                 "application",
@@ -95,6 +96,7 @@ describe("client creation through both public entry points", () => {
                 "members",
                 "permissions",
                 "roles",
+                "attachments",
                 "messages",
                 "on",
                 "events",

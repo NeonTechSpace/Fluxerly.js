@@ -8,6 +8,7 @@ const mode = process.argv[2]
 const cancelRecovery = process.argv[3] === "--cancel-recovery"
 const applicationCheck = process.argv[3] === "--application"
 const diagnosticsCheck = process.argv[3] === "--diagnostics"
+const instanceCheck = process.argv[3] === "--instance"
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, ...details }))
 let stage = "configuration"
@@ -80,6 +81,86 @@ async function get(path, token) {
         throw new Error("Identity request failed")
     }
     return response.json()
+}
+
+function instanceDocument(value) {
+    assert.equal(typeof value, "object")
+    assert.ok(value !== null && !Array.isArray(value))
+    assert.ok(Number.isSafeInteger(value.api_code_version) && value.api_code_version >= 0)
+    assert.equal(typeof value.endpoints, "object")
+    assert.ok(value.endpoints !== null && !Array.isArray(value.endpoints))
+    for (const key of ["api_public", "gateway", "media", "static_cdn", "webapp", "invite"])
+        assert.equal(typeof value.endpoints[key], "string")
+    assert.equal(typeof value.features, "object")
+    assert.ok(value.features !== null && !Array.isArray(value.features))
+    assert.equal(typeof value.features.presigned_attachment_uploads, "boolean")
+    return {
+        endpoints: {
+            apiPublic: value.endpoints.api_public,
+            gateway: value.endpoints.gateway,
+            media: value.endpoints.media,
+            staticCdn: value.endpoints.static_cdn,
+            webapp: value.endpoints.webapp,
+            invite: value.endpoints.invite,
+        },
+        presignedAttachmentUploads: value.features.presigned_attachment_uploads,
+    }
+}
+
+async function hostedInstanceDocument() {
+    let target = "https://fluxer.app/.well-known/fluxer"
+    for (let redirects = 0; redirects <= 3; redirects++) {
+        const url = new URL(target)
+        assert.equal(url.protocol, "https:")
+        assert.equal(url.pathname, "/.well-known/fluxer")
+        assert.equal(url.username, "")
+        assert.equal(url.password, "")
+        assert.equal(url.search, "")
+        assert.equal(url.hash, "")
+        const response = await fetch(target, { redirect: "manual", signal: AbortSignal.timeout(10_000) })
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+            await response.body?.cancel()
+            const location = response.headers.get("location")
+            assert.ok(location)
+            target = new URL(location, target).href
+            continue
+        }
+        if (!response.ok) {
+            await response.body?.cancel()
+            throw new Error("Hosted instance response failed")
+        }
+        const reader = response.body?.getReader()
+        assert.ok(reader)
+        const chunks = []
+        let bytes = 0
+        let ended = false
+        try {
+            for (;;) {
+                const chunk = await reader.read()
+                if (chunk.done) {
+                    ended = true
+                    break
+                }
+                bytes += chunk.value.byteLength
+                assert.ok(bytes <= 1_048_576)
+                chunks.push(chunk.value)
+            }
+            return instanceDocument(JSON.parse(Buffer.concat(chunks).toString("utf8")))
+        } finally {
+            try {
+                if (!ended) await reader.cancel()
+            } finally {
+                reader.releaseLock()
+            }
+        }
+    }
+    throw new Error("Hosted instance redirect limit")
+}
+
+function verifyResolvedInstance(resolved, external) {
+    assert.deepEqual(resolved.endpoints, external.endpoints)
+    assert.equal(resolved.presignedAttachmentUploads, external.presignedAttachmentUploads)
+    assert.ok(Object.isFrozen(resolved) && Object.isFrozen(resolved.endpoints))
 }
 
 async function observeHeartbeat(client) {
@@ -189,7 +270,7 @@ setTimeout(() => {
 
 try {
     assert.ok(mode === "default" || mode === "effect")
-    assert.ok(process.argv[3] === undefined || cancelRecovery || applicationCheck || diagnosticsCheck)
+    assert.ok(process.argv[3] === undefined || cancelRecovery || applicationCheck || diagnosticsCheck || instanceCheck)
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
     writeSync(lock, String(process.pid))
@@ -230,6 +311,20 @@ try {
                     assert.ok(result.isOk())
                     return result.value
                 })
+            } else if (instanceCheck) {
+                stage = "instance_independent_discovery"
+                const external = await hostedInstanceDocument()
+                stage = "instance_resolve"
+                const resolved = await client.instance.resolve()
+                assert.ok(resolved.isOk())
+                verifyResolvedInstance(resolved.value, external)
+                report(stage, { passed: true, unauthenticatedBootstrap: true })
+                stage = "instance_fresh_self_read"
+                const self = await client.users.fetchSelf()
+                assert.ok(self.isOk())
+                assert.equal(self.value.id, user.id)
+                assert.equal(self.value.isBot, true)
+                report(stage, { passed: true, noCache: true })
             } else if (applicationCheck) {
                 stage = "current_application"
                 const current = await client.application.fetchCurrent()
@@ -283,6 +378,18 @@ try {
                     assert.equal(client.state, "Disconnected")
                     if (diagnosticsCheck) {
                         yield* Effect.promise(() => verifyDiagnostics(client, guildId, token, Effect.runPromise))
+                    } else if (instanceCheck) {
+                        stage = "instance_independent_discovery"
+                        const external = yield* Effect.promise(() => hostedInstanceDocument())
+                        stage = "instance_resolve"
+                        const resolved = yield* client.instance.resolve()
+                        verifyResolvedInstance(resolved, external)
+                        report(stage, { passed: true, unauthenticatedBootstrap: true })
+                        stage = "instance_fresh_self_read"
+                        const self = yield* client.users.fetchSelf()
+                        assert.equal(self.id, user.id)
+                        assert.equal(self.isBot, true)
+                        report(stage, { passed: true, noCache: true })
                     } else if (applicationCheck) {
                         stage = "current_application"
                         const current = yield* client.application.fetchCurrent()

@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { Effect, Exit, Scope } from "effect"
 import { createClient } from "@neontechspace/fluxerly"
 import { createClient as createNative } from "@neontechspace/fluxerly/effect"
+import { withHostedDiscovery } from "./hosted-discovery.mjs"
 
 assert.equal(typeof globalThis.gc, "function")
 const originalFetch = globalThis.fetch
@@ -11,7 +12,7 @@ const userId = (index) => (2234567890123456000n + BigInt(index)).toString()
 const roleIds = Array.from({ length: 250 }, (_, index) => (3234567890123456000n + BigInt(index)).toString())
 let large = false
 let requests = 0
-globalThis.fetch = async (input) => {
+globalThis.fetch = withHostedDiscovery(async (input) => {
     requests++
     const path = new URL(input).pathname
     if (path.endsWith("/members"))
@@ -35,7 +36,7 @@ globalThis.fetch = async (input) => {
             },
         ])
     return Response.json({ id: guildId, name: "Community", owner_id: userId(0), features: [] })
-}
+})
 
 const unwrap = (result) => {
     assert.ok(result.isOk())

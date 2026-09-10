@@ -3,11 +3,12 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { Effect, Exit, Scope, Stream } from "effect"
 import { createClient } from "@neontechspace/fluxerly"
 import { createClient as createNative } from "@neontechspace/fluxerly/effect"
+import { withHostedDiscovery } from "./hosted-discovery.mjs"
 
 assert.equal(typeof globalThis.gc, "function")
 const originalFetch = globalThis.fetch
 const wire = (id) => ({ id, channel_id: "20", content: "fixture", author: { id: "40", username: "fixture" } })
-globalThis.fetch = async () => Response.json([wire("30"), wire("29")])
+globalThis.fetch = withHostedDiscovery(async () => Response.json([wire("30"), wire("29")]))
 const value = (result) => {
     assert.ok(result.isOk())
     return result.value

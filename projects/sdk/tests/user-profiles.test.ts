@@ -8,6 +8,7 @@ import {
     type UserProfileQuery,
 } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 
@@ -68,7 +69,7 @@ async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Pro
 }
 
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
             ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
             : handler(url, init),
@@ -198,7 +199,7 @@ test.each(modes)("%s preserves privacy-limited nulls and an omitted banner colou
 
 test.each(modes)("%s validates profile request and contextual response identities", async (mode) => {
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const api = await setup(mode)
 
     for (const request of [

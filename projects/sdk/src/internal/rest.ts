@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Cause, Deferred, Effect, Exit, Random, Redacted } from "effect"
 import { mapFailureCause, withDeadline } from "./effect-failures.js"
-import { ClientClosedError } from "#sdk/errors"
+import { ClientClosedError, ConnectionError, RateLimitError } from "#sdk/errors"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import type {
     EditMessageInput,
@@ -13,6 +13,8 @@ import type {
     MessageReference,
     SendOptions,
 } from "#sdk/messages"
+import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "#sdk/attachments"
+import { AttachmentDownloadError } from "#sdk/attachments"
 import {
     decodeMessage,
     encodeEdit,
@@ -25,7 +27,13 @@ import {
 } from "./message.js"
 import type { MessageCache } from "./cache.js"
 import type { EncodedBody } from "./attachments.js"
-import { decodeUploadPlans, readUploadJson, uploadBody } from "./uploads.js"
+import { decodeUploadPlans, readUploadJson, type UploadPlan, UploadResponseCleanupError } from "./uploads.js"
+import {
+    AttachmentTransferCleanupError,
+    AttachmentTransferSource,
+    AttachmentTransferVerificationCleanupError,
+} from "./transfer-source.js"
+import type { InstanceEndpointContext } from "./instance.js"
 import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "#sdk/reactions"
 import { encodeReactionEmoji, encodeReactionUsersQuery, decodeReactionUsersPage } from "./reactions.js"
 import type { MessagePinsPage, MessagePinsQuery } from "#sdk/pins"
@@ -56,6 +64,7 @@ type Pending = {
     route: string
     bytes: number
     until: number
+    rateLimited: boolean
     resume: (effect: Effect.Effect<() => void, RestFailure | ClientClosedError>) => void
 }
 type Bucket = { remaining: number; until: number }
@@ -82,10 +91,36 @@ type Request<A> = {
     path: string
     body: EncodedBody | undefined
     status?: number
-    decode: (response: Response) => Promise<A>
+    decode: (response: Response, instance: InstanceEndpointContext) => Promise<A>
     target?: string
     preparation?: boolean
-    put?: { url: string; data: Uint8Array; offset: number; size: number; contentType?: string }
+    instance?: InstanceEndpointContext
+    sources?: readonly AttachmentTransferSource[]
+    inlineAttachments?: true
+    featureDisabled?: () => A
+    put?: {
+        url: string
+        source: AttachmentTransferSource
+        offset: number
+        size: number
+        contentType?: string
+    }
+}
+async function completeCleanup(actions: readonly (() => void | PromiseLike<void>)[]) {
+    const failures: unknown[] = []
+    for (const action of actions) {
+        try {
+            await action()
+        } catch (error) {
+            failures.push(error)
+        }
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, "REST cleanup failed")
+}
+
+function completeSourceCleanup(sources: readonly AttachmentTransferSource[]) {
+    return completeCleanup(sources.map((source) => () => source.close()))
 }
 
 class RestFailure extends Error {
@@ -100,11 +135,41 @@ class RestFailure extends Error {
     }
 }
 
+function instanceFailure(error: unknown): RestFailure | ClientClosedError {
+    if (error instanceof ClientClosedError) return error
+    if (error instanceof RestFailure) return error
+    if (error instanceof RateLimitError) return new RestFailure("rateLimit", "notDispatched", null, error.retryAfterMs)
+    if (error instanceof ConnectionError) return new RestFailure("network", "notDispatched", error.status)
+    return new RestFailure("network", "notDispatched")
+}
+
 function retryAfter(response: Response): number | null {
     const value = response.headers.get("retry-after")?.trim()
     if (!value) return null
     const delay = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now()
     return Number.isFinite(delay) ? Math.max(0, Math.ceil(delay)) : null
+}
+
+function attachmentDownloadUrl(value: unknown, instance: InstanceEndpointContext): string | undefined {
+    if (typeof value !== "string" || value.length < 1 || value.length > 8192) return undefined
+    try {
+        const base = new URL(instance.media)
+        const url = new URL(value)
+        const path = `${base.pathname === "/" ? "" : base.pathname.replace(/\/$/, "")}/attachments/`
+        return (base.protocol === "https:" || (instance.allowInsecure && base.protocol === "http:")) &&
+            base.username === "" &&
+            base.password === "" &&
+            url.protocol === base.protocol &&
+            url.origin === base.origin &&
+            url.username === "" &&
+            url.password === "" &&
+            url.hash === "" &&
+            url.pathname.startsWith(path)
+            ? url.toString()
+            : undefined
+    } catch {
+        return undefined
+    }
 }
 
 async function readMessage(response: Response, channel: string, id?: string): Promise<Message> {
@@ -141,11 +206,12 @@ async function readHistory(response: Response, channel: string, query: NonNullab
 /** One client's transient REST scheduler, without shared-token coordination or durable delivery */
 export class RestOwner {
     constructor(
-        private readonly cache?: MessageCache,
-        private readonly uploadMaxBytes = 104_857_600,
-        private readonly resources?: GuildCache,
-        private readonly channels?: ChannelCache,
-        private readonly users?: UserCache,
+        private readonly cache: MessageCache | undefined,
+        private readonly uploadMaxBytes: number,
+        private readonly resources: GuildCache | undefined,
+        private readonly channels: ChannelCache | undefined,
+        private readonly users: UserCache | undefined,
+        private readonly resolveInstance: () => Effect.Effect<InstanceEndpointContext, unknown>,
     ) {}
     #uploadBytes = 0
     #closed = false
@@ -157,6 +223,7 @@ export class RestOwner {
     #timer: ReturnType<typeof setTimeout> | undefined
     #controllers = new Set<AbortController>()
     #operations = new Set<Deferred.Deferred<void>>()
+    #instance: InstanceEndpointContext | undefined
 
     diagnostics() {
         return {
@@ -180,8 +247,10 @@ export class RestOwner {
         let earliest = Infinity
         for (let index = 0; index < this.#pending.length && this.#active < activeRequestCapacity;) {
             const item = this.#pending[index]!
-            const bucket = this.#buckets.get(item.route)
-            const until = Math.max(item.until, this.#globalUntil, bucket && bucket.remaining <= 0 ? bucket.until : 0)
+            const bucket = item.rateLimited ? this.#buckets.get(item.route) : undefined
+            const until = item.rateLimited
+                ? Math.max(item.until, this.#globalUntil, bucket && bucket.remaining <= 0 ? bucket.until : 0)
+                : item.until
             if (until > now) {
                 earliest = Math.min(earliest, until)
                 index++
@@ -205,7 +274,12 @@ export class RestOwner {
             this.#timer = setTimeout(() => this.#pump(), Math.min(2_147_483_647, Math.max(1, earliest - now)))
     }
 
-    #acquire(route: string, bytes: number, until = 0): Effect.Effect<() => void, RestFailure | ClientClosedError> {
+    #acquire(
+        route: string,
+        bytes: number,
+        until = 0,
+        rateLimited = true,
+    ): Effect.Effect<() => void, RestFailure | ClientClosedError> {
         return Effect.callback((resume) => {
             if (this.#closed) {
                 resume(Effect.fail(new ClientClosedError()))
@@ -216,7 +290,7 @@ export class RestOwner {
                 resume(Effect.fail(new RestFailure("busy", "notDispatched")))
                 return
             }
-            const item = { route, bytes, until, resume }
+            const item = { route, bytes, until, rateLimited, resume }
             this.#pending.push(item)
             this.#bytes += bytes
             this.#pump()
@@ -257,14 +331,41 @@ export class RestOwner {
         RestFailure | ClientClosedError
     > {
         const owner = this
-        const failure = (error: unknown): RestFailure | ClientClosedError =>
-            owner.#closed
+        const failure = (error: unknown, state?: { cleanupDefects: unknown[] }): RestFailure | ClientClosedError => {
+            if (error instanceof AttachmentTransferCleanupError) throw error
+            if (error instanceof AttachmentTransferVerificationCleanupError) {
+                state?.cleanupDefects.push(error.cleanup)
+                return new RestFailure("network", progress.outcome)
+            }
+            if (error instanceof UploadResponseCleanupError) {
+                state?.cleanupDefects.push(error.cause)
+                const rejected = error.status >= 400
+                if (rejected && !request.preparation) progress.outcome = "rejected"
+                return new RestFailure(rejected ? "rejected" : "response", progress.outcome, error.status)
+            }
+            return owner.#closed
                 ? new ClientClosedError()
                 : error instanceof RestFailure || error instanceof ClientClosedError
                   ? error
                   : new RestFailure("network", progress.outcome)
+        }
         return Effect.acquireUseRelease(
             Effect.sync(() => {
+                // Opening a caller-owned source can throw before it is consumed. Do that
+                // before registering client-owned controller or cache state, whose release
+                // only runs after successful acquisition
+                const putUpload = request.put
+                    ? request.put.source.open(request.put.offset, request.put.size)
+                    : undefined
+                const upload =
+                    putUpload ??
+                    ((request.webhookId || request.inlineAttachments) && request.body?.files.length
+                        ? multipart(request.body, request.sources ?? [])
+                        : undefined)
+                const multipartHeaders =
+                    upload && "contentType" in upload && "size" in upload
+                        ? { "Content-Type": String(upload.contentType), "Content-Length": String(upload.size) }
+                        : undefined
                 const controller = new AbortController()
                 owner.#controllers.add(controller)
                 const guard =
@@ -279,15 +380,6 @@ export class RestOwner {
                               request.method === "PATCH" || request.method === "DELETE" || request.bucket === "pins",
                               generation,
                           )
-                const upload = request.put
-                    ? uploadBody(request.put.data, request.put.offset, request.put.size)
-                    : request.webhookId && request.body?.files.length
-                      ? multipart(request.body)
-                      : undefined
-                const multipartHeaders =
-                    upload && "contentType" in upload && "size" in upload
-                        ? { "Content-Type": String(upload.contentType), "Content-Length": String(upload.size) }
-                        : undefined
                 return {
                     controller,
                     settled: Promise.resolve(),
@@ -295,7 +387,9 @@ export class RestOwner {
                     guard,
                     success: false,
                     upload,
+                    putUpload,
                     multipartHeaders,
+                    cleanupDefects: [] as unknown[],
                 }
             }),
             (state) =>
@@ -305,7 +399,7 @@ export class RestOwner {
                         if (!request.preparation) progress.outcome = "unknown"
                         const work = fetch(
                             request.put?.url ??
-                                `https://api.fluxer.app/v1${request.webhookId ? `/webhooks/${request.webhookId}/${encodeURIComponent(Redacted.value(token))}` : ""}${request.path}`,
+                                `${request.instance!.apiPublic}/v1${request.webhookId ? `/webhooks/${request.webhookId}/${encodeURIComponent(Redacted.value(token))}` : ""}${request.path}`,
                             {
                                 method: request.method,
                                 redirect: "error",
@@ -342,7 +436,12 @@ export class RestOwner {
                                 state.response = response
                                 return response
                             })
-                            .catch(() => {
+                            .catch((error) => {
+                                if (
+                                    error instanceof AttachmentTransferCleanupError ||
+                                    error instanceof AttachmentTransferVerificationCleanupError
+                                )
+                                    throw error
                                 throw new RestFailure("network", progress.outcome, null, null, true)
                             })
                         state.settled = work.then(
@@ -351,7 +450,7 @@ export class RestOwner {
                         )
                         return work
                     },
-                    catch: failure,
+                    catch: (error) => failure(error, state),
                 }).pipe(
                     Effect.flatMap((response) => {
                         if (!request.put) owner.#headers(route, response)
@@ -387,6 +486,11 @@ export class RestOwner {
                                         return { kind: "retry" as const, retry, global }
                                     }
                                     if (!response.ok) {
+                                        if (response.status === 403 && request.featureDisabled) {
+                                            const data = await readUploadJson(response)
+                                            if (record(data) && data.code === "FEATURE_TEMPORARILY_DISABLED")
+                                                return { kind: "success" as const, value: request.featureDisabled() }
+                                        }
                                         if (
                                             response.status === 404 &&
                                             request.method === "GET" &&
@@ -409,7 +513,7 @@ export class RestOwner {
                                     }
                                     if (request.status !== undefined && response.status !== request.status)
                                         throw new RestFailure("response", progress.outcome, response.status)
-                                    const value = await request.decode(response)
+                                    const value = await request.decode(response, request.instance!)
                                     return { kind: "success" as const, value }
                                 })()
                                 state.settled = work.then(
@@ -418,9 +522,20 @@ export class RestOwner {
                                 )
                                 return work
                             },
-                            catch: failure,
+                            catch: (error) => failure(error, state),
                         })
                     }),
+                    Effect.flatMap((result) =>
+                        result.kind === "success" && state.putUpload
+                            ? Effect.tryPromise({
+                                  try: () => state.putUpload!.verify(),
+                                  catch: (error) => failure(error, state),
+                              }).pipe(
+                                  Effect.flatMap(() => Effect.promise(() => state.putUpload!.finish())),
+                                  Effect.as(result),
+                              )
+                            : Effect.succeed(result),
+                    ),
                     Effect.map((result) => {
                         if (result.kind === "success") {
                             state.success = true
@@ -446,24 +561,36 @@ export class RestOwner {
                 Effect.uninterruptible(
                     Effect.promise(async () => {
                         let cancelled = false
-                        try {
-                            if (state.response && !state.response.bodyUsed) {
-                                await state.response.body?.cancel()
-                                cancelled = true
-                            }
-                        } finally {
-                            state.controller.abort()
-                            state.upload?.stop()
-                            await state.settled
-                        }
-                        if (!cancelled && !state.response?.bodyUsed) {
-                            try {
-                                await state.response?.body?.cancel()
-                            } catch (error) {
-                                if (!state.controller.signal.aborted || error !== state.controller.signal.reason)
-                                    throw error
-                            }
-                        }
+                        await completeCleanup([
+                            async () => {
+                                if (state.response && !state.response.bodyUsed) {
+                                    await state.response.body?.cancel()
+                                    cancelled = true
+                                }
+                            },
+                            () => state.controller.abort(),
+                            () => state.upload?.stop(),
+                            () => state.settled,
+                            async () => {
+                                const response = state.response
+                                if (!cancelled && response && !response.bodyUsed) {
+                                    try {
+                                        await response.body?.cancel()
+                                    } catch (error) {
+                                        if (
+                                            !state.controller.signal.aborted ||
+                                            error !== state.controller.signal.reason
+                                        )
+                                            throw error
+                                    }
+                                }
+                            },
+                            () => {
+                                if (state.cleanupDefects.length === 1) throw state.cleanupDefects[0]
+                                if (state.cleanupDefects.length > 1)
+                                    throw new AggregateError(state.cleanupDefects, "REST response cleanup failed")
+                            },
+                        ])
                     }).pipe(
                         Effect.ensuring(
                             Effect.sync(() => {
@@ -481,6 +608,192 @@ export class RestOwner {
                     ),
                 ),
         )
+    }
+
+    download(
+        attachment: Attachment,
+        options?: AttachmentDownloadOptions,
+    ): Effect.Effect<Uint8Array, AttachmentDownloadFailure> {
+        const owner = this
+        return Effect.suspend((): Effect.Effect<Uint8Array, AttachmentDownloadFailure> => {
+            if (owner.#closed) return Effect.fail(new ClientClosedError())
+            if (!record(options)) return Effect.fail(new AttachmentDownloadError("input"))
+            const maxBytes = options.maxBytes
+            const attachmentUrl = attachment?.url
+            if (
+                Object.keys(options).some((key) => key !== "maxBytes" && key !== "timeoutMs" && key !== "signal") ||
+                typeof maxBytes !== "number" ||
+                !Number.isSafeInteger(maxBytes) ||
+                maxBytes <= 0 ||
+                maxBytes > 52_428_800
+            )
+                return Effect.fail(new AttachmentDownloadError("input"))
+            const timeout = options.timeoutMs === undefined ? 30_000 : options.timeoutMs
+            if (
+                typeof timeout !== "number" ||
+                !Number.isSafeInteger(timeout) ||
+                timeout <= 0 ||
+                timeout > 2_147_483_647
+            )
+                return Effect.fail(new AttachmentDownloadError("input"))
+            const operation = Deferred.makeUnsafe<void>()
+            owner.#operations.add(operation)
+            let controller: AbortController | undefined
+            let response: Response | undefined
+            let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+            let ended = false
+            let settled = Promise.resolve()
+            let release: (() => void) | undefined
+            const cancel = async (action: () => void | PromiseLike<void>) => {
+                try {
+                    await action()
+                } catch (error) {
+                    // Fetch can return this controller's exact abort reason while closing its own body
+                    if (!(controller?.signal.aborted && error === controller.signal.reason)) throw error
+                }
+            }
+            const closeBody = async () => {
+                if (reader) {
+                    const current = reader
+                    reader = undefined
+                    await completeCleanup([
+                        ...(!ended ? [() => cancel(() => current.cancel())] : []),
+                        () => current.releaseLock(),
+                    ])
+                } else if (response && !response.bodyUsed) {
+                    const body = response.body
+                    if (body) await cancel(() => body.cancel())
+                }
+            }
+            return Effect.gen(function* () {
+                const resolved = owner.#instance
+                const instance =
+                    resolved ??
+                    (yield* Effect.acquireUseRelease(
+                        Effect.interruptible(owner.#acquire("media:discovery", 0, 0, false)),
+                        () => owner.resolveInstance(),
+                        (release) => Effect.sync(release),
+                    ).pipe(
+                        mapFailureCause((error) =>
+                            error instanceof ClientClosedError
+                                ? error
+                                : error instanceof RestFailure
+                                  ? new AttachmentDownloadError(
+                                        error.reason === "busy" ? "busy" : "network",
+                                        error.status,
+                                    )
+                                  : new AttachmentDownloadError(
+                                        "network",
+                                        error instanceof ConnectionError ? error.status : null,
+                                    ),
+                        ),
+                    ))
+                if (!resolved) owner.#instance = instance
+                const url = attachmentDownloadUrl(attachmentUrl, instance)
+                if (!url) return yield* Effect.fail(new AttachmentDownloadError("untrustedUrl"))
+                // Media transfers share the client's four HTTP slots but not API rate-limit buckets
+                release = yield* owner
+                    .#acquire("media:download", 0, 0, false)
+                    .pipe(Effect.interruptible)
+                    .pipe(
+                        mapFailureCause((error) =>
+                            error instanceof ClientClosedError
+                                ? error
+                                : error instanceof RestFailure
+                                  ? new AttachmentDownloadError(
+                                        error.reason === "busy" ? "busy" : "network",
+                                        error.status,
+                                    )
+                                  : new AttachmentDownloadError("network"),
+                        ),
+                    )
+                controller = new AbortController()
+                owner.#controllers.add(controller)
+                return yield* Effect.tryPromise({
+                    try: () => {
+                        const work = (async () => {
+                            response = await fetch(url, {
+                                method: "GET",
+                                redirect: "error",
+                                signal: controller!.signal,
+                            })
+                            if (controller!.signal.aborted) {
+                                throw controller!.signal.reason ?? new Error("Attachment download aborted")
+                            }
+                            if (!response.ok) throw new AttachmentDownloadError("response", response.status)
+                            const declared = response.headers.get("content-length")
+                            if (declared !== null) {
+                                if (!/^\d+$/.test(declared))
+                                    throw new AttachmentDownloadError("response", response.status)
+                                if (Number(declared) > maxBytes)
+                                    throw new AttachmentDownloadError("tooLarge", response.status)
+                            }
+                            reader = response.body?.getReader()
+                            if (!reader) {
+                                ended = true
+                                return new Uint8Array()
+                            }
+                            const chunks: Uint8Array[] = []
+                            let total = 0
+                            while (true) {
+                                const next = await reader.read()
+                                if (next.done) {
+                                    ended = true
+                                    break
+                                }
+                                if (!(next.value instanceof Uint8Array) || !(next.value.buffer instanceof ArrayBuffer))
+                                    throw new AttachmentDownloadError("response", response.status)
+                                total += next.value.byteLength
+                                if (!Number.isSafeInteger(total) || total > maxBytes)
+                                    throw new AttachmentDownloadError("tooLarge", response.status)
+                                chunks.push(next.value)
+                            }
+                            const output = new Uint8Array(total)
+                            let offset = 0
+                            for (const chunk of chunks) {
+                                output.set(chunk, offset)
+                                offset += chunk.byteLength
+                            }
+                            return output
+                        })()
+                        settled = work.then(
+                            () => undefined,
+                            () => undefined,
+                        )
+                        return work
+                    },
+                    catch: (error) =>
+                        error instanceof AttachmentDownloadError
+                            ? error
+                            : new AttachmentDownloadError("network", response?.status ?? null),
+                })
+            }).pipe(
+                withDeadline(timeout, () => new AttachmentDownloadError("timeout")),
+                Effect.ensuring(
+                    Effect.uninterruptible(
+                        Effect.promise(async () => {
+                            await completeCleanup([
+                                () => controller?.abort(),
+                                () => closeBody(),
+                                () => settled,
+                                () => closeBody(),
+                                () => release?.(),
+                                () => {
+                                    if (controller) owner.#controllers.delete(controller)
+                                },
+                            ])
+                        }).pipe(
+                            Effect.ensuring(
+                                Effect.sync(() => {
+                                    owner.#operations.delete(operation)
+                                    Deferred.doneUnsafe(operation, Effect.void)
+                                }),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        })
     }
 
     send(
@@ -1050,6 +1363,11 @@ export class RestOwner {
                 }
                 const response = attempt.value
                 if (response.kind === "success") return response.value
+                if (
+                    (request.inlineAttachments || request.webhookId) &&
+                    request.sources?.some((source) => !source.replayable)
+                )
+                    return yield* Effect.fail(new RestFailure("rateLimit", progress.outcome, 429, response.retry))
                 until = performance.now() + response.retry
                 if (response.global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
                 else owner.#buckets.set(route, { remaining: 0, until })
@@ -1063,43 +1381,66 @@ export class RestOwner {
         token: Redacted.Redacted<string>,
         channel: string,
         body: EncodedBody,
+        sources: readonly AttachmentTransferSource[],
+        instance: InstanceEndpointContext,
         progress: { outcome: Outcome },
         generation: number,
         deadline: number,
-    ): Effect.Effect<void, RestFailure | ClientClosedError> {
+    ): Effect.Effect<"preuploaded" | "inline", RestFailure | ClientClosedError> {
         const owner = this
         return Effect.gen(function* () {
+            const inline = (): "inline" => {
+                const payload = JSON.parse(body.json) as { attachments: Record<string, unknown>[] }
+                payload.attachments = payload.attachments.map((item) => {
+                    const file = body.files.find((file) => file.id === item.id)
+                    if (!file) throw new Error("Inline attachment source is missing")
+                    return { ...item, filename: file.filename, content_type: file.contentType }
+                })
+                body.json = JSON.stringify(payload)
+                return "inline"
+            }
+            if (!instance.presignedAttachmentUploads) return inline()
             const retainedBytes = Buffer.byteLength(body.json)
             const attachments = body.files.map((file) => ({
                 id: file.id,
                 filename: file.filename,
-                file_size: file.data.byteLength,
+                file_size: file.size,
                 content_type: file.contentType,
             }))
-            const plans = yield* owner.#exchange(
+            const planned = yield* owner.#exchange<{ kind: "plans"; plans: UploadPlan[] } | { kind: "disabled" }>(
                 token,
                 {
                     method: "POST",
                     channel,
                     bucket: "upload",
                     preparation: true,
+                    instance,
                     path: `/channels/${channel}/attachments`,
                     body: { json: JSON.stringify({ attachments }), files: [] },
-                    decode: async (response) => {
-                        const plans = decodeUploadPlans(await readUploadJson(response), body.files)
+                    decode: async (response): Promise<{ kind: "plans"; plans: UploadPlan[] }> => {
+                        const plans = decodeUploadPlans(
+                            await readUploadJson(response),
+                            body.files,
+                            instance.allowInsecure,
+                        )
                         if (!plans) throw new RestFailure("response", "notDispatched", response.status)
-                        return plans
+                        return { kind: "plans" as const, plans }
                     },
+                    featureDisabled: () => ({ kind: "disabled" as const }),
                 },
                 progress,
                 generation,
                 deadline,
                 retainedBytes,
             )
+            if (planned.kind === "disabled") return inline()
+            const plans = planned.plans
             // Charge retained plan capabilities too while queued; they are never exposed as diagnostics
             const queuedBytes = retainedBytes + Buffer.byteLength(JSON.stringify(plans))
             for (const plan of plans) {
                 const file = body.files.find((file) => file.id === plan.id)!
+                const source = sources[body.files.indexOf(file)]
+                if (!source) return yield* Effect.fail(new RestFailure("response", "notDispatched"))
                 for (const part of plan.parts) {
                     yield* owner.#exchange(
                         token,
@@ -1107,11 +1448,12 @@ export class RestOwner {
                             method: "PUT",
                             channel,
                             preparation: true,
+                            instance,
                             path: "",
                             body: undefined,
                             put: {
                                 ...part,
-                                data: file.data,
+                                source,
                                 ...(plan.uploadId ? {} : { contentType: plan.contentType }),
                             },
                             decode: async () => {},
@@ -1134,6 +1476,7 @@ export class RestOwner {
                         channel,
                         bucket: "upload",
                         preparation: true,
+                        instance,
                         path: `/channels/${channel}/attachments/complete`,
                         body: { json: JSON.stringify({ uploads }), files: [] },
                         decode: async (response) => {
@@ -1167,11 +1510,12 @@ export class RestOwner {
                     ...item,
                     filename: plan.filename,
                     content_type: plan.contentType,
-                    file_size: file.data.byteLength,
+                    file_size: file.size,
                     upload_filename: plan.key,
                 }
             })
             body.json = JSON.stringify(payload)
+            return "preuploaded" as const
         })
     }
 
@@ -1218,9 +1562,9 @@ export class RestOwner {
                     method: input.method,
                     status: input.status,
                     body: input.json === undefined ? undefined : { json: input.json, files: [] },
-                    decode: async (response) => {
+                    decode: async (response, instance) => {
                         if (input.status === 204) return undefined as A
-                        const value = input.decode(await response.json().catch(() => null))
+                        const value = input.decode(await response.json().catch(() => null), instance)
                         if (value === undefined) throw new RestFailure("response", "unknown", response.status)
                         return value
                     },
@@ -1438,6 +1782,14 @@ export class RestOwner {
         request: Request<A>,
         options?: MessageOperationOptions,
     ): Effect.Effect<A, RestFailure | ClientClosedError> {
+        return this.#executeResolved(token, request, options)
+    }
+
+    #executeResolved<A>(
+        token: Redacted.Redacted<string>,
+        request: Request<A>,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<A, RestFailure | ClientClosedError> {
         const owner = this
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (owner.#closed) return Effect.fail(new ClientClosedError())
@@ -1451,7 +1803,7 @@ export class RestOwner {
             )
                 return Effect.fail(new RestFailure("input", "notDispatched"))
             const bytes = Buffer.byteLength(request.body?.json ?? "")
-            const uploadBytes = request.body?.files.reduce((sum, file) => sum + file.data.byteLength, 0) ?? 0
+            const uploadBytes = request.body?.files.reduce((sum, file) => sum + file.size, 0) ?? 0
             if (!Number.isSafeInteger(uploadBytes) || uploadBytes > owner.uploadMaxBytes - owner.#uploadBytes)
                 return Effect.fail(new RestFailure("busy", "notDispatched"))
             // Check JSON/count admission before allocating binary snapshots, then reserve before any wait
@@ -1459,11 +1811,16 @@ export class RestOwner {
                 return Effect.fail(new RestFailure("busy", "notDispatched"))
             owner.#uploadBytes += uploadBytes
             try {
-                if (request.body)
+                if (request.body) {
                     request.body.files = request.body.files.map((file) => ({
                         ...file,
-                        data: new Uint8Array(file.data),
+                        source:
+                            file.source.kind === "bytes"
+                                ? { kind: "bytes" as const, data: new Uint8Array(file.source.data) }
+                                : file.source,
                     }))
+                    request.sources = request.body.files.map((file) => new AttachmentTransferSource(file))
+                }
             } catch {
                 owner.#uploadBytes -= uploadBytes
                 return Effect.fail(new RestFailure("input", "notDispatched"))
@@ -1472,7 +1829,7 @@ export class RestOwner {
             const generation = owner.cache?.generation ?? 0
             const progress: { outcome: Outcome } = { outcome: "notDispatched" }
             const deletionGuard = request.deleteIds && owner.cache?.begin(request.channel, undefined, true, generation)
-            // Register before queue/rate waits so events, writes and gaps invalidate the whole operation, including retries
+            // Register before discovery and queue/rate waits so events, writes and gaps invalidate the whole operation
             const resourceGuard = request.resourceCache && owner.resources?.begin(request.resourceCache)
             if (resourceGuard) request = { ...request, resourceGuard }
             const channelGuard = request.channelCache && owner.channels?.begin(request.channelCache)
@@ -1480,6 +1837,16 @@ export class RestOwner {
             const operation = Deferred.makeUnsafe<void>()
             owner.#operations.add(operation)
             return Effect.gen(function* () {
+                const resolved = owner.#instance
+                const instance =
+                    resolved ??
+                    (yield* Effect.acquireUseRelease(
+                        Effect.interruptible(owner.#acquire("discovery", bytes)),
+                        () => owner.resolveInstance(),
+                        (release) => Effect.sync(release),
+                    ).pipe(mapFailureCause(instanceFailure)))
+                if (!resolved) owner.#instance = instance
+                request = { ...request, instance }
                 if (request.directMessageUser !== undefined) {
                     const open = directMessageOpen(request.directMessageUser)!
                     const userGeneration = owner.users?.begin("directMessages", true)
@@ -1491,6 +1858,7 @@ export class RestOwner {
                                 channel: "@me",
                                 bucket: "user:directMessages.open",
                                 cache: false,
+                                instance,
                                 path: open.path,
                                 body: { json: open.json!, files: [] },
                                 status: 200,
@@ -1521,41 +1889,58 @@ export class RestOwner {
                         decode: (response) => readMessage(response, channel.id) as Promise<A>,
                     }
                 }
-                if (request.body?.files.length && !request.webhookId)
-                    yield* owner.#prepareUploads(token, request.channel, request.body, progress, generation, deadline)
+                if (request.body?.files.length && !request.webhookId) {
+                    const uploadMode = yield* owner.#prepareUploads(
+                        token,
+                        request.channel,
+                        request.body,
+                        request.sources ?? [],
+                        instance,
+                        progress,
+                        generation,
+                        deadline,
+                    )
+                    if (uploadMode === "inline") request = { ...request, inlineAttachments: true }
+                }
                 return yield* owner.#exchange(token, request, progress, generation, deadline)
             }).pipe(
                 withDeadline(timeout, () => new RestFailure("timeout", progress.outcome)),
                 Effect.ensuring(
-                    Effect.sync(() => {
-                        if (request.deleteIds && progress.outcome !== "notDispatched")
-                            owner.cache?.deleteMany(request.channel, request.deleteIds)
-                        if (deletionGuard) owner.cache!.end(deletionGuard)
-                        if (resourceGuard)
-                            owner.resources!.end(
-                                resourceGuard,
-                                request.moderation
-                                    ? progress.outcome !== "notDispatched"
-                                    : progress.outcome === "unknown",
-                            )
-                        if (request.deleteAuthorId && progress.outcome !== "notDispatched")
-                            owner.cache?.deleteAuthor(request.deleteAuthorId)
-                        // Message observations need not carry guild IDs, so leaving conservatively clears this cache
-                        if (request.invalidateMessages && progress.outcome !== "notDispatched") owner.cache?.gap()
-                        // A rejected multi-entry reorder can have applied earlier entries before its failure
-                        if (channelGuard) owner.channels!.end(channelGuard, progress.outcome !== "notDispatched")
-                        if (
-                            request.channelCache?.mutation &&
-                            request.method === "DELETE" &&
-                            request.bucket === "channel:delete" &&
-                            progress.outcome === "unknown"
-                        )
-                            owner.cache?.deleteChannel(request.channel)
-                        if (request.body) request.body.files.length = 0
-                        owner.#uploadBytes -= uploadBytes
-                        owner.#operations.delete(operation)
-                        Deferred.doneUnsafe(operation, Effect.void)
-                    }),
+                    Effect.promise(() => completeSourceCleanup(request.sources ?? [])).pipe(
+                        Effect.ensuring(
+                            Effect.sync(() => {
+                                if (request.deleteIds && progress.outcome !== "notDispatched")
+                                    owner.cache?.deleteMany(request.channel, request.deleteIds)
+                                if (deletionGuard) owner.cache!.end(deletionGuard)
+                                if (resourceGuard)
+                                    owner.resources!.end(
+                                        resourceGuard,
+                                        request.moderation
+                                            ? progress.outcome !== "notDispatched"
+                                            : progress.outcome === "unknown",
+                                    )
+                                if (request.deleteAuthorId && progress.outcome !== "notDispatched")
+                                    owner.cache?.deleteAuthor(request.deleteAuthorId)
+                                // Message observations need not carry guild IDs, so leaving conservatively clears this cache
+                                if (request.invalidateMessages && progress.outcome !== "notDispatched")
+                                    owner.cache?.gap()
+                                // A rejected multi-entry reorder can have applied earlier entries before its failure
+                                if (channelGuard)
+                                    owner.channels!.end(channelGuard, progress.outcome !== "notDispatched")
+                                if (
+                                    request.channelCache?.mutation &&
+                                    request.method === "DELETE" &&
+                                    request.bucket === "channel:delete" &&
+                                    progress.outcome === "unknown"
+                                )
+                                    owner.cache?.deleteChannel(request.channel)
+                                if (request.body) request.body.files.length = 0
+                                owner.#uploadBytes -= uploadBytes
+                                owner.#operations.delete(operation)
+                                Deferred.doneUnsafe(operation, Effect.void)
+                            }),
+                        ),
+                    ),
                 ),
             )
         })
@@ -1569,6 +1954,7 @@ export class RestOwner {
         this.#pending = []
         this.#bytes = 0
         this.#buckets.clear()
+        this.#instance = undefined
         for (const item of pending) item.resume(Effect.fail(new ClientClosedError()))
         for (const controller of this.#controllers) controller.abort()
     }

@@ -3,6 +3,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { memberNicknameEdit } from "../src/internal/guilds.js"
 import { createClient, type ClientOptions, type GuildMember, type MemberReference } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const target: MemberReference = { guildId: "20", userId: "31" }
@@ -83,7 +84,7 @@ test("rejects invalid nickname target and values before dispatch", () => {
 
 test.each(modes)("%s sets and clears a nickname through the public client", async (mode) => {
     const calls: { path: string; method: string; body: Record<string, unknown> }[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {}
         calls.push({ path: new URL(url).pathname, method: init.method!, body })
         return Response.json(wireMember(Object.hasOwn(body, "nick") ? (body.nick as string | null) : "Before rename"))
@@ -104,7 +105,7 @@ test.each(modes)("%s sets and clears a nickname through the public client", asyn
 
 test.each(modes)("%s preserves known cache state but evicts an uncertain nickname write", async (mode) => {
     let outcome: "rejected" | "malformed" = "rejected"
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (init.method === "PATCH" && outcome === "rejected")
             return new Response("private provider response", { status: 403 })
         if (init.method === "PATCH") return Response.json({})
@@ -134,7 +135,7 @@ test.each(modes)("%s preserves known cache state but evicts an uncertain nicknam
 })
 
 test.each(modes)("%s rejects a nickname response for another member and evicts the targeted cache", async (mode) => {
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) =>
         init.method === "PATCH" ? Response.json(wireMember("Renamed", "32")) : Response.json(wireMember()),
     )
     const api = await setup(mode)

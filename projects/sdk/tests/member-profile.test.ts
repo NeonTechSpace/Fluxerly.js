@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import { decodeMember, memberEditSelf } from "../src/internal/guilds.js"
 import { createClient, type MemberProfileEdit, type MemberReference } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const image = "data:image/png;base64,AA=="
 const modes = ["default", "native"] as const
@@ -104,7 +105,7 @@ test.each(modes)(
     "%s exposes member-profile edits through the public client and replaces self cache readback",
     async (mode) => {
         const calls: { path: string; method: string; body: Record<string, unknown>; auditReason: string | null }[] = []
-        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
             const path = new URL(url).pathname
             const body: Record<string, unknown> = init.body ? JSON.parse(String(init.body)) : {}
             calls.push({
@@ -168,7 +169,7 @@ test.each(modes)(
     async (mode) => {
         let outcome: "success" | "rejected" | "malformed" = "success"
         let calls = 0
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             calls++
             if (init.method === "PATCH" && outcome === "rejected")
                 return new Response("private provider response", { status: 403 })

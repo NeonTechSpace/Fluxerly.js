@@ -4,6 +4,7 @@ import { AuditLogActions, type AuditLogPage } from "../src/audit-logs.js"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 import { auditLogPage } from "../src/internal/audit-logs.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const user = {
     id: "30",
@@ -65,7 +66,7 @@ test.each(["default", "native"] as const)(
                 ? await Effect.runPromise(createNative({ token: "fixture_only" }).pipe(Scope.provide(scope)))
                 : undefined
         const requests: URL[] = []
-        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
             const parsed = new URL(url)
             requests.push(parsed)
             expect(init.method).toBe("GET")

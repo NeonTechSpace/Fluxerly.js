@@ -3,6 +3,7 @@ import type { ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const wire = (group = false) => ({
@@ -50,7 +51,7 @@ async function setup(mode: (typeof modes)[number]) {
 test.each(modes)("%s creates separate one-day invites and supports explicit provider settings", async (mode) => {
     const client = await setup(mode)
     const requests: { path: string; method: string; body: unknown; audit: string | null }[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         requests.push({
             path: new URL(url).pathname,
             method: init.method!,
@@ -93,13 +94,13 @@ test.each(modes)("%s handles existing-group metadata and safely encodes plain co
         expect(new URL(url).pathname).toBe("/v1/invites/%252e%252e")
         return Response.json({ ...wire(true), code: "%2e%2e" })
     })
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const read = await settle(client.invites.fetch("%2e%2e"))
     expect(read.url).toBe("https://fluxer.gg/%252e%252e")
     expect(read.type).toBe("group")
     expect(read).not.toHaveProperty("guild")
     expect(read).not.toHaveProperty("presenceCount")
-    vi.stubGlobal("fetch", async () => Response.json(wire(true)))
+    stubFetchWithHostedDiscovery(async () => Response.json(wire(true)))
     const created = await settle(client.invites.create("100"))
     expect(created).not.toHaveProperty("maxAgeSeconds")
 })
@@ -107,7 +108,7 @@ test.each(modes)("%s handles existing-group metadata and safely encodes plain co
 test.each(modes)("%s rejects malformed invite input without requests or private diagnostics", async (mode) => {
     const client = await setup(mode)
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     for (const code of ["", ".", "..", "../private", "https://fluxer.gg/private", "a?b", "a\u0000b", "\ud800"]) {
         await expect(settle(client.invites.fetch(code))).rejects.toMatchObject({
             reason: "input",
@@ -139,7 +140,7 @@ test.each(modes)("%s rejects malformed invite input without requests or private 
 test.each(modes)("%s rejects mismatched invite responses and duplicate management entries", async (mode) => {
     const client = await setup(mode)
     let response: unknown = { ...wire(), code: "WrongCode" }
-    vi.stubGlobal("fetch", async () => Response.json(response))
+    stubFetchWithHostedDiscovery(async () => Response.json(response))
     await expect(settle(client.invites.fetch("FixtureCode"))).rejects.toMatchObject({ reason: "response" })
     response = wire()
     await expect(settle(client.invites.create("999"))).rejects.toMatchObject({ reason: "response", outcome: "unknown" })
@@ -156,7 +157,7 @@ test.each(modes)("%s never replays uncertain invite creation and excludes codes 
     const fetch = vi.fn(async () => {
         throw Error("FixtureCode private")
     })
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     await expect(settle(client.invites.create("100"))).rejects.toMatchObject({ reason: "network", outcome: "unknown" })
     expect(fetch).toHaveBeenCalledTimes(1)
     let failure: unknown

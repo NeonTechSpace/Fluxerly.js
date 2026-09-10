@@ -6,6 +6,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocket, WebSocketServer } from "ws"
 import { createClient, type ClientOptions } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { hostedDiscoveryDocument } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "", sockets: [] as import("ws").WebSocket[] }))
 vi.mock("ws", async (original) => {
@@ -21,7 +22,6 @@ vi.mock("ws", async (original) => {
         },
     }
 })
-const realFetch = globalThis.fetch
 afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
@@ -71,18 +71,7 @@ async function fixture(clock: ReturnType<typeof time>) {
     const requests: number[] = []
     const commands: { op: number; d: { seq?: number; session_id?: string } }[] = []
     const sockets: WebSocket[] = []
-    const server = createServer((_request, response) => {
-        requests.push(clock.now())
-        response.writeHead(options.status, {
-            "Content-Type": "application/json",
-            ...(options.header ? { "Retry-After": options.header } : {}),
-        })
-        response.end(
-            JSON.stringify(
-                options.status === 429 ? { retry_after: options.retryAfter } : { url: "wss://gateway.fluxer.app" },
-            ),
-        )
-    })
+    const server = createServer()
     const gateway = new WebSocketServer({ server })
     gateway.on("connection", (socket) => {
         sockets.push(socket)
@@ -113,10 +102,21 @@ async function fixture(clock: ReturnType<typeof time>) {
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Expected loopback listener")
     transport.url = `ws://127.0.0.1:${address.port}`
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
-        expect(url).toBe("https://api.fluxer.app/v1/gateway/bot")
-        return realFetch(`http://127.0.0.1:${address.port}`, init)
-    })
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+            expect(url).toBe("https://fluxer.app/.well-known/fluxer")
+            expect(init).toMatchObject({ method: "GET", redirect: "manual" })
+            requests.push(clock.now())
+            if (options.status === 429)
+                return Response.json(
+                    { retry_after: options.retryAfter },
+                    { status: options.status, headers: options.header ? { "Retry-After": options.header } : {} },
+                )
+            if (options.status !== 200) return new Response(null, { status: options.status })
+            return Response.json(hostedDiscoveryDocument)
+        }),
+    )
     onTestFinished(async () => {
         for (const socket of [...sockets, ...transport.sockets]) socket.terminate()
         await new Promise<void>((resolve) => gateway.close(() => resolve()))

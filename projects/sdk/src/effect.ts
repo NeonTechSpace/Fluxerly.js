@@ -276,6 +276,65 @@ export const assets = Object.freeze({
     /** Lazily build a custom-sticker URL from only its ID and animation metadata. Stickers do not expose format because Fluxer returns WebP except an animated sticker's GIF source */
     sticker: (...args: Parameters<typeof sharedAssets.sticker>) => assetEffect(() => sharedAssets.sticker(...args)),
 })
+
+/** Native Effect projection of an immutable selected-instance document */
+export interface ResolvedInstance {
+    /** Provider code-version indicator from discovery. It is not an API path version */
+    readonly apiCodeVersion: number
+    /** Exact validated service bases selected by this client */
+    readonly endpoints: InstanceEndpoints
+    /** Whether this instance advertises presigned attachment upload plans */
+    readonly presignedAttachmentUploads: boolean
+    /** Pure instance-bound asset builders. Fallible calls are lazy Effects in the caller's context */
+    readonly assets: typeof assets
+    /** Pure instance-bound application-link builders. Fallible calls are lazy Effects in the caller's context */
+    readonly links: typeof links
+}
+
+function effectInstance(value: DefaultResolvedInstance): ResolvedInstance {
+    const instanceAssets = value.assets
+    const instanceLinks = value.links
+    return Object.freeze({
+        apiCodeVersion: value.apiCodeVersion,
+        endpoints: value.endpoints,
+        presignedAttachmentUploads: value.presignedAttachmentUploads,
+        assets: Object.freeze({
+            userBanner: (...args: Parameters<typeof instanceAssets.userBanner>) =>
+                assetEffect(() => instanceAssets.userBanner(...args)),
+            avatar: (...args: Parameters<typeof instanceAssets.avatar>) =>
+                assetEffect(() => instanceAssets.avatar(...args)),
+            defaultAvatar: (userId: string) => assetEffect(() => instanceAssets.defaultAvatar(userId)),
+            displayAvatar: (...args: Parameters<typeof instanceAssets.displayAvatar>) =>
+                assetEffect(() => instanceAssets.displayAvatar(...args)),
+            memberAvatar: (...args: Parameters<typeof instanceAssets.memberAvatar>) =>
+                assetEffect(() => instanceAssets.memberAvatar(...args)),
+            memberBanner: (...args: Parameters<typeof instanceAssets.memberBanner>) =>
+                assetEffect(() => instanceAssets.memberBanner(...args)),
+            displayMemberAvatar: (...args: Parameters<typeof instanceAssets.displayMemberAvatar>) =>
+                assetEffect(() => instanceAssets.displayMemberAvatar(...args)),
+            guildIcon: (...args: Parameters<typeof instanceAssets.guildIcon>) =>
+                assetEffect(() => instanceAssets.guildIcon(...args)),
+            guildBanner: (...args: Parameters<typeof instanceAssets.guildBanner>) =>
+                assetEffect(() => instanceAssets.guildBanner(...args)),
+            guildSplash: (...args: Parameters<typeof instanceAssets.guildSplash>) =>
+                assetEffect(() => instanceAssets.guildSplash(...args)),
+            guildEmbedSplash: (...args: Parameters<typeof instanceAssets.guildEmbedSplash>) =>
+                assetEffect(() => instanceAssets.guildEmbedSplash(...args)),
+            emoji: (...args: Parameters<typeof instanceAssets.emoji>) =>
+                assetEffect(() => instanceAssets.emoji(...args)),
+            sticker: (...args: Parameters<typeof instanceAssets.sticker>) =>
+                assetEffect(() => instanceAssets.sticker(...args)),
+        }),
+        links: Object.freeze({
+            channel: (...args: Parameters<typeof instanceLinks.channel>) =>
+                helperEffect(() => instanceLinks.channel(...args)),
+            message: (...args: Parameters<typeof instanceLinks.message>) =>
+                helperEffect(() => instanceLinks.message(...args)),
+            installation: (...args: Parameters<typeof instanceLinks.installation>) =>
+                helperEffect(() => instanceLinks.installation(...args)),
+        }),
+    })
+}
 import type { BotApplication, BotApplicationOperationFailure, BotApplicationOperationOptions } from "./application.js"
 export { BotApplicationOperationError } from "./application.js"
 export type {
@@ -357,7 +416,7 @@ export type {
 } from "./audit-logs.js"
 import type { GuildEdit, GuildVanityUrl, GuildVanityUrlUsage } from "./guilds.js"
 export type { GuildEdit, GuildVanityUrl, GuildVanityUrlUsage } from "./guilds.js"
-import { vanityUrlFetch, vanityUrlEdit } from "#sdk/internal/vanity-url"
+import { vanityUrlEdit, vanityUrlFetch } from "#sdk/internal/vanity-url"
 export {
     GuildSystemChannelFlags,
     GuildDefaultMessageNotifications,
@@ -379,7 +438,7 @@ export type {
 import { guildEdit } from "#sdk/internal/guild-settings"
 import type { Invite, InviteCreate, InviteMetadata } from "./invites.js"
 export type { Invite, InviteCreate, InviteMetadata } from "./invites.js"
-import { inviteFetch, inviteCreate, inviteList, inviteDelete } from "#sdk/internal/invites"
+import { inviteCreate, inviteDelete, inviteFetch, inviteList } from "#sdk/internal/invites"
 import type {
     GuildEmoji,
     GuildSticker,
@@ -572,7 +631,24 @@ export type {
     EmbedField,
 } from "./embeds.js"
 export type { MessageBody } from "./messages.js"
-export type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
+export { AttachmentDownloadError } from "./attachments.js"
+export type {
+    Attachment,
+    AttachmentBytesInput,
+    AttachmentDownloadFailure,
+    AttachmentDownloadOptions,
+    AttachmentFileInput,
+    AttachmentFileSource,
+    AttachmentInput,
+    AttachmentReference,
+    AttachmentStreamInput,
+    AttachmentStreamReadResult,
+    AttachmentStreamReader,
+    AttachmentStreamReaderOptions,
+    AttachmentStreamSource,
+    DefaultAttachmentDownloadOptions,
+} from "./attachments.js"
+import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "./attachments.js"
 import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "./reactions.js"
 export type {
     ReactionEmojiInput,
@@ -814,6 +890,13 @@ export interface ClientOptions<E = never, R = never> extends Omit<SharedClientOp
     }
 }
 import type { ConfigurationError, ConnectError, ConnectionFailure } from "./errors.js"
+import type {
+    InstanceEndpoints,
+    InstanceResolveError,
+    InstanceResolveOptions,
+    ResolvedInstance as DefaultResolvedInstance,
+} from "./instance.js"
+export type { InstanceEndpoints, InstanceOptions, InstanceResolveError, InstanceResolveOptions } from "./instance.js"
 import { makeClient } from "#sdk/internal/client"
 import type { MessagePinsQuery, MessagePinsPage } from "./pins.js"
 export type { MessagePinsQuery, MessagePinsPage, MessagePin, ChannelPinsUpdate } from "./pins.js"
@@ -953,6 +1036,19 @@ export interface EventHandlerOptions<E = never, R = never> extends HandlerOption
     readonly onError?: (report: HandlerErrorReport) => Effect.Effect<unknown, E, R>
 }
 
+/** Lazy bounded remote attachment retrieval without gateway, cache, proxy URL or credential-bearing request */
+export interface Attachments {
+    /** Download attachment.url after matching it against this instance's discovered media `/attachments/` base path.
+     * maxBytes is required and caps returned bytes at 50 MiB. Packing can briefly retain response chunks beside that result, so it is not a total heap limit. The SDK sends no Authorization header, follows no redirect, caches nothing and never falls back to proxyUrl.
+     * timeoutMs defaults to 30,000 across endpoint resolution, local four-slot media admission and GET. Media shares that slot limit but does not wait for bot API rate limits. Interruption awaits response-reader cleanup and cannot undo already received bytes.
+     * URL expiry metadata is not an availability check. Failures contain a safe reason/status, including local busy, without a URL or response body
+     */
+    download(
+        attachment: Attachment,
+        options: AttachmentDownloadOptions,
+    ): Effect.Effect<Uint8Array, AttachmentDownloadFailure>
+}
+
 /**
  * Lazy message operations preserving caller context and interruption. REST/local lookup work without a gateway.
  * Collection with guildId requires its locally owned shard to be ready; channel-only collection requires aggregate Connected. Closing/Closed reject new work.
@@ -967,6 +1063,7 @@ export interface EventHandlerOptions<E = never, R = never> extends HandlerOption
  * Typed failures, defects and interruption retain native channels, including combined cleanup causes.
  * Interruption or client closure awaits owned cleanup but cannot undo a dispatched mutation
  */
+
 export interface Messages {
     /** Traverse remote history newest-to-oldest as a lazy Stream, without connecting or prefetching another page.
      * Each execution copies inputs and owns independent progress in the caller's context, without a detached runtime
@@ -2580,6 +2677,8 @@ export interface Webhooks {
 export interface WebhookClient {
     /** Credential identity, never a token-bearing URL */
     readonly id: string
+    /** Immutable endpoint discovery and pure URL helpers for this webhook client's selected instance */
+    readonly instance: Instance
     /** Send with wait=true and return the created message. Mentions default off. Files use bounded multipart streaming, with 50 MiB maximum per file.
      * Image/thumbnail attachment URLs match a new upload in this execution. flags accepts only the two non-voice MessageFlags bits.
      * Snapshot inputs at execution, including admitted file bytes. Never retry an uncertain send, which may already have posted */
@@ -2636,6 +2735,8 @@ export interface ClientCache {
  * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause
  */
 export interface Client extends ClientState {
+    /** Immutable endpoint discovery and pure URL helpers for this client's selected instance */
+    readonly instance: Instance
     /** Public server-directory management, not gateway service discovery or directory joining */
     readonly discovery: Discovery
     /** Process-local requested presence, restored after gateway reconnects and never stored across process restarts */
@@ -2666,6 +2767,8 @@ export interface Client extends ClientState {
     readonly channels: Channels
     /** Remote member reads, moderation and targeted role assignment */
     readonly members: Members
+    /** Bounded attachment downloads from this instance's discovered media base path */
+    readonly attachments: Attachments
     /** REST, local lookup and live collection owned by this client */
     readonly messages: Messages
     /** Local cache enumeration and release controls. Caching remains opt-in through ClientOptions.cache */
@@ -2791,7 +2894,35 @@ export interface Client extends ClientState {
 }
 
 /**
- * Create a webhook-only client for hosted Fluxer, from { id, token } or redacted creation credentials.
+ * One client's selected instance discovery result
+ *
+ * `resolve` is lazy and runs in the caller's native Effect context. Concurrent
+ * callers share one owner-scoped document read, while interruption releases
+ * only the interrupted caller. The successful immutable result is retained
+ * without refresh until client shutdown
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import type { Client } from "@neontechspace/fluxerly/effect"
+ * export const instanceExample = (client: Client) => Effect.gen(function* () {
+ *     const resolved = yield* client.instance.resolve({ timeoutMs: 10_000 })
+ *     const channel = yield* resolved.links.channel({ id: "1750000000000000000" })
+ *     const avatar = yield* resolved.assets.defaultAvatar("1750000000000000000")
+ *     return { api: resolved.endpoints.apiPublic, channel, avatar }
+ * })
+ * ```
+ */
+export interface Instance {
+    /** Resolve this client's immutable selected-instance endpoint map and pure asset/link helpers.
+     * The unauthenticated bootstrap has a 30,000 ms caller-local deadline unless overridden. Interruption releases only this caller's wait, while another resolve, REST request or gateway connection can keep the shared read alive.
+     * Expected document, rate-limit, timeout, closure and local timeout-option failures use Effect's failure channel. Cleanup defects remain in Cause with any failure or interruption
+     */
+    resolve(options?: InstanceResolveOptions): Effect.Effect<ResolvedInstance, InstanceResolveError>
+}
+
+/**
+ * Create a webhook-only client for hosted Fluxer or an explicitly selected self-hosted instance, from { id, token } or redacted creation credentials.
  * Validate locally without requests, copying the credential into an independently owned redacted reference.
  * Creation is lazy and scope closure shuts down the client.
  * No token storage, gateway or bot authentication. Keep one client per credential for shared admission and rate waits.
@@ -2813,8 +2944,15 @@ export function createWebhookClient(
     return Effect.gen(function* () {
         const owner = yield* makeWebhookClient(options)
         yield* Effect.addFinalizer(() => owner.shutdown())
+        let instance: ResolvedInstance | undefined
         return Object.freeze({
             id: owner.id,
+            instance: Object.freeze({
+                resolve: (options?: InstanceResolveOptions) =>
+                    owner.instance
+                        .resolveInfo(options)
+                        .pipe(Effect.map((value) => (instance ??= effectInstance(value)))),
+            }),
             send: (input: WebhookMessageInput, options?: MessageOperationOptions) =>
                 owner.run("webhooks.send", () => webhookSend(owner.id, input), options),
             fetchMessage: (id: string, options?: MessageOperationOptions) =>
@@ -2986,7 +3124,8 @@ export interface DirectMessages {
  *
  * Validate configuration locally without authenticating the token
  *
- * Hosted Fluxer only; self-hosted instances and custom REST or gateway endpoints are not supported
+ * Omit `instance` for hosted Fluxer, or select a self-hosted root whose unauthenticated well-known document supplies REST, gateway and projection endpoints lazily.
+ * HTTPS and WSS are required unless that explicit instance sets `allowInsecure: true` for a local or self-hosted HTTP/WS deployment
  *
  * Cache settings are copied and validated here without invoking retention policies or reporters.
  * Unknown cache or message-cache option keys fail validation. Caching is disabled by default.
@@ -3023,7 +3162,14 @@ export function createClient<E = never, R = never>(
         const scope = Scope.makeUnsafe()
         const owner = yield* makeClient(options, scope, true)
         yield* Effect.addFinalizer((exit) => owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, exit))))
+        let instance: ResolvedInstance | undefined
         return Object.freeze({
+            instance: Object.freeze({
+                resolve: (options?: InstanceResolveOptions) =>
+                    owner.instance
+                        .resolveInfo(options)
+                        .pipe(Effect.map((value) => (instance ??= effectInstance(value)))),
+            }),
             presence: Object.freeze({
                 set: (input: PresenceInput) => owner.setPresence(input),
                 setMembers: (guildId: string, memberIds: readonly string[]) =>
@@ -3250,6 +3396,10 @@ export function createClient<E = never, R = never>(
                     owner.guild("roles.delete", () => roleDelete(target), options),
                 reorder: (id: string, positions: readonly RolePosition[], options?: GuildOperationOptions) =>
                     owner.guild("roles.reorder", () => roleReorder(id, positions), options),
+            }),
+            attachments: Object.freeze({
+                download: (attachment: Attachment, options: AttachmentDownloadOptions) =>
+                    owner.downloadAttachment(attachment, options),
             }),
             messages: Object.freeze({
                 iterateHistory: (id: string, query: HistoryIterationQuery, options?: MessageOperationOptions) =>

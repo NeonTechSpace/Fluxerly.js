@@ -22,7 +22,7 @@ The documentation website remains a scaffold
 | [client.ts](/projects/sdk/src/internal/client.ts) | Client lifetime, per-shard recovery supervision and shared Identify pacing |
 | [sharding.ts](/projects/sdk/src/internal/sharding.ts) | Immutable local shard-plan validation and guild ownership calculation |
 | [application.ts](/projects/sdk/src/internal/application.ts) | Current bot-token application allowlist projection, using shared REST without retention or application management |
-| [discovery.ts](/projects/sdk/src/internal/discovery.ts) | Hosted service discovery |
+| [instance.ts](/projects/sdk/src/internal/instance.ts) | Shared lifetime endpoint discovery, selected-instance trust and unauthenticated bootstrap cleanup |
 | [effect-failures.ts](/projects/sdk/src/internal/effect-failures.ts) | REST/discovery cause-preserving error translation and deadlines, including cleanup defects during interruption |
 | [gateway.ts](/projects/sdk/src/internal/gateway.ts) | Gateway transport and protocol |
 | [events.ts](/projects/sdk/src/internal/events.ts) | Subscription scheduling and bounded event intake |
@@ -53,11 +53,12 @@ The documentation website remains a scaffold
 | [counts.ts](/projects/sdk/src/internal/counts.ts) | Fresh guild/channel count requests, shard scatter/gather, private nonce correlation and interruption/gap cleanup without count retention |
 | [member-chunks.ts](/projects/sdk/src/internal/member-chunks.ts) | One on-demand member stream, chunk validation, bounded buffering, deadline and interruption/gap cleanup without roster retention |
 | [gateway-requests.ts](/projects/sdk/src/internal/gateway-requests.ts) | Shared four-slot local admission for member and count requests, distinct from provider-side worker state |
-| [multipart.ts](/projects/sdk/src/internal/multipart.ts) | Bounded webhook multipart body streaming over admitted file snapshots |
+| [multipart.ts](/projects/sdk/src/internal/multipart.ts) | Inline message and webhook multipart framing over admitted attachment sources |
+| [transfer-source.ts](/projects/sdk/src/internal/transfer-source.ts) | Sized file and finite-stream reads, exact byte verification and reader ownership |
 | [channels.ts](/projects/sdk/src/internal/channels.ts) | Guild channel request validation and REST/event projection, with scheduling owned by shared REST |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
 | [attachments.ts](/projects/sdk/src/internal/attachments.ts) | File validation and metadata projection |
-| [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation, upload destination boundary and bounded file streams; REST owns scheduling and message completion |
+| [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation and bounded response reads, with REST owning scheduling, direct uploads, downloads and message completion |
 | [cache.ts](/projects/sdk/src/internal/cache.ts) | Cache retention and conflicting observations |
 | [guild-cache.ts](/projects/sdk/src/internal/guild-cache.ts) | Optional guild/member/role retention, related-resource invalidation and request conflicts |
 | [channel-cache.ts](/projects/sdk/src/internal/channel-cache.ts) | Optional guild channel retention, mutation/event invalidation and request conflicts |
@@ -181,6 +182,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live` | Hosted protocol discovery, readiness and heartbeats | No server-content changes |
 | `test:live:sdk` | Built default/native client connection and shutdown | No server-content changes |
 | `test:live:application` | Built default/native current-bot application allowlist and hosted installation-link construction | Read-only; no navigation, authorization, or server-content changes |
+| `test:live:instance` | Built default/native hosted instance discovery comparison and fresh bot-self read | Read-only unauthenticated bootstrap and bot-self REST requests; no server-content changes |
 | `test:live:diagnostics` | Built default/native diagnostics and cache clearing across a delayed live guild read | Read-only with the shared sandbox lock, no gateway connection or remote mutation |
 | `test:live:consumer-operations` | Account-banner URLs, attachment deletion, exact bot-role replacement and fresh gateway counts through both built APIs | Temporary channel/messages and one zero-permission role assigned only to the test bot, plus test-owned response loss and socket interruption |
 | `test:live:member-chunks` | Streamed member selection, optional presence, full-list readback and failure/recovery through both built APIs | Read-only guild/member requests, test-owned reply drops and one socket interruption per mode, no server-content changes |
@@ -222,6 +224,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:collectors` | Collector completion, gap failure and use after recovery | Temporary channel/messages and test-socket termination |
 | `test:live:embeds` | Embed send/reply/edit, readback, events, cache and collectors | Temporary channel/messages and test-message edits |
 | `test:live:attachments` | Uploads, binary readback, file edits, events/cache/collectors and recovery | Temporary channel/messages, 50 MiB file upload/download, file replacements and test-socket termination |
+| `test:live:attachment-sources` | `openAsBlob` file and finite multipart-stream uploads, SDK/raw binary readback, bounded download failure/cancellation and injected inline fallback through both APIs | Temporary channel/messages, one test-owned temporary file and delayed-EOF wrapper; the injected 403 targets only the current channel's unique attachment plan and does not change provider configuration |
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools
 

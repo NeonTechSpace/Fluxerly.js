@@ -3,18 +3,23 @@ import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
 
+const hostedInvite = "https://fluxer.gg"
+
 const codeValue = (value: unknown): value is string =>
     typeof value === "string" && value.length >= 2 && value.length <= 32 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)
 
-function decode(value: unknown): GuildVanityUrl | undefined {
+function decode(value: unknown, inviteBase = hostedInvite): GuildVanityUrl | undefined {
     if (!record(value) || (value.code !== null && !codeValue(value.code))) return undefined
     return Object.freeze({
         code: value.code,
-        url: value.code === null ? null : `https://fluxer.gg/${encodeURIComponent(value.code)}`,
+        url: value.code === null ? null : `${inviteBase}/${encodeURIComponent(value.code)}`,
     })
 }
 
-export function vanityUrlFetch(guildId: string): GuildRequest<GuildVanityUrlUsage> | undefined {
+export function vanityUrlFetch(
+    guildId: string,
+    inviteBase = hostedInvite,
+): GuildRequest<GuildVanityUrlUsage> | undefined {
     if (!identifier(guildId)) return undefined
     return {
         guildId,
@@ -22,8 +27,8 @@ export function vanityUrlFetch(guildId: string): GuildRequest<GuildVanityUrlUsag
         path: `/guilds/${guildId}/vanity-url`,
         method: "GET",
         status: 200,
-        decode: (value) => {
-            const result = decode(value)
+        decode: (value, instance) => {
+            const result = decode(value, instance?.invite ?? inviteBase)
             if (
                 !result ||
                 !record(value) ||
@@ -42,8 +47,9 @@ export function vanityUrlEdit(
     guildId: string,
     code: string | null,
     options?: ModerationOptions,
+    inviteBase = hostedInvite,
 ): GuildRequest<GuildVanityUrl> | undefined {
-    const base = vanityUrlFetch(guildId)
+    const base = vanityUrlFetch(guildId, inviteBase)
     const audit = auditSettings(options)
     if (!base || !audit || (code !== null && !codeValue(code))) return undefined
     return {
@@ -53,8 +59,8 @@ export function vanityUrlEdit(
         method: "PATCH",
         json: JSON.stringify({ code }),
         cache: { selection: { kind: "guilds", guildId }, mutation: true },
-        decode: (value) => {
-            const result = decode(value)
+        decode: (value, instance) => {
+            const result = decode(value, instance?.invite ?? inviteBase)
             return result?.code === code ? result : undefined
         },
     }

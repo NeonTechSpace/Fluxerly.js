@@ -46,9 +46,30 @@ import {
     type CollectorRegistrationError,
     type MemberReference,
     type RoleHierarchyInput,
+    type InstanceOptions,
+    type ResolvedInstance,
+    type AttachmentFileSource,
+    type AttachmentInput,
+    type AttachmentStreamSource,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
 const CommandService = Context.Service<{ readonly enabled: true }>("command-service")
+
+const structuralAttachmentStream: AttachmentStreamSource = {
+    getReader(_options?: { readonly mode?: "byob" }) {
+        return {
+            read: async () => ({ done: true as const }),
+            cancel: async () => undefined,
+            releaseLock: () => undefined,
+        }
+    },
+}
+
+const structuralAttachmentFile: AttachmentFileSource = {
+    size: 2,
+    slice: () => structuralAttachmentFile,
+    stream: () => structuralAttachmentStream,
+}
 
 export const pureHelperTypes = (bits: bigint) =>
     Effect.gen(function* () {
@@ -67,6 +88,20 @@ export const pureHelperTypes = (bits: bigint) =>
             hex: yield* colors.toHex(0xff8800),
             rgb: yield* colors.toRgb(0xff8800),
             chunks: yield* text.split("text", options),
+        }
+    })
+
+/** Packed declaration coverage for explicit self-hosted selection and lifetime discovery */
+export const resolveSelectedInstance = (client: Client) =>
+    Effect.gen(function* () {
+        const selected: InstanceOptions = { url: "https://community.example" }
+        const created = createClient({ token: "fixture-only", instance: selected })
+        const resolved: ResolvedInstance = yield* client.instance.resolve()
+        return {
+            resolved,
+            link: resolved.links.channel({ id: "20" }),
+            asset: resolved.assets.defaultAvatar("20"),
+            created,
         }
     })
 
@@ -478,16 +513,34 @@ export function moderationOperations(client: Client, target: import("@neontechsp
 export function useAttachments(client: Client, channelId: string) {
     return Effect.gen(function* () {
         const file = { data: new Uint8Array([1, 2]), filename: "fixture.bin" }
-        const sent = yield* client.messages.send(channelId, { attachments: [file] })
+        const sources = [
+            { file: structuralAttachmentFile, filename: "sized.bin" },
+            { stream: structuralAttachmentStream, size: 2, filename: "streamed.bin" },
+        ] as const satisfies readonly AttachmentInput[]
+        const sent = yield* client.messages.send(channelId, { attachments: [file, ...sources] })
         const attachment = sent.attachments[0]!
+        const bytes: Uint8Array = yield* client.attachments.download(attachment, {
+            maxBytes: 1_024,
+            timeoutMs: 5_000,
+        })
         yield* client.messages.reply(sent, { attachments: [file] })
         yield* client.messages.edit(sent, { attachments: [{ id: attachment.id }, file] })
         yield* client.messages.edit(sent, { content: "Cleared", attachments: [] })
         // @ts-expect-error References are edit-only
         client.messages.send(channelId, { attachments: [{ id: attachment.id }] })
+        client.messages.send(channelId, {
+            attachments: [
+                // @ts-expect-error Stream uploads need an exact byte size
+                { stream: structuralAttachmentStream, filename: "unknown.bin" },
+            ],
+        })
+        // @ts-expect-error Bounded downloads require maxBytes
+        client.attachments.download(attachment, {})
+        // @ts-expect-error Attachment input lists remain readonly
+        sources.push({ file: structuralAttachmentFile, filename: "later.bin" })
         // @ts-expect-error Received arrays are immutable
         sent.attachments.push(attachment)
-        return attachment.url
+        return { url: attachment.url, bytes }
     })
 }
 /** Typechecked targeted nickname and local hierarchy usage against the packed Effect entry point */

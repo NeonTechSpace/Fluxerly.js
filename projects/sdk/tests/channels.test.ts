@@ -4,6 +4,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
 import { ChannelType, createClient, type ClientOptions, type EventName } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "", sockets: [] as import("ws").WebSocket[] }))
 vi.mock("ws", async (original) => {
@@ -576,7 +577,7 @@ async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Pro
 }
 
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
             ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
             : handler(url, init),

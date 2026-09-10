@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import WebSocket, { WebSocketServer } from "ws"
 import { SdkDefect, createClient, type Client as DefaultClient } from "../src/index.js"
 import { createClient as createNative, type Client as NativeClient } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({
     url: "",
@@ -124,7 +125,7 @@ async function gatewayFixture() {
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Expected owned loopback address")
     transport.url = `ws://127.0.0.1:${address.port}`
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
         expect(url).toBe("https://api.fluxer.app/v1/gateway/bot")
         return fetch(`http://127.0.0.1:${address.port}`, init)
     })

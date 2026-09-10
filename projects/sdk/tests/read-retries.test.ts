@@ -7,6 +7,7 @@ import {
     type MessageOperationFailure,
 } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const reads = ["fetch", "fetchHistory", "fetchReactionUsers", "fetchPins"] as const
@@ -93,7 +94,7 @@ test.each(modes.flatMap((mode) => reads.map((operation) => ({ mode, operation })
     async ({ mode, operation }) => {
         const calls: { url: string; at: number }[] = []
         let cancelled = 0
-        vi.stubGlobal("fetch", async (url: string) => {
+        stubFetchWithHostedDiscovery(async (url: string) => {
             calls.push({ url, at: performance.now() })
             if (calls.length === 1) throw Error("private network detail")
             if (calls.length === 2)
@@ -125,7 +126,7 @@ test.each(modes)(
         const api = await setup(mode)
         for (const status of [500, 502, 503, 504, 400, 401, 403, 404, 501, 505, 200]) {
             let calls = 0
-            vi.stubGlobal("fetch", async () => {
+            stubFetchWithHostedDiscovery(async () => {
                 calls++
                 return new Response("private body", { status })
             })
@@ -136,7 +137,7 @@ test.each(modes)(
         }
         let calls = 0
         const cleanup = new Error("private cleanup detail")
-        vi.stubGlobal("fetch", async () => {
+        stubFetchWithHostedDiscovery(async () => {
             calls++
             return new Response(
                 new ReadableStream({
@@ -180,7 +181,7 @@ test.each(modes)(
 
 test.each(modes)("%s preserves confirmed 429 handling separately from transient retries", async (mode) => {
     let calls = 0
-    vi.stubGlobal("fetch", async () => {
+    stubFetchWithHostedDiscovery(async () => {
         calls++
         if ([1, 3, 5].includes(calls)) return Response.json({ retry_after: 0.005 }, { status: 429 })
         if ([2, 4].includes(calls)) return new Response(null, { status: 502 })
@@ -196,7 +197,7 @@ test.each(modes.flatMap((mode) => ["timeout", "cancel", "shutdown"].map((reason)
     async ({ mode, reason }) => {
         let calls = 0,
             cancelled = 0
-        vi.stubGlobal("fetch", async () => {
+        stubFetchWithHostedDiscovery(async () => {
             calls++
             return new Response(
                 new ReadableStream({
@@ -226,7 +227,7 @@ test.each(modes.flatMap((mode) => ["timeout", "cancel", "shutdown"].map((reason)
             else expect(error).toMatchObject({ _tag: "CancelledError" })
         }
         expect(calls).toBe(1)
-        vi.stubGlobal("fetch", async () => Response.json(wire))
+        stubFetchWithHostedDiscovery(async () => Response.json(wire))
         if (reason !== "shutdown") expect(await api.read()).toMatchObject({ id: "10" })
     },
 )
@@ -237,7 +238,7 @@ test.each(modes)("%s honors numeric and HTTP-date Retry-After without blocking u
         const calls: number[] = []
         let edited = false
         const required = /^\d/.test(header) ? Number(header) * 1000 : Date.parse(header) - Date.now()
-        vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             if (init.method === "PATCH") {
                 edited = true
                 return Response.json({ ...wire, content: "edited" })
@@ -259,7 +260,7 @@ test.each(modes)("%s honors numeric and HTTP-date Retry-After without blocking u
 
 test.each(modes)("%s retry backlogs share the existing pending count budget", async (mode) => {
     let calls = 0
-    vi.stubGlobal("fetch", async () => {
+    stubFetchWithHostedDiscovery(async () => {
         calls++
         return new Response(null, { status: 503, headers: { "retry-after": "60" } })
     })
@@ -277,7 +278,7 @@ test.each(modes)("%s POST, PATCH, PUT and DELETE never use transient read retrie
     const api = await setup(mode)
     let calls = 0
     for (const network of [false, true]) {
-        vi.stubGlobal("fetch", async () => {
+        stubFetchWithHostedDiscovery(async () => {
             calls++
             if (network) throw Error("private network failure")
             return new Response(null, { status: 503, headers: { "retry-after": "0.001" } })
@@ -307,7 +308,7 @@ test.each(modes)("%s a mutation overlapping a successful retry prevents stale ca
     const api = await setup(mode)
     let calls = 0
     let respond!: (response: Response) => void
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (init.method === "PATCH") return Response.json({ ...wire, content: "edited" })
         if (++calls === 1) return new Response(null, { status: 500 })
         return new Promise<Response>((resolve) => {

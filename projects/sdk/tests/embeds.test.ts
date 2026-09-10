@@ -14,6 +14,7 @@ import {
     type CollectorResult,
 } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "" }))
 vi.mock("ws", async (original) => {
@@ -112,7 +113,7 @@ async function fixture() {
     const deliver = (event: string) => {
         for (const socket of sockets) socket.send(JSON.stringify({ op: 0, s: ++sequence, t: event, d: message }))
     }
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         if (url.endsWith("/gateway/bot")) return Response.json({ url: "wss://gateway.fluxer.app" })
         expect(url.startsWith("https://api.fluxer.app/v1/channels/20/messages")).toBe(true)
         const body = init.body ? JSON.parse(String(init.body)) : undefined

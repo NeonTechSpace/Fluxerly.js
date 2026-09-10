@@ -2,6 +2,7 @@ import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type Guild, type GuildEdit, type DefaultModerationOptions } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 
@@ -249,7 +250,7 @@ async function setup(mode: (typeof modes)[number]) {
 }
 
 function rest(handler: (url: string, init: RequestInit) => Response) {
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
             ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
             : Promise.resolve(handler(url, init)),

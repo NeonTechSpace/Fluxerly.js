@@ -519,3 +519,36 @@ export const assets = Object.freeze({
         )
     },
 })
+
+/**
+ * Bind the pure asset helpers to validated instance media and static-CDN bases
+ *
+ * This keeps the hosted `assets` export stable while preserving its local input
+ * validation and result types for a selected instance
+ */
+export function createInstanceAssets(media: string, staticCdn: string): typeof assets {
+    const project = <A extends string | null | undefined>(value: Result<A, AssetUrlError>): Result<A, AssetUrlError> =>
+        value.map((url) => {
+            if (typeof url !== "string") return url
+            if (url.startsWith(mediaOrigin)) return `${media}${url.slice(mediaOrigin.length)}` as A
+            if (url.startsWith(staticOrigin)) return `${staticCdn}${url.slice(staticOrigin.length)}` as A
+            return url
+        })
+    return Object.freeze({
+        userBanner: (...input: Parameters<typeof assets.userBanner>) => project(assets.userBanner(...input)),
+        avatar: (...input: Parameters<typeof assets.avatar>) => project(assets.avatar(...input)),
+        defaultAvatar: (...input: Parameters<typeof assets.defaultAvatar>) => project(assets.defaultAvatar(...input)),
+        displayAvatar: (...input: Parameters<typeof assets.displayAvatar>) => project(assets.displayAvatar(...input)),
+        memberAvatar: (...input: Parameters<typeof assets.memberAvatar>) => project(assets.memberAvatar(...input)),
+        memberBanner: (...input: Parameters<typeof assets.memberBanner>) => project(assets.memberBanner(...input)),
+        displayMemberAvatar: (...input: Parameters<typeof assets.displayMemberAvatar>) =>
+            project(assets.displayMemberAvatar(...input)),
+        guildIcon: (...input: Parameters<typeof assets.guildIcon>) => project(assets.guildIcon(...input)),
+        guildBanner: (...input: Parameters<typeof assets.guildBanner>) => project(assets.guildBanner(...input)),
+        guildSplash: (...input: Parameters<typeof assets.guildSplash>) => project(assets.guildSplash(...input)),
+        guildEmbedSplash: (...input: Parameters<typeof assets.guildEmbedSplash>) =>
+            project(assets.guildEmbedSplash(...input)),
+        emoji: (...input: Parameters<typeof assets.emoji>) => project(assets.emoji(...input)),
+        sticker: (...input: Parameters<typeof assets.sticker>) => project(assets.sticker(...input)),
+    })
+}

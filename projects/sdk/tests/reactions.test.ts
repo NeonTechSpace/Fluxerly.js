@@ -16,6 +16,7 @@ import {
     SdkDefect,
 } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "", sequence: 1, sockets: [] as import("ws").WebSocket[] }))
 vi.mock("ws", async (original) => {
@@ -1379,7 +1380,7 @@ async function setup(mode: (typeof modes)[number]) {
 }
 
 function mockRest(handler: (url: string, init: RequestInit) => Promise<Response>) {
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
             ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
             : handler(url, init),

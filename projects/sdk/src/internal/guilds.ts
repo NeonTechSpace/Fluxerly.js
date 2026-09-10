@@ -20,6 +20,7 @@ import type {
 import { identifier, record } from "./message.js"
 import type { ResourceRequest } from "./guild-cache.js"
 import type { ChannelCacheRequest } from "./channel-cache.js"
+import type { InstanceEndpointContext } from "./instance.js"
 
 /** Validated request description; the shared REST owner retains admission, cleanup and rate state */
 export interface GuildRequest<A> {
@@ -33,7 +34,8 @@ export interface GuildRequest<A> {
     readonly auditReason?: string
     readonly deleteAuthorId?: string
     readonly invalidateMessages?: true
-    readonly decode: (value: unknown) => A | undefined
+    /** REST supplies the immutable endpoint snapshot after request admission. One-argument decoders ignore it */
+    readonly decode: (value: unknown, instance?: InstanceEndpointContext) => A | undefined
     readonly cache?: ResourceRequest
     readonly channelCache?: ChannelCacheRequest
 }

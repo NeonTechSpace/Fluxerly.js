@@ -1,4 +1,5 @@
 import type { OperationOptions } from "./client.js"
+import type { InstanceOptions } from "./instance.js"
 import type { ClientClosedError } from "./errors.js"
 import type { AllowedMentions, MessageBody, MessageOperationOptions } from "./messages.js"
 import type { EmbedInput } from "./embeds.js"
@@ -86,8 +87,15 @@ export interface DefaultWebhookOperationOptions extends WebhookOperationOptions,
 
 /** Stored raw credentials are validated and copied locally without authenticating or sending requests */
 export type WebhookClientOptions = ({ readonly id: string; readonly token: string } | WebhookCredentials) & {
-    /** Maximum retained SDK-owned file bytes, positive safe integer, default 104,857,600.
-     * Separate from the 4 MiB queued JSON budget, not a process-memory ceiling
+    /**
+     * Explicit hosted or self-hosted instance selection. Omit it for hosted Fluxer.
+     * Creation validates the root only. Requests and `instance.resolve` read the unauthenticated well-known document lazily and retain one immutable result for this webhook client's lifetime.
+     * HTTPS is required by default. `allowInsecure: true` is an explicit HTTP local/self-hosted opt-in
+     */
+    readonly instance?: InstanceOptions
+    /** Maximum reserved attachment transfer bytes across queued and active operations, positive safe integer, default 104,857,600.
+     * Reservations use byte-array length, file size or declared stream size and release after transport cleanup.
+     * Separate from the 4 MiB queued JSON budget, not a measure of retained heap or a process-memory ceiling
      */
     readonly uploadMaxBytes?: number
 }

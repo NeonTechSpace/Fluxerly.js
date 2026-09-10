@@ -11,6 +11,7 @@ import { createGuildChannelFixture, cleanupGuildChannelFixtures } from "./channe
 import { createReactionEmoji, cleanupReactionEmoji } from "./reaction-fixture.mjs"
 import { createGuildTestRole, cleanupGuildTestRole } from "./guild-fixture.mjs"
 import { cleanupModeration } from "./moderation-fixture.mjs"
+import { verifyAttachmentSources } from "./attachment-sources.mjs"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
@@ -33,6 +34,7 @@ const collectors = process.argv[3] === "--collectors"
 const embeds = process.argv[3] === "--embeds"
 const smallAttachments = process.argv[3] === "--attachments-small"
 const attachments = process.argv[3] === "--attachments" || smallAttachments
+const attachmentSources = process.argv[3] === "--attachment-sources"
 const reactions = process.argv[3] === "--reactions"
 const pins = process.argv[3] === "--pins"
 const guilds = process.argv[3] === "--guilds"
@@ -2623,7 +2625,7 @@ setTimeout(
         report("process_timeout", false)
         process.exit(1)
     },
-    attachments || moderation || search ? 240_000 : typing ? 60_000 : 120_000,
+    attachments || attachmentSources || moderation || search ? 240_000 : typing ? 60_000 : 120_000,
 ).unref()
 
 try {
@@ -2640,6 +2642,7 @@ try {
                     collectors ||
                     embeds ||
                     attachments ||
+                    attachmentSources ||
                     reactions ||
                     pins ||
                     guilds ||
@@ -2715,7 +2718,7 @@ try {
             return response
         }
     }
-    if (attachments)
+    if (attachments || attachmentSources)
         globalThis.fetch = observeUploads(rawFetch, (record) =>
             console.log(JSON.stringify({ mode, check: stage, ...record })),
         )
@@ -3280,33 +3283,56 @@ try {
                     () => gatewayProbe.interruptAndWait(client, states),
                 )
             }
-            if (embeds || attachments) {
+            if (embeds || attachments || attachmentSources) {
                 const unwrap = async (operation) => {
                     const result = await operation
                     if (result.isErr()) reportFailure(result.error)
                     assert.ok(result.isOk())
                     return result.value
                 }
-                await (attachments ? verifyAttachments : verifyEmbeds)(
-                    {
-                        send: (input, options) => unwrap(client.messages.send(channel.id, input, options)),
-                        reply: (target, input) => unwrap(client.messages.reply(target, input)),
-                        edit: (target, input) => unwrap(client.messages.edit(target, input)),
-                        editFailure: async (target, input) => {
-                            const result = await client.messages.edit(target, input)
-                            assert.ok(result.isErr())
-                            return result.error
-                        },
-                        fetch: (target) => unwrap(client.messages.fetch(target)),
-                        history: () => unwrap(client.messages.fetchHistory(channel.id)),
-                        get: (target) => unwrap(client.messages.get(target)),
-                        collect: async (options) => {
-                            const collector = await unwrap(client.messages.collect(channel.id, options))
-                            return () => unwrap(collector.waitForClose())
-                        },
+                const attachmentOps = {
+                    send: (input, options) => unwrap(client.messages.send(channel.id, input, options)),
+                    reply: (target, input) => unwrap(client.messages.reply(target, input)),
+                    edit: (target, input) => unwrap(client.messages.edit(target, input)),
+                    editFailure: async (target, input) => {
+                        const result = await client.messages.edit(target, input)
+                        assert.ok(result.isErr())
+                        return result.error
                     },
-                    channel.id,
-                )
+                    fetch: (target) => unwrap(client.messages.fetch(target)),
+                    history: () => unwrap(client.messages.fetchHistory(channel.id)),
+                    get: (target) => unwrap(client.messages.get(target)),
+                    collect: async (options) => {
+                        const collector = await unwrap(client.messages.collect(channel.id, options))
+                        return () => unwrap(collector.waitForClose())
+                    },
+                    download: (attachment, options) => unwrap(client.attachments.download(attachment, options)),
+                    downloadFailure: async (attachment, options) => {
+                        const result = await client.attachments.download(attachment, options)
+                        assert.ok(result.isErr())
+                        return result.error
+                    },
+                    cancelDownload: async (attachment, size, signal) => {
+                        const result = await client.attachments.download(attachment, {
+                            maxBytes: size,
+                            timeoutMs: 60_000,
+                            signal,
+                        })
+                        assert.ok(result.isErr())
+                        assert.equal(result.error._tag, "CancelledError")
+                    },
+                }
+                if (attachmentSources)
+                    await verifyAttachmentSources({
+                        ops: attachmentOps,
+                        channelId: channel.id,
+                        rawFetch,
+                        getFetch: () => globalThis.fetch,
+                        setFetch: (value) => (globalThis.fetch = value),
+                        setStage: (value) => (stage = value),
+                        report,
+                    })
+                else await (attachments ? verifyAttachments : verifyEmbeds)(attachmentOps, channel.id)
             }
             if (forceRecovery && !reactions && !pins && !guilds && !channels) {
                 if (cache) sdkRequests.length = 0
@@ -4054,7 +4080,7 @@ try {
                             ),
                         )
                     }
-                    if (embeds || attachments) {
+                    if (embeds || attachments || attachmentSources) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
                             const result = await Effect.runPromise(Effect.result(operation))
@@ -4062,26 +4088,45 @@ try {
                             assert.equal(result._tag, "Success")
                             return result.success
                         }
+                        const attachmentOps = {
+                            send: (input, options) => run(client.messages.send(channel.id, input, options)),
+                            reply: (target, input) => run(client.messages.reply(target, input)),
+                            edit: (target, input) => run(client.messages.edit(target, input)),
+                            editFailure: (target, input) =>
+                                Effect.runPromise(client.messages.edit(target, input).pipe(Effect.flip)),
+                            fetch: (target) => Effect.runPromise(client.messages.fetch(target)),
+                            history: () => Effect.runPromise(client.messages.fetchHistory(channel.id)),
+                            get: (target) => Effect.runPromise(client.messages.get(target)),
+                            collect: async (options) => {
+                                const collector = await run(
+                                    client.messages.collect(channel.id, options).pipe(Scope.provide(scope)),
+                                )
+                                return () => Effect.runPromise(collector.waitForClose())
+                            },
+                            download: (attachment, options) => run(client.attachments.download(attachment, options)),
+                            downloadFailure: (attachment, options) =>
+                                Effect.runPromise(client.attachments.download(attachment, options).pipe(Effect.flip)),
+                            cancelDownload: async (attachment, size, signal) => {
+                                const cancelled = await Effect.runPromiseExit(
+                                    client.attachments.download(attachment, { maxBytes: size, timeoutMs: 60_000 }),
+                                    { signal },
+                                )
+                                assert.ok(Exit.isFailure(cancelled))
+                                if (Exit.isFailure(cancelled)) assert.equal(Cause.hasInterrupts(cancelled.cause), true)
+                            },
+                        }
                         yield* Effect.promise(() =>
-                            (attachments ? verifyAttachments : verifyEmbeds)(
-                                {
-                                    send: (input, options) => run(client.messages.send(channel.id, input, options)),
-                                    reply: (target, input) => run(client.messages.reply(target, input)),
-                                    edit: (target, input) => run(client.messages.edit(target, input)),
-                                    editFailure: (target, input) =>
-                                        Effect.runPromise(client.messages.edit(target, input).pipe(Effect.flip)),
-                                    fetch: (target) => Effect.runPromise(client.messages.fetch(target)),
-                                    history: () => Effect.runPromise(client.messages.fetchHistory(channel.id)),
-                                    get: (target) => Effect.runPromise(client.messages.get(target)),
-                                    collect: async (options) => {
-                                        const collector = await run(
-                                            client.messages.collect(channel.id, options).pipe(Scope.provide(scope)),
-                                        )
-                                        return () => Effect.runPromise(collector.waitForClose())
-                                    },
-                                },
-                                channel.id,
-                            ),
+                            attachmentSources
+                                ? verifyAttachmentSources({
+                                      ops: attachmentOps,
+                                      channelId: channel.id,
+                                      rawFetch,
+                                      getFetch: () => globalThis.fetch,
+                                      setFetch: (value) => (globalThis.fetch = value),
+                                      setStage: (value) => (stage = value),
+                                      report,
+                                  })
+                                : (attachments ? verifyAttachments : verifyEmbeds)(attachmentOps, channel.id),
                         )
                     }
                     if (forceRecovery && !reactions && !pins && !guilds && !channels) {
@@ -4242,7 +4287,7 @@ try {
                     : (effect) => effect,
             ),
         )
-        if (attachments && Exit.isFailure(exit))
+        if ((attachments || attachmentSources) && Exit.isFailure(exit))
             for (const reason of exit.cause.reasons.slice(0, 8)) {
                 if (reason._tag === "Fail") reportFailure(reason.error)
                 else if (reason._tag === "Die") reportFailure(reason.defect)
@@ -4293,7 +4338,7 @@ try {
     report("sdk_closed", true)
 } catch (error) {
     // Never print assertions, HTTP bodies, native causes, configured identities or credentials
-    if (attachments || reactions || pins || guilds || channels || moderation) reportFailure(error)
+    if (attachments || attachmentSources || reactions || pins || guilds || channels || moderation) reportFailure(error)
     report(stage, false)
     process.exitCode = 1
 } finally {

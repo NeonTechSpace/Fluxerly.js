@@ -3,6 +3,7 @@ import type { Result } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type MessageSearchIterationLimits, type MessageSearchQuery } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 afterEach(() => vi.unstubAllGlobals())
@@ -86,7 +87,7 @@ async function read<A>(value: Result<A, unknown> | Effect.Effect<A, unknown>): P
 test.each(modes)("%s search traversal is lazy, bounded, cursor-based and cache-free", async (mode) => {
     const api = await setup(mode)
     const sent: Record<string, unknown>[] = []
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body))
         sent.push(body)
         return body.cursor === undefined ? page(["10", "11"], ["opaque", "one"]) : page(["11", "12"])
@@ -105,7 +106,7 @@ test.each(modes)("%s search traversal is lazy, bounded, cursor-based and cache-f
 test.each(modes)("%s stops indexing, repeated opaque cursors and page budgets without hidden polling", async (mode) => {
     const api = await setup(mode)
     const fetch = vi.fn(async () => Response.json({ indexing: true }))
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     await expect(collect(api.iterate({}, { maxItems: 2 }))).rejects.toMatchObject({ reason: "indexing" })
     expect(fetch).toHaveBeenCalledTimes(1)
 
@@ -121,7 +122,7 @@ test.each(modes)("%s stops indexing, repeated opaque cursors and page budgets wi
 test.each(modes)("%s rejects invalid traversal settings before dispatch", async (mode) => {
     const api = await setup(mode)
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     await expect(collect(api.iterate({}, { maxItems: 0 }))).rejects.toMatchObject({ reason: "input" })
     await expect(collect(api.iterate({}, { maxItems: 1, pageSize: 26 }))).rejects.toMatchObject({ reason: "input" })
     await expect(collect(api.iterate({ cursor: ["wrong"] } as never, { maxItems: 1 }))).rejects.toMatchObject({

@@ -15,6 +15,7 @@ import {
     isAboveInHierarchy as isAboveNativeHierarchy,
 } from "../src/effect.js"
 import type { GuildOperationError } from "../src/guilds.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const guild = (ownerId = "1") => ({ id: "20", ownerId, name: "fixture", features: [] })
 const member = (userId: string, roleIds: readonly string[] = []) => ({
@@ -132,7 +133,7 @@ test("evaluates only target hierarchy with exact owner, self, tie and empty-role
 })
 
 test("accepts the full public roles.fetchAll observation without caller filtering", async () => {
-    vi.stubGlobal("fetch", async (url: string) => {
+    stubFetchWithHostedDiscovery(async (url: string) => {
         expect(new URL(url).pathname).toBe("/v1/guilds/20/roles")
         return Response.json([wireRole("20", 0), wireRole("100", 2), wireRole("101", 1)])
     })
@@ -191,7 +192,7 @@ test.each(["default", "native"] as const)(
     async (mode) => {
         const calls: string[] = []
         const releases: Array<(response: Response) => void> = []
-        vi.stubGlobal("fetch", (url: string) => {
+        stubFetchWithHostedDiscovery((url: string) => {
             const path = new URL(url).pathname
             calls.push(path)
             return new Promise<Response>((resolve) => releases.push(resolve))
@@ -257,7 +258,7 @@ test.each(["default", "native"] as const)(
         const started = new Promise<void>((resolve) => {
             ready = resolve
         })
-        vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+        stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
             const path = new URL(url).pathname
             if (path.endsWith("/guilds/20")) return new Promise<Response>((resolve) => (releaseGuild = resolve))
             if (path.endsWith("/members/@me"))

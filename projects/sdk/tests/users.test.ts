@@ -12,6 +12,7 @@ import {
     type ReplyInput,
 } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "", sockets: [] as import("ws").WebSocket[] }))
 vi.mock("ws", async (original) => {
@@ -217,7 +218,7 @@ test.each(modes)("%s does not expose group creation", async (mode) => {
 
 test.each(modes)("%s rejects invalid user and conversation operations before dispatch", async (mode) => {
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const api = await setup(mode)
     for (const operation of [
         () => api.fetchUser("bad"),
@@ -525,7 +526,7 @@ async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Pro
 }
 
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
             ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
             : handler(url, init),

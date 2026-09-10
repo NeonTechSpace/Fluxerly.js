@@ -2,6 +2,7 @@ import { Effect, Fiber } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 afterEach(() => vi.unstubAllGlobals())
 const configuration = { token: "fixture-only-not-a-credential", cache: { messages: {} } }
@@ -17,7 +18,7 @@ function defaultApi() {
 
 test("default batches copy IDs, use canonical JSON and preserve unselected cached messages", async () => {
     const calls: RequestInit[] = []
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         if (init.method === "GET") return Response.json(wire(url.split("/").at(-1)!))
         expect(url).toBe("https://api.fluxer.app/v1/channels/20/messages/bulk-delete")
         calls.push(init)
@@ -39,7 +40,7 @@ test("default batches copy IDs, use canonical JSON and preserve unselected cache
 
 test("invalid, duplicate, sparse or oversized selections do not dispatch", async () => {
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const client = defaultApi()
     for (const ids of [
         [],
@@ -64,7 +65,7 @@ test("invalid, duplicate, sparse or oversized selections do not dispatch", async
 
 test.each([400, 500, 200, "network"])("dispatched failure %s evicts selected data without replay", async (status) => {
     let writes = 0
-    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (init.method === "GET") return Response.json(wire("10"))
         writes++
         if (status === "network") throw new Error("private upstream body")
@@ -81,7 +82,7 @@ test.each([400, 500, 200, "network"])("dispatched failure %s evicts selected dat
 
 test("native batches are lazy, repeatable and honor confirmed rate rejection", async () => {
     let writes = 0
-    vi.stubGlobal("fetch", async () =>
+    stubFetchWithHostedDiscovery(async () =>
         ++writes === 1 ? Response.json({ retry_after: 0.001 }, { status: 429 }) : new Response(null, { status: 204 }),
     )
     await Effect.runPromise(
@@ -107,7 +108,7 @@ test("interrupted native deletion waits for fetch cleanup and evicts selected sn
         dispatched = resolve
     })
     let cleaned = false
-    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery((_url: string, init: RequestInit) => {
         if (init.method === "GET") return Promise.resolve(Response.json(wire("10")))
         return new Promise((_resolve, reject) => {
             init.signal!.addEventListener("abort", () =>
@@ -137,7 +138,7 @@ test("interrupted native deletion waits for fetch cleanup and evicts selected sn
 test("a batch deletion prevents an older queued read from restoring deleted messages", async () => {
     const releases: (() => void)[] = []
     let started = 0
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         if (init.method === "POST") return new Response(null, { status: 204 })
         started++
         await new Promise<void>((resolve) => releases.push(resolve))

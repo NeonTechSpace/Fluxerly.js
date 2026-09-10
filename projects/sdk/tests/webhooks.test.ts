@@ -6,6 +6,7 @@ import type { ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, createWebhookClient, type WebhookClientOptions } from "../src/index.js"
 import { createClient as createNative, createWebhookClient as createNativeWebhook } from "../src/effect.js"
+import { hostedOperationCalls, stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
 const secret = "test_only_secret"
@@ -85,7 +86,7 @@ async function setup(mode: (typeof modes)[number], options: WebhookClientOptions
 
 test.each(modes)("%s sends sticker-only webhook messages without bot authentication", async (mode) => {
     const { webhook } = await setup(mode)
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         expect(url).toContain("/webhooks/100/")
         expect(new Headers(init.headers).has("Authorization")).toBe(false)
         expect(JSON.parse(String(init.body)).sticker_ids).toEqual(["501"])
@@ -98,8 +99,7 @@ test.each(modes)("%s sends sticker-only webhook messages without bot authenticat
 
 test.each(modes)("%s manages webhooks with token-free snapshots and explicit credential access", async (mode) => {
     const requests: { path: string; method: string; body: unknown }[] = []
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         vi.fn(async (url: string, init: RequestInit) => {
             expect(new Headers(init.headers).get("authorization")).toBe("Bot test_bot")
             const path = new URL(url).pathname
@@ -136,10 +136,9 @@ test.each(modes)("%s manages webhooks with token-free snapshots and explicit cre
     expect(requests[4]!.body).toEqual({ name: "Renamed", avatar: null, channel_id: "301" })
 })
 
-test.each(modes)("%s sends and manages owned messages without bot auth or discovery", async (mode) => {
+test.each(modes)("%s sends and manages owned messages without bot authentication", async (mode) => {
     const calls: { url: string; body: unknown }[] = []
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         vi.fn(async (url: string, init: RequestInit) => {
             expect(new Headers(init.headers).has("authorization")).toBe(false)
             expect(init.redirect).toBe("error")
@@ -170,7 +169,7 @@ test.each(modes)("%s sends and manages owned messages without bot auth or discov
 
 test.each(modes)("%s preserves supplied metadata from webhook message responses without hydration", async (mode) => {
     const fetch = vi.fn(async () => Response.json(metadataMessage()))
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const { webhook } = await setup(mode)
     const received = await settle(webhook.fetchMessage("400"))
     expect(received).toMatchObject({
@@ -207,7 +206,7 @@ test.each(modes)("%s preserves supplied metadata from webhook message responses 
 
 test.each(modes)("%s rejects invalid input before any dispatch", async (mode) => {
     const fetch = vi.fn()
-    vi.stubGlobal("fetch", fetch)
+    stubFetchWithHostedDiscovery(fetch)
     const { bot, webhook } = await setup(mode)
     for (const operation of [
         () => bot.webhooks.create("bad", { name: "x" }),
@@ -231,10 +230,7 @@ test.each(modes)("%s rejects invalid input before any dispatch", async (mode) =>
 
 test.each(modes)("%s rejects mismatched identities and malformed lists without exposing secrets", async (mode) => {
     let response: unknown = message({ webhook_id: "101", private: secret })
-    vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => Response.json(response)),
-    )
+    stubFetchWithHostedDiscovery(vi.fn(async () => Response.json(response)))
     const { bot, webhook } = await setup(mode)
     await expect(settle(webhook.send({ content: "x" }))).rejects.toMatchObject({
         reason: "response",
@@ -249,8 +245,7 @@ test.each(modes)("%s rejects mismatched identities and malformed lists without e
 test.each(modes)("%s does not replay unknown sends, but retries confirmed rate limits", async (mode) => {
     let attempts = 0,
         rate = false
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         vi.fn(async () => {
             attempts++
             if (!rate) throw new Error(`private upstream ${secret}`)
@@ -275,8 +270,7 @@ test.each(modes)("%s does not replay unknown sends, but retries confirmed rate l
 
 test.each(modes)("%s supports non-voice webhook flags and rejects invalid flags without dispatch", async (mode) => {
     const bodies: Record<string, unknown>[] = []
-    vi.stubGlobal(
-        "fetch",
+    const hostedFetch = stubFetchWithHostedDiscovery(
         vi.fn(async (_url: string, init: RequestInit) => {
             bodies.push(JSON.parse(String(init.body)))
             return Response.json(message())
@@ -297,15 +291,14 @@ test.each(modes)("%s supports non-voice webhook flags and rejects invalid flags 
             outcome: "notDispatched",
         })
     }
-    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(hostedOperationCalls(hostedFetch)).toHaveLength(3)
 })
 
 test.each(modes)("%s snapshots binary uploads and replays identical multipart after 429", async (mode) => {
     let calls = 0
     const bytes = new Uint8Array([1, 2, 3])
     const observed: Uint8Array[] = []
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         vi.fn(async (_url: string, init: RequestInit) => {
             const headers = new Headers(init.headers)
             expect(headers.has("authorization")).toBe(false)
@@ -325,6 +318,30 @@ test.each(modes)("%s snapshots binary uploads and replays identical multipart af
     expect(observed).toEqual([new Uint8Array([1, 2, 3]), new Uint8Array([1, 2, 3])])
 })
 
+test.each(modes)("%s recreates copied webhook bytes when a 429 arrives before multipart consumption", async (mode) => {
+    let attempts = 0
+    const observed: Uint8Array[] = []
+    stubFetchWithHostedDiscovery(
+        vi.fn(async (_url: string, init: RequestInit) => {
+            const headers = new Headers(init.headers)
+            expect(headers.has("authorization")).toBe(false)
+            expect(headers.get("content-type")).toMatch(/^multipart\/form-data; boundary=/)
+            if (++attempts === 1) return Response.json({ retry_after: 0.001 }, { status: 429 })
+            const body = await new Response(init.body).arrayBuffer()
+            const form = await new Response(body, { headers }).formData()
+            observed.push(new Uint8Array(await (form.get("files[0]") as File).arrayBuffer()))
+            return Response.json(message())
+        }),
+    )
+    const { webhook } = await setup(mode)
+    const bytes = new Uint8Array([4, 5, 6])
+    const pending = settle(webhook.send({ attachments: [{ data: bytes, filename: "early-429.txt" }] }))
+    bytes.fill(9)
+    await pending
+    expect(attempts).toBe(2)
+    expect(observed).toEqual([new Uint8Array([4, 5, 6])])
+})
+
 test.each(modes)("%s shutdown awaits active body cleanup and rejects new requests", async (mode) => {
     let started!: () => void, release!: () => void
     const ready = new Promise<void>((resolve) => {
@@ -333,8 +350,7 @@ test.each(modes)("%s shutdown awaits active body cleanup and rejects new request
     const cleanup = new Promise<void>((resolve) => {
         release = resolve
     })
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         vi.fn(async (_url: string, init: RequestInit) => {
             started()
             await new Promise<void>((resolve) =>
@@ -360,21 +376,18 @@ test.each(modes)("%s shutdown awaits active body cleanup and rejects new request
 })
 
 test.each(modes)("%s bounds retained upload bytes and releases reservations after failure", async (mode) => {
-    vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => Response.json(message())),
-    )
+    const hostedFetch = stubFetchWithHostedDiscovery(vi.fn(async () => Response.json(message())))
     const { webhook } = await setup(mode, { id: "100", token: secret, uploadMaxBytes: 2 })
     await expect(
         settle(webhook.send({ attachments: [{ data: new Uint8Array(3), filename: "a" }] })),
     ).rejects.toMatchObject({ reason: "busy", outcome: "notDispatched" })
     await settle(webhook.send({ content: "x" }))
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(hostedOperationCalls(hostedFetch)).toHaveLength(1)
 })
 
 test("native creation and operations are lazy, independently scoped and release credentials on closure", async () => {
     const request = vi.fn(async () => Response.json(message()))
-    vi.stubGlobal("fetch", request)
+    stubFetchWithHostedDiscovery(request)
     const scope = Scope.makeUnsafe()
     const creation = createNativeWebhook({ id: "100", token: secret })
     expect(request).not.toHaveBeenCalled()
@@ -401,8 +414,7 @@ test("invalid client configuration contains no rejected values", () => {
 test.each(modes)("%s retries transient reads but never retries rejected or server-failed writes", async (mode) => {
     let calls = 0,
         status = 503
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         vi.fn(async (_url: string, init: RequestInit) => {
             calls++
             if (init.method === "GET" && calls === 3) return Response.json(message())
@@ -432,8 +444,7 @@ test.each(modes)("%s cancellation waits for owned cleanup without stopping the c
         release = resolve
     })
     const controller = new AbortController()
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         vi.fn(async (_url: string, init: RequestInit) => {
             started()
             await new Promise<void>((resolve) =>
@@ -464,10 +475,7 @@ test.each(modes)("%s cancellation waits for owned cleanup without stopping the c
     expect(done).toBe(false)
     release()
     await result
-    vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => Response.json(message())),
-    )
+    stubFetchWithHostedDiscovery(vi.fn(async () => Response.json(message())))
     await settle(webhook.send({ content: "After cancellation" }))
 })
 
@@ -475,8 +483,7 @@ test.each(modes)("%s validates explicit null upload budgets and bounds response 
     expect(createWebhookClient({ id: "100", token: secret, uploadMaxBytes: null } as never).isErr()).toBe(true)
     const { webhook } = await setup(mode)
     let cancelled = false
-    vi.stubGlobal(
-        "fetch",
+    stubFetchWithHostedDiscovery(
         vi.fn(
             async () =>
                 new Response(
@@ -521,7 +528,7 @@ test("multipart bytes cross a real HTTP transport with correct framing", async (
                 server.closeAllConnections()
             }),
     )
-    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => fetch(`http://127.0.0.1:${address.port}`, init))
+    stubFetchWithHostedDiscovery((_url: string, init: RequestInit) => fetch(`http://127.0.0.1:${address.port}`, init))
     const { webhook } = await setup("default")
     await settle(webhook.send({ attachments: [{ filename: "a.txt", data: new Uint8Array([5, 6]) }] }))
     expect(received).toBe(true)

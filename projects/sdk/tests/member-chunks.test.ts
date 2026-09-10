@@ -5,6 +5,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import WebSocket, { WebSocketServer } from "ws"
 import { createClient, type MemberChunk, type MemberChunkQuery, type DefaultMemberChunkOptions } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "", sockets: [] as import("ws").WebSocket[] }))
 vi.mock("ws", async (original) => {
@@ -56,7 +57,7 @@ async function fixture(mode: Mode, connect = true) {
     const address = server.address()
     if (!address || typeof address === "string") throw Error("Expected owned loopback address")
     transport.url = `ws://127.0.0.1:${address.port}`
-    vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
         expect(url).toBe("https://api.fluxer.app/v1/gateway/bot")
         return fetch(`http://127.0.0.1:${address.port}`, init)
     })

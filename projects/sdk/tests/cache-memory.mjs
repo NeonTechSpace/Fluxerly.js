@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { setTimeout as sleep } from "node:timers/promises"
+import { withHostedDiscovery } from "./hosted-discovery.mjs"
 
 const child = process.argv.includes("--child")
 const samples = 5
@@ -38,7 +39,7 @@ if (!child) {
     let shape = shapes[0]
     let offset = 0
     let requests = 0
-    globalThis.fetch = async (input, init) => {
+    globalThis.fetch = withHostedDiscovery(async (input, init) => {
         const url = new URL(input)
         assert.equal(url.origin, "https://api.fluxer.app")
         assert.equal(url.pathname, `/v1/channels/${channelId}/messages`)
@@ -62,7 +63,7 @@ if (!child) {
         })
         offset += limit
         return Response.json(rows)
-    }
+    })
 
     try {
         const { createClient } = await import("@neontechspace/fluxerly")
