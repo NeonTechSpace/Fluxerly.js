@@ -19,6 +19,7 @@ import { record, identifier, decodeMessage, encodeForward, encodeMessage, encode
 import type { EncodedBody } from "./attachments.js"
 import { RestOwner } from "./rest.js"
 import { InstanceResolver, type InstanceConfiguration, instanceConfiguration } from "./instance.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 export type WebhookRequest<A> = {
     majorId: string
@@ -30,6 +31,7 @@ export type WebhookRequest<A> = {
     auditReason?: string
     decode: (value: unknown) => A | undefined
 }
+type WebhookValidationResult<A> = WebhookRequest<A> | InputValidationFailure
 
 const validToken = (value: unknown): value is string =>
     typeof value === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(value)
@@ -62,22 +64,30 @@ function credentials(id: string, token: string): WebhookCredentials {
 }
 
 function settings(value: unknown, create: boolean, move: boolean) {
-    if (
-        !record(value) ||
-        Object.keys(value).some((key) => !["name", "avatar", ...(move ? ["channelId"] : [])].includes(key))
-    )
-        return undefined
-    if ((create || value.name !== undefined) && !name(value.name)) return undefined
+    if (!record(value)) return inputValidationFailure("input", "type", "Webhook input must be an object")
+    if (Object.keys(value).some((key) => !["name", "avatar", ...(move ? ["channelId"] : [])].includes(key)))
+        return inputValidationFailure(
+            "input",
+            "allowedFields",
+            "Webhook input may contain only name, avatar, and the operation-supported channelId",
+        )
+    if ((create || value.name !== undefined) && !name(value.name))
+        return inputValidationFailure(
+            "name",
+            "length",
+            "Webhook name must contain 1 through 80 Unicode code points and at least one non-whitespace character",
+        )
     if (
         value.avatar !== undefined &&
         value.avatar !== null &&
         (typeof value.avatar !== "string" ||
             !/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]*={0,2}$/.test(value.avatar))
     )
-        return undefined
-    if (value.channelId !== undefined && !identifier(value.channelId)) return undefined
+        return inputValidationFailure("avatar", "format", "Webhook avatar must be null or a base64 image data URI")
+    if (value.channelId !== undefined && !identifier(value.channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
     if (!create && value.name === undefined && value.avatar === undefined && value.channelId === undefined)
-        return undefined
+        return inputValidationFailure("input", "required", "Webhook edit must contain a change")
     return {
         json: JSON.stringify({
             ...(value.name === undefined ? {} : { name: value.name }),
@@ -92,7 +102,11 @@ function audit(options?: WebhookOperationOptions) {
     const reason = options?.auditReason
     if (reason === undefined) return {}
     if (typeof reason !== "string" || !/^[\x20-\x7e]+$/.test(reason) || !reason.trim() || reason.trim().length > 512)
-        return undefined
+        return inputValidationFailure(
+            "options.auditReason",
+            "format",
+            "Audit reason must contain 1 through 512 printable ASCII characters",
+        )
     return { auditReason: reason.trim() }
 }
 
@@ -100,10 +114,13 @@ export function webhookCreate(
     channelId: string,
     input: WebhookCreate,
     options?: WebhookOperationOptions,
-): WebhookRequest<CreatedWebhook> | undefined {
+): WebhookValidationResult<CreatedWebhook> {
     const body = settings(input, true, false),
         extra = audit(options)
-    if (!identifier(channelId) || !body || !extra) return undefined
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    if (body instanceof InputValidationFailure) return body
+    if (extra instanceof InputValidationFailure) return extra
     return {
         majorId: channelId,
         method: "POST",
@@ -120,8 +137,8 @@ export function webhookCreate(
     }
 }
 
-export function webhookFetch(id: string): WebhookRequest<Webhook> | undefined {
-    if (!identifier(id)) return undefined
+export function webhookFetch(id: string): WebhookValidationResult<Webhook> {
+    if (!identifier(id)) return inputValidationFailure("webhookId", "format", "Webhook IDs must be decimal strings")
     return {
         majorId: id,
         method: "GET",
@@ -134,8 +151,13 @@ export function webhookFetch(id: string): WebhookRequest<Webhook> | undefined {
     }
 }
 
-export function webhookList(id: string, kind: "channels" | "guilds"): WebhookRequest<readonly Webhook[]> | undefined {
-    if (!identifier(id)) return undefined
+export function webhookList(id: string, kind: "channels" | "guilds"): WebhookValidationResult<readonly Webhook[]> {
+    if (!identifier(id))
+        return inputValidationFailure(
+            kind === "channels" ? "channelId" : "guildId",
+            "format",
+            "Resource IDs must be decimal strings",
+        )
     return {
         majorId: id,
         method: "GET",
@@ -165,23 +187,26 @@ export function webhookEdit(
     id: string,
     input: WebhookEdit,
     options?: WebhookOperationOptions,
-): WebhookRequest<Webhook> | undefined {
+): WebhookValidationResult<Webhook> {
     const base = webhookFetch(id),
         body = settings(input, false, true),
         extra = audit(options)
-    if (!base || !body || !extra) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (body instanceof InputValidationFailure) return body
+    if (extra instanceof InputValidationFailure) return extra
     return { ...base, ...extra, method: "PATCH", body }
 }
 
-export function webhookDelete(id: string, options?: WebhookOperationOptions): WebhookRequest<void> | undefined {
+export function webhookDelete(id: string, options?: WebhookOperationOptions): WebhookValidationResult<void> {
     const base = webhookFetch(id),
         extra = audit(options)
-    if (!base || !extra) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (extra instanceof InputValidationFailure) return extra
     return { ...base, ...extra, method: "DELETE", status: 204, decode: () => undefined }
 }
 
-export function webhookTokenFetch(id: string): WebhookRequest<Webhook> | undefined {
-    if (!identifier(id)) return undefined
+export function webhookTokenFetch(id: string): WebhookValidationResult<Webhook> {
+    if (!identifier(id)) return inputValidationFailure("webhookId", "format", "Webhook IDs must be decimal strings")
     return {
         majorId: id,
         tokenAuth: true,
@@ -195,19 +220,25 @@ export function webhookTokenFetch(id: string): WebhookRequest<Webhook> | undefin
     }
 }
 
-export function webhookTokenEdit(id: string, input: WebhookTokenEdit): WebhookRequest<Webhook> | undefined {
+export function webhookTokenEdit(id: string, input: WebhookTokenEdit): WebhookValidationResult<Webhook> {
     const base = webhookTokenFetch(id),
         body = settings(input, false, false)
-    return base && body ? { ...base, method: "PATCH", body } : undefined
+    if (base instanceof InputValidationFailure) return base
+    if (body instanceof InputValidationFailure) return body
+    return { ...base, method: "PATCH", body }
 }
 
-export function webhookTokenDelete(id: string): WebhookRequest<void> | undefined {
+export function webhookTokenDelete(id: string): WebhookValidationResult<void> {
     const base = webhookTokenFetch(id)
-    return base ? { ...base, method: "DELETE", status: 204, decode: () => undefined } : undefined
+    return base instanceof InputValidationFailure
+        ? base
+        : { ...base, method: "DELETE", status: 204, decode: () => undefined }
 }
 
-function messageRequest(id: string, messageId?: string): WebhookRequest<Message> | undefined {
-    if (!identifier(id) || (messageId !== undefined && !identifier(messageId))) return undefined
+function messageRequest(id: string, messageId?: string): WebhookValidationResult<Message> {
+    if (!identifier(id)) return inputValidationFailure("webhookId", "format", "Webhook IDs must be decimal strings")
+    if (messageId !== undefined && !identifier(messageId))
+        return inputValidationFailure("messageId", "format", "Message IDs must be decimal strings")
     return {
         majorId: id,
         tokenAuth: true,
@@ -228,9 +259,10 @@ function messageRequest(id: string, messageId?: string): WebhookRequest<Message>
     }
 }
 
-export function webhookSend(id: string, input: WebhookMessageInput): WebhookRequest<Message> | undefined {
+export function webhookSend(id: string, input: WebhookMessageInput): WebhookValidationResult<Message> {
     const base = messageRequest(id)
-    if (!base || !record(input)) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (!record(input)) return inputValidationFailure("input", "type", "Webhook message input must be an object")
     if (
         Object.keys(input).some(
             (key) =>
@@ -247,16 +279,35 @@ export function webhookSend(id: string, input: WebhookMessageInput): WebhookRequ
                 ].includes(key),
         )
     )
-        return undefined
+        return inputValidationFailure(
+            "input",
+            "allowedFields",
+            "Webhook message input may contain only documented message, username, avatarUrl, and messageReference fields",
+        )
     const { username, avatarUrl, messageReference, ...message } = input
-    if (username !== undefined && !name(username)) return undefined
+    if (username !== undefined && !name(username))
+        return inputValidationFailure(
+            "username",
+            "length",
+            "Webhook username must contain 1 through 80 Unicode code points and at least one non-whitespace character",
+        )
     if (avatarUrl !== undefined) {
-        if (typeof avatarUrl !== "string" || avatarUrl.length > 8192) return undefined
+        if (typeof avatarUrl !== "string" || avatarUrl.length > 8192)
+            return inputValidationFailure(
+                "avatarUrl",
+                "format",
+                "Webhook avatarUrl must be an HTTP URL up to 8,192 characters",
+            )
         try {
             const url = new URL(avatarUrl)
-            if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) return undefined
+            if (!["https:", "http:"].includes(url.protocol) || url.username || url.password)
+                return inputValidationFailure(
+                    "avatarUrl",
+                    "format",
+                    "Webhook avatarUrl must be an HTTP URL without credentials",
+                )
         } catch {
-            return undefined
+            return inputValidationFailure("avatarUrl", "format", "Webhook avatarUrl must be a valid HTTP URL")
         }
     }
     let body: EncodedBody | MessageError
@@ -287,7 +338,8 @@ export function webhookSend(id: string, input: WebhookMessageInput): WebhookRequ
             { content: "_", flags: message.flags, allowedMentions: message.allowedMentions },
             "",
         )
-        if (forward instanceof MessageError || options instanceof MessageError) return undefined
+        if (forward instanceof MessageError) return new InputValidationFailure(forward.inputValidation!)
+        if (options instanceof MessageError) return new InputValidationFailure(options.inputValidation!)
         const payload = JSON.parse(options.json)
         body = {
             files: [],
@@ -297,8 +349,13 @@ export function webhookSend(id: string, input: WebhookMessageInput): WebhookRequ
                 ...JSON.parse(forward.json),
             }),
         }
-    } else return undefined
-    if (body instanceof MessageError) return undefined
+    } else
+        return inputValidationFailure(
+            "messageReference",
+            "relationship",
+            "Webhook messageReference must be a valid reply or a body-exclusive forward",
+        )
+    if (body instanceof MessageError) return new InputValidationFailure(body.inputValidation!)
     const payload = JSON.parse(body.json)
     delete payload.nonce
     body.json = JSON.stringify({
@@ -314,22 +371,26 @@ export function webhookMessage(
     messageId: string,
     method: "GET" | "PATCH",
     input?: WebhookMessageEdit,
-): WebhookRequest<Message> | undefined {
+): WebhookValidationResult<Message> {
     const base = messageRequest(id, messageId)
-    if (!base) return undefined
+    if (base instanceof InputValidationFailure) return base
     if (method === "GET") return base
-    if (
-        !record(input) ||
-        Object.keys(input).some((key) => !["content", "embeds", "allowedMentions", "flags"].includes(key))
-    )
-        return undefined
+    if (!record(input)) return inputValidationFailure("input", "type", "Webhook message edit must be an object")
+    if (Object.keys(input).some((key) => !["content", "embeds", "allowedMentions", "flags"].includes(key)))
+        return inputValidationFailure(
+            "input",
+            "allowedFields",
+            "Webhook message edit may contain only content, embeds, allowedMentions, and flags",
+        )
     const body = encodeEdit(input)
-    return body ? { ...base, method, body } : undefined
+    return body instanceof InputValidationFailure ? body : { ...base, method, body }
 }
 
-export function webhookMessageDelete(id: string, messageId: string): WebhookRequest<void> | undefined {
+export function webhookMessageDelete(id: string, messageId: string): WebhookValidationResult<void> {
     const base = messageRequest(id, messageId)
-    return base ? { ...base, method: "DELETE", status: 204, decode: () => undefined } : undefined
+    return base instanceof InputValidationFailure
+        ? base
+        : { ...base, method: "DELETE", status: 204, decode: () => undefined }
 }
 
 /** Token-only lifetime with its own bounded scheduler and no gateway, token store or observation cache */
@@ -349,7 +410,11 @@ class WebhookOwner {
         this.instance = new InstanceResolver(instance, this.#scope)
         this.rest = new RestOwner(undefined, maxBytes, undefined, undefined, undefined, () => this.instance.resolve())
     }
-    run<A>(operation: WebhookOperation, build: () => WebhookRequest<A> | undefined, options?: MessageOperationOptions) {
+    run<A>(
+        operation: WebhookOperation,
+        build: () => WebhookRequest<A> | InputValidationFailure,
+        options?: MessageOperationOptions,
+    ) {
         return Effect.suspend(() =>
             this.#token
                 ? this.rest.webhook(this.#token, operation, build, options)

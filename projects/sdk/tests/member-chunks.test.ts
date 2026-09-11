@@ -176,11 +176,15 @@ async function fixture(mode: Mode, connect = true) {
         native,
         shutdown,
         state: () => defaultApi?.state ?? native!.state,
-        counts: () =>
+        counts: (ids: readonly string[] = ["20"], options?: unknown) =>
             defaultApi
-                ? defaultApi.guilds.fetchCounts(["20"]).then((r) => (r.isErr() ? r.error : r.value))
+                ? defaultApi.guilds
+                      .fetchCounts(ids, options as import("../src/counts.js").DefaultCountOperationOptions)
+                      .then((r) => (r.isErr() ? r.error : r.value))
                 : Effect.runPromise(
-                      native!.guilds.fetchCounts(["20"]).pipe(Effect.catch((error) => Effect.succeed(error))),
+                      native!.guilds
+                          .fetchCounts(ids, options as import("../src/counts.js").CountOperationOptions)
+                          .pipe(Effect.catch((error) => Effect.succeed(error))),
                   ),
     }
 }
@@ -324,6 +328,50 @@ for (const mode of ["default", "native"] as const) {
         expect(f.requestCount()).toBe(0)
     })
 
+    test(`${mode} reports safe member-chunk and count input detail before gateway dispatch`, async () => {
+        const f = await fixture(mode, false)
+        const memberFailure = await f
+            .iterate({ all: true, callerSecret: "private rejected value" } as never)
+            .next()
+            .catch((error) => error)
+        expect(memberFailure).toMatchObject({
+            _tag: "MemberChunkError",
+            reason: "input",
+            inputValidation: { path: "query", constraint: "allowedFields" },
+        })
+        expect(Object.isFrozen(memberFailure.inputValidation)).toBe(true)
+        expect(JSON.stringify(memberFailure)).not.toContain("callerSecret")
+        expect(JSON.stringify(memberFailure)).not.toContain("private rejected value")
+
+        const countFailure = await f.counts(["private-invalid-id"])
+        expect(countFailure).toMatchObject({
+            _tag: "CountOperationError",
+            operation: "guilds.fetchCounts",
+            reason: "input",
+            inputValidation: { path: "guildIds", constraint: "format" },
+        })
+        expect(Object.isFrozen((countFailure as { readonly inputValidation: unknown }).inputValidation)).toBe(true)
+        expect(JSON.stringify(countFailure)).not.toContain("private-invalid-id")
+        expect(f.requestCount()).toBe(0)
+    })
+
+    if (mode === "default")
+        test("default reports malformed member-chunk cancellation options before gateway dispatch", async () => {
+            const f = await fixture(mode, false)
+            const failure = await f
+                .iterate({ all: true }, { signal: { callerSecret: "private rejected value" } } as never)
+                .next()
+                .catch((error) => error)
+            expect(failure).toMatchObject({
+                _tag: "MemberChunkError",
+                reason: "input",
+                inputValidation: { path: "options.signal", constraint: "type" },
+            })
+            expect(JSON.stringify(failure)).not.toContain("callerSecret")
+            expect(JSON.stringify(failure)).not.toContain("private rejected value")
+            expect(f.requestCount()).toBe(0)
+        })
+
     test(`${mode} validates sequence and correlation, preserving already delivered batches on failure`, async () => {
         const f = await fixture(mode)
         for (const changed of [
@@ -366,7 +414,7 @@ for (const mode of ["default", "native"] as const) {
         await expect(f.iterate().next()).rejects.toMatchObject({ reason: "busy" })
         const counts = [f.counts(), f.counts(), f.counts()]
         await vi.waitFor(() => expect(f.commands.filter((c) => c.op === 15)).toHaveLength(3), { interval: 5 })
-        expect(await f.counts()).toMatchObject({ _tag: "CountOperationError", reason: "busy" })
+        expect(await f.counts()).toMatchObject({ _tag: "CountOperationError", reason: "busy", inputValidation: null })
         f.chunk(sent.nonce, [member("30")], 0, 2)
         await first
         await iterator.close()

@@ -1,6 +1,7 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import type { ApiErrorDetail } from "./api-errors.js"
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** Numeric Fluxer channel types this SDK can create, with received guild-channel types remaining numeric for forward compatibility */
 export const ChannelType = Object.freeze({
@@ -200,6 +201,8 @@ export type ChannelOperation =
 export class ChannelOperationError extends Error {
     /** Stable expected-failure discriminator */
     readonly _tag = "ChannelOperationError"
+    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    readonly inputValidation: InputValidationDetail | null
     constructor(
         /** Requested operation */
         readonly operation: ChannelOperation,
@@ -213,9 +216,11 @@ export class ChannelOperationError extends Error {
         readonly retryAfterMs: number | null = null,
         /** Reviewed provider rejection detail, or null when no safe classification is available */
         readonly apiError: ApiErrorDetail | null = null,
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(`Channel operation ${operation} failed (${reason}; outcome ${outcome})`)
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 

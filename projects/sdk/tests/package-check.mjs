@@ -91,6 +91,20 @@ try {
                 ? apiErrorExamples[0]
                 : apiErrorExamples[0].replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"'),
         )
+        const inputValidationSource = readFileSync(join(sdk, "src", "input-validation.ts"), "utf8")
+        writeNamedExampleFixtures(
+            consumer,
+            kind === "default"
+                ? inputValidationSource
+                : inputValidationSource.replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"'),
+            [
+                {
+                    name: "input-validation",
+                    matches: (example) => /function readInputValidation/.test(example),
+                    file: () => "input-validation-example.ts",
+                },
+            ],
+        )
         run(
             process.execPath,
             [
@@ -108,6 +122,7 @@ try {
             "client",
             "errors",
             "api-errors",
+            "input-validation",
             "oauth",
             "messages",
             "events",

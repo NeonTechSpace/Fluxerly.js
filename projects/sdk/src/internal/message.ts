@@ -13,6 +13,7 @@ import type {
     MessageSticker,
 } from "#sdk/messages"
 import { MessageError } from "#sdk/message-errors"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
 import { decodeAttachments, encodeAttachments, type EncodedBody } from "./attachments.js"
 
@@ -296,18 +297,31 @@ export function reference(value: unknown): value is MessageReference {
 }
 
 export function encodeHistory(channelId: unknown, query: unknown) {
-    if (!identifier(channelId)) return undefined
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
     const input = query === undefined ? {} : query
-    if (!record(input) || Object.keys(input).some((key) => !["limit", "before", "after", "around"].includes(key)))
-        return undefined
+    if (!record(input)) return inputValidationFailure("query", "type", "History query must be an object")
+    if (Object.keys(input).some((key) => !["limit", "before", "after", "around"].includes(key)))
+        return inputValidationFailure(
+            "query",
+            "allowedFields",
+            "History query may contain only limit, before, after, and around",
+        )
     const limit = input.limit === undefined ? 50 : input.limit
-    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100) return undefined
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)
+        return inputValidationFailure("query.limit", "range", "History limit must be an integer from 1 through 100")
     const cursors = ["before", "after", "around"].filter((key) => input[key] !== undefined)
-    if (cursors.length > 1) return undefined
+    if (cursors.length > 1)
+        return inputValidationFailure(
+            "query",
+            "relationship",
+            "History query may contain at most one of before, after, and around",
+        )
     const params = new URLSearchParams({ limit: String(limit) })
     for (const key of cursors) {
         const id = input[key]
-        if (!identifier(id)) return undefined
+        if (!identifier(id))
+            return inputValidationFailure(`query.${key}`, "format", "History cursor IDs must be decimal strings")
         params.set(key, id)
     }
     return { limit, params }
@@ -333,8 +347,11 @@ export function decodeBulkDeletion(value: unknown): MessageBulkDeletion | undefi
 
 /** Unknown input fields fail before dispatch; unknown wire response fields are not copied into snapshots */
 export function encodeMessage(channelId: unknown, input: unknown, nonce: string): EncodedBody | MessageError {
-    const invalid = () => new MessageError("input", "notSent")
-    if (!identifier(channelId) || !record(input)) return invalid()
+    const invalid = (failure: InputValidationFailure) =>
+        new MessageError("input", "notSent", null, null, null, failure.detail)
+    if (!identifier(channelId))
+        return invalid(inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings"))
+    if (!record(input)) return invalid(inputValidationFailure("input", "type", "Message input must be an object"))
     if (
         Object.keys(input).some(
             (key) =>
@@ -349,29 +366,74 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
                 ].includes(key),
         )
     )
-        return invalid()
+        return invalid(
+            inputValidationFailure(
+                "input",
+                "allowedFields",
+                "Message input may contain only content, embeds, attachments, stickerIds, allowedMentions, messageReference, and flags",
+            ),
+        )
     const attachments = encodeAttachments(input.attachments, false)
-    const body = encodeBody(input, attachments?.uploadedFilenames)
+    if (attachments instanceof InputValidationFailure) return invalid(attachments)
+    const body = encodeBody(input, attachments.uploadedFilenames)
+    if (body instanceof InputValidationFailure) return invalid(body)
     const stickerIds = input.stickerIds
+    if (stickerIds !== undefined && !Array.isArray(stickerIds))
+        return invalid(inputValidationFailure("stickerIds", "type", "Sticker IDs must be an array"))
+    if (Array.isArray(stickerIds) && stickerIds.length > 3)
+        return invalid(
+            inputValidationFailure("stickerIds", "length", "A message may contain at most three sticker IDs"),
+        )
+    if (Array.isArray(stickerIds) && !Array.from(stickerIds).every(identifier))
+        return invalid(inputValidationFailure("stickerIds[]", "format", "Sticker IDs must be decimal strings"))
+    if (input.flags !== undefined && !writableFlags(input.flags))
+        return invalid(
+            inputValidationFailure(
+                "flags",
+                "allowedValue",
+                "Message flags may contain only SuppressEmbeds and SuppressNotifications",
+            ),
+        )
+    if (body === undefined)
+        return invalid(
+            inputValidationFailure(
+                "input",
+                "required",
+                "A message must contain non-empty content, an embed, an attachment, or a sticker",
+            ),
+        )
     if (
-        stickerIds !== undefined &&
-        (!Array.isArray(stickerIds) || stickerIds.length > 3 || !Array.from(stickerIds).every(identifier))
+        !(typeof input.content === "string" && input.content.length > 0) &&
+        !body.embeds?.length &&
+        !attachments.files.length &&
+        !(Array.isArray(stickerIds) && stickerIds.length)
     )
-        return invalid()
-    if (
-        !attachments ||
-        !body ||
-        (input.flags !== undefined && !writableFlags(input.flags)) ||
-        (!(typeof input.content === "string" && input.content.length > 0) &&
-            !body.embeds?.length &&
-            !attachments.files.length &&
-            !stickerIds?.length)
-    )
-        return invalid()
+        return invalid(
+            inputValidationFailure(
+                "input",
+                "required",
+                "A message must contain non-empty content, an embed, an attachment, or a sticker",
+            ),
+        )
     const mentions = encodeAllowedMentions(input.allowedMentions)
-    if (!mentions) return invalid()
+    if (mentions instanceof InputValidationFailure) return invalid(mentions)
     const ref = input.messageReference
-    if (ref !== undefined && (!reference(ref) || ref.channelId !== channelId)) return invalid()
+    if (ref !== undefined && !reference(ref))
+        return invalid(
+            inputValidationFailure(
+                "messageReference",
+                "format",
+                "Message references require decimal id and channelId strings",
+            ),
+        )
+    if (ref !== undefined && ref.channelId !== channelId)
+        return invalid(
+            inputValidationFailure(
+                "messageReference.channelId",
+                "relationship",
+                "A reply reference must use the destination channel ID",
+            ),
+        )
     return {
         files: attachments.files,
         json: JSON.stringify({
@@ -390,34 +452,53 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
 
 /** Forward inputs encode only Fluxer's source reference and optional media selectors */
 export function encodeForward(channelId: unknown, input: unknown, nonce: string): EncodedBody | MessageError {
-    const invalid = () => new MessageError("input", "notSent")
-    if (
-        !identifier(channelId) ||
-        !record(input) ||
-        Object.keys(input).some((key) => !["source", "attachmentIds", "embedIndices"].includes(key))
-    )
-        return invalid()
+    const invalid = (failure: InputValidationFailure) =>
+        new MessageError("input", "notSent", null, null, null, failure.detail)
+    if (!identifier(channelId))
+        return invalid(inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings"))
+    if (!record(input)) return invalid(inputValidationFailure("input", "type", "Forward input must be an object"))
+    if (Object.keys(input).some((key) => !["source", "attachmentIds", "embedIndices"].includes(key)))
+        return invalid(
+            inputValidationFailure(
+                "input",
+                "allowedFields",
+                "Forward input may contain only source, attachmentIds, and embedIndices",
+            ),
+        )
     const source = input.source
-    if (!reference(source)) return invalid()
+    if (!reference(source))
+        return invalid(
+            inputValidationFailure("source", "format", "Forward source requires decimal id and channelId strings"),
+        )
     const attachmentIds = input.attachmentIds
     const embedIndices = input.embedIndices
+    if (attachmentIds !== undefined && !Array.isArray(attachmentIds))
+        return invalid(inputValidationFailure("attachmentIds", "type", "Forward attachment IDs must be an array"))
+    if (Array.isArray(attachmentIds) && attachmentIds.length > 10)
+        return invalid(
+            inputValidationFailure("attachmentIds", "length", "A forward may select at most ten attachments"),
+        )
+    if (Array.isArray(attachmentIds) && !Array.from(attachmentIds).every(identifier))
+        return invalid(
+            inputValidationFailure("attachmentIds[]", "format", "Forward attachment IDs must be decimal strings"),
+        )
+    if (embedIndices !== undefined && !Array.isArray(embedIndices))
+        return invalid(inputValidationFailure("embedIndices", "type", "Forward embed indices must be an array"))
+    if (Array.isArray(embedIndices) && embedIndices.length > 10)
+        return invalid(inputValidationFailure("embedIndices", "length", "A forward may select at most ten embeds"))
     if (
-        (attachmentIds !== undefined &&
-            (!Array.isArray(attachmentIds) ||
-                attachmentIds.length > 10 ||
-                !Array.from(attachmentIds).every(identifier))) ||
-        (embedIndices !== undefined &&
-            (!Array.isArray(embedIndices) ||
-                embedIndices.length > 10 ||
-                !Array.from(embedIndices).every(
-                    (index) =>
-                        typeof index === "number" &&
-                        Number.isSafeInteger(index) &&
-                        index >= 0 &&
-                        index <= 2_147_483_647,
-                )))
+        Array.isArray(embedIndices) &&
+        !Array.from(embedIndices).every(
+            (index) => typeof index === "number" && Number.isSafeInteger(index) && index >= 0 && index <= 2_147_483_647,
+        )
     )
-        return invalid()
+        return invalid(
+            inputValidationFailure(
+                "embedIndices[]",
+                "range",
+                "Forward embed indices must be nonnegative 32-bit integers",
+            ),
+        )
     return {
         files: [],
         json: JSON.stringify({
@@ -435,18 +516,34 @@ export function encodeForward(channelId: unknown, input: unknown, nonce: string)
 
 function encodeAllowedMentions(value: unknown) {
     const mentions = value === undefined ? {} : value
-    if (
-        !record(mentions) ||
-        Object.keys(mentions).some((key) => !["users", "roles", "everyone", "repliedUser"].includes(key))
-    )
-        return undefined
+    if (!record(mentions))
+        return inputValidationFailure("allowedMentions", "type", "Allowed mentions must be an object")
+    if (Object.keys(mentions).some((key) => !["users", "roles", "everyone", "repliedUser"].includes(key)))
+        return inputValidationFailure(
+            "allowedMentions",
+            "allowedFields",
+            "Allowed mentions may contain only users, roles, everyone, and repliedUser",
+        )
     for (const key of ["users", "roles"]) {
         const list = mentions[key]
-        if (list !== undefined && (!Array.isArray(list) || list.length > 100 || !list.every(identifier)))
-            return undefined
+        if (list !== undefined && !Array.isArray(list))
+            return inputValidationFailure(`allowedMentions.${key}`, "type", "Mention selections must be arrays")
+        if (Array.isArray(list) && list.length > 100)
+            return inputValidationFailure(
+                `allowedMentions.${key}`,
+                "length",
+                "Mention selections may contain at most 100 IDs",
+            )
+        if (Array.isArray(list) && !list.every(identifier))
+            return inputValidationFailure(
+                `allowedMentions.${key}[]`,
+                "format",
+                "Mention selection IDs must be decimal strings",
+            )
     }
     for (const key of ["everyone", "repliedUser"])
-        if (mentions[key] !== undefined && typeof mentions[key] !== "boolean") return undefined
+        if (mentions[key] !== undefined && typeof mentions[key] !== "boolean")
+            return inputValidationFailure(`allowedMentions.${key}`, "type", "Mention switches must be booleans")
     return {
         parse: mentions.everyone === true ? ["everyone"] : [],
         users: mentions.users ?? [],
@@ -455,26 +552,39 @@ function encodeAllowedMentions(value: unknown) {
     }
 }
 
-export function encodeEdit(input: unknown): EncodedBody | undefined {
-    if (!record(input)) return undefined
+export function encodeEdit(input: unknown): EncodedBody | InputValidationFailure {
+    if (!record(input)) return inputValidationFailure("input", "type", "Message edit input must be an object")
     if (
         Object.keys(input).some(
             (key) => !["content", "embeds", "attachments", "allowedMentions", "flags"].includes(key),
         )
     )
-        return undefined
+        return inputValidationFailure(
+            "input",
+            "allowedFields",
+            "Message edit input may contain only content, embeds, attachments, allowedMentions, and flags",
+        )
     const attachments = encodeAttachments(input.attachments, true)
-    const body = encodeBody(input, attachments?.uploadedFilenames)
+    if (attachments instanceof InputValidationFailure) return attachments
+    const body = encodeBody(input, attachments.uploadedFilenames)
+    if (body instanceof InputValidationFailure) return body
     const mentions = encodeAllowedMentions(input.allowedMentions)
+    if (mentions instanceof InputValidationFailure) return mentions
     const hasBodyInput = input.content !== undefined || input.embeds !== undefined || input.attachments !== undefined
-    if (
-        !mentions ||
-        !attachments ||
-        (input.flags !== undefined && !writableFlags(input.flags)) ||
-        (!body && (hasBodyInput || input.flags === undefined)) ||
-        (attachments.metadata?.length === 0 && !input.content && !body?.embeds?.length)
-    )
-        return undefined
+    if (input.flags !== undefined && !writableFlags(input.flags))
+        return inputValidationFailure(
+            "flags",
+            "allowedValue",
+            "Message flags may contain only SuppressEmbeds and SuppressNotifications",
+        )
+    if (!body && (hasBodyInput || input.flags === undefined))
+        return inputValidationFailure("input", "required", "A message edit must contain at least one editable field")
+    if (attachments.metadata?.length === 0 && !input.content && !body?.embeds?.length)
+        return inputValidationFailure(
+            "input",
+            "required",
+            "A message edit must retain non-empty content, an embed, or an attachment",
+        )
     return {
         files: attachments.files,
         json: JSON.stringify({
@@ -487,15 +597,29 @@ export function encodeEdit(input: unknown): EncodedBody | undefined {
 }
 
 export function replyInput(target: unknown, input: unknown): MessageInput | MessageError {
-    const attachments = record(input) ? encodeAttachments(input.attachments, false) : undefined
-    if (
-        !reference(target) ||
-        !record(input) ||
-        "messageReference" in input ||
-        !attachments ||
-        !encodeBody(input, attachments.uploadedFilenames)
-    )
-        return new MessageError("input", "notSent")
+    const invalid = (failure: InputValidationFailure) =>
+        new MessageError("input", "notSent", null, null, null, failure.detail)
+    if (!reference(target))
+        return invalid(
+            inputValidationFailure("target", "format", "Reply targets require decimal id and channelId strings"),
+        )
+    if (!record(input)) return invalid(inputValidationFailure("input", "type", "Reply input must be an object"))
+    if ("messageReference" in input)
+        return invalid(
+            inputValidationFailure(
+                "messageReference",
+                "relationship",
+                "Reply input must not provide its own messageReference",
+            ),
+        )
+    const attachments = encodeAttachments(input.attachments, false)
+    if (attachments instanceof InputValidationFailure) return invalid(attachments)
+    const body = encodeBody(input, attachments.uploadedFilenames)
+    if (body instanceof InputValidationFailure) return invalid(body)
+    if (!body)
+        return invalid(
+            inputValidationFailure("input", "required", "A reply must contain content, an embed, or an attachment"),
+        )
     // Body presence/types were checked above; send performs complete validation of mentions and unknown keys
     return { ...input, messageReference: target } as MessageInput
 }
@@ -508,9 +632,10 @@ function encodeBody(input: Record<string, unknown>, uploadedFilenames?: readonly
         input.stickerIds === undefined
     )
         return undefined
-    if (input.content !== undefined && typeof input.content !== "string") return undefined
+    if (input.content !== undefined && typeof input.content !== "string")
+        return inputValidationFailure("content", "type", "Message content must be a string")
     const embeds = input.embeds === undefined ? undefined : encodeEmbeds(input.embeds, uploadedFilenames)
-    if (input.embeds !== undefined && embeds === undefined) return undefined
+    if (embeds instanceof InputValidationFailure) return embeds
     return {
         ...(input.content === undefined ? {} : { content: input.content }),
         ...(embeds === undefined ? {} : { embeds }),

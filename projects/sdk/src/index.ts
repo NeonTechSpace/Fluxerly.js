@@ -750,6 +750,8 @@ import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, 
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
 export type { ApiErrorDetail } from "./api-errors.js"
+export type { InputValidationConstraint, InputValidationDetail } from "./input-validation.js"
+import { InputValidationFailure, inputValidationFailure } from "./input-validation.js"
 export { MessageCleanupError } from "./message-cleanup.js"
 export { MessageFlags } from "./messages.js"
 export type { EventReadError, RegistrationError, SendError, MessageOperationFailure } from "./message-errors.js"
@@ -3414,7 +3416,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 const opened = await execute(
                     Effect.gen(function* () {
                         const copied = iterationOptions(options)
-                        if (!copied) return yield* Effect.fail(new PaginationError(operation, "input"))
+                        if (copied instanceof InputValidationFailure)
+                            return yield* Effect.fail(new PaginationError(operation, "input", copied.detail))
                         const source = yield* create(copied.request)
                         return { source, signal: copied.signal }
                     }),
@@ -3456,7 +3459,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 const opened = await execute(
                     Effect.gen(function* () {
                         const copied = memberChunkIterationOptions(options)
-                        if (!copied) return yield* Effect.fail(new MemberChunkError("input"))
+                        if (copied instanceof InputValidationFailure)
+                            return yield* Effect.fail(new MemberChunkError("input", null, copied.detail))
                         if (copied.signal?.aborted) return yield* Effect.interrupt
                         const source = yield* owner.memberChunks.open(guildId, query, copied.request)
                         if (copied.signal) source.bindSignal(copied.signal)
@@ -4262,7 +4266,21 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     execute(
                         typeof task === "function"
                             ? owner.keepTyping(channelId, defaultTypingTask(task), options)
-                            : Effect.fail(new MessageOperationError("typing", "input", "notDispatched")),
+                            : Effect.fail(
+                                  new MessageOperationError(
+                                      "typing",
+                                      "input",
+                                      "notDispatched",
+                                      null,
+                                      null,
+                                      null,
+                                      inputValidationFailure(
+                                          "task",
+                                          "type",
+                                          "Default keepTyping task must be a function",
+                                      ).detail,
+                                  ),
+                              ),
                         "keepTyping",
                         options,
                     ),

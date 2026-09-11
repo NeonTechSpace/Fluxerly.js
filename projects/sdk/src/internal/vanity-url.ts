@@ -2,6 +2,7 @@ import type { GuildVanityUrl, GuildVanityUrlUsage, ModerationOptions } from "#sd
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const hostedInvite = "https://fluxer.gg"
 
@@ -19,8 +20,8 @@ function decode(value: unknown, inviteBase = hostedInvite): GuildVanityUrl | und
 export function vanityUrlFetch(
     guildId: string,
     inviteBase = hostedInvite,
-): GuildRequest<GuildVanityUrlUsage> | undefined {
-    if (!identifier(guildId)) return undefined
+): GuildRequest<GuildVanityUrlUsage> | InputValidationFailure {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         guildId,
         bucket: "guild:vanity:read",
@@ -48,10 +49,17 @@ export function vanityUrlEdit(
     code: string | null,
     options?: ModerationOptions,
     inviteBase = hostedInvite,
-): GuildRequest<GuildVanityUrl> | undefined {
+): GuildRequest<GuildVanityUrl> | InputValidationFailure {
     const base = vanityUrlFetch(guildId, inviteBase)
     const audit = auditSettings(options)
-    if (!base || !audit || (code !== null && !codeValue(code))) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (audit instanceof InputValidationFailure) return audit
+    if (code !== null && !codeValue(code))
+        return inputValidationFailure(
+            "code",
+            "format",
+            "Vanity code must be null or contain 2 through 32 lowercase alphanumeric hyphen-separated characters",
+        )
     return {
         ...base,
         ...audit,

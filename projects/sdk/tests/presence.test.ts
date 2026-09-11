@@ -117,9 +117,9 @@ const publicModes: readonly PublicMode[] = ["default", "native"]
 interface PublicDriver {
     readonly state: () => string
     set(input: PresenceInput): void
-    invalid(input: unknown): void
+    invalid(input: unknown): unknown
     setMembers(guildId: string, memberIds: readonly string[]): void
-    invalidMembers(guildId: unknown, memberIds: unknown, reason: "input" | "limit"): void
+    invalidMembers(guildId: unknown, memberIds: unknown, reason: "input" | "limit"): unknown
     connect(): Promise<void>
     shutdown(): Promise<void>
     closed(): void
@@ -134,12 +134,16 @@ async function publicDriver(mode: PublicMode): Promise<PublicDriver> {
             invalid: (input) => {
                 const result = client.presence.set(input as PresenceInput)
                 expect(result).toMatchObject({ error: { _tag: "PresenceError", reason: "input" } })
+                if (!result.isErr()) throw new Error("Expected PresenceError")
+                return result.error
             },
             setMembers: (guildId, memberIds) =>
                 expect(client.presence.setMembers(guildId, memberIds).isOk()).toBe(true),
             invalidMembers: (guildId, memberIds, reason) => {
                 const result = client.presence.setMembers(guildId as string, memberIds as readonly string[])
                 expect(result).toMatchObject({ error: { _tag: "PresenceError", reason } })
+                if (!result.isErr()) throw new Error("Expected PresenceError")
+                return result.error
             },
             connect: async () => expect((await client.connect()).isOk()).toBe(true),
             shutdown: async () => expect((await client.shutdown()).isOk()).toBe(true),
@@ -158,13 +162,17 @@ async function publicDriver(mode: PublicMode): Promise<PublicDriver> {
         invalid: (input) => {
             const exit = Effect.runSyncExit(client.presence.set(input as PresenceInput))
             expect(Exit.isFailure(exit)).toBe(true)
-            if (Exit.isFailure(exit))
+            if (Exit.isFailure(exit)) {
                 expect(exit.cause.reasons).toContainEqual(
                     expect.objectContaining({
                         _tag: "Fail",
                         error: expect.objectContaining({ _tag: "PresenceError", reason: "input" }),
                     }),
                 )
+                const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
+                if (failure?._tag === "Fail") return failure.error
+            }
+            throw new Error("Expected PresenceError")
         },
         setMembers: (guildId, memberIds) =>
             expect(Effect.runSyncExit(client.presence.setMembers(guildId, memberIds))).toMatchObject({
@@ -175,13 +183,17 @@ async function publicDriver(mode: PublicMode): Promise<PublicDriver> {
                 client.presence.setMembers(guildId as string, memberIds as readonly string[]),
             )
             expect(Exit.isFailure(exit)).toBe(true)
-            if (Exit.isFailure(exit))
+            if (Exit.isFailure(exit)) {
                 expect(exit.cause.reasons).toContainEqual(
                     expect.objectContaining({
                         _tag: "Fail",
                         error: expect.objectContaining({ _tag: "PresenceError", reason }),
                     }),
                 )
+                const failure = exit.cause.reasons.find((entry) => entry._tag === "Fail")
+                if (failure?._tag === "Fail") return failure.error
+            }
+            throw new Error("Expected PresenceError")
         },
         connect: async () => {
             await Effect.runPromise(client.connect())
@@ -237,12 +249,12 @@ test("presence owner coalesces one latest intent, spaces writes and cancels deta
     const clock = timers()
     const sent: unknown[] = []
     const owner = new PresenceOwner(clock.timer)
-    expect(owner.set({ status: "online", customStatus: { text: "retained" } })).toBe(true)
+    expect(owner.set({ status: "online", customStatus: { text: "retained" } })).toBeUndefined()
     owner.attach((update) => sent.push(update))
     clock.advance(0)
     expect(sent).toEqual([{ status: "online", afk: false, mobile: false, custom_status: { text: "retained" } }])
 
-    expect(owner.set({ status: "idle" })).toBe(true)
+    expect(owner.set({ status: "idle" })).toBeUndefined()
     clock.advance(3_999)
     expect(sent).toHaveLength(1)
     clock.advance(1)
@@ -251,12 +263,12 @@ test("presence owner coalesces one latest intent, spaces writes and cancels deta
         { status: "idle", afk: false, mobile: false, custom_status: { text: "retained" } },
     ])
 
-    expect(owner.set({ status: "dnd", customStatus: { text: "first" } })).toBe(true)
-    expect(owner.set({ status: "invisible", customStatus: null })).toBe(true)
+    expect(owner.set({ status: "dnd", customStatus: { text: "first" } })).toBeUndefined()
+    expect(owner.set({ status: "invisible", customStatus: null })).toBeUndefined()
     clock.advance(4_000)
     expect(sent.at(-1)).toEqual({ status: "invisible", afk: false, mobile: false, custom_status: null })
 
-    expect(owner.set({ status: "online" })).toBe(true)
+    expect(owner.set({ status: "online" })).toBeUndefined()
     owner.detach()
     clock.advance(4_000)
     expect(sent).toHaveLength(3)
@@ -264,7 +276,7 @@ test("presence owner coalesces one latest intent, spaces writes and cancels deta
     clock.advance(0)
     expect(sent.at(-1)).toEqual({ status: "online", afk: false, mobile: false, custom_status: null })
 
-    expect(owner.set({ status: "dnd" })).toBe(true)
+    expect(owner.set({ status: "dnd" })).toBeUndefined()
     owner.close()
     clock.advance(4_000)
     expect(sent).toHaveLength(4)
@@ -345,8 +357,8 @@ test("member presence validates identifier, per-client capacity and the complete
     const clock = timers()
     const sent: unknown[] = []
     const owner = new PresenceOwner(clock.timer)
-    expect(owner.setMembers("invalid", ["30"])).toBe("input")
-    expect(owner.setMembers("40", ["30", "30"])).toBe("input")
+    expect(owner.setMembers("invalid", ["30"])).toMatchObject({ detail: { path: "guildId", constraint: "format" } })
+    expect(owner.setMembers("40", ["30", "30"])).toMatchObject({ detail: { path: "memberIds", constraint: "unique" } })
     expect(
         owner.setMembers(
             "40",
@@ -400,7 +412,7 @@ test("an expiry that elapsed while disconnected is not restored", () => {
     const owner = new PresenceOwner(clock.timer)
     expect(
         owner.set({ status: "online", customStatus: { text: "temporary", expiresAt: "1970-01-01T00:00:10Z" } }),
-    ).toBe(true)
+    ).toBeUndefined()
     vi.setSystemTime(10_000)
     owner.attach((update) => sent.push(update))
     clock.advance(0)
@@ -414,7 +426,19 @@ test.each(publicModes)(
         try {
             expect(api.state()).toBe("Disconnected")
             api.set({ status: "idle", customStatus: { text: "queued while disconnected" } })
-            api.invalid({ status: "offline" })
+            const invalid = api.invalid({ status: "offline", callerSecret: "private rejected value" })
+            expect(invalid).toMatchObject({
+                inputValidation: { path: "input", constraint: "allowedFields" },
+            })
+            expect(Object.isFrozen((invalid as { readonly inputValidation: unknown }).inputValidation)).toBe(true)
+            expect(JSON.stringify(invalid)).not.toContain("callerSecret")
+            expect(JSON.stringify(invalid)).not.toContain("private rejected value")
+            const limit = api.invalidMembers(
+                "40",
+                Array.from({ length: 1_001 }, (_, index) => String(index + 1)),
+                "limit",
+            )
+            expect(limit).toMatchObject({ inputValidation: null })
             expect(transport.sockets).toEqual([])
             await api.shutdown()
             expect(api.state()).toBe("Closed")

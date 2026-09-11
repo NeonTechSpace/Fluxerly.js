@@ -27,6 +27,7 @@ import {
     type ConfigurationError,
     type MessageReference,
     type MessageOperationFailure,
+    type InputValidationDetail,
     type Message,
     type MessageHistoryQuery,
     type MessageSearchContext,
@@ -685,4 +686,9 @@ export function previewModerationCleanup(client: Client, guildId: string, channe
         void permissions
         return { hierarchy, report }
     })
+}
+
+/** Typechecked local-validation facts through the packed Effect entry point */
+export function describeNativeInputValidation(error: MessageOperationFailure): InputValidationDetail | null {
+    return error._tag === "MessageOperationError" ? error.inputValidation : null
 }

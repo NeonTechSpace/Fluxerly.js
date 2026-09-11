@@ -84,6 +84,7 @@ import type {
     SendOptions,
 } from "#sdk/messages"
 import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "#sdk/attachments"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const cacheKinds = [
     "messages",
@@ -125,7 +126,7 @@ interface ShardRuntime {
     session: Session
 }
 
-type GuildBuild<A> = () => GuildRequest<A> | undefined
+type GuildBuild<A> = () => GuildRequest<A> | InputValidationFailure
 
 /** Internal fresh-Identify coordination used only by supervisor.child.run */
 export interface IdentifyGate {
@@ -151,14 +152,20 @@ export class ClientOwner {
     setPresence(input: PresenceInput) {
         return Effect.suspend((): Effect.Effect<void, PresenceFailure> => {
             if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
-            return this.presence.set(input) ? Effect.void : Effect.fail(new PresenceError())
+            const failure = this.presence.set(input)
+            if (failure === undefined) return Effect.void
+            if (failure === false) return Effect.fail(new ClientClosedError())
+            return Effect.fail(new PresenceError("input", failure.detail))
         })
     }
     setPresenceMembers(guildId: string, memberIds: readonly string[]) {
         return Effect.suspend((): Effect.Effect<void, PresenceFailure> => {
             if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
             const failure = this.presence.setMembers(guildId, memberIds)
-            return failure === undefined ? Effect.void : Effect.fail(new PresenceError(failure))
+            if (failure === undefined) return Effect.void
+            if (failure === "limit") return Effect.fail(new PresenceError("limit"))
+            if (failure === false) return Effect.fail(new ClientClosedError())
+            return Effect.fail(new PresenceError("input", failure.detail))
         })
     }
     #messageCollectors = new Set<MessageCollector>()
@@ -459,25 +466,67 @@ export class ClientOwner {
         this.#setState("Closed")
     }
 
-    user<A>(operation: UserOperation, build: () => UserRequest<A> | undefined, options?: UserOperationOptions) {
+    user<A>(
+        operation: UserOperation,
+        build: () => UserRequest<A> | InputValidationFailure,
+        options?: UserOperationOptions,
+    ) {
         return Effect.suspend(() => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
             const request = build()
-            if (!request) return Effect.fail(new UserOperationError(operation, "input", "notDispatched"))
+            if (request instanceof InputValidationFailure)
+                return Effect.fail(
+                    new UserOperationError(operation, "input", "notDispatched", null, null, null, request.detail),
+                )
             const owner = this
             const token = this.#configuration.token
             return Effect.gen(function* () {
                 const timeout = options?.timeoutMs ?? 30_000
-                if (
-                    (options !== undefined &&
-                        (!record(options) ||
-                            Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))) ||
-                    !Number.isSafeInteger(timeout) ||
-                    timeout <= 0 ||
-                    timeout > 2_147_483_647
-                )
-                    return yield* Effect.fail(new UserOperationError(operation, "input", "notDispatched"))
+                if (options !== undefined && !record(options))
+                    return yield* Effect.fail(
+                        new UserOperationError(
+                            operation,
+                            "input",
+                            "notDispatched",
+                            null,
+                            null,
+                            null,
+                            inputValidationFailure("options", "type", "Operation options must be an object").detail,
+                        ),
+                    )
+                if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
+                    return yield* Effect.fail(
+                        new UserOperationError(
+                            operation,
+                            "input",
+                            "notDispatched",
+                            null,
+                            null,
+                            null,
+                            inputValidationFailure(
+                                "options",
+                                "allowedFields",
+                                "Operation options may contain only timeoutMs and signal",
+                            ).detail,
+                        ),
+                    )
+                if (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2_147_483_647)
+                    return yield* Effect.fail(
+                        new UserOperationError(
+                            operation,
+                            "input",
+                            "notDispatched",
+                            null,
+                            null,
+                            null,
+                            inputValidationFailure(
+                                "options.timeoutMs",
+                                "range",
+                                "Operation timeoutMs must be an integer from 1 through 2,147,483,647 milliseconds",
+                            ).detail,
+                        ),
+                    )
                 const deadline = performance.now() + timeout
                 if (request.verifyType) {
                     const channel = yield* owner.rest.user(
@@ -487,7 +536,21 @@ export class ClientOwner {
                         options,
                     )
                     if (request.verifyType === "group" && channel.type !== "group")
-                        return yield* Effect.fail(new UserOperationError(operation, "input", "notDispatched"))
+                        return yield* Effect.fail(
+                            new UserOperationError(
+                                operation,
+                                "input",
+                                "notDispatched",
+                                null,
+                                null,
+                                null,
+                                inputValidationFailure(
+                                    "channelId",
+                                    "relationship",
+                                    "This operation requires a group DM channel",
+                                ).detail,
+                            ),
+                        )
                 }
                 const remaining = Math.floor(deadline - performance.now())
                 if (remaining <= 0)
@@ -537,7 +600,24 @@ export class ClientOwner {
             (): Effect.Effect<UserResources[K] | undefined, ClientClosedError | UserOperationError> => {
                 if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                     return Effect.fail(new ClientClosedError())
-                if (!identifier(id)) return Effect.fail(new UserOperationError(`${kind}.get`, "input", "notDispatched"))
+                if (!identifier(id))
+                    return Effect.fail(
+                        new UserOperationError(
+                            `${kind}.get`,
+                            "input",
+                            "notDispatched",
+                            null,
+                            null,
+                            null,
+                            inputValidationFailure(
+                                kind === "users" ? "userId" : "channelId",
+                                "format",
+                                kind === "users"
+                                    ? "User IDs must be decimal strings"
+                                    : "Channel IDs must be decimal strings",
+                            ).detail,
+                        ),
+                    )
                 return Effect.succeed(this.userCache.get(kind, id))
             },
         )
@@ -545,7 +625,7 @@ export class ClientOwner {
 
     webhook<A>(
         operation: WebhookOperation,
-        build: () => WebhookRequest<A> | undefined,
+        build: () => WebhookRequest<A> | InputValidationFailure,
         options?: WebhookOperationOptions,
     ) {
         return Effect.suspend(() =>
@@ -571,7 +651,7 @@ export class ClientOwner {
 
     channel<A>(
         operation: ChannelOperation,
-        build: () => ChannelRequest<A> | undefined,
+        build: () => ChannelRequest<A> | InputValidationFailure,
         options?: ChannelOperationOptions,
     ) {
         return Effect.suspend(() =>
@@ -587,7 +667,17 @@ export class ClientOwner {
                 if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                     return Effect.fail(new ClientClosedError())
                 if (!identifier(id))
-                    return Effect.fail(new ChannelOperationError("channels.get", "input", "notDispatched"))
+                    return Effect.fail(
+                        new ChannelOperationError(
+                            "channels.get",
+                            "input",
+                            "notDispatched",
+                            null,
+                            null,
+                            null,
+                            inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings").detail,
+                        ),
+                    )
                 return Effect.succeed(this.channelCache?.get(id))
             },
         )
@@ -607,7 +697,23 @@ export class ClientOwner {
                           : target.id
                       : undefined
             if (!identifier(guildId) || !identifier(id))
-                return Effect.fail(new GuildOperationError(`${kind}.get`, "input", "notDispatched"))
+                return Effect.fail(
+                    new GuildOperationError(
+                        `${kind}.get`,
+                        "input",
+                        "notDispatched",
+                        null,
+                        null,
+                        null,
+                        inputValidationFailure(
+                            kind === "guilds" ? "guildId" : "target",
+                            "format",
+                            kind === "guilds"
+                                ? "Guild IDs must be decimal strings"
+                                : "Resource targets require decimal guild and resource IDs",
+                        ).detail,
+                    ),
+                )
             return Effect.succeed(this.resources?.get(kind, guildId, id))
         })
     }
@@ -646,8 +752,43 @@ export class ClientOwner {
         return Effect.suspend((): Effect.Effect<Message, SendError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
-            if (!identifier(userId) || !record(input) || input.messageReference !== undefined)
-                return Effect.fail(new MessageError("input", "notSent"))
+            if (!identifier(userId))
+                return Effect.fail(
+                    new MessageError(
+                        "input",
+                        "notSent",
+                        null,
+                        null,
+                        null,
+                        inputValidationFailure("userId", "format", "User IDs must be decimal strings").detail,
+                    ),
+                )
+            if (!record(input))
+                return Effect.fail(
+                    new MessageError(
+                        "input",
+                        "notSent",
+                        null,
+                        null,
+                        null,
+                        inputValidationFailure("input", "type", "Direct message input must be an object").detail,
+                    ),
+                )
+            if (input.messageReference !== undefined)
+                return Effect.fail(
+                    new MessageError(
+                        "input",
+                        "notSent",
+                        null,
+                        null,
+                        null,
+                        inputValidationFailure(
+                            "messageReference",
+                            "relationship",
+                            "Direct messages cannot include a message reference",
+                        ).detail,
+                    ),
+                )
             return (this.reports?.start() ?? Effect.void).pipe(
                 Effect.andThen(this.rest.send(this.#configuration.token, userId, input, options, userId)),
             )
@@ -705,6 +846,18 @@ export class ClientOwner {
         options?: MessageOperationOptions,
     ): Effect.Effect<A, E | MessageOperationFailure, R> {
         const owner = this
+        if (!Effect.isEffect(task))
+            return Effect.fail(
+                new MessageOperationError(
+                    "typing",
+                    "input",
+                    "notDispatched",
+                    null,
+                    null,
+                    null,
+                    inputValidationFailure("task", "type", "Native keepTyping task must be an Effect").detail,
+                ),
+            )
         return Effect.uninterruptibleMask((restore) =>
             restore(owner.typing(channelId, options)).pipe(
                 Effect.flatMap(() =>
@@ -830,7 +983,22 @@ export class ClientOwner {
         return Effect.suspend((): Effect.Effect<Message | undefined, ClientClosedError | MessageOperationError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
-            if (!reference(target)) return Effect.fail(new MessageOperationError("get", "input", "notDispatched"))
+            if (!reference(target))
+                return Effect.fail(
+                    new MessageOperationError(
+                        "get",
+                        "input",
+                        "notDispatched",
+                        null,
+                        null,
+                        null,
+                        inputValidationFailure(
+                            "target",
+                            "format",
+                            "Message targets require decimal id and channelId strings",
+                        ).detail,
+                    ),
+                )
             return Effect.succeed(this.cache?.get(target))
         })
     }

@@ -1,4 +1,5 @@
 import type { ChannelPinsUpdate, MessagePinsPage, MessagePin } from "#sdk/pins"
+import { inputValidationFailure } from "#sdk/input-validation"
 import { decodeMessage, identifier, record } from "./message.js"
 
 const timestamp = (value: unknown): value is string =>
@@ -8,17 +9,20 @@ const timestamp = (value: unknown): value is string =>
 
 export function encodePinsQuery(channel: unknown, query: unknown) {
     const input = query === undefined ? {} : query
-    if (!identifier(channel) || !record(input) || Object.keys(input).some((key) => key !== "limit" && key !== "before"))
-        return undefined
+    if (!identifier(channel))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    if (!record(input)) return inputValidationFailure("query", "type", "Pin query must be an object")
+    if (Object.keys(input).some((key) => key !== "limit" && key !== "before"))
+        return inputValidationFailure("query", "allowedFields", "Pin query may contain only limit and before")
     const limit = input.limit === undefined ? 50 : input.limit
-    if (
-        typeof limit !== "number" ||
-        !Number.isInteger(limit) ||
-        limit < 1 ||
-        limit > 50 ||
-        (input.before !== undefined && !timestamp(input.before))
-    )
-        return undefined
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 50)
+        return inputValidationFailure("query.limit", "range", "Pin limit must be an integer from 1 through 50")
+    if (input.before !== undefined && !timestamp(input.before))
+        return inputValidationFailure(
+            "query.before",
+            "format",
+            "Pin cursor must be an ISO 8601 timestamp with timezone",
+        )
     const params = new URLSearchParams({ limit: String(limit) })
     if (input.before !== undefined) params.set("before", input.before as string)
     return { limit, params }
@@ -27,7 +31,7 @@ export function encodePinsQuery(channel: unknown, query: unknown) {
 export function decodePinsPage(
     value: unknown,
     channel: string,
-    query: NonNullable<ReturnType<typeof encodePinsQuery>>,
+    query: { readonly limit: number; readonly params: URLSearchParams },
 ): MessagePinsPage | undefined {
     if (
         !record(value) ||

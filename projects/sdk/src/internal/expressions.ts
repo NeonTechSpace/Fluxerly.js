@@ -10,6 +10,7 @@ import type { ModerationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 export type ExpressionKind = "emojis" | "stickers"
 export type ExpressionResources = { emojis: GuildEmoji; stickers: GuildSticker }
@@ -74,8 +75,8 @@ export function decodeExpressionUpdate<K extends ExpressionKind>(
 export function expressionList<K extends ExpressionKind>(
     kind: K,
     guildId: string,
-): GuildRequest<readonly ExpressionResources[K][]> | undefined {
-    if (!identifier(guildId)) return undefined
+): GuildRequest<readonly ExpressionResources[K][]> | InputValidationFailure {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         guildId,
         bucket: `guild:${kind}`,
@@ -87,8 +88,12 @@ export function expressionList<K extends ExpressionKind>(
     }
 }
 
-export function expressionMetadata(kind: ExpressionKind, id: string): GuildRequest<ExpressionMetadata> | undefined {
-    if (!identifier(id)) return undefined
+export function expressionMetadata(
+    kind: ExpressionKind,
+    id: string,
+): GuildRequest<ExpressionMetadata> | InputValidationFailure {
+    if (!identifier(id))
+        return inputValidationFailure("expressionId", "format", "Expression IDs must be decimal strings")
     return {
         guildId: id,
         bucket: `${kind}:metadata`,
@@ -109,9 +114,10 @@ export function expressionMetadata(kind: ExpressionKind, id: string): GuildReque
     }
 }
 
-function encode(kind: ExpressionKind, value: unknown, create: boolean) {
+function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = "") {
+    const path = (field: string) => (prefix ? `${prefix}.${field}` : field)
+    if (!record(value)) return inputValidationFailure(prefix || "input", "type", "Expression input must be an object")
     if (
-        !record(value) ||
         Object.keys(value).some(
             (key) =>
                 ![
@@ -121,33 +127,60 @@ function encode(kind: ExpressionKind, value: unknown, create: boolean) {
                 ].includes(key),
         )
     )
-        return undefined
-    if (
-        kind === "emojis"
-            ? !(typeof value.name === "string" && /^[A-Za-z0-9_]{2,32}$/.test(value.name))
-            : !text(value.name, 2, 30)
-    )
-        return undefined
+        return inputValidationFailure(
+            prefix || "input",
+            "allowedFields",
+            "Expression input contains an unsupported field",
+        )
+    if (kind === "emojis" && !(typeof value.name === "string" && /^[A-Za-z0-9_]{2,32}$/.test(value.name)))
+        return inputValidationFailure(
+            path("name"),
+            "format",
+            "Emoji name must contain 2 through 32 ASCII letters, digits, or underscores",
+        )
+    if (kind === "stickers" && !text(value.name, 2, 30))
+        return inputValidationFailure(
+            path("name"),
+            "length",
+            "Sticker name must contain 2 through 30 Unicode code points",
+        )
     if (create) {
-        if (typeof value.image !== "string" || value.image.length > 699_150) return undefined
+        if (typeof value.image !== "string" || value.image.length > 699_150)
+            return inputValidationFailure(
+                path("image"),
+                "size",
+                "Expression image must be a base64 string no longer than 699,150 UTF-16 code units",
+            )
         const raw = value.image.replace(/^data:image\/[a-zA-Z0-9.+-]+(?:;[^,;=\s]+=[^,;\s]*)*;base64,/, "")
         if (
             !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(raw) ||
             !raw.length ||
             Buffer.byteLength(raw, "base64") > 524_288
         )
-            return undefined
+            return inputValidationFailure(
+                path("image"),
+                "format",
+                "Expression image must be valid base64 no larger than 524,288 bytes",
+            )
     }
     if (kind === "stickers") {
         if (value.description !== undefined && value.description !== null && !text(value.description, 1, 500))
-            return undefined
+            return inputValidationFailure(
+                path("description"),
+                "length",
+                "Sticker description must be null or contain 1 through 500 Unicode code points",
+            )
         if (
             value.tags !== undefined &&
             (!Array.isArray(value.tags) ||
                 value.tags.length > 10 ||
                 !Array.from(value.tags).every((tag) => text(tag, 1, 30)))
         )
-            return undefined
+            return inputValidationFailure(
+                path("tags[]"),
+                "format",
+                "Sticker tags must contain at most ten entries of 1 through 30 Unicode code points",
+            )
     }
     return {
         name: value.name,
@@ -161,11 +194,13 @@ export function expressionCreate<K extends ExpressionKind>(
     guildId: string,
     input: unknown,
     options?: ModerationOptions,
-): GuildRequest<ExpressionResources[K]> | undefined {
+): GuildRequest<ExpressionResources[K]> | InputValidationFailure {
     const base = expressionList(kind, guildId)
     const body = encode(kind, input, true)
     const audit = auditSettings(options)
-    if (!base || !body || !audit) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (body instanceof InputValidationFailure) return body
+    if (audit instanceof InputValidationFailure) return audit
     return {
         ...base,
         ...audit,
@@ -181,10 +216,13 @@ export function expressionClone<K extends ExpressionKind>(
     guildId: string,
     sourceId: string,
     options?: ModerationOptions,
-): GuildRequest<ExpressionResources[K]> | undefined {
+): GuildRequest<ExpressionResources[K]> | InputValidationFailure {
     const base = expressionList(kind, guildId)
     const audit = auditSettings(options)
-    if (!base || !identifier(sourceId) || !audit) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (!identifier(sourceId))
+        return inputValidationFailure("sourceId", "format", "Source expression IDs must be decimal strings")
+    if (audit instanceof InputValidationFailure) return audit
     return {
         ...base,
         ...audit,
@@ -201,13 +239,19 @@ export function expressionBatch<K extends ExpressionKind>(
     guildId: string,
     inputs: unknown,
     options?: ModerationOptions,
-): GuildRequest<ExpressionBatch<ExpressionResources[K]>> | undefined {
+): GuildRequest<ExpressionBatch<ExpressionResources[K]>> | InputValidationFailure {
     const base = expressionList(kind, guildId)
     const audit = auditSettings(options)
-    if (!base || !audit || !Array.isArray(inputs) || inputs.length < 1 || inputs.length > 50) return undefined
-    const items = Array.from(inputs, (item) => encode(kind, item, true))
+    if (base instanceof InputValidationFailure) return base
+    if (audit instanceof InputValidationFailure) return audit
+    if (!Array.isArray(inputs))
+        return inputValidationFailure("inputs", "type", "Expression batch input must be an array")
+    if (inputs.length < 1 || inputs.length > 50)
+        return inputValidationFailure("inputs", "length", "Expression batch input must contain 1 through 50 entries")
+    const items = Array.from(inputs, (item) => encode(kind, item, true, "inputs[]"))
     const count = inputs.length
-    if (items.some((item) => !item)) return undefined
+    const failed = items.find((item): item is InputValidationFailure => item instanceof InputValidationFailure)
+    if (failed) return failed
     return {
         ...base,
         ...audit,
@@ -239,8 +283,10 @@ export function expressionEdit<K extends ExpressionKind>(
     target: ExpressionReference,
     input: unknown,
     options?: ModerationOptions,
-): GuildRequest<ExpressionResources[K]> | undefined {
-    if (!record(target) || !identifier(target.id)) return undefined
+): GuildRequest<ExpressionResources[K]> | InputValidationFailure {
+    if (!record(target)) return inputValidationFailure("target", "type", "Expression targets must be objects")
+    if (!identifier(target.id))
+        return inputValidationFailure("target.id", "format", "Expression IDs must be decimal strings")
     const { id, guildId } = target
     const base = expressionList(kind, target.guildId)
     if (kind === "stickers") {
@@ -250,25 +296,32 @@ export function expressionEdit<K extends ExpressionKind>(
             !Object.hasOwn(input, "description") ||
             !Object.hasOwn(input, "tags")
         )
-            return undefined
+            return inputValidationFailure("input", "required", "Sticker edit requires name, description, and tags")
         if (
             Object.keys(input).some(
                 (key) => !["name", "description", "tags", "guildId", "id", "animated"].includes(key),
             )
         )
-            return undefined
+            return inputValidationFailure("input", "allowedFields", "Sticker edit contains an unsupported field")
         if (
             (input.id !== undefined && input.id !== id) ||
             (input.guildId !== undefined && input.guildId !== guildId) ||
             (input.animated !== undefined && typeof input.animated !== "boolean")
         )
-            return undefined
-        if (input.description === undefined || input.tags === undefined) return undefined
+            return inputValidationFailure(
+                "input",
+                "relationship",
+                "Sticker snapshot fields must match the selected target",
+            )
+        if (input.description === undefined || input.tags === undefined)
+            return inputValidationFailure("input", "required", "Sticker edit requires description and tags")
         input = { name: input.name, description: input.description === "" ? null : input.description, tags: input.tags }
     }
     const body = encode(kind, input, false)
     const audit = auditSettings(options)
-    if (!base || !body || !audit) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (body instanceof InputValidationFailure) return body
+    if (audit instanceof InputValidationFailure) return audit
     return {
         ...base,
         ...audit,
@@ -287,11 +340,16 @@ export function expressionDelete(
     kind: ExpressionKind,
     target: ExpressionReference,
     options?: ExpressionDeleteOptions,
-): GuildRequest<void> | undefined {
-    if (!record(target) || !identifier(target.id)) return undefined
+): GuildRequest<void> | InputValidationFailure {
+    if (!record(target)) return inputValidationFailure("target", "type", "Expression targets must be objects")
+    if (!identifier(target.id))
+        return inputValidationFailure("target.id", "format", "Expression IDs must be decimal strings")
     const base = expressionList(kind, target.guildId)
     const audit = auditSettings(options)
-    if (!base || !audit || (options?.purge !== undefined && typeof options.purge !== "boolean")) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (audit instanceof InputValidationFailure) return audit
+    if (options?.purge !== undefined && typeof options.purge !== "boolean")
+        return inputValidationFailure("options.purge", "type", "Expression purge must be a boolean")
     return {
         ...base,
         ...audit,

@@ -32,6 +32,7 @@ import {
     type MessageSearchIterationLimits,
     type MessageReference,
     type MessageOperationFailure,
+    type InputValidationDetail,
     type MessageDeletion,
     type MessageBulkDeletion,
     type TypingStart,
@@ -693,4 +694,9 @@ export async function previewModerationCleanup(client: Client, guildId: string, 
     // @ts-expect-error A cleanup selection must be bounded
     client.messages.previewCleanup(channelId, { authorId })
     return { hierarchy, report }
+}
+
+/** Typechecked local-validation facts through the packed default entry point */
+export function describeDefaultInputValidation(error: MessageOperationFailure): InputValidationDetail | null {
+    return error._tag === "MessageOperationError" ? error.inputValidation : null
 }

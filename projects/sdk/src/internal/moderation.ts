@@ -1,20 +1,34 @@
 import type { BanInput, GuildBan, GuildMember, MemberReference, ModerationOptions } from "#sdk/guilds"
 import { identifier, record } from "./message.js"
 import { decodeMember, memberFetch, type GuildRequest } from "./guilds.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const integer = (value: unknown, min: number, max: number): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
 const timestamp = (value: unknown): value is string =>
     typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && Number.isFinite(Date.parse(value))
 
-export function auditSettings(options?: ModerationOptions): { moderation: true; auditReason?: string } | undefined {
-    if (options !== undefined && !record(options)) return undefined
+export function auditSettings(
+    options?: ModerationOptions,
+): { readonly moderation: true; readonly auditReason?: string } | InputValidationFailure {
+    if (options !== undefined && !record(options))
+        return inputValidationFailure("options", "type", "Moderation options must be an object")
     const reason = options?.auditReason
-    if (reason === undefined) return { moderation: true }
-    if (typeof reason !== "string" || !/^[\x20-\x7E]+$/.test(reason)) return undefined
+    if (reason === undefined) return { moderation: true as const }
+    if (typeof reason !== "string" || !/^[\x20-\x7E]+$/.test(reason))
+        return inputValidationFailure(
+            "options.auditReason",
+            "format",
+            "Audit reason must contain printable ASCII characters",
+        )
     const trimmed = reason.trim()
-    if (!trimmed || trimmed.length > 512) return undefined
-    return { moderation: true, auditReason: trimmed }
+    if (!trimmed || trimmed.length > 512)
+        return inputValidationFailure(
+            "options.auditReason",
+            "length",
+            "Audit reason must contain 1 through 512 characters",
+        )
+    return { moderation: true as const, auditReason: trimmed }
 }
 
 export function memberTimeout(
@@ -22,10 +36,17 @@ export function memberTimeout(
     durationMs: number | null,
     options?: ModerationOptions,
     clear = false,
-): GuildRequest<GuildMember> | undefined {
+): GuildRequest<GuildMember> | InputValidationFailure {
     const request = memberFetch(target)
     const extra = auditSettings(options)
-    if (!request || !extra || (!clear && !integer(durationMs, 1, 31_536_000_000))) return undefined
+    if (request instanceof InputValidationFailure) return request
+    if (extra instanceof InputValidationFailure) return extra
+    if (!clear && !integer(durationMs, 1, 31_536_000_000))
+        return inputValidationFailure(
+            "durationMs",
+            "range",
+            "Timeout duration must be an integer from 1 through 31,536,000,000 milliseconds",
+        )
     const { guildId, userId } = target
     return {
         ...request,
@@ -42,10 +63,14 @@ export function memberTimeout(
     }
 }
 
-export function memberKick(target: MemberReference, options?: ModerationOptions): GuildRequest<void> | undefined {
+export function memberKick(
+    target: MemberReference,
+    options?: ModerationOptions,
+): GuildRequest<void> | InputValidationFailure {
     const request = memberFetch(target)
     const extra = auditSettings(options)
-    if (!request || !extra) return undefined
+    if (request instanceof InputValidationFailure) return request
+    if (extra instanceof InputValidationFailure) return extra
     return {
         ...request,
         ...extra,
@@ -60,15 +85,17 @@ export function guildBan(
     target: MemberReference,
     input?: BanInput,
     options?: ModerationOptions,
-): GuildRequest<void> | undefined {
+): GuildRequest<void> | InputValidationFailure {
     const request = memberKick(target, options)
     const value = input === undefined ? {} : input
-    if (
-        !request ||
-        !record(value) ||
-        Object.keys(value).some((key) => !["reason", "durationSeconds", "deleteMessageSeconds"].includes(key))
-    )
-        return undefined
+    if (request instanceof InputValidationFailure) return request
+    if (!record(value)) return inputValidationFailure("input", "type", "Ban input must be an object")
+    if (Object.keys(value).some((key) => !["reason", "durationSeconds", "deleteMessageSeconds"].includes(key)))
+        return inputValidationFailure(
+            "input",
+            "allowedFields",
+            "Ban input may contain only reason, durationSeconds, and deleteMessageSeconds",
+        )
     const duration = value.durationSeconds === undefined ? 0 : value.durationSeconds
     const removal = value.deleteMessageSeconds === undefined ? 0 : value.deleteMessageSeconds
     if (
@@ -76,7 +103,11 @@ export function guildBan(
         !integer(removal, 0, 604_800) ||
         (value.reason !== undefined && (typeof value.reason !== "string" || [...value.reason].length > 512))
     )
-        return undefined
+        return inputValidationFailure(
+            "input",
+            "range",
+            "Ban fields must satisfy their documented duration, message deletion, and reason limits",
+        )
     return {
         ...request,
         method: "PUT",
@@ -91,14 +122,17 @@ export function guildBan(
     }
 }
 
-export function guildUnban(target: MemberReference, options?: ModerationOptions): GuildRequest<void> | undefined {
+export function guildUnban(
+    target: MemberReference,
+    options?: ModerationOptions,
+): GuildRequest<void> | InputValidationFailure {
     const request = memberKick(target, options)
-    if (!request) return undefined
+    if (request instanceof InputValidationFailure) return request
     return { ...request, bucket: "guild:bans", path: `/guilds/${target.guildId}/bans/${target.userId}` }
 }
 
-export function guildBans(guildId: string): GuildRequest<readonly GuildBan[]> | undefined {
-    if (!identifier(guildId)) return undefined
+export function guildBans(guildId: string): GuildRequest<readonly GuildBan[]> | InputValidationFailure {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         guildId,
         bucket: "guild:bans",

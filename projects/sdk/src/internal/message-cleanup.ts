@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import { ClientClosedError } from "#sdk/errors"
+import { InputValidationFailure, inputValidationFailure, type InputValidationDetail } from "#sdk/input-validation"
 import {
     MessageCleanupError,
     type MessageCleanupBatch,
@@ -61,6 +62,7 @@ function error(
     terminal: readonly string[] | null = null,
     status: number | null = null,
     retryAfterMs: number | null = null,
+    inputValidation: InputValidationDetail | null = null,
 ): MessageCleanupError {
     return new MessageCleanupError(
         phase,
@@ -72,6 +74,7 @@ function error(
         freezeIds(ids),
         freezeBatches(submitted),
         terminal === null ? null : freezeIds(terminal),
+        inputValidation,
     )
 }
 
@@ -94,53 +97,90 @@ function wrappedFailure(
             terminal,
             source.status,
             source.retryAfterMs,
+            source.inputValidation,
         )
     return error(phase, "closed", "unknown", scannedCount, ids, submitted, terminal)
 }
 
-function validOptions(value: unknown, progress: boolean): PreviewOptions | undefined {
+function validOptions(value: unknown, progress: boolean): PreviewOptions | InputValidationFailure {
     if (value === undefined) return {}
+    if (!record(value)) return inputValidationFailure("options", "type", "Cleanup options must be an object")
     if (
-        !record(value) ||
         Object.keys(value).some(
             (key) => key !== "timeoutMs" && key !== "signal" && (progress ? key !== "onProgress" : true),
-        ) ||
-        (value.timeoutMs !== undefined &&
-            (typeof value.timeoutMs !== "number" ||
-                !Number.isSafeInteger(value.timeoutMs) ||
-                value.timeoutMs < 1 ||
-                value.timeoutMs > 2_147_483_647)) ||
-        (value.signal !== undefined &&
-            (!record(value.signal) ||
-                typeof value.signal.aborted !== "boolean" ||
-                typeof value.signal.addEventListener !== "function" ||
-                typeof value.signal.removeEventListener !== "function")) ||
-        (progress && value.onProgress !== undefined && typeof value.onProgress !== "function")
+        )
     )
-        return undefined
+        return inputValidationFailure(
+            "options",
+            "allowedFields",
+            progress
+                ? "Cleanup options may contain only timeoutMs, signal, and onProgress"
+                : "Preview options may contain only timeoutMs and signal",
+        )
+    if (
+        value.timeoutMs !== undefined &&
+        (typeof value.timeoutMs !== "number" ||
+            !Number.isSafeInteger(value.timeoutMs) ||
+            value.timeoutMs < 1 ||
+            value.timeoutMs > 2_147_483_647)
+    )
+        return inputValidationFailure(
+            "options.timeoutMs",
+            "range",
+            "Cleanup timeout must be an integer from 1 through 2,147,483,647 milliseconds",
+        )
+    if (
+        value.signal !== undefined &&
+        (!record(value.signal) ||
+            typeof value.signal.aborted !== "boolean" ||
+            typeof value.signal.addEventListener !== "function" ||
+            typeof value.signal.removeEventListener !== "function")
+    )
+        return inputValidationFailure("options.signal", "type", "Cleanup signal must be an AbortSignal")
+    if (progress && value.onProgress !== undefined && typeof value.onProgress !== "function")
+        return inputValidationFailure("options.onProgress", "type", "Cleanup progress callback must be a function")
     return {
         ...(value.timeoutMs === undefined ? {} : { timeoutMs: value.timeoutMs }),
         ...(value.signal === undefined ? {} : { signal: value.signal as unknown as AbortSignal }),
     }
 }
 
-function selection(value: unknown): ValidSelection | undefined {
+function selection(value: unknown): ValidSelection | InputValidationFailure {
+    if (!record(value)) return inputValidationFailure("selection", "type", "Cleanup selection must be an object")
+    if (Object.keys(value).some((key) => !["authorId", "filter", "maxScanned", "maxSelected"].includes(key)))
+        return inputValidationFailure(
+            "selection",
+            "allowedFields",
+            "Cleanup selection may contain only authorId, filter, maxScanned, and maxSelected",
+        )
+    if (value.authorId !== undefined && !identifier(value.authorId))
+        return inputValidationFailure("selection.authorId", "format", "Cleanup author ID must be a decimal string")
+    if (value.filter !== undefined && typeof value.filter !== "function")
+        return inputValidationFailure("selection.filter", "type", "Cleanup filter must be a function")
+    if (value.authorId === undefined && value.filter === undefined)
+        return inputValidationFailure("selection", "required", "Cleanup selection requires authorId or filter")
     if (
-        !record(value) ||
-        Object.keys(value).some((key) => !["authorId", "filter", "maxScanned", "maxSelected"].includes(key)) ||
-        (value.authorId !== undefined && !identifier(value.authorId)) ||
-        (value.filter !== undefined && typeof value.filter !== "function") ||
-        (value.authorId === undefined && value.filter === undefined) ||
         typeof value.maxScanned !== "number" ||
         !Number.isSafeInteger(value.maxScanned) ||
         value.maxScanned < 1 ||
-        value.maxScanned > maximum ||
+        value.maxScanned > maximum
+    )
+        return inputValidationFailure(
+            "selection.maxScanned",
+            "range",
+            "Cleanup maxScanned must be an integer from 1 through 10,000",
+        )
+    if (
         typeof value.maxSelected !== "number" ||
         !Number.isSafeInteger(value.maxSelected) ||
         value.maxSelected < 1 ||
         value.maxSelected > maximum
     )
-        return undefined
+        return inputValidationFailure(
+            "selection.maxSelected",
+            "range",
+            "Cleanup maxSelected must be an integer from 1 through 10,000",
+        )
     return {
         authorId: value.authorId,
         filter: value.filter as ((message: Message) => boolean) | undefined,
@@ -217,8 +257,12 @@ export function previewCleanup(
     return Effect.suspend(() => {
         const selected = selection(suppliedSelection)
         const requestOptions = validOptions(suppliedOptions, false)
-        if (!identifier(channelId) || !selected || !requestOptions)
-            return Effect.fail(error("preview", "input", "notDispatched", 0, [], []))
+        const invalid = (failure: InputValidationFailure) =>
+            Effect.fail(error("preview", "input", "notDispatched", 0, [], [], null, null, null, failure.detail))
+        if (!identifier(channelId))
+            return invalid(inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings"))
+        if (selected instanceof InputValidationFailure) return invalid(selected)
+        if (requestOptions instanceof InputValidationFailure) return invalid(requestOptions)
         const deadline = performance.now() + (requestOptions.timeoutMs ?? 30_000)
         return Effect.gen(function* () {
             const messages: Message[] = []
@@ -294,8 +338,29 @@ export function cleanup(
 ): Effect.Effect<MessageCleanupReport, MessageCleanupError> {
     return Effect.suspend(() => {
         const requestOptions = validOptions(suppliedOptions, true)
-        if (!requestOptions || !ownsPlan(owner, plan) || consumedPlans.has(plan))
-            return Effect.fail(error("cleanup", "input", "notDispatched", 0, [], []))
+        if (requestOptions instanceof InputValidationFailure)
+            return Effect.fail(
+                error("cleanup", "input", "notDispatched", 0, [], [], null, null, null, requestOptions.detail),
+            )
+        if (!ownsPlan(owner, plan) || consumedPlans.has(plan))
+            return Effect.fail(
+                error(
+                    "cleanup",
+                    "input",
+                    "notDispatched",
+                    0,
+                    [],
+                    [],
+                    null,
+                    null,
+                    null,
+                    inputValidationFailure(
+                        "plan",
+                        "relationship",
+                        "Cleanup requires an unused preview plan from this client",
+                    ).detail,
+                ),
+            )
         consumedPlans.add(plan)
         const notify = progressCallback(suppliedOptions)
         const ids = selectedIds(plan.selectedMessages)

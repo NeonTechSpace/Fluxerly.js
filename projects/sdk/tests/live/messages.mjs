@@ -221,11 +221,24 @@ async function verifyOptionalTools(ops, channelId, botId) {
     const replies = []
     const rejections = []
     const feedbackReplies = []
+    const unmatched = []
+    const unmatchedReplies = []
     const cooldown = await ops.cooldowns(claims)
 
     stage = "optional_tools_router_attachment"
     await ops.assertConnected()
-    const initial = await ops.create({ prefix: () => prefix, ignoreBots: false })
+    const initial = await ops.create({
+        prefix: () => prefix,
+        ignoreBots: false,
+        parse: ops.parseQuoted,
+        onUnmatched: ops.reject(async (message, outcome) => {
+            if (message.channelId !== channelId || message.author.id !== botId) return
+            unmatched.push({ messageId: message.id, outcome })
+            unmatchedReplies.push(
+                await ops.reply(message, { content: `${marker} ${outcome._tag}`, allowedMentions: {} }),
+            )
+        }),
+    })
     const router = await ops.register(initial, {
         name: commandName,
         description: "Live command feedback check",
@@ -288,25 +301,47 @@ async function verifyOptionalTools(ops, channelId, botId) {
         assert.deepEqual(executions, [first.id])
         report(stage, true)
 
+        stage = "optional_tools_unmatched_feedback"
+        const unknown = await ops.send({ content: `${prefix}unknown-${marker}` })
+        await waitForCondition(() => unmatchedReplies.length === 1, "Unknown-command feedback deadline")
+        assert.equal(unmatched[0].messageId, unknown.id)
+        assert.deepEqual(unmatched[0].outcome, { _tag: "CommandUnknownName", name: `unknown-${marker}` })
+        const malformed = await ops.send({ content: `${prefix}${commandName} \"unterminated` })
+        await waitForCondition(() => unmatchedReplies.length === 2, "Parser-rejection feedback deadline")
+        assert.equal(unmatched[1].messageId, malformed.id)
+        assert.deepEqual(unmatched[1].outcome, { _tag: "CommandParserRejected" })
+        for (const [index, command] of [unknown, malformed].entries()) {
+            const readback = await api("GET", `/channels/${channelId}/messages/${unmatchedReplies[index].id}`)
+            assert.equal(readback.status, 200)
+            assert.equal(readback.data.content, `${marker} ${unmatched[index].outcome._tag}`)
+            assert.equal(readback.data.message_reference?.message_id, command.id)
+            assert.equal(readback.data.mention_everyone, false)
+            assert.deepEqual(readback.data.mentions, [])
+        }
+        assert.deepEqual(executions, [first.id])
+        assert.equal(claims.length, 2)
+        report(stage, true)
+
         stage = "optional_tools_unsubscribe"
         await ops.close(subscription)
         subscription = undefined
         await cooldown.clear()
         const observed = []
         const observer = await ops.observe((message) => {
-            if (message.channelId === channelId && message.author.id === botId && message.content === invocation)
-                observed.push(message.id)
+            if (message.channelId === channelId && message.author.id === botId) observed.push(message.id)
         })
         try {
+            const unmatchedAfterUnsubscribe = await ops.send({ content: `${prefix}unknown-${marker}` })
             const afterUnsubscribe = await ops.send({ content: invocation })
             await waitForCondition(
-                () => observed.includes(afterUnsubscribe.id),
+                () => observed.includes(afterUnsubscribe.id) && observed.includes(unmatchedAfterUnsubscribe.id),
                 "Optional command post-unsubscribe gateway deadline",
             )
             await sleep(250)
             assert.deepEqual(executions, [first.id])
             assert.equal(claims.length, 2)
-            const rawHistory = await api("GET", `/channels/${channelId}/messages?limit=10`)
+            assert.equal(unmatched.length, 2)
+            const rawHistory = await api("GET", `/channels/${channelId}/messages?limit=100`)
             assert.equal(rawHistory.status, 200)
             assert.ok(Array.isArray(rawHistory.data))
             assert.deepEqual(
@@ -3066,6 +3101,7 @@ try {
                 await verifyOptionalTools(
                     {
                         builders,
+                        parseQuoted: commands.parseQuoted,
                         assertConnected: async () => assert.equal(client.state, "Connected"),
                         create: (options) => run(Promise.resolve(commands.create(options))),
                         register: (router, command) => run(Promise.resolve(router.register(command))),
@@ -3817,6 +3853,7 @@ try {
                             verifyOptionalTools(
                                 {
                                     builders,
+                                    parseQuoted: commands.parseQuoted,
                                     assertConnected: async () => assert.equal(client.state, "Connected"),
                                     create: (options) => run(commands.create(options)),
                                     register: (router, command) => run(router.register(command)),

@@ -9,6 +9,7 @@ import type {
 } from "#sdk/users"
 import type { Message } from "#sdk/messages"
 import { decodeMessage, identifier, record } from "./message.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 /** Validated requests executed by the client's shared REST scheduler */
 export interface UserRequest<A> {
@@ -25,6 +26,8 @@ export interface UserRequest<A> {
     /** Skips all user-cache generations and writes while retaining the shared REST scheduler and retries */
     readonly noCache?: boolean
 }
+
+type UserValidationResult<A> = UserRequest<A> | InputValidationFailure
 
 const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value)
@@ -100,8 +103,9 @@ export function decodeDirectMessage(value: unknown): DirectMessageChannel | unde
     }) as DirectMessageChannel
 }
 
-export function userFetch(id: string): UserRequest<User> | undefined {
-    if (id !== "@me" && !identifier(id)) return undefined
+export function userFetch(id: string): UserValidationResult<User> {
+    if (id !== "@me" && !identifier(id))
+        return inputValidationFailure("userId", "format", "User IDs must be decimal strings or @me")
     return {
         majorId: id,
         path: `/users/${id}`,
@@ -117,15 +121,14 @@ export function userFetch(id: string): UserRequest<User> | undefined {
 }
 
 /** Build one explicit profile read with only a caller-selected guild context and no relationship-expansion flags */
-export function userProfile(id: string, query?: UserProfileQuery): UserRequest<UserProfile> | undefined {
-    if (
-        !identifier(id) ||
-        (query !== undefined &&
-            (!record(query) ||
-                Object.keys(query).some((key) => key !== "guildId") ||
-                (query.guildId !== undefined && !identifier(query.guildId))))
-    )
-        return undefined
+export function userProfile(id: string, query?: UserProfileQuery): UserValidationResult<UserProfile> {
+    if (!identifier(id)) return inputValidationFailure("userId", "format", "User IDs must be decimal strings")
+    if (query !== undefined && !record(query))
+        return inputValidationFailure("query", "type", "User profile query must be an object")
+    if (record(query) && Object.keys(query).some((key) => key !== "guildId"))
+        return inputValidationFailure("query", "allowedFields", "User profile query may contain only guildId")
+    if (record(query) && query.guildId !== undefined && !identifier(query.guildId))
+        return inputValidationFailure("query.guildId", "format", "Guild IDs must be decimal strings")
     const guildId = typeof query?.guildId === "string" ? query.guildId : undefined
     const path = `/users/${id}/profile${guildId === undefined ? "" : `?guild_id=${encodeURIComponent(guildId)}`}`
     return {
@@ -191,10 +194,11 @@ function decodeUserProfileFields(value: unknown, accountProfile: boolean): UserP
     return Object.freeze(profile)
 }
 
-export function directMessageOpen(id: string): UserRequest<DirectMessageChannel> | undefined {
-    if (!identifier(id)) return undefined
+export function directMessageOpen(id: string): UserValidationResult<DirectMessageChannel> {
+    if (!identifier(id)) return inputValidationFailure("userId", "format", "User IDs must be decimal strings")
     const json = JSON.stringify({ recipient_id: id })
-    if (Buffer.byteLength(json) > 4_194_304) return undefined
+    if (Buffer.byteLength(json) > 4_194_304)
+        return inputValidationFailure("userId", "size", "Direct message open input must fit the request byte limit")
     return {
         majorId: "@me",
         path: "/users/@me/channels",
@@ -209,8 +213,8 @@ export function directMessageOpen(id: string): UserRequest<DirectMessageChannel>
     }
 }
 
-export function directMessageFetch(id: string): UserRequest<DirectMessageChannel> | undefined {
-    if (!identifier(id)) return undefined
+export function directMessageFetch(id: string): UserValidationResult<DirectMessageChannel> {
+    if (!identifier(id)) return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
     return {
         majorId: id,
         id,
@@ -251,17 +255,14 @@ export function directMessageList(): UserRequest<readonly DirectMessageChannel[]
 }
 
 /** Request latest messages only for explicit private-channel IDs, without cache admission or conversation enumeration */
-export function directMessageLatestMessages(
-    ids: readonly string[],
-): UserRequest<DirectMessageLatestMessages> | undefined {
-    if (
-        !Array.isArray(ids) ||
-        ids.length === 0 ||
-        ids.length > 100 ||
-        Array.from(ids).some((id) => !identifier(id)) ||
-        new Set(ids).size !== ids.length
-    )
-        return undefined
+export function directMessageLatestMessages(ids: readonly string[]): UserValidationResult<DirectMessageLatestMessages> {
+    if (!Array.isArray(ids)) return inputValidationFailure("channelIds", "type", "Channel IDs must be an array")
+    if (ids.length === 0 || ids.length > 100)
+        return inputValidationFailure("channelIds", "length", "Latest-message reads require 1 through 100 channel IDs")
+    if (Array.from(ids).some((id) => !identifier(id)))
+        return inputValidationFailure("channelIds[]", "format", "Channel IDs must be decimal strings")
+    if (new Set(ids).size !== ids.length)
+        return inputValidationFailure("channelIds", "unique", "Channel IDs must be unique")
     const channelIds = [...ids]
     const json = JSON.stringify({ channels: channelIds })
     return {
@@ -296,12 +297,18 @@ export function directMessageLatestMessages(
 export function directMessageEdit(
     id: string,
     input: DirectMessageGroupEdit,
-): UserRequest<DirectMessageChannel> | undefined {
+): UserValidationResult<DirectMessageChannel> {
+    if (!identifier(id)) return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    if (!record(input)) return inputValidationFailure("input", "type", "Group DM input must be an object")
+    if (Object.keys(input).length === 0)
+        return inputValidationFailure("input", "required", "Group DM input must contain at least one field")
+    if (Object.keys(input).some((key) => !["name", "icon", "ownerId", "nicknames"].includes(key)))
+        return inputValidationFailure(
+            "input",
+            "allowedFields",
+            "Group DM input may contain only name, icon, ownerId, and nicknames",
+        )
     if (
-        !identifier(id) ||
-        !record(input) ||
-        Object.keys(input).length === 0 ||
-        Object.keys(input).some((key) => !["name", "icon", "ownerId", "nicknames"].includes(key)) ||
         (input.name !== undefined && !text(input.name, 1, 100)) ||
         (input.icon !== undefined &&
             input.icon !== null &&
@@ -309,7 +316,11 @@ export function directMessageEdit(
                 !/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(input.icon))) ||
         (input.ownerId !== undefined && !identifier(input.ownerId))
     )
-        return undefined
+        return inputValidationFailure(
+            "input",
+            "format",
+            "Group DM fields must satisfy their documented types, lengths, image format, and ID format",
+        )
     if (
         input.nicknames !== undefined &&
         input.nicknames !== null &&
@@ -318,11 +329,19 @@ export function directMessageEdit(
                 ([id, value]) => !identifier(id) || (value !== null && !text(value, 1, 32)),
             ))
     )
-        return undefined
+        return inputValidationFailure(
+            "nicknames",
+            "format",
+            "Group DM nicknames must map decimal user IDs to null or 1 through 32 characters",
+        )
     const json = JSON.stringify({ name: input.name, icon: input.icon, owner_id: input.ownerId, nicks: input.nicknames })
-    if (json === "{}" || Buffer.byteLength(json) > 4_194_304) return undefined
+    if (json === "{}") return inputValidationFailure("input", "required", "Group DM input must encode a change")
+    if (Buffer.byteLength(json) > 4_194_304)
+        return inputValidationFailure("input", "size", "Group DM input must not exceed 4,194,304 encoded bytes")
+    const current = directMessageFetch(id)
+    if (current instanceof InputValidationFailure) return current
     return {
-        ...directMessageFetch(id)!,
+        ...current,
         method: "PATCH",
         json,
         verifyType: "group",
@@ -333,8 +352,10 @@ export function directMessageEdit(
     }
 }
 
-export function directMessageClose(id: string, recipient?: string): UserRequest<void> | undefined {
-    if (!identifier(id) || (recipient !== undefined && !identifier(recipient))) return undefined
+export function directMessageClose(id: string, recipient?: string): UserValidationResult<void> {
+    if (!identifier(id)) return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    if (recipient !== undefined && !identifier(recipient))
+        return inputValidationFailure("recipientId", "format", "Recipient IDs must be decimal strings")
     return {
         majorId: id,
         id,

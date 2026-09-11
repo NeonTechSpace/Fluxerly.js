@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { SdkDefect, createClient } from "../src/index.js"
+import { MessageCleanupError, SdkDefect, createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
@@ -55,6 +55,69 @@ async function cleanupApi(mode: (typeof modes)[number]) {
 }
 
 afterEach(() => vi.unstubAllGlobals())
+
+test.each(modes)("%s cleanup validation reports safe facts before reading or deleting", async (mode) => {
+    const fetch = vi.fn()
+    vi.stubGlobal("fetch", fetch)
+    const api = await cleanupApi(mode)
+    const selected = { authorId: "30", maxScanned: 10, maxSelected: 1 }
+    try {
+        for (const [operation, path, constraint] of [
+            [() => api.preview("private-invalid-channel", selected), "channelId", "format"],
+            [
+                () => api.preview("20", { ...selected, privateCallerKey: "private-value" } as never),
+                "selection",
+                "allowedFields",
+            ],
+            [() => api.preview("20", { ...selected, maxScanned: 10_001 }), "selection.maxScanned", "range"],
+            [() => api.preview("20", selected, { timeoutMs: 0 }), "options.timeoutMs", "range"],
+            [() => api.cleanup({} as never), "plan", "relationship"],
+            [() => api.cleanup({} as never, { onProgress: 42 } as never), "options.onProgress", "type"],
+        ] as const) {
+            const failure = await operation().then(
+                () => undefined,
+                (error: unknown) => error,
+            )
+            expect(failure).toBeInstanceOf(MessageCleanupError)
+            if (!(failure instanceof MessageCleanupError)) throw new Error("Expected cleanup validation failure")
+            expect(failure).toMatchObject({
+                reason: "input",
+                outcome: "notDispatched",
+                scannedCount: 0,
+                selectedMessageIds: [],
+                submittedBatches: [],
+                terminalBatchIds: null,
+                inputValidation: { path, constraint },
+            })
+            expect(Object.isFrozen(failure.inputValidation)).toBe(true)
+            for (const privateText of ["private-invalid-channel", "privateCallerKey", "private-value"])
+                expect(JSON.stringify(failure)).not.toContain(privateText)
+        }
+        expect(fetch).not.toHaveBeenCalled()
+    } finally {
+        await api.close()
+    }
+})
+
+test("cleanup validation keeps legacy constructors and clones only public detail fields", () => {
+    const supplied = {
+        path: "plan",
+        constraint: "relationship" as const,
+        explanation: "Use an owned plan",
+        privateKey: "private-value",
+    }
+    const error = new MessageCleanupError("cleanup", "input", "notDispatched", null, null, 0, [], [], null, supplied)
+    expect(error.inputValidation).toEqual({
+        path: "plan",
+        constraint: "relationship",
+        explanation: "Use an owned plan",
+    })
+    supplied.path = "changed"
+    expect(error.inputValidation?.path).toBe("plan")
+    expect(
+        new MessageCleanupError("cleanup", "network", "unknown", null, null, 0, [], [], null).inputValidation,
+    ).toBeNull()
+})
 
 test.each(modes)(
     "%s cleanup submits only previewed IDs, ignores progress callback failures, and consumes the plan",
@@ -324,6 +387,7 @@ test.each(modes)("%s permits at most one concurrent cleanup execution for an own
             phase: "cleanup",
             reason: "input",
             outcome: "notDispatched",
+            inputValidation: { path: "plan", constraint: "relationship" },
         })
     } finally {
         await api.close()

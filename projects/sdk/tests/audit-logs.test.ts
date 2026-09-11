@@ -4,6 +4,8 @@ import { AuditLogActions, type AuditLogPage } from "../src/audit-logs.js"
 import { createClient } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 import { auditLogPage } from "../src/internal/audit-logs.js"
+import type { GuildRequest } from "../src/internal/guilds.js"
+import { InputValidationFailure } from "../src/input-validation.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const user = {
@@ -54,6 +56,11 @@ function entry(extra: Record<string, unknown> = {}) {
 const unwrap = <A>(result: { isErr(): boolean; value?: A; error?: unknown }): A => {
     if (result.isErr()) throw result.error
     return result.value!
+}
+
+const validRequest = <A>(request: GuildRequest<A> | InputValidationFailure): GuildRequest<A> => {
+    if (request instanceof InputValidationFailure) throw request
+    return request
 }
 
 test.each(["default", "native"] as const)(
@@ -110,19 +117,19 @@ test("accepts sticker lifecycle actions in user-filtered pages and action filter
     expect(actions).toEqual([90, 91, 92])
     const entries = actions.map((action_type, index) => entry({ id: String(100 - index), action_type }))
     expect(
-        auditLogPage("20", { userId: "30" })!
+        validRequest(auditLogPage("20", { userId: "30" }))
             .decode(page(entries))!
             .entries.map((item) => item.actionType),
     ).toEqual(actions)
     for (const actionType of actions) {
-        const request = auditLogPage("20", { actionType })!
+        const request = validRequest(auditLogPage("20", { actionType }))
         expect(request.path).toContain(`action_type=${actionType}`)
         expect(request.decode(page([entry({ action_type: actionType })]))!.entries[0]!.actionType).toBe(actionType)
     }
 })
 
 test("projects complete frozen, token-free audit-log pages and preserves a non-snowflake target", () => {
-    const request = auditLogPage("20", { userId: "30" })!
+    const request = validRequest(auditLogPage("20", { userId: "30" }))
     const result = request.decode(page())!
     expect(result).toMatchObject({
         entries: [
@@ -153,7 +160,7 @@ test("projects complete frozen, token-free audit-log pages and preserves a non-s
 })
 
 test("projects every published option and change-value shape from a GuildUpdate entry", () => {
-    const request = auditLogPage("20", { actionType: AuditLogActions.GuildUpdate })!
+    const request = validRequest(auditLogPage("20", { actionType: AuditLogActions.GuildUpdate }))
     const result = request.decode(
         page([
             entry({
@@ -228,9 +235,9 @@ test("rejects unfiltered, malformed, ambiguous, and non-descending audit-log pag
         { actionType: 999 },
         { userId: "30", extra: true },
     ])
-        expect(auditLogPage("20", query as never)).toBeUndefined()
+        expect(auditLogPage("20", query as never)).toBeInstanceOf(InputValidationFailure)
 
-    const before = auditLogPage("20", { before: "200", actionType: AuditLogActions.RoleUpdate })!
+    const before = validRequest(auditLogPage("20", { before: "200", actionType: AuditLogActions.RoleUpdate }))
     expect(before.decode(page([entry({ id: "200" })]))).toBeUndefined()
     expect(before.decode(page([entry({ id: "199" }), entry({ id: "199" })]))).toBeUndefined()
     expect(before.decode(page([entry({ action_type: AuditLogActions.GuildUpdate })]))).toBeUndefined()

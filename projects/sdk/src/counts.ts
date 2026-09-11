@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** One fresh gateway count request. A logical request can fan out to local shard commands but holds one client-wide admission slot and no count cache */
 export type CountOperation = "guilds.fetchCounts" | "channels.fetchMemberCounts"
@@ -65,15 +66,20 @@ export interface DefaultCountOperationOptions extends CountOperationOptions, Ope
 export class CountOperationError extends Error {
     /** Stable expected-failure discriminator */
     readonly _tag = "CountOperationError"
+    /** SDK-owned local input detail, or null for non-input failures */
+    readonly inputValidation: InputValidationDetail | null
 
     constructor(
         /** Requested count operation */
         readonly operation: CountOperation,
         /** Local validation, an absent or unready routed shard, client-wide capacity, deadline, gateway loss, or matched malformed reply */
         readonly reason: "input" | "notConnected" | "busy" | "timeout" | "connectionLost" | "response",
+        /** Safe local input detail. It never retains rejected values, caller keys, credentials, or provider data */
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(`Count operation ${operation} failed (${reason})`)
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 

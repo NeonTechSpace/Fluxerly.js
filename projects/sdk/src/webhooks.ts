@@ -2,6 +2,7 @@ import type { OperationOptions } from "./client.js"
 import type { InstanceOptions } from "./instance.js"
 import type { ClientClosedError } from "./errors.js"
 import type { ApiErrorDetail } from "./api-errors.js"
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type {
     AllowedMentions,
     ForwardMessageInput,
@@ -161,6 +162,8 @@ export type WebhookOperation =
 export class WebhookOperationError extends Error {
     /** Stable expected-failure discriminator */
     readonly _tag = "WebhookOperationError"
+    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    readonly inputValidation: InputValidationDetail | null
     constructor(
         /** Requested operation */
         readonly operation: WebhookOperation,
@@ -174,9 +177,11 @@ export class WebhookOperationError extends Error {
         readonly retryAfterMs: number | null = null,
         /** Reviewed provider rejection detail, or null when no safe classification is available */
         readonly apiError: ApiErrorDetail | null = null,
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(`Webhook operation ${operation} failed (${reason}, outcome ${outcome})`)
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 

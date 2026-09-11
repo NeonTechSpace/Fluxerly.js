@@ -16,6 +16,7 @@ import { InstanceResolver, instanceConfiguration } from "#sdk/internal/instance"
 import { guildList } from "#sdk/internal/guild-lifecycle"
 import { identifier, record } from "#sdk/internal/message"
 import type { GuildListQuery, GuildListSummary } from "#sdk/guilds"
+import { InputValidationFailure, inputValidationFailure, type InputValidationConstraint } from "#sdk/input-validation"
 
 const maximumResponseBytes = 1_048_576
 const maximumConcurrentRequests = 8
@@ -106,8 +107,21 @@ function identity(value: unknown): OAuthIdentity | undefined {
     })
 }
 
-function inputError(operation: OAuthOperation): OAuthOperationError {
-    return new OAuthError(operation, "input", "notDispatched")
+function inputError(
+    operation: OAuthOperation,
+    path: string,
+    constraint: InputValidationConstraint,
+    explanation: string,
+): OAuthOperationError {
+    return new OAuthError(
+        operation,
+        "input",
+        "notDispatched",
+        null,
+        null,
+        null,
+        inputValidationFailure(path, constraint, explanation).detail,
+    )
 }
 
 function responseError(operation: OAuthOperation, status: number): OAuthOperationError {
@@ -240,7 +254,14 @@ export class OAuthOwner {
                 Object.keys(options).some((key) => key !== "timeoutMs") ||
                 (options.timeoutMs !== undefined && limit === undefined))
         )
-            return Effect.fail(inputError(operation))
+            return Effect.fail(
+                inputError(
+                    operation,
+                    "options",
+                    "format",
+                    "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
+                ),
+            )
         return Effect.suspend<A, OAuthOperationError | ClientClosedError, never>(() => {
             if (this.#closed || !this.#secret) return Effect.fail(new ClientClosedError())
             if (this.#active >= maximumConcurrentRequests)
@@ -288,17 +309,45 @@ export class OAuthOwner {
         input: OAuthAuthorizationInput,
         options?: OAuthOperationOptions,
     ): Effect.Effect<string, OAuthOperationError | ClientClosedError> {
-        if (
-            !record(input) ||
-            !redirectUri(input.redirectUri) ||
-            !text(input.state) ||
-            typeof input.codeChallenge !== "string" ||
-            !/^[A-Za-z0-9_-]{43}$/.test(input.codeChallenge) ||
-            !Array.isArray(input.scopes) ||
-            input.scopes.length === 0 ||
-            Array.from(input.scopes).some((scope) => !["identify", "email", "guilds", "connections"].includes(scope))
-        )
-            return Effect.fail(inputError("oauth.authorizationUrl"))
+        if (!record(input))
+            return Effect.fail(
+                inputError("oauth.authorizationUrl", "input", "type", "OAuth authorization input must be an object"),
+            )
+        if (!redirectUri(input.redirectUri))
+            return Effect.fail(
+                inputError(
+                    "oauth.authorizationUrl",
+                    "redirectUri",
+                    "format",
+                    "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
+                ),
+            )
+        if (!text(input.state))
+            return Effect.fail(
+                inputError("oauth.authorizationUrl", "state", "required", "OAuth state must be a non-empty string"),
+            )
+        if (typeof input.codeChallenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(input.codeChallenge))
+            return Effect.fail(
+                inputError(
+                    "oauth.authorizationUrl",
+                    "codeChallenge",
+                    "format",
+                    "PKCE code challenge must contain exactly 43 base64url characters",
+                ),
+            )
+        if (!Array.isArray(input.scopes) || input.scopes.length === 0)
+            return Effect.fail(
+                inputError("oauth.authorizationUrl", "scopes", "length", "OAuth scopes must be a non-empty array"),
+            )
+        if (Array.from(input.scopes).some((scope) => !["identify", "email", "guilds", "connections"].includes(scope)))
+            return Effect.fail(
+                inputError(
+                    "oauth.authorizationUrl",
+                    "scopes[]",
+                    "allowedValue",
+                    "OAuth scopes must be identify, email, guilds, or connections",
+                ),
+            )
         const request = {
             redirectUri: input.redirectUri,
             scopes: Object.freeze([...input.scopes]),
@@ -466,13 +515,32 @@ export class OAuthOwner {
         input: OAuthCodeExchangeInput,
         options?: OAuthOperationOptions,
     ): Effect.Effect<OAuthTokens, OAuthOperationError | ClientClosedError> {
-        if (
-            !record(input) ||
-            !text(input.code) ||
-            !redirectUri(input.redirectUri) ||
-            !/^[A-Za-z0-9._~-]{43,128}$/.test(input.codeVerifier)
-        )
-            return Effect.fail(inputError("oauth.exchangeCode"))
+        if (!record(input))
+            return Effect.fail(
+                inputError("oauth.exchangeCode", "input", "type", "OAuth code exchange input must be an object"),
+            )
+        if (!text(input.code))
+            return Effect.fail(
+                inputError("oauth.exchangeCode", "code", "required", "Authorization code must be a non-empty string"),
+            )
+        if (!redirectUri(input.redirectUri))
+            return Effect.fail(
+                inputError(
+                    "oauth.exchangeCode",
+                    "redirectUri",
+                    "format",
+                    "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
+                ),
+            )
+        if (typeof input.codeVerifier !== "string" || !/^[A-Za-z0-9._~-]{43,128}$/.test(input.codeVerifier))
+            return Effect.fail(
+                inputError(
+                    "oauth.exchangeCode",
+                    "codeVerifier",
+                    "format",
+                    "PKCE code verifier must contain 43 through 128 unreserved characters",
+                ),
+            )
         const request = { code: input.code, redirectUri: input.redirectUri, codeVerifier: input.codeVerifier }
         return this.#run("oauth.exchangeCode", options, (api, _webapp, secret, progress) =>
             this.#request(
@@ -502,7 +570,10 @@ export class OAuthOwner {
         refreshToken: string,
         options?: OAuthOperationOptions,
     ): Effect.Effect<OAuthTokens, OAuthOperationError | ClientClosedError> {
-        if (!text(refreshToken)) return Effect.fail(inputError("oauth.refresh"))
+        if (!text(refreshToken))
+            return Effect.fail(
+                inputError("oauth.refresh", "refreshToken", "required", "Refresh token must be a non-empty string"),
+            )
         return this.#run("oauth.refresh", options, (api, _webapp, secret, progress) =>
             this.#request(
                 "oauth.refresh",
@@ -529,14 +600,25 @@ export class OAuthOwner {
         value: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
         options?: OAuthOperationOptions,
     ): Effect.Effect<void, OAuthOperationError | ClientClosedError> {
+        if (!record(value))
+            return Effect.fail(inputError("oauth.revoke", "input", "type", "OAuth revoke input must be an object"))
+        if (!text(value.token))
+            return Effect.fail(
+                inputError("oauth.revoke", "token", "required", "Revoked token must be a non-empty string"),
+            )
         if (
-            !record(value) ||
-            !text(value.token) ||
-            (value.tokenTypeHint !== undefined &&
-                value.tokenTypeHint !== "access_token" &&
-                value.tokenTypeHint !== "refresh_token")
+            value.tokenTypeHint !== undefined &&
+            value.tokenTypeHint !== "access_token" &&
+            value.tokenTypeHint !== "refresh_token"
         )
-            return Effect.fail(inputError("oauth.revoke"))
+            return Effect.fail(
+                inputError(
+                    "oauth.revoke",
+                    "tokenTypeHint",
+                    "allowedValue",
+                    "Token type hint must be access_token or refresh_token",
+                ),
+            )
         const request = { token: value.token, tokenTypeHint: value.tokenTypeHint }
         return this.#run("oauth.revoke", options, (api, _webapp, secret, progress) =>
             this.#request(
@@ -565,7 +647,10 @@ export class OAuthOwner {
         accessToken: string,
         options?: OAuthOperationOptions,
     ): Effect.Effect<OAuthIdentity, OAuthOperationError | ClientClosedError> {
-        if (!text(accessToken)) return Effect.fail(inputError("oauth.fetchIdentity"))
+        if (!text(accessToken))
+            return Effect.fail(
+                inputError("oauth.fetchIdentity", "accessToken", "required", "Access token must be a non-empty string"),
+            )
         return this.#run("oauth.fetchIdentity", options, (api, _webapp, _secret, progress) =>
             this.#request(
                 "oauth.fetchIdentity",
@@ -584,7 +669,14 @@ export class OAuthOwner {
         options?: OAuthOperationOptions,
     ): Effect.Effect<readonly GuildListSummary[], OAuthOperationError | ClientClosedError> {
         const request = guildList(query)
-        if (!text(accessToken) || !request) return Effect.fail(inputError("oauth.fetchGuilds"))
+        if (!text(accessToken))
+            return Effect.fail(
+                inputError("oauth.fetchGuilds", "accessToken", "required", "Access token must be a non-empty string"),
+            )
+        if (request instanceof InputValidationFailure)
+            return Effect.fail(
+                new OAuthError("oauth.fetchGuilds", "input", "notDispatched", null, null, null, request.detail),
+            )
         return this.#run("oauth.fetchGuilds", options, (api, _webapp, _secret, progress) =>
             this.#request(
                 "oauth.fetchGuilds",

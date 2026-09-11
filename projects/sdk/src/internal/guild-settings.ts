@@ -2,6 +2,7 @@ import type { Guild, GuildEdit, GuildFeatureToggle, ModerationOptions } from "#s
 import { decodeGuild, type GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const text = (value: unknown, minimum: number, maximum: number): value is string =>
     typeof value === "string" && [...value].length >= minimum && [...value].length <= maximum
@@ -29,14 +30,14 @@ export function guildEdit(
     guildId: string,
     input: GuildEdit,
     options?: ModerationOptions,
-): GuildRequest<Guild> | undefined {
+): GuildRequest<Guild> | InputValidationFailure {
     const audit = auditSettings(options)
     const rawFeatureToggles = record(input) ? input.featureToggles : undefined
     const featureToggles = Array.isArray(rawFeatureToggles) ? Array.from(rawFeatureToggles) : undefined
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    if (!record(input)) return inputValidationFailure("input", "type", "Guild settings input must be an object")
+    if (audit instanceof InputValidationFailure) return audit
     if (
-        !identifier(guildId) ||
-        !record(input) ||
-        !audit ||
         Object.keys(input).some(
             (key) =>
                 ![
@@ -59,56 +60,116 @@ export function guildEdit(
                     "featureToggles",
                     "messageHistoryCutoff",
                 ].includes(key),
-        ) ||
-        (input.name !== undefined && !text(input.name, 1, 100)) ||
-        (input.icon !== undefined && input.icon !== null && !imageDataUri(input.icon)) ||
-        (input.banner !== undefined && input.banner !== null && !imageDataUri(input.banner)) ||
-        (input.splash !== undefined && input.splash !== null && !imageDataUri(input.splash)) ||
-        (input.embedSplash !== undefined && input.embedSplash !== null && !imageDataUri(input.embedSplash)) ||
-        (input.systemChannelId !== undefined && !nullableIdentifier(input.systemChannelId)) ||
-        (input.systemChannelFlags !== undefined && input.systemChannelFlags !== 0 && input.systemChannelFlags !== 1) ||
-        (input.afkChannelId !== undefined && !nullableIdentifier(input.afkChannelId)) ||
-        (input.afkTimeoutSeconds !== undefined &&
-            !(
-                typeof input.afkTimeoutSeconds === "number" &&
-                Number.isInteger(input.afkTimeoutSeconds) &&
-                input.afkTimeoutSeconds >= 60 &&
-                input.afkTimeoutSeconds <= 3600
-            )) ||
-        (input.defaultMessageNotifications !== undefined &&
-            input.defaultMessageNotifications !== 0 &&
-            input.defaultMessageNotifications !== 1) ||
-        (input.verificationLevel !== undefined &&
-            input.verificationLevel !== 0 &&
-            input.verificationLevel !== 1 &&
-            input.verificationLevel !== 2 &&
-            input.verificationLevel !== 3 &&
-            input.verificationLevel !== 4) ||
-        (input.nsfw !== undefined && typeof input.nsfw !== "boolean") ||
-        (input.contentWarningLevel !== undefined &&
-            input.contentWarningLevel !== 0 &&
-            input.contentWarningLevel !== 1) ||
-        (input.contentWarningText !== undefined &&
-            input.contentWarningText !== null &&
-            !text(input.contentWarningText, 0, 200)) ||
-        (input.explicitContentFilter !== undefined &&
-            input.explicitContentFilter !== 0 &&
-            input.explicitContentFilter !== 1 &&
-            input.explicitContentFilter !== 2) ||
-        (input.splashCardAlignment !== undefined &&
-            input.splashCardAlignment !== 0 &&
-            input.splashCardAlignment !== 1 &&
-            input.splashCardAlignment !== 2) ||
-        (input.featureToggles !== undefined &&
-            (!Array.isArray(input.featureToggles) ||
-                featureToggles!.length > guildFeatureToggles.size ||
-                !featureToggles!.every((feature) => guildFeatureToggles.has(feature)) ||
-                new Set(featureToggles).size !== featureToggles!.length)) ||
-        (input.messageHistoryCutoff !== undefined &&
-            input.messageHistoryCutoff !== null &&
-            !timestamp(input.messageHistoryCutoff))
+        )
     )
-        return undefined
+        return inputValidationFailure("input", "allowedFields", "Guild settings input contains an unsupported field")
+    if (input.name !== undefined && !text(input.name, 1, 100))
+        return inputValidationFailure("name", "length", "Guild name must contain 1 through 100 Unicode code points")
+    for (const [path, value] of [
+        ["icon", input.icon],
+        ["banner", input.banner],
+        ["splash", input.splash],
+        ["embedSplash", input.embedSplash],
+    ] as const)
+        if (value !== undefined && value !== null && !imageDataUri(value))
+            return inputValidationFailure(path, "format", `${path} must be null or a base64 image data URI`)
+    if (input.systemChannelId !== undefined && !nullableIdentifier(input.systemChannelId))
+        return inputValidationFailure("systemChannelId", "format", "System channel ID must be null or a decimal string")
+    if (input.systemChannelFlags !== undefined && input.systemChannelFlags !== 0 && input.systemChannelFlags !== 1)
+        return inputValidationFailure("systemChannelFlags", "allowedValue", "System channel flags must be 0 or 1")
+    if (input.afkChannelId !== undefined && !nullableIdentifier(input.afkChannelId))
+        return inputValidationFailure("afkChannelId", "format", "AFK channel ID must be null or a decimal string")
+    if (
+        input.afkTimeoutSeconds !== undefined &&
+        !(
+            typeof input.afkTimeoutSeconds === "number" &&
+            Number.isInteger(input.afkTimeoutSeconds) &&
+            input.afkTimeoutSeconds >= 60 &&
+            input.afkTimeoutSeconds <= 3600
+        )
+    )
+        return inputValidationFailure(
+            "afkTimeoutSeconds",
+            "range",
+            "AFK timeout must be an integer from 60 through 3,600 seconds",
+        )
+    if (
+        input.defaultMessageNotifications !== undefined &&
+        input.defaultMessageNotifications !== 0 &&
+        input.defaultMessageNotifications !== 1
+    )
+        return inputValidationFailure(
+            "defaultMessageNotifications",
+            "allowedValue",
+            "Default message notifications must be 0 or 1",
+        )
+    if (
+        input.verificationLevel !== undefined &&
+        input.verificationLevel !== 0 &&
+        input.verificationLevel !== 1 &&
+        input.verificationLevel !== 2 &&
+        input.verificationLevel !== 3 &&
+        input.verificationLevel !== 4
+    )
+        return inputValidationFailure(
+            "verificationLevel",
+            "allowedValue",
+            "Verification level must be 0, 1, 2, 3, or 4",
+        )
+    if (input.nsfw !== undefined && typeof input.nsfw !== "boolean")
+        return inputValidationFailure("nsfw", "type", "NSFW must be a boolean")
+    if (input.contentWarningLevel !== undefined && input.contentWarningLevel !== 0 && input.contentWarningLevel !== 1)
+        return inputValidationFailure("contentWarningLevel", "allowedValue", "Content warning level must be 0 or 1")
+    if (
+        input.contentWarningText !== undefined &&
+        input.contentWarningText !== null &&
+        !text(input.contentWarningText, 0, 200)
+    )
+        return inputValidationFailure(
+            "contentWarningText",
+            "length",
+            "Content warning text must be null or contain at most 200 Unicode code points",
+        )
+    if (
+        input.explicitContentFilter !== undefined &&
+        input.explicitContentFilter !== 0 &&
+        input.explicitContentFilter !== 1 &&
+        input.explicitContentFilter !== 2
+    )
+        return inputValidationFailure(
+            "explicitContentFilter",
+            "allowedValue",
+            "Explicit content filter must be 0, 1, or 2",
+        )
+    if (
+        input.splashCardAlignment !== undefined &&
+        input.splashCardAlignment !== 0 &&
+        input.splashCardAlignment !== 1 &&
+        input.splashCardAlignment !== 2
+    )
+        return inputValidationFailure("splashCardAlignment", "allowedValue", "Splash card alignment must be 0, 1, or 2")
+    if (
+        input.featureToggles !== undefined &&
+        (!Array.isArray(input.featureToggles) ||
+            featureToggles!.length > guildFeatureToggles.size ||
+            !featureToggles!.every((feature) => guildFeatureToggles.has(feature)) ||
+            new Set(featureToggles).size !== featureToggles!.length)
+    )
+        return inputValidationFailure(
+            "featureToggles[]",
+            "allowedValue",
+            "Feature toggles must be unique supported values",
+        )
+    if (
+        input.messageHistoryCutoff !== undefined &&
+        input.messageHistoryCutoff !== null &&
+        !timestamp(input.messageHistoryCutoff)
+    )
+        return inputValidationFailure(
+            "messageHistoryCutoff",
+            "format",
+            "Message history cutoff must be null or an ISO 8601 UTC timestamp",
+        )
     const json = JSON.stringify({
         name: input.name,
         icon: input.icon,
@@ -129,7 +190,9 @@ export function guildEdit(
         features: featureToggles,
         message_history_cutoff: input.messageHistoryCutoff,
     })
-    if (json === "{}" || Buffer.byteLength(json) > 4_194_304) return undefined
+    if (json === "{}") return inputValidationFailure("input", "required", "Guild settings input must contain a change")
+    if (Buffer.byteLength(json) > 4_194_304)
+        return inputValidationFailure("input", "size", "Guild settings input must not exceed 4,194,304 encoded bytes")
     return {
         guildId,
         bucket: "guild:settings:update",

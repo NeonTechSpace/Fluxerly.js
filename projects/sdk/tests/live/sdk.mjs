@@ -9,6 +9,7 @@ const cancelRecovery = process.argv[3] === "--cancel-recovery"
 const applicationCheck = process.argv[3] === "--application"
 const diagnosticsCheck = process.argv[3] === "--diagnostics"
 const instanceCheck = process.argv[3] === "--instance"
+const qualityCheck = process.argv[3] === "--quality"
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, ...details }))
 let stage = "configuration"
@@ -261,6 +262,76 @@ async function verifyDiagnostics(client, guildId, token, run) {
     report(stage, { passed: true, callerSnapshotPreserved: true, staleReadNotRetained: true })
 }
 
+async function verifyQuality(client, token, run, fail) {
+    stage = "quality_target_identity"
+    const userId = process.env.FLUXER_TEST_DM_USER_ID
+    const groupId = process.env.FLUXER_TEST_GROUP_DM_ID
+    assert.match(userId ?? "", /^\d+$/)
+    assert.match(groupId ?? "", /^\d+$/)
+    const externalUser = await get(`/users/${userId}`, token)
+    const externalGroup = await get(`/channels/${groupId}`, token)
+    assert.equal(externalUser.id, userId)
+    assert.equal(externalUser.bot ?? false, false)
+    assert.equal(externalGroup.id, groupId)
+    assert.equal(externalGroup.type, 3)
+    assert.equal(externalGroup.owner_id, userId)
+    await run(client.instance.resolve())
+    report(stage, { passed: true, remoteMutations: false })
+
+    stage = "quality_local_validation_no_dispatch"
+    const originalFetch = globalThis.fetch
+    let requests = 0
+    globalThis.fetch = async () => {
+        requests += 1
+        throw new Error("Unexpected request during local validation")
+    }
+    try {
+        for (const [operation, path, constraint] of [
+            [() => client.users.fetch("private-invalid-user"), "userId", "format"],
+            [
+                () => client.messages.send("private-invalid-channel", { content: "not dispatched" }),
+                "channelId",
+                "format",
+            ],
+            [() => client.directMessages.fetchLatestMessages([groupId, groupId]), "channelIds", "unique"],
+        ]) {
+            const error = await fail(operation())
+            assert.equal(error.reason, "input")
+            assert.equal(error.status, null)
+            assert.equal(error.apiError, null)
+            assert.equal(error.outcome ?? error.delivery, error.delivery === undefined ? "notDispatched" : "notSent")
+            assert.equal(error.inputValidation?.path, path)
+            assert.equal(error.inputValidation?.constraint, constraint)
+            assert.ok(Object.isFrozen(error.inputValidation))
+            assert.equal(typeof error.inputValidation.explanation, "string")
+            const encoded = JSON.stringify(error)
+            for (const privateValue of [token, userId, groupId, "private-invalid-user", "private-invalid-channel"])
+                assert.ok(!encoded.includes(privateValue))
+        }
+        assert.equal(requests, 0)
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+    report(stage, { passed: true, dispatchedRequests: requests })
+
+    stage = "quality_live_reads_after_rejection"
+    const user = await run(client.users.fetch(userId))
+    const group = await run(client.directMessages.fetch(groupId))
+    assert.equal(user.id, externalUser.id)
+    assert.equal(group.id, externalGroup.id)
+    assert.equal(await run(client.users.get(userId)), user)
+    assert.equal(await run(client.directMessages.get(groupId)), group)
+    for (const [resource, value] of [
+        ["users", user],
+        ["directMessages", group],
+    ]) {
+        assert.deepEqual(await run(client.cache.entries(resource)), [value])
+        assert.equal(client.diagnostics().caches[resource].retainedEntries, 1)
+    }
+    assert.equal(client.diagnostics().rest.activeRequests, 0)
+    report(stage, { passed: true, remoteMutations: false })
+}
+
 // A watchdog is failure containment, never evidence of successful cleanup
 // Keep it unreferenced so a successful check must exit naturally
 setTimeout(() => {
@@ -270,7 +341,14 @@ setTimeout(() => {
 
 try {
     assert.ok(mode === "default" || mode === "effect")
-    assert.ok(process.argv[3] === undefined || cancelRecovery || applicationCheck || diagnosticsCheck || instanceCheck)
+    assert.ok(
+        process.argv[3] === undefined ||
+            cancelRecovery ||
+            applicationCheck ||
+            diagnosticsCheck ||
+            instanceCheck ||
+            qualityCheck,
+    )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
     writeSync(lock, String(process.pid))
@@ -298,14 +376,33 @@ try {
     if (mode === "default") {
         const { createClient, links } = await import("@neontechspace/fluxerly")
         stage = "creation"
-        const created = createClient({ token, ...(diagnosticsCheck ? { cache: { guilds: true } } : {}) })
+        const created = createClient({
+            token,
+            ...(diagnosticsCheck ? { cache: { guilds: true } } : {}),
+            ...(qualityCheck ? { cache: { users: true, directMessages: true } } : {}),
+        })
         assert.ok(created.isOk())
         client = created.value
         assert.equal(client.state, "Disconnected")
         const controller = new AbortController()
         let running
         try {
-            if (diagnosticsCheck) {
+            if (qualityCheck) {
+                await verifyQuality(
+                    client,
+                    token,
+                    async (operation) => {
+                        const result = await operation
+                        assert.ok(result.isOk())
+                        return result.value
+                    },
+                    async (operation) => {
+                        const result = await operation
+                        assert.ok(result.isErr())
+                        return result.error
+                    },
+                )
+            } else if (diagnosticsCheck) {
                 await verifyDiagnostics(client, guildId, token, async (operation) => {
                     const result = await operation
                     assert.ok(result.isOk())
@@ -374,9 +471,21 @@ try {
             Effect.scoped(
                 Effect.gen(function* () {
                     stage = "creation"
-                    client = yield* createClient({ token, ...(diagnosticsCheck ? { cache: { guilds: true } } : {}) })
+                    client = yield* createClient({
+                        token,
+                        ...(diagnosticsCheck ? { cache: { guilds: true } } : {}),
+                        ...(qualityCheck ? { cache: { users: true, directMessages: true } } : {}),
+                    })
                     assert.equal(client.state, "Disconnected")
-                    if (diagnosticsCheck) {
+                    if (qualityCheck) {
+                        yield* Effect.promise(() =>
+                            verifyQuality(client, token, Effect.runPromise, async (operation) => {
+                                const result = await Effect.runPromise(Effect.result(operation))
+                                assert.equal(result._tag, "Failure")
+                                return result.failure
+                            }),
+                        )
+                    } else if (diagnosticsCheck) {
                         yield* Effect.promise(() => verifyDiagnostics(client, guildId, token, Effect.runPromise))
                     } else if (instanceCheck) {
                         stage = "instance_independent_discovery"
@@ -433,6 +542,14 @@ try {
         assert.equal(closed.caches.guilds.accountedBytes, 0)
         assert.equal(closed.rest.activeRequests, 0)
         report("diagnostics_closed_release", { passed: true })
+    }
+    if (qualityCheck) {
+        for (const resource of ["users", "directMessages"]) {
+            assert.equal(client.diagnostics().caches[resource].retainedEntries, 0)
+            assert.equal(client.diagnostics().caches[resource].accountedBytes, 0)
+        }
+        assert.equal(client.diagnostics().rest.activeRequests, 0)
+        report("quality_closed_release", { passed: true })
     }
     if (cancelRecovery) {
         stage = "cancelled_recovery_cleanup"

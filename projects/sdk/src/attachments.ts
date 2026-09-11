@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** One complete result read from an attachment stream.
  * The structural shape accepts Node's native ReadableStream without adding DOM declarations to default consumers
@@ -210,14 +211,18 @@ export interface DefaultAttachmentDownloadOptions extends AttachmentDownloadOpti
 /** Expected bounded attachment-download failure, without a URL, response body or credential */
 export class AttachmentDownloadError extends Error {
     readonly _tag = "AttachmentDownloadError"
+    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    readonly inputValidation: InputValidationDetail | null
     constructor(
         /** Local validation, untrusted attachment URL, local scheduler saturation, transport, response decoding, output limit or deadline */
         readonly reason: "input" | "untrustedUrl" | "busy" | "network" | "response" | "tooLarge" | "timeout",
         /** HTTP status when a response was received, otherwise null */
         readonly status: number | null = null,
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(`Attachment download failed (${reason})`)
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 

@@ -4,6 +4,12 @@ import { mapFailureCause, withDeadline } from "./effect-failures.js"
 import { ClientClosedError, ConnectionError, RateLimitError } from "#sdk/errors"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import { apiErrorDetail, type ApiErrorDetail } from "#sdk/api-errors"
+import {
+    InputValidationFailure,
+    inputValidationFailure,
+    type InputValidationConstraint,
+    type InputValidationDetail,
+} from "#sdk/input-validation"
 import type {
     EditMessageInput,
     ForwardMessageInput,
@@ -132,9 +138,22 @@ class RestFailure extends Error {
         readonly retryAfterMs: number | null = null,
         readonly retryableRead = false,
         readonly apiError: ApiErrorDetail | null = null,
+        readonly inputValidation: InputValidationDetail | null = null,
     ) {
         super("REST operation failed")
     }
+}
+
+function localInputFailure(path: string, constraint: InputValidationConstraint, explanation: string): RestFailure {
+    return new RestFailure(
+        "input",
+        "notDispatched",
+        null,
+        null,
+        false,
+        null,
+        inputValidationFailure(path, constraint, explanation).detail,
+    )
 }
 
 function instanceFailure(error: unknown): RestFailure | ClientClosedError {
@@ -256,7 +275,11 @@ async function readMessage(response: Response, channel: string, id?: string): Pr
     return decoded
 }
 
-async function readHistory(response: Response, channel: string, query: NonNullable<ReturnType<typeof encodeHistory>>) {
+async function readHistory(
+    response: Response,
+    channel: string,
+    query: { readonly limit: number; readonly params: URLSearchParams },
+) {
     const body: unknown = await response.json().catch(() => null)
     const invalid = () => new RestFailure("response", "unknown", response.status)
     if (!Array.isArray(body) || body.length > query.limit) throw invalid()
@@ -700,17 +723,46 @@ export class RestOwner {
         const owner = this
         return Effect.suspend((): Effect.Effect<Uint8Array, AttachmentDownloadFailure> => {
             if (owner.#closed) return Effect.fail(new ClientClosedError())
-            if (!record(options)) return Effect.fail(new AttachmentDownloadError("input"))
+            if (!record(options))
+                return Effect.fail(
+                    new AttachmentDownloadError(
+                        "input",
+                        null,
+                        inputValidationFailure("options", "type", "Attachment download options must be an object")
+                            .detail,
+                    ),
+                )
             const maxBytes = options.maxBytes
             const attachmentUrl = attachment?.url
+            if (Object.keys(options).some((key) => key !== "maxBytes" && key !== "timeoutMs" && key !== "signal"))
+                return Effect.fail(
+                    new AttachmentDownloadError(
+                        "input",
+                        null,
+                        inputValidationFailure(
+                            "options",
+                            "allowedFields",
+                            "Attachment download options may contain only maxBytes, timeoutMs, and signal",
+                        ).detail,
+                    ),
+                )
             if (
-                Object.keys(options).some((key) => key !== "maxBytes" && key !== "timeoutMs" && key !== "signal") ||
                 typeof maxBytes !== "number" ||
                 !Number.isSafeInteger(maxBytes) ||
                 maxBytes <= 0 ||
                 maxBytes > 52_428_800
             )
-                return Effect.fail(new AttachmentDownloadError("input"))
+                return Effect.fail(
+                    new AttachmentDownloadError(
+                        "input",
+                        null,
+                        inputValidationFailure(
+                            "options.maxBytes",
+                            "range",
+                            "Attachment maxBytes must be an integer from 1 through 52,428,800",
+                        ).detail,
+                    ),
+                )
             const timeout = options.timeoutMs === undefined ? 30_000 : options.timeoutMs
             if (
                 typeof timeout !== "number" ||
@@ -718,7 +770,17 @@ export class RestOwner {
                 timeout <= 0 ||
                 timeout > 2_147_483_647
             )
-                return Effect.fail(new AttachmentDownloadError("input"))
+                return Effect.fail(
+                    new AttachmentDownloadError(
+                        "input",
+                        null,
+                        inputValidationFailure(
+                            "options.timeoutMs",
+                            "range",
+                            "Attachment timeoutMs must be an integer from 1 through 2,147,483,647 milliseconds",
+                        ).detail,
+                    ),
+                )
             const operation = Deferred.makeUnsafe<void>()
             owner.#operations.add(operation)
             let controller: AbortController | undefined
@@ -935,6 +997,7 @@ export class RestOwner {
                               error.status,
                               error.retryAfterMs,
                               error.apiError,
+                              error.inputValidation,
                           )
                         : error,
                 ),
@@ -955,12 +1018,18 @@ export class RestOwner {
     ): Effect.Effect<void, MessageOperationFailure> {
         return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            if (
-                !identifier(channel) ||
-                (options !== undefined &&
-                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
-            )
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (!identifier(channel))
+                return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
+            if (options !== undefined && !record(options))
+                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
+            if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
+                return Effect.fail(
+                    localInputFailure(
+                        "options",
+                        "allowedFields",
+                        "Operation options may contain only timeoutMs and signal",
+                    ),
+                )
             return this.#execute(
                 token,
                 {
@@ -985,6 +1054,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1000,7 +1070,8 @@ export class RestOwner {
         return Effect.suspend((): Effect.Effect<readonly Message[], RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const encoded = encodeHistory(channel, query)
-            if (!encoded) return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (encoded instanceof InputValidationFailure)
+                return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, encoded.detail))
             return this.#execute(
                 token,
                 {
@@ -1024,6 +1095,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1039,7 +1111,8 @@ export class RestOwner {
         return Effect.suspend((): Effect.Effect<MessageSearchPage, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const encoded = encodeMessageSearch(context, query)
-            if (!encoded) return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (encoded instanceof InputValidationFailure)
+                return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, encoded.detail))
             return this.#execute(
                 token,
                 {
@@ -1068,6 +1141,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1097,8 +1171,14 @@ export class RestOwner {
     ): Effect.Effect<void, MessageOperationFailure> {
         return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            if (!reference(target) || !identifier(attachmentId))
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (!reference(target))
+                return Effect.fail(
+                    localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
+                )
+            if (!identifier(attachmentId))
+                return Effect.fail(
+                    localInputFailure("attachmentId", "format", "Attachment IDs must be decimal strings"),
+                )
             const ref = { channelId: target.channelId, id: target.id }
             return this.#execute(
                 token,
@@ -1123,6 +1203,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1137,17 +1218,28 @@ export class RestOwner {
     ): Effect.Effect<void, MessageOperationFailure> {
         return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            if (
-                !identifier(channelId) ||
-                !Array.isArray(ids) ||
-                ids.length < 1 ||
-                ids.length > 100 ||
-                !Array.from(ids).every(identifier) ||
-                new Set(ids).size !== ids.length ||
-                (options !== undefined &&
-                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
-            )
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (!identifier(channelId))
+                return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
+            if (!Array.isArray(ids))
+                return Effect.fail(localInputFailure("messageIds", "type", "Message IDs must be an array"))
+            if (ids.length < 1 || ids.length > 100)
+                return Effect.fail(
+                    localInputFailure("messageIds", "length", "Bulk deletion requires 1 through 100 message IDs"),
+                )
+            if (!Array.from(ids).every(identifier))
+                return Effect.fail(localInputFailure("messageIds[]", "format", "Message IDs must be decimal strings"))
+            if (new Set(ids).size !== ids.length)
+                return Effect.fail(localInputFailure("messageIds", "unique", "Message IDs must be unique"))
+            if (options !== undefined && !record(options))
+                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
+            if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
+                return Effect.fail(
+                    localInputFailure(
+                        "options",
+                        "allowedFields",
+                        "Operation options may contain only timeoutMs and signal",
+                    ),
+                )
             const snapshot = [...ids]
             return this.#execute(
                 token,
@@ -1174,6 +1266,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1191,8 +1284,20 @@ export class RestOwner {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const encoded = encodeReactionEmoji(emoji)
             const page = encodeReactionUsersQuery(query)
-            if (!reference(target) || encoded === undefined || !page)
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (!reference(target))
+                return Effect.fail(
+                    localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
+                )
+            if (encoded === undefined)
+                return Effect.fail(
+                    localInputFailure(
+                        "emoji",
+                        "format",
+                        "Reaction emoji must be Unicode text or a custom emoji with a decimal ID",
+                    ),
+                )
+            if (page instanceof InputValidationFailure)
+                return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, page.detail))
             return this.#execute(
                 token,
                 {
@@ -1220,6 +1325,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1235,7 +1341,8 @@ export class RestOwner {
         return Effect.suspend((): Effect.Effect<MessagePinsPage, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const page = encodePinsQuery(channel, query)
-            if (!page) return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (page instanceof InputValidationFailure)
+                return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, page.detail))
             return this.#execute(
                 token,
                 {
@@ -1263,6 +1370,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1277,7 +1385,10 @@ export class RestOwner {
     ): Effect.Effect<void, MessageOperationFailure> {
         return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            if (!reference(target)) return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (!reference(target))
+                return Effect.fail(
+                    localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
+                )
             return this.#execute(
                 token,
                 {
@@ -1302,6 +1413,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1319,12 +1431,20 @@ export class RestOwner {
         return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const encoded = operation === "clearReactions" ? "" : encodeReactionEmoji(emoji as ReactionEmojiInput)
-            if (
-                !reference(target) ||
-                encoded === undefined ||
-                (operation === "removeUserReaction" && !identifier(userId))
-            )
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (!reference(target))
+                return Effect.fail(
+                    localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
+                )
+            if (encoded === undefined)
+                return Effect.fail(
+                    localInputFailure(
+                        "emoji",
+                        "format",
+                        "Reaction emoji must be Unicode text or a custom emoji with a decimal ID",
+                    ),
+                )
+            if (operation === "removeUserReaction" && !identifier(userId))
+                return Effect.fail(localInputFailure("userId", "format", "User IDs must be decimal strings"))
             const suffix =
                 operation === "clearReactions"
                     ? ""
@@ -1354,6 +1474,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1370,11 +1491,14 @@ export class RestOwner {
     ): Effect.Effect<A, MessageOperationFailure> {
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            if (!reference(target)) return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (!reference(target))
+                return Effect.fail(
+                    localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
+                )
             const ref = { channelId: target.channelId, id: target.id }
             const body = operation === "edit" ? encodeEdit(input) : undefined
-            if (operation === "edit" && body === undefined)
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (body instanceof InputValidationFailure)
+                return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, body.detail))
             return this.#execute(
                 token,
                 {
@@ -1398,6 +1522,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1628,29 +1753,33 @@ export class RestOwner {
     guild<A>(
         token: Redacted.Redacted<string>,
         operation: GuildOperation,
-        build: () => GuildRequest<A> | undefined,
+        build: () => GuildRequest<A> | InputValidationFailure,
         options?: GuildOperationOptions,
     ) {
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const input = build()
+            if (input instanceof InputValidationFailure)
+                return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, input.detail))
+            if (options !== undefined && !record(options))
+                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
             if (
-                !input ||
-                (options !== undefined &&
-                    (!record(options) ||
-                        Object.keys(options).some(
-                            (key) =>
-                                key !== "timeoutMs" &&
-                                key !== "signal" &&
-                                !(input.moderation && key === "auditReason") &&
-                                !(
-                                    key === "purge" &&
-                                    input.method === "DELETE" &&
-                                    ["guild:emojis", "guild:stickers"].includes(input.bucket)
-                                ),
-                        )))
+                record(options) &&
+                Object.keys(options).some(
+                    (key) =>
+                        key !== "timeoutMs" &&
+                        key !== "signal" &&
+                        !(input.moderation && key === "auditReason") &&
+                        !(
+                            key === "purge" &&
+                            input.method === "DELETE" &&
+                            ["guild:emojis", "guild:stickers"].includes(input.bucket)
+                        ),
+                )
             )
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+                return Effect.fail(
+                    localInputFailure("options", "allowedFields", "Operation options contain an unsupported field"),
+                )
             return this.#execute(
                 token,
                 {
@@ -1687,6 +1816,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1696,18 +1826,24 @@ export class RestOwner {
     channel<A>(
         token: Redacted.Redacted<string>,
         operation: ChannelOperation,
-        build: () => ChannelRequest<A> | undefined,
+        build: () => ChannelRequest<A> | InputValidationFailure,
         options?: ChannelOperationOptions,
     ) {
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const input = build()
-            if (
-                !input ||
-                (options !== undefined &&
-                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
-            )
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (input instanceof InputValidationFailure)
+                return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, input.detail))
+            if (options !== undefined && !record(options))
+                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
+            if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
+                return Effect.fail(
+                    localInputFailure(
+                        "options",
+                        "allowedFields",
+                        "Operation options may contain only timeoutMs and signal",
+                    ),
+                )
             return this.#execute(
                 token,
                 {
@@ -1738,6 +1874,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1747,18 +1884,24 @@ export class RestOwner {
     user<A>(
         token: Redacted.Redacted<string>,
         operation: UserOperation,
-        build: () => UserRequest<A> | undefined,
+        build: () => UserRequest<A> | InputValidationFailure,
         options?: UserOperationOptions,
     ) {
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const input = build()
-            if (
-                !input ||
-                (options !== undefined &&
-                    (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
-            )
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (input instanceof InputValidationFailure)
+                return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, input.detail))
+            if (options !== undefined && !record(options))
+                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
+            if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
+                return Effect.fail(
+                    localInputFailure(
+                        "options",
+                        "allowedFields",
+                        "Operation options may contain only timeoutMs and signal",
+                    ),
+                )
             return this.#execute(
                 token,
                 {
@@ -1788,6 +1931,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1803,11 +1947,16 @@ export class RestOwner {
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const input = build()
-            if (
-                options !== undefined &&
-                (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
-            )
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (options !== undefined && !record(options))
+                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
+            if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
+                return Effect.fail(
+                    localInputFailure(
+                        "options",
+                        "allowedFields",
+                        "Operation options may contain only timeoutMs and signal",
+                    ),
+                )
             return this.#execute(
                 token,
                 {
@@ -1836,6 +1985,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1845,24 +1995,28 @@ export class RestOwner {
     webhook<A>(
         token: Redacted.Redacted<string>,
         operation: WebhookOperation,
-        build: () => WebhookRequest<A> | undefined,
+        build: () => WebhookRequest<A> | InputValidationFailure,
         options?: WebhookOperationOptions,
     ) {
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const input = build()
+            if (input instanceof InputValidationFailure)
+                return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, input.detail))
+            if (options !== undefined && !record(options))
+                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
             if (
-                !input ||
-                (options !== undefined &&
-                    (!record(options) ||
-                        Object.keys(options).some(
-                            (key) =>
-                                key !== "timeoutMs" &&
-                                key !== "signal" &&
-                                !(input.method !== "GET" && !input.tokenAuth && key === "auditReason"),
-                        )))
+                record(options) &&
+                Object.keys(options).some(
+                    (key) =>
+                        key !== "timeoutMs" &&
+                        key !== "signal" &&
+                        !(input.method !== "GET" && !input.tokenAuth && key === "auditReason"),
+                )
             )
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+                return Effect.fail(
+                    localInputFailure("options", "allowedFields", "Operation options contain an unsupported field"),
+                )
             return this.#execute(
                 token,
                 {
@@ -1894,6 +2048,7 @@ export class RestOwner {
                           error.status,
                           error.retryAfterMs,
                           error.apiError,
+                          error.inputValidation,
                       )
                     : error,
             ),
@@ -1916,7 +2071,8 @@ export class RestOwner {
         const owner = this
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (owner.#closed) return Effect.fail(new ClientClosedError())
-            if (options !== undefined && !record(options)) return Effect.fail(new RestFailure("input", "notDispatched"))
+            if (options !== undefined && !record(options))
+                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
             const timeout = options?.timeoutMs === undefined ? 30_000 : options.timeoutMs
             if (
                 typeof timeout !== "number" ||
@@ -1924,7 +2080,13 @@ export class RestOwner {
                 timeout <= 0 ||
                 timeout > 2_147_483_647
             )
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+                return Effect.fail(
+                    localInputFailure(
+                        "options.timeoutMs",
+                        "range",
+                        "Operation timeoutMs must be an integer from 1 through 2,147,483,647 milliseconds",
+                    ),
+                )
             const bytes = Buffer.byteLength(request.body?.json ?? "")
             const uploadBytes = request.body?.files.reduce((sum, file) => sum + file.size, 0) ?? 0
             if (!Number.isSafeInteger(uploadBytes) || uploadBytes > owner.uploadMaxBytes - owner.#uploadBytes)
@@ -1946,7 +2108,13 @@ export class RestOwner {
                 }
             } catch {
                 owner.#uploadBytes -= uploadBytes
-                return Effect.fail(new RestFailure("input", "notDispatched"))
+                return Effect.fail(
+                    localInputFailure(
+                        "attachments[].data",
+                        "type",
+                        "Attachment byte data must remain readable while the operation snapshots it",
+                    ),
+                )
             }
             const deadline = performance.now() + timeout
             const generation = owner.cache?.generation ?? 0
@@ -1972,6 +2140,10 @@ export class RestOwner {
                 request = { ...request, instance }
                 if (request.directMessageUser !== undefined) {
                     const open = directMessageOpen(request.directMessageUser)!
+                    if (open instanceof InputValidationFailure)
+                        return yield* Effect.fail(
+                            new RestFailure("input", "notDispatched", null, null, false, null, open.detail),
+                        )
                     const userGeneration = owner.users?.begin("directMessages", true)
                     const channel = yield* owner
                         .#exchange(

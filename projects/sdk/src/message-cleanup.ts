@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { MessageOperationError } from "./message-errors.js"
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type { Message, MessageOperationOptions } from "./messages.js"
 
 /** Required bounded selection for one moderation cleanup preview.
@@ -115,6 +116,8 @@ export type MessageCleanupOutcome = "notDispatched" | "rejected" | "unknown"
 export class MessageCleanupError extends Error {
     /** Stable expected-failure discriminator */
     readonly _tag = "MessageCleanupError"
+    /** Frozen SDK-owned validation facts for local input failures, otherwise null; presentation remains application-owned */
+    readonly inputValidation: InputValidationDetail | null
     constructor(
         /** Preview never submits deletion. Cleanup can have earlier submitted batches */
         readonly phase: "preview" | "cleanup",
@@ -134,9 +137,11 @@ export class MessageCleanupError extends Error {
         readonly submittedBatches: readonly MessageCleanupBatch[],
         /** Failed or uncertain batch IDs when a cleanup request was reached, otherwise null */
         readonly terminalBatchIds: readonly string[] | null,
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(`Message cleanup ${phase} failed (${reason}, outcome ${outcome})`)
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 

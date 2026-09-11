@@ -37,7 +37,7 @@ test("presence shards keep independent status timers and route member selections
     const membersOne: unknown[] = []
     const owner = new PresenceOwner(clock.timer, (guildId) => (guildId === "40" ? 0 : guildId === "50" ? 1 : undefined))
 
-    expect(owner.set({ status: "online" })).toBe(true)
+    expect(owner.set({ status: "online" })).toBeUndefined()
     expect(owner.setMembers("40", ["30"])).toBeUndefined()
     expect(owner.setMembers("50", ["31"])).toBeUndefined()
     owner.attach(
@@ -58,7 +58,7 @@ test("presence shards keep independent status timers and route member selections
     expect(membersZero).toEqual([{ subscriptions: { "40": { members: ["30"] } } }])
     expect(membersOne).toEqual([{ subscriptions: { "50": { members: ["31"] } } }])
 
-    expect(owner.set({ status: "idle" })).toBe(true)
+    expect(owner.set({ status: "idle" })).toBeUndefined()
     clock.advance(3_999)
     expect(statusZero).toHaveLength(1)
     expect(statusOne).toHaveLength(1)
@@ -86,7 +86,7 @@ test("presence shards keep independent status timers and route member selections
     expect(membersOne).toHaveLength(1)
 
     owner.detach()
-    expect(owner.set({ status: "dnd" })).toBe(true)
+    expect(owner.set({ status: "dnd" })).toBeUndefined()
     clock.advance(4_000)
     expect(statusZero).toHaveLength(2)
     expect(statusOne).toHaveLength(2)
@@ -145,7 +145,7 @@ test("an unowned guild is rejected before it can consume selection capacity or q
     const frames: unknown[] = []
     const owner = new PresenceOwner(clock.timer, () => undefined)
 
-    expect(owner.setMembers("40", ["30"])).toBe("input")
+    expect(owner.setMembers("40", ["30"])).toMatchObject({ detail: { path: "guildId", constraint: "relationship" } })
     owner.attach(
         () => undefined,
         (subscriptions) => frames.push(subscriptions),

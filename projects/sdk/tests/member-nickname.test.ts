@@ -3,6 +3,8 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { memberNicknameEdit } from "../src/internal/guilds.js"
 import { createClient, type ClientOptions, type GuildMember, type MemberReference } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import type { GuildRequest } from "../src/internal/guilds.js"
+import { InputValidationFailure } from "../src/input-validation.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
@@ -18,6 +20,11 @@ const wireMember = (nickname: string | null = "Before rename", userId = "31") =>
 const unwrap = <A, E>(result: { isErr(): boolean; value?: A; error?: E }): A => {
     if (result.isErr()) throw result.error
     return result.value!
+}
+
+const validRequest = <A>(request: GuildRequest<A> | InputValidationFailure): GuildRequest<A> => {
+    if (request instanceof InputValidationFailure) throw request
+    return request
 }
 
 async function setup(mode: (typeof modes)[number]) {
@@ -67,8 +74,8 @@ test("builds a target-member nickname PATCH without a roles replacement", () => 
         status: 200,
         cache: { selection: { kind: "members", guildId: "20", id: "31" }, mutation: true },
     })
-    expect(JSON.parse(request!.json!)).toEqual({ nick: "Renamed" })
-    expect(JSON.parse(memberNicknameEdit(target, null)!.json!)).toEqual({ nick: null })
+    expect(JSON.parse(validRequest(request).json!)).toEqual({ nick: "Renamed" })
+    expect(JSON.parse(validRequest(memberNicknameEdit(target, null)).json!)).toEqual({ nick: null })
 })
 
 test("rejects invalid nickname target and values before dispatch", () => {
@@ -79,7 +86,7 @@ test("rejects invalid nickname target and values before dispatch", () => {
         [target, "x".repeat(33)],
         [target, undefined],
     ])
-        expect(memberNicknameEdit(member as never, nickname as never)).toBeUndefined()
+        expect(memberNicknameEdit(member as never, nickname as never)).toBeInstanceOf(InputValidationFailure)
 })
 
 test.each(modes)("%s sets and clears a nickname through the public client", async (mode) => {

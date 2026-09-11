@@ -1,9 +1,15 @@
 import type { Embed } from "#sdk/embeds"
+import { InputValidationFailure, inputValidationFailure, type InputValidationConstraint } from "#sdk/input-validation"
 
 const object = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value)
 type Reader = (value: unknown) => unknown
-type Property = readonly [wire: string, read: Reader, required?: boolean]
+type Property = readonly [
+    wire: string,
+    read: Reader,
+    required?: boolean,
+    validation?: readonly [constraint: InputValidationConstraint, explanation: string],
+]
 type Shape = Record<string, Property>
 const string: Reader = (value) => (typeof value === "string" ? value : undefined)
 const boolean: Reader = (value) => (typeof value === "boolean" ? value : undefined)
@@ -42,19 +48,48 @@ const timestamp: Reader = (value) =>
         ? value
         : undefined
 
-// The tables own only embed projection. Input is strict; responses ignore unknown wire properties
-function project(value: unknown, shape: Shape, input: boolean): Record<string, unknown> | undefined {
-    if (!object(value) || (input && Object.keys(value).some((key) => !Object.hasOwn(shape, key)))) return undefined
+// The tables own only response projection, which ignores unknown wire properties
+function project(value: unknown, shape: Shape): Record<string, unknown> | undefined {
+    if (!object(value)) return undefined
     const result: Record<string, unknown> = {}
     for (const [key, [wire, read, required]] of Object.entries(shape)) {
-        const item = value[input ? key : wire]
-        if (item === undefined || (!input && item === null)) {
+        const item = value[wire]
+        if (item === undefined || item === null) {
             if (required) return undefined
             continue
         }
         const decoded = read(item)
         if (decoded === undefined) return undefined
-        result[input ? wire : key] = decoded
+        result[key] = decoded
+    }
+    return Object.freeze(result)
+}
+
+function projectInput(value: unknown, shape: Shape, path: string): Record<string, unknown> | InputValidationFailure {
+    if (!object(value)) return inputValidationFailure(path, "type", "Embed components must be objects")
+    if (Object.keys(value).some((key) => !Object.hasOwn(shape, key)))
+        return inputValidationFailure(path, "allowedFields", "Embed component contains an unsupported field")
+    const result: Record<string, unknown> = {}
+    for (const [key, [wire, read, required, validation]] of Object.entries(shape)) {
+        const item = value[key]
+        if (item === undefined) {
+            if (required)
+                return inputValidationFailure(
+                    `${path}.${key}`,
+                    "required",
+                    validation?.[1] ?? "Required embed field is missing",
+                )
+            continue
+        }
+        const decoded = read(item)
+        if (decoded instanceof InputValidationFailure) return decoded
+        if (decoded === undefined)
+            return inputValidationFailure(
+                `${path}.${key}`,
+                validation?.[0] ?? "format",
+                validation?.[1] ?? "Embed field has an invalid format",
+            )
+        result[wire] = decoded
     }
     return Object.freeze(result)
 }
@@ -70,35 +105,83 @@ function list(value: unknown, read: Reader, max = Infinity): readonly unknown[] 
     return Object.freeze(result)
 }
 
+function inputList(
+    value: unknown,
+    read: Reader,
+    maximum: number,
+    path: string,
+): readonly unknown[] | InputValidationFailure {
+    if (!Array.isArray(value)) return inputValidationFailure(path, "type", "Embed collection must be an array")
+    if (value.length > maximum)
+        return inputValidationFailure(path, "length", `Embed collection may contain at most ${maximum} entries`)
+    const result: unknown[] = []
+    for (const item of value) {
+        const decoded = read(item)
+        if (decoded instanceof InputValidationFailure) return decoded
+        if (decoded === undefined) return inputValidationFailure(`${path}[]`, "format", "Embed entry is invalid")
+        result.push(decoded)
+    }
+    return Object.freeze(result)
+}
+
 const inputAuthor: Shape = {
-    name: ["name", length(1, 256), true],
-    url: ["url", url],
-    iconUrl: ["icon_url", url],
+    name: ["name", length(1, 256), true, ["length", "Embed author name must contain 1 through 256 code units"]],
+    url: ["url", url, false, ["format", "Embed author URL must be an HTTP URL up to 2,048 characters"]],
+    iconUrl: ["icon_url", url, false, ["format", "Embed author iconUrl must be an HTTP URL up to 2,048 characters"]],
 }
 const inputFooter: Shape = {
-    text: ["text", length(1, 2048), true],
-    iconUrl: ["icon_url", url],
+    text: ["text", length(1, 2048), true, ["length", "Embed footer text must contain 1 through 2,048 code units"]],
+    iconUrl: ["icon_url", url, false, ["format", "Embed footer iconUrl must be an HTTP URL up to 2,048 characters"]],
 }
 const inputMedia = (uploadedFilenames: readonly string[] | undefined): Shape => ({
-    url: ["url", (value) => attachmentUrl(value, uploadedFilenames), true],
-    description: ["description", length(1, 4096)],
+    url: [
+        "url",
+        (value) => attachmentUrl(value, uploadedFilenames),
+        true,
+        ["format", "Embed media URL must be HTTP or an unambiguous supported attachment URL"],
+    ],
+    description: [
+        "description",
+        length(1, 4096),
+        false,
+        ["length", "Embed media description must contain 1 through 4,096 code units"],
+    ],
 })
 const inputField: Shape = {
-    name: ["name", length(1, 256), true],
-    value: ["value", length(0, 1024), true],
-    inline: ["inline", boolean],
+    name: ["name", length(1, 256), true, ["length", "Embed field name must contain 1 through 256 code units"]],
+    value: ["value", length(0, 1024), true, ["length", "Embed field value must contain at most 1,024 code units"]],
+    inline: ["inline", boolean, false, ["type", "Embed field inline must be a boolean"]],
 }
 const inputEmbed = (uploadedFilenames: readonly string[] | undefined): Shape => ({
-    title: ["title", length(0, 256)],
-    description: ["description", length(0, 4096)],
-    url: ["url", url],
-    color: ["color", (value) => (integer(value) !== undefined && (value as number) <= 0xffffff ? value : undefined)],
-    timestamp: ["timestamp", timestamp],
-    author: ["author", (value) => project(value, inputAuthor, true)],
-    footer: ["footer", (value) => project(value, inputFooter, true)],
-    image: ["image", (value) => project(value, inputMedia(uploadedFilenames), true)],
-    thumbnail: ["thumbnail", (value) => project(value, inputMedia(uploadedFilenames), true)],
-    fields: ["fields", (value) => list(value, (field) => project(field, inputField, true), 25)],
+    title: ["title", length(0, 256), false, ["length", "Embed title must contain at most 256 code units"]],
+    description: [
+        "description",
+        length(0, 4096),
+        false,
+        ["length", "Embed description must contain at most 4,096 code units"],
+    ],
+    url: ["url", url, false, ["format", "Embed URL must be an HTTP URL up to 2,048 characters"]],
+    color: [
+        "color",
+        (value) => (integer(value) !== undefined && (value as number) <= 0xffffff ? value : undefined),
+        false,
+        ["range", "Embed color must be an integer from 0 through 16,777,215"],
+    ],
+    timestamp: [
+        "timestamp",
+        timestamp,
+        false,
+        ["format", "Embed timestamp must be an ISO 8601 timestamp with timezone"],
+    ],
+    author: ["author", (value) => projectInput(value, inputAuthor, "embeds[].author")],
+    footer: ["footer", (value) => projectInput(value, inputFooter, "embeds[].footer")],
+    image: ["image", (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].image")],
+    thumbnail: ["thumbnail", (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].thumbnail")],
+    fields: [
+        "fields",
+        (value) =>
+            inputList(value, (field) => projectInput(field, inputField, "embeds[].fields[]"), 25, "embeds[].fields"),
+    ],
 })
 
 const outputAuthor: Shape = {
@@ -136,14 +219,14 @@ const outputChild: Shape = {
     url: ["url", string],
     color: ["color", integer],
     timestamp: ["timestamp", timestamp],
-    author: ["author", (value) => project(value, outputAuthor, false)],
-    footer: ["footer", (value) => project(value, outputFooter, false)],
-    image: ["image", (value) => project(value, outputMedia, false)],
-    thumbnail: ["thumbnail", (value) => project(value, outputMedia, false)],
-    fields: ["fields", (value) => list(value, (field) => project(field, outputField, false))],
-    provider: ["provider", (value) => project(value, outputAuthor, false)],
-    video: ["video", (value) => project(value, outputMedia, false)],
-    audio: ["audio", (value) => project(value, outputMedia, false)],
+    author: ["author", (value) => project(value, outputAuthor)],
+    footer: ["footer", (value) => project(value, outputFooter)],
+    image: ["image", (value) => project(value, outputMedia)],
+    thumbnail: ["thumbnail", (value) => project(value, outputMedia)],
+    fields: ["fields", (value) => list(value, (field) => project(field, outputField))],
+    provider: ["provider", (value) => project(value, outputAuthor)],
+    video: ["video", (value) => project(value, outputMedia)],
+    audio: ["audio", (value) => project(value, outputMedia)],
     html: ["html", string],
     htmlWidth: ["html_width", integer],
     htmlHeight: ["html_height", integer],
@@ -151,15 +234,15 @@ const outputChild: Shape = {
 }
 const outputEmbed: Shape = {
     ...outputChild,
-    children: ["children", (value) => list(value, (child) => project(child, outputChild, false), 1)],
+    children: ["children", (value) => list(value, (child) => project(child, outputChild), 1)],
 }
 
 /** attachment:// media targets need an unambiguous new upload in this request. Retained IDs never imply a filename lookup */
 export const encodeEmbeds = (value: unknown, uploadedFilenames?: readonly string[]) =>
-    list(value, (embed) => project(embed, inputEmbed(uploadedFilenames), true))
+    inputList(value, (embed) => projectInput(embed, inputEmbed(uploadedFilenames), "embeds[]"), Infinity, "embeds")
 
 export function decodeEmbeds(value: unknown): readonly Embed[] | undefined {
     if (value === undefined || value === null) return Object.freeze([])
     // Each public property is checked and copied by the response tables, with no input objects retained
-    return list(value, (embed) => project(embed, outputEmbed, false)) as readonly Embed[] | undefined
+    return list(value, (embed) => project(embed, outputEmbed)) as readonly Embed[] | undefined
 }

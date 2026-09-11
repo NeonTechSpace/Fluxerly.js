@@ -1,6 +1,7 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import type { ApiErrorDetail } from "./api-errors.js"
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type { MessageOperationOptions } from "./messages.js"
 
 /**
@@ -35,6 +36,8 @@ export type BotApplicationOperation = "application.fetchCurrent"
 export class BotApplicationOperationError extends Error {
     /** Stable expected-failure discriminator */
     readonly _tag = "BotApplicationOperationError"
+    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    readonly inputValidation: InputValidationDetail | null
 
     constructor(
         /** Requested operation */
@@ -49,9 +52,11 @@ export class BotApplicationOperationError extends Error {
         readonly retryAfterMs: number | null = null,
         /** Reviewed provider rejection detail, or null when no safe classification is available */
         readonly apiError: ApiErrorDetail | null = null,
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(`Bot application operation ${operation} failed (${reason}, outcome ${outcome})`)
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 

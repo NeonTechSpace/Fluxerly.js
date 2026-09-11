@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { Cause, Clock, Effect, Exit, Stream } from "effect"
 import type { OperationOptions } from "#sdk/client"
 import { ClientClosedError } from "#sdk/errors"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { MemberChunkError, type MemberChunk, type MemberChunkFailure } from "#sdk/member-chunks"
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import { decodeMember } from "./guilds.js"
@@ -28,55 +29,96 @@ interface Settings {
     readonly payload: Readonly<Record<string, unknown>>
 }
 
-function settings(guildId: unknown, query: unknown, options: unknown): Settings | undefined {
-    if (
-        !positiveId(guildId) ||
-        !record(query) ||
-        Object.keys(query).some((key) => !["all", "userIds", "query", "limit", "presences"].includes(key)) ||
-        (query.presences !== undefined && typeof query.presences !== "boolean")
-    )
-        return undefined
+function settings(guildId: unknown, query: unknown, options: unknown): Settings | InputValidationFailure {
+    if (!positiveId(guildId))
+        return inputValidationFailure("guildId", "format", "Must be a canonical positive uint64 decimal string")
+    if (!record(query)) return inputValidationFailure("query", "type", "Must be a member-chunk query object")
+    if (Object.keys(query).some((key) => !["all", "userIds", "query", "limit", "presences"].includes(key)))
+        return inputValidationFailure(
+            "query",
+            "allowedFields",
+            "Only all, userIds, query, limit, and presences are accepted",
+        )
+    if (query.presences !== undefined && typeof query.presences !== "boolean")
+        return inputValidationFailure("query.presences", "type", "Must be a boolean when supplied")
     const input = options === undefined ? {} : options
-    if (!record(input) || Object.keys(input).some((key) => key !== "timeoutMs" && key !== "maxPendingBytes"))
-        return undefined
+    if (!record(input)) return inputValidationFailure("options", "type", "Must be an options object when supplied")
+    if (Object.keys(input).some((key) => key !== "timeoutMs" && key !== "maxPendingBytes"))
+        return inputValidationFailure("options", "allowedFields", "Only timeoutMs and maxPendingBytes are accepted")
     const timeoutMs = input.timeoutMs === undefined ? 30_000 : input.timeoutMs
     const maxPendingBytes = input.maxPendingBytes === undefined ? 4_194_304 : input.maxPendingBytes
-    if (!positive(timeoutMs) || timeoutMs > 2_147_483_647 || !positive(maxPendingBytes)) return undefined
+    if (typeof timeoutMs !== "number")
+        return inputValidationFailure("options.timeoutMs", "type", "Must be an integer number of milliseconds")
+    if (!positive(timeoutMs) || timeoutMs > 2_147_483_647)
+        return inputValidationFailure(
+            "options.timeoutMs",
+            "range",
+            "Must be an integer from 1 through 2147483647 milliseconds",
+        )
+    if (typeof maxPendingBytes !== "number")
+        return inputValidationFailure(
+            "options.maxPendingBytes",
+            "type",
+            "Must be a positive safe integer number of bytes",
+        )
+    if (!positive(maxPendingBytes))
+        return inputValidationFailure(
+            "options.maxPendingBytes",
+            "range",
+            "Must be a positive safe integer number of bytes",
+        )
     const presences = query.presences === true
     let userIds: readonly string[] | undefined
     let maximumMembers: number
     let selection: Record<string, unknown>
-    if (query.all === true && query.userIds === undefined && query.query === undefined && query.limit === undefined) {
+    if (query.all !== undefined && query.all !== true)
+        return inputValidationFailure("query.all", "allowedValue", "Must be true when supplied")
+    if (query.all === true) {
+        if (query.userIds !== undefined || query.query !== undefined || query.limit !== undefined)
+            return inputValidationFailure("query", "relationship", "Use all or one explicit selection, not both")
         maximumMembers = 100_000
         selection = { query: "", limit: 0 }
-    } else if (
-        query.all === undefined &&
-        query.query === undefined &&
-        query.limit === undefined &&
-        Array.isArray(query.userIds) &&
-        query.userIds.length >= 1 &&
-        query.userIds.length <= 100 &&
-        query.userIds.every(positiveId)
-    ) {
+    } else if (query.userIds !== undefined) {
+        if (query.query !== undefined || query.limit !== undefined)
+            return inputValidationFailure("query", "relationship", "Use userIds or a text query, not both")
+        if (!Array.isArray(query.userIds))
+            return inputValidationFailure("query.userIds", "type", "Must be an array of canonical user IDs")
+        if (query.userIds.length < 1 || query.userIds.length > 100)
+            return inputValidationFailure("query.userIds", "length", "Must contain from 1 through 100 user IDs")
+        if (!query.userIds.every(positiveId))
+            return inputValidationFailure(
+                "query.userIds",
+                "format",
+                "Each ID must be a canonical positive uint64 decimal string",
+            )
         userIds = Object.freeze([...query.userIds])
-        if (new Set(userIds).size !== userIds.length) return undefined
+        if (new Set(userIds).size !== userIds.length)
+            return inputValidationFailure("query.userIds", "unique", "Must not contain duplicate user IDs")
         maximumMembers = userIds.length
         selection = { user_ids: userIds }
-    } else if (
-        query.all === undefined &&
-        query.userIds === undefined &&
-        typeof query.query === "string" &&
-        query.query.length <= 4_096 &&
-        query.query.isWellFormed()
-    ) {
+    } else if (query.query !== undefined) {
+        if (typeof query.query !== "string")
+            return inputValidationFailure("query.query", "type", "Must be a string when supplied")
+        if (query.query.length > 4_096)
+            return inputValidationFailure("query.query", "length", "Must contain at most 4096 UTF-16 code units")
+        if (!query.query.isWellFormed())
+            return inputValidationFailure("query.query", "format", "Must be a well-formed Unicode string")
         const limit = query.limit === undefined ? 25 : query.limit
-        if (!positive(limit) || limit > 100) return undefined
+        if (typeof limit !== "number")
+            return inputValidationFailure("query.limit", "type", "Must be an integer when supplied")
+        if (!positive(limit) || limit > 100)
+            return inputValidationFailure("query.limit", "range", "Must be an integer from 1 through 100")
         maximumMembers = limit
         selection = { query: query.query, limit }
-    } else return undefined
+    } else {
+        if (query.limit !== undefined)
+            return inputValidationFailure("query", "relationship", "limit requires a text query")
+        return inputValidationFailure("query", "required", "Must select all members, user IDs, or a text query")
+    }
     const payload = Object.freeze({ guild_id: guildId, ...selection, presences })
     // Op8 nonces are at most 32 bytes, unlike count nonces. Reject frames the gateway would close as oversized
-    if (Buffer.byteLength(JSON.stringify({ op: 8, d: { ...payload, nonce: "0".repeat(32) } })) > 4_096) return undefined
+    if (Buffer.byteLength(JSON.stringify({ op: 8, d: { ...payload, nonce: "0".repeat(32) } })) > 4_096)
+        return inputValidationFailure("query", "size", "The encoded gateway request must not exceed 4096 bytes")
     return { guildId, presences, ...(userIds ? { userIds } : {}), maximumMembers, timeoutMs, maxPendingBytes, payload }
 }
 
@@ -361,7 +403,8 @@ export class MemberChunkOwner {
         return Effect.gen({ self: this }, function* () {
             if (this.#closed) return yield* Effect.fail(new ClientClosedError())
             const config = settings(guildId, query, options)
-            if (!config) return yield* Effect.fail(new MemberChunkError("input"))
+            if (config instanceof InputValidationFailure)
+                return yield* Effect.fail(new MemberChunkError("input", null, config.detail))
             const shardId = this.routeGuild(config.guildId)
             const sender = shardId === undefined ? undefined : this.#senders.get(shardId)
             if (!sender) return yield* Effect.fail(new MemberChunkError("notConnected"))
@@ -395,8 +438,13 @@ export class MemberChunkOwner {
 /** Copy the default stream's options before opening intake, without giving native streams a signal contract */
 export function memberChunkIterationOptions(value: unknown) {
     const input = value === undefined ? {} : value
-    if (!record(input) || Object.keys(input).some((key) => !["timeoutMs", "maxPendingBytes", "signal"].includes(key)))
-        return undefined
+    if (!record(input)) return inputValidationFailure("options", "type", "Must be an options object when supplied")
+    if (Object.keys(input).some((key) => !["timeoutMs", "maxPendingBytes", "signal"].includes(key)))
+        return inputValidationFailure(
+            "options",
+            "allowedFields",
+            "Only timeoutMs, maxPendingBytes, and signal are accepted",
+        )
     const signal = input.signal as OperationOptions["signal"]
     if (
         signal !== undefined &&
@@ -405,7 +453,11 @@ export function memberChunkIterationOptions(value: unknown) {
             typeof signal.addEventListener !== "function" ||
             typeof signal.removeEventListener !== "function")
     )
-        return undefined
+        return inputValidationFailure(
+            "options.signal",
+            "type",
+            "Must be an AbortSignal-compatible object when supplied",
+        )
     return { request: { timeoutMs: input.timeoutMs, maxPendingBytes: input.maxPendingBytes }, signal }
 }
 

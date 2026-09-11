@@ -3,6 +3,8 @@ import { afterEach, expect, test, vi } from "vitest"
 import { decodeMember, memberEditSelf } from "../src/internal/guilds.js"
 import { createClient, type MemberProfileEdit, type MemberReference } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import type { GuildRequest } from "../src/internal/guilds.js"
+import { InputValidationFailure } from "../src/input-validation.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const image = "data:image/png;base64,AA=="
@@ -28,6 +30,11 @@ afterEach(() => {
 const unwrap = <A, E>(result: { isErr(): boolean; value?: A; error?: E }): A => {
     if (result.isErr()) throw result.error
     return result.value!
+}
+
+const validRequest = <A>(request: GuildRequest<A> | InputValidationFailure): GuildRequest<A> => {
+    if (request instanceof InputValidationFailure) throw request
+    return request
 }
 
 async function setup(mode: (typeof modes)[number]) {
@@ -89,7 +96,7 @@ test("builds the authenticated member-profile PATCH with a conservative self cac
         status: 200,
         cache: { selection: { kind: "members", guildId: "20" }, mutation: true },
     })
-    expect(JSON.parse(request!.json!)).toEqual({
+    expect(JSON.parse(validRequest(request).json!)).toEqual({
         nick: "Bot profile",
         avatar: image,
         banner: image,
@@ -217,21 +224,23 @@ test.each(modes)(
 )
 
 test("preserves omitted profile fields and sends null clears", () => {
-    expect(JSON.parse(memberEditSelf("20", { nickname: "Only this field" })!.json!)).toEqual({
+    expect(JSON.parse(validRequest(memberEditSelf("20", { nickname: "Only this field" })).json!)).toEqual({
         nick: "Only this field",
     })
     expect(
         JSON.parse(
-            memberEditSelf("20", {
-                nickname: null,
-                avatar: null,
-                banner: null,
-                bio: null,
-                pronouns: null,
-                accentColor: null,
-                profileFlags: null,
-                mentionFlags: null,
-            })!.json!,
+            validRequest(
+                memberEditSelf("20", {
+                    nickname: null,
+                    avatar: null,
+                    banner: null,
+                    bio: null,
+                    pronouns: null,
+                    accentColor: null,
+                    profileFlags: null,
+                    mentionFlags: null,
+                }),
+            ).json!,
         ),
     ).toEqual({
         nick: null,
@@ -243,7 +252,7 @@ test("preserves omitted profile fields and sends null clears", () => {
         profile_flags: null,
         mention_flags: null,
     })
-    expect(memberEditSelf("20", {})).toBeUndefined()
+    expect(memberEditSelf("20", {})).toBeInstanceOf(InputValidationFailure)
 })
 
 test("projects returned profile metadata without fabricating write-only fields", () => {
@@ -292,10 +301,10 @@ test("rejects malformed member-profile requests and profile response fields", ()
         { profileFlags: 1.5 },
         { mentionFlags: 3 },
     ])
-        expect(memberEditSelf("20", input as never)).toBeUndefined()
+        expect(memberEditSelf("20", input as never)).toBeInstanceOf(InputValidationFailure)
 
-    expect(memberEditSelf("invalid", {})).toBeUndefined()
-    expect(memberEditSelf("20", { profileFlags: 4 })?.json).toBe('{"profile_flags":4}')
+    expect(memberEditSelf("invalid", {})).toBeInstanceOf(InputValidationFailure)
+    expect(validRequest(memberEditSelf("20", { profileFlags: 4 })).json).toBe('{"profile_flags":4}')
     for (const extra of [{ banner: 1 }, { accent_color: -1 }, { profile_flags: -1 }, { mention_flags: 3 }])
         expect(decodeMember(wireMember(extra), "20")).toBeUndefined()
 })

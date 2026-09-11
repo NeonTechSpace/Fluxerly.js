@@ -6,6 +6,7 @@ import type {
     GuildChannelUpdateBulk,
     PermissionOverwrite,
 } from "#sdk/channels"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
 
 /** Validated request description, with the shared REST owner retaining admission, cleanup and rate state */
@@ -26,6 +27,8 @@ export interface ChannelRequest<A> {
         readonly replace?: boolean
     }
 }
+
+type ChannelValidationResult<A> = ChannelRequest<A> | InputValidationFailure
 
 const maxPermission = 18_446_744_073_709_551_615n
 const maxRequestBytes = 4_194_304
@@ -186,10 +189,7 @@ function nullableValue(value: unknown, guard: (candidate: unknown) => boolean): 
     return value === null || guard(value)
 }
 
-function validOptionalFields(
-    input: Record<string, unknown>,
-    create: boolean,
-): input is Record<string, unknown> & { type?: number; name?: string } {
+function validateOptionalFields(input: Record<string, unknown>, create: boolean): true | InputValidationFailure {
     const allowed = create
         ? [
               "type",
@@ -222,23 +222,46 @@ function validOptionalFields(
               "permissionOverwrites",
               "rtcRegion",
           ]
-    if (Object.keys(input).some((key) => !allowed.includes(key))) return false
-    if (create && input.type !== 0 && input.type !== 2 && input.type !== 4 && input.type !== 998) return false
-    if (create && !text(input.name, 1, 100)) return false
-    if (input.name !== undefined && (!text(input.name, 1, 100) || input.name.trim().length === 0)) return false
-    if (input.topic !== undefined && !nullableValue(input.topic, (candidate) => text(candidate, 1, 1024))) return false
-    if (input.url !== undefined && !nullableValue(input.url, url)) return false
-    if (input.parentId !== undefined && !nullableIdentifier(input.parentId)) return false
+    if (Object.keys(input).some((key) => !allowed.includes(key)))
+        return inputValidationFailure("input", "allowedFields", "Channel input contains an unsupported field")
+    if (create && input.type !== 0 && input.type !== 2 && input.type !== 4 && input.type !== 998)
+        return inputValidationFailure("type", "allowedValue", "Channel type must be 0, 2, 4, or 998")
+    if (create && input.name === undefined)
+        return inputValidationFailure("name", "required", "Channel name is required")
+    if (input.name !== undefined && (!text(input.name, 1, 100) || input.name.trim().length === 0))
+        return inputValidationFailure(
+            "name",
+            "length",
+            "Channel name must contain 1 through 100 Unicode code points and at least one non-whitespace character",
+        )
+    if (input.topic !== undefined && !nullableValue(input.topic, (candidate) => text(candidate, 1, 1024)))
+        return inputValidationFailure(
+            "topic",
+            "length",
+            "Channel topic must be null or contain 1 through 1,024 characters",
+        )
+    if (input.url !== undefined && !nullableValue(input.url, url))
+        return inputValidationFailure("url", "format", "Channel URL must be null or a valid absolute URL")
+    if (input.parentId !== undefined && !nullableIdentifier(input.parentId))
+        return inputValidationFailure("parentId", "format", "Channel parentId must be null or a decimal string")
     if (
         input.bitrate !== undefined &&
         !nullableValue(input.bitrate, (candidate) => int32(candidate) && candidate >= 8_000 && candidate <= 320_000)
     )
-        return false
+        return inputValidationFailure(
+            "bitrate",
+            "range",
+            "Channel bitrate must be null or an integer from 8,000 through 320,000",
+        )
     if (
         input.userLimit !== undefined &&
         !nullableValue(input.userLimit, (candidate) => int32(candidate) && candidate >= 0 && candidate <= 99)
     )
-        return false
+        return inputValidationFailure(
+            "userLimit",
+            "range",
+            "Channel userLimit must be null or an integer from 0 through 99",
+        )
     if (
         input.voiceConnectionLimit !== undefined &&
         !nullableValue(
@@ -246,42 +269,92 @@ function validOptionalFields(
             (candidate) => int32(candidate) && candidate >= 1 && candidate <= 100,
         )
     )
-        return false
-    if (input.nsfw !== undefined && !(typeof input.nsfw === "boolean" || (!create && input.nsfw === null))) return false
+        return inputValidationFailure(
+            "voiceConnectionLimit",
+            "range",
+            "Channel voiceConnectionLimit must be null or an integer from 1 through 100",
+        )
+    if (input.nsfw !== undefined && !(typeof input.nsfw === "boolean" || (!create && input.nsfw === null)))
+        return inputValidationFailure("nsfw", "type", "Channel nsfw must be boolean, or null when editing")
     if (input.nsfwOverride !== undefined && !(typeof input.nsfwOverride === "boolean" || input.nsfwOverride === null))
-        return false
+        return inputValidationFailure("nsfwOverride", "type", "Channel nsfwOverride must be boolean or null")
     if (input.contentWarningLevel !== undefined && input.contentWarningLevel !== 0 && input.contentWarningLevel !== 1)
-        return false
+        return inputValidationFailure(
+            "contentWarningLevel",
+            "allowedValue",
+            "Channel contentWarningLevel must be 0 or 1",
+        )
     if (
         input.contentWarningText !== undefined &&
         !nullableValue(input.contentWarningText, (candidate) => text(candidate, 0, 200))
     )
-        return false
+        return inputValidationFailure(
+            "contentWarningText",
+            "length",
+            "Channel contentWarningText must be null or contain at most 200 characters",
+        )
     if (
         input.rateLimitPerUser !== undefined &&
         !nullableValue(input.rateLimitPerUser, (candidate) => int32(candidate) && candidate >= 0 && candidate <= 21_600)
     )
-        return false
+        return inputValidationFailure(
+            "rateLimitPerUser",
+            "range",
+            "Channel rateLimitPerUser must be null or an integer from 0 through 21,600",
+        )
     if (input.rtcRegion !== undefined && !nullableValue(input.rtcRegion, (candidate) => text(candidate, 1, 64)))
-        return false
+        return inputValidationFailure(
+            "rtcRegion",
+            "length",
+            "Channel rtcRegion must be null or contain 1 through 64 characters",
+        )
     return true
 }
 
-function encodeOverwrites(value: unknown): readonly Record<string, string | number>[] | undefined {
-    if (!Array.isArray(value)) return undefined
+function encodeOverwrites(value: unknown): readonly Record<string, string | number>[] | InputValidationFailure {
+    if (!Array.isArray(value))
+        return inputValidationFailure("permissionOverwrites", "type", "Permission overwrites must be an array")
     const overwrites: Array<Record<string, string | number>> = []
     const ids = new Set<string>()
     for (const item of value) {
-        if (
-            !record(item) ||
-            Object.keys(item).some((key) => key !== "id" && key !== "type" && key !== "allow" && key !== "deny") ||
-            !identifier(item.id) ||
-            ids.has(item.id) ||
-            (item.type !== "role" && item.type !== "member") ||
-            !permission(item.allow) ||
-            !permission(item.deny)
-        )
-            return undefined
+        if (!record(item))
+            return inputValidationFailure("permissionOverwrites[]", "type", "Permission overwrites must be objects")
+        if (Object.keys(item).some((key) => key !== "id" && key !== "type" && key !== "allow" && key !== "deny"))
+            return inputValidationFailure(
+                "permissionOverwrites[]",
+                "allowedFields",
+                "Permission overwrites may contain only id, type, allow, and deny",
+            )
+        if (!identifier(item.id))
+            return inputValidationFailure(
+                "permissionOverwrites[].id",
+                "format",
+                "Permission overwrite IDs must be decimal strings",
+            )
+        if (ids.has(item.id))
+            return inputValidationFailure(
+                "permissionOverwrites[].id",
+                "unique",
+                "Permission overwrite IDs must be unique",
+            )
+        if (item.type !== "role" && item.type !== "member")
+            return inputValidationFailure(
+                "permissionOverwrites[].type",
+                "allowedValue",
+                "Permission overwrite type must be role or member",
+            )
+        if (!permission(item.allow))
+            return inputValidationFailure(
+                "permissionOverwrites[].allow",
+                "range",
+                "Permission overwrite allow must be an unsigned 64-bit bigint",
+            )
+        if (!permission(item.deny))
+            return inputValidationFailure(
+                "permissionOverwrites[].deny",
+                "range",
+                "Permission overwrite deny must be an unsigned 64-bit bigint",
+            )
         ids.add(item.id)
         overwrites.push({
             id: item.id,
@@ -293,11 +366,13 @@ function encodeOverwrites(value: unknown): readonly Record<string, string | numb
     return overwrites
 }
 
-function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): string | undefined {
-    if (!record(input) || !validOptionalFields(input, create)) return undefined
+function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): string | InputValidationFailure {
+    if (!record(input)) return inputValidationFailure("input", "type", "Channel input must be an object")
+    const validated = validateOptionalFields(input, create)
+    if (validated instanceof InputValidationFailure) return validated
     const permissionOverwrites =
         input.permissionOverwrites === undefined ? undefined : encodeOverwrites(input.permissionOverwrites)
-    if (input.permissionOverwrites !== undefined && permissionOverwrites === undefined) return undefined
+    if (permissionOverwrites instanceof InputValidationFailure) return permissionOverwrites
     const body = {
         ...(create ? { type: input.type } : {}),
         ...(input.name === undefined ? {} : { name: input.name }),
@@ -316,11 +391,15 @@ function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): strin
         ...(!create && input.rtcRegion !== undefined ? { rtc_region: input.rtcRegion } : {}),
     }
     const json = JSON.stringify(body)
-    return json === "{}" || Buffer.byteLength(json) > maxRequestBytes ? undefined : json
+    if (json === "{}") return inputValidationFailure("input", "required", "Channel edit must contain a change")
+    return Buffer.byteLength(json) > maxRequestBytes
+        ? inputValidationFailure("input", "size", "Channel input must not exceed 4,194,304 encoded bytes")
+        : json
 }
 
-export function channelFetch(channelId: string): ChannelRequest<GuildChannel> | undefined {
-    if (!identifier(channelId)) return undefined
+export function channelFetch(channelId: string): ChannelValidationResult<GuildChannel> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
     return {
         majorId: channelId,
         bucket: "channel:read",
@@ -335,8 +414,8 @@ export function channelFetch(channelId: string): ChannelRequest<GuildChannel> | 
     }
 }
 
-export function channelList(guildId: string): ChannelRequest<readonly GuildChannel[]> | undefined {
-    if (!identifier(guildId)) return undefined
+export function channelList(guildId: string): ChannelValidationResult<readonly GuildChannel[]> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         majorId: guildId,
         bucket: "guild:channels:list",
@@ -348,10 +427,10 @@ export function channelList(guildId: string): ChannelRequest<readonly GuildChann
     }
 }
 
-export function channelCreate(guildId: string, input: ChannelCreate): ChannelRequest<GuildChannel> | undefined {
-    if (!identifier(guildId)) return undefined
+export function channelCreate(guildId: string, input: ChannelCreate): ChannelValidationResult<GuildChannel> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     const json = channelBody(input, true)
-    if (!json) return undefined
+    if (json instanceof InputValidationFailure) return json
     return {
         majorId: guildId,
         bucket: "guild:channel:create",
@@ -367,10 +446,11 @@ export function channelCreate(guildId: string, input: ChannelCreate): ChannelReq
     }
 }
 
-export function channelEdit(channelId: string, input: ChannelEdit): ChannelRequest<GuildChannel> | undefined {
-    if (!identifier(channelId)) return undefined
+export function channelEdit(channelId: string, input: ChannelEdit): ChannelValidationResult<GuildChannel> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
     const json = channelBody(input, false)
-    if (!json) return undefined
+    if (json instanceof InputValidationFailure) return json
     return {
         majorId: channelId,
         bucket: "channel:update",
@@ -386,8 +466,9 @@ export function channelEdit(channelId: string, input: ChannelEdit): ChannelReque
     }
 }
 
-export function channelDelete(channelId: string): ChannelRequest<void> | undefined {
-    if (!identifier(channelId)) return undefined
+export function channelDelete(channelId: string): ChannelValidationResult<void> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
     return {
         majorId: channelId,
         bucket: "channel:delete",
@@ -399,8 +480,11 @@ export function channelDelete(channelId: string): ChannelRequest<void> | undefin
     }
 }
 
-function channelPositionBody(positions: readonly ChannelPosition[]): string | undefined {
-    if (!Array.isArray(positions) || positions.length === 0) return undefined
+function channelPositionBody(positions: readonly ChannelPosition[]): string | InputValidationFailure {
+    if (!Array.isArray(positions))
+        return inputValidationFailure("positions", "type", "Channel positions must be an array")
+    if (positions.length === 0)
+        return inputValidationFailure("positions", "length", "Channel positions must contain at least one entry")
     const ids = new Set<string>()
     const updates: Array<Record<string, string | number | boolean | null>> = []
     let bytes = 2
@@ -423,7 +507,11 @@ function channelPositionBody(positions: readonly ChannelPosition[]): string | un
             (item.precedingSiblingId !== undefined && !nullableIdentifier(item.precedingSiblingId)) ||
             (item.syncPermissionsOnMove !== undefined && typeof item.syncPermissionsOnMove !== "boolean")
         )
-            return undefined
+            return inputValidationFailure(
+                "positions[]",
+                "format",
+                "Channel positions require a unique decimal ID and documented position, parent, sibling, and permission fields",
+            )
         const update = {
             id: item.id,
             ...(item.position === undefined ? {} : { position: item.position }),
@@ -432,20 +520,22 @@ function channelPositionBody(positions: readonly ChannelPosition[]): string | un
             ...(item.syncPermissionsOnMove === undefined ? {} : { lock_permissions: item.syncPermissionsOnMove }),
         }
         bytes += Buffer.byteLength(JSON.stringify(update)) + (updates.length ? 1 : 0)
-        if (bytes > maxRequestBytes) return undefined
+        if (bytes > maxRequestBytes)
+            return inputValidationFailure(
+                "positions",
+                "size",
+                "Channel positions must not exceed 4,194,304 encoded bytes",
+            )
         ids.add(item.id)
         updates.push(update)
     }
     return JSON.stringify(updates)
 }
 
-export function channelReorder(
-    guildId: string,
-    positions: readonly ChannelPosition[],
-): ChannelRequest<void> | undefined {
-    if (!identifier(guildId)) return undefined
+export function channelReorder(guildId: string, positions: readonly ChannelPosition[]): ChannelValidationResult<void> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     const json = channelPositionBody(positions)
-    if (!json) return undefined
+    if (json instanceof InputValidationFailure) return json
     return {
         majorId: guildId,
         bucket: "guild:channel:positions",
@@ -458,7 +548,7 @@ export function channelReorder(
     }
 }
 
-function permissionSetBody(input: PermissionOverwrite): string | undefined {
+function permissionSetBody(input: PermissionOverwrite): string | InputValidationFailure {
     if (
         !record(input) ||
         Object.keys(input).some((key) => key !== "id" && key !== "type" && key !== "allow" && key !== "deny") ||
@@ -467,7 +557,11 @@ function permissionSetBody(input: PermissionOverwrite): string | undefined {
         !permission(input.allow) ||
         !permission(input.deny)
     )
-        return undefined
+        return inputValidationFailure(
+            "permissionOverwrite",
+            "format",
+            "Permission overwrite requires a decimal ID, role or member type, and unsigned 64-bit allow and deny values",
+        )
     return JSON.stringify({
         type: input.type === "role" ? 0 : 1,
         allow: input.allow.toString(),
@@ -475,10 +569,11 @@ function permissionSetBody(input: PermissionOverwrite): string | undefined {
     })
 }
 
-export function permissionSet(channelId: string, input: PermissionOverwrite): ChannelRequest<void> | undefined {
-    if (!identifier(channelId)) return undefined
+export function permissionSet(channelId: string, input: PermissionOverwrite): ChannelValidationResult<void> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
     const json = permissionSetBody(input)
-    if (!json) return undefined
+    if (json instanceof InputValidationFailure) return json
     return {
         majorId: channelId,
         bucket: "channel:update",
@@ -491,8 +586,11 @@ export function permissionSet(channelId: string, input: PermissionOverwrite): Ch
     }
 }
 
-export function permissionRemove(channelId: string, targetId: string): ChannelRequest<void> | undefined {
-    if (!identifier(channelId) || !identifier(targetId)) return undefined
+export function permissionRemove(channelId: string, targetId: string): ChannelValidationResult<void> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    if (!identifier(targetId))
+        return inputValidationFailure("targetId", "format", "Permission target IDs must be decimal strings")
     return {
         majorId: channelId,
         bucket: "channel:update",

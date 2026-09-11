@@ -2,6 +2,7 @@ import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import type { PresenceUpdate } from "./events.js"
 import type { GuildMember } from "./guilds.js"
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** Select one guild's gateway member response explicitly, without changing REST member pages or subscriptions */
 export type MemberChunkQuery = (
@@ -74,6 +75,8 @@ export class MemberChunkError extends Error {
     readonly _tag = "MemberChunkError"
     /** Public operation that failed */
     readonly operation = "members.iterateChunks"
+    /** SDK-owned local input detail, or null for non-input failures */
+    readonly inputValidation: InputValidationDetail | null
 
     constructor(
         /** Input, an absent or unready routed shard, client-wide admission, malformed sequence, buffer overflow, missing response, owning-shard gap or confirmed rate limit */
@@ -81,9 +84,12 @@ export class MemberChunkError extends Error {
             "input" | "notConnected" | "busy" | "response" | "overflow" | "timeout" | "connectionLost" | "rateLimit",
         /** Confirmed provider retry delay in milliseconds for rateLimit, otherwise null. The SDK never retries automatically */
         readonly retryAfterMs: number | null = null,
+        /** Safe local input detail. It never retains rejected values, caller keys, credentials, or provider data */
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(`Member chunks failed (${reason})`)
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 

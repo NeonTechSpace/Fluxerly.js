@@ -2,6 +2,7 @@ import { err, ok, type Result } from "neverthrow"
 import { GuildOperationError } from "./guilds.js"
 import type { Guild, GuildMember, GuildRole } from "./guilds.js"
 import { compareRoleHierarchy, evaluateMemberHierarchy, isRoleAboveInHierarchy } from "#sdk/internal/role-hierarchy"
+import { inputValidationFailure } from "./input-validation.js"
 
 /** One local snapshot for evaluating Fluxer's member-target hierarchy without an SDK request */
 export interface RoleHierarchyInput {
@@ -17,7 +18,16 @@ export interface RoleHierarchyInput {
 
 type HierarchyOperation = "hierarchy.compare" | "hierarchy.isAbove" | "hierarchy.canManage"
 
-const inputFailure = (operation: HierarchyOperation) => new GuildOperationError(operation, "input", "notDispatched")
+const inputFailure = (operation: HierarchyOperation, path: string, explanation: string) =>
+    new GuildOperationError(
+        operation,
+        "input",
+        "notDispatched",
+        null,
+        null,
+        null,
+        inputValidationFailure(path, "format", explanation).detail,
+    )
 
 /**
  * Compares two role snapshots in Fluxer's local hierarchy order
@@ -29,7 +39,15 @@ const inputFailure = (operation: HierarchyOperation) => new GuildOperationError(
  */
 export function compareHierarchy(left: GuildRole, right: GuildRole): Result<-1 | 0 | 1, GuildOperationError> {
     const comparison = compareRoleHierarchy(left, right)
-    return comparison === undefined ? err(inputFailure("hierarchy.compare")) : ok(comparison)
+    return comparison === undefined
+        ? err(
+              inputFailure(
+                  "hierarchy.compare",
+                  "roles",
+                  "Role snapshots must contain same-guild decimal IDs and nonnegative 32-bit integer positions",
+              ),
+          )
+        : ok(comparison)
 }
 
 /**
@@ -40,7 +58,15 @@ export function compareHierarchy(left: GuildRole, right: GuildRole): Result<-1 |
  */
 export function isAboveInHierarchy(left: GuildRole, right: GuildRole): Result<boolean, GuildOperationError> {
     const above = isRoleAboveInHierarchy(left, right)
-    return above === undefined ? err(inputFailure("hierarchy.isAbove")) : ok(above)
+    return above === undefined
+        ? err(
+              inputFailure(
+                  "hierarchy.isAbove",
+                  "roles",
+                  "Role snapshots must contain same-guild decimal IDs and nonnegative 32-bit integer positions",
+              ),
+          )
+        : ok(above)
 }
 
 /**
@@ -73,5 +99,13 @@ export function isAboveInHierarchy(left: GuildRole, right: GuildRole): Result<bo
  */
 export function canManageHierarchy(input: RoleHierarchyInput): Result<boolean, GuildOperationError> {
     const manageable = evaluateMemberHierarchy(input)
-    return manageable === undefined ? err(inputFailure("hierarchy.canManage")) : ok(manageable)
+    return manageable === undefined
+        ? err(
+              inputFailure(
+                  "hierarchy.canManage",
+                  "input",
+                  "Hierarchy input must contain consistent guild, member, and unique role snapshots covering both members",
+              ),
+          )
+        : ok(manageable)
 }

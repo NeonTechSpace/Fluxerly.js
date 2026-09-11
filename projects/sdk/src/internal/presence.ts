@@ -1,4 +1,5 @@
 import type { PresenceUpdate, PresenceUpdateBulk } from "#sdk/events"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import type { CustomStatusEmoji, PresenceInput, PresenceStatus } from "#sdk/presence"
 import { identifier, record } from "./message.js"
 
@@ -102,27 +103,31 @@ const clock: PresenceTimer = {
     clear: (handle) => clearTimeout(handle as number),
 }
 
-function customStatus(value: unknown): FrozenCustomStatus | undefined {
-    if (!record(value) || Object.keys(value).some((key) => key !== "text" && key !== "emoji" && key !== "expiresAt"))
-        return undefined
+function customStatus(value: unknown): FrozenCustomStatus | InputValidationFailure {
+    if (!record(value)) return inputValidationFailure("customStatus", "type", "Must be an object when supplied")
+    if (Object.keys(value).some((key) => key !== "text" && key !== "emoji" && key !== "expiresAt"))
+        return inputValidationFailure("customStatus", "allowedFields", "Only text, emoji, and expiresAt are accepted")
     const text = value.text
-    if (
-        text !== undefined &&
-        (typeof text !== "string" || text.length < 1 || text.length > 128 || !text.isWellFormed())
-    )
-        return undefined
+    if (text !== undefined && typeof text !== "string")
+        return inputValidationFailure("customStatus.text", "type", "Must be a string when supplied")
+    if (typeof text === "string" && (text.length < 1 || text.length > 128))
+        return inputValidationFailure(
+            "customStatus.text",
+            "length",
+            "Must contain from 1 through 128 UTF-16 code units",
+        )
+    if (typeof text === "string" && !text.isWellFormed())
+        return inputValidationFailure("customStatus.text", "format", "Must be a well-formed Unicode string")
     const emoji = value.emoji
     const frozenEmoji = emoji === undefined ? undefined : customStatusEmoji(emoji)
-    if (emoji !== undefined && frozenEmoji === undefined) return undefined
+    if (frozenEmoji instanceof InputValidationFailure) return frozenEmoji
     const expiresAt = value.expiresAt
-    if (
-        expiresAt !== undefined &&
-        (typeof expiresAt !== "string" ||
-            !iso8601(expiresAt) ||
-            !Number.isFinite(Date.parse(expiresAt)) ||
-            Date.parse(expiresAt) <= Date.now())
-    )
-        return undefined
+    if (expiresAt !== undefined && typeof expiresAt !== "string")
+        return inputValidationFailure("customStatus.expiresAt", "type", "Must be an ISO-8601 timestamp when supplied")
+    if (typeof expiresAt === "string" && (!iso8601(expiresAt) || !Number.isFinite(Date.parse(expiresAt))))
+        return inputValidationFailure("customStatus.expiresAt", "format", "Must be a valid ISO-8601 timestamp")
+    if (typeof expiresAt === "string" && Date.parse(expiresAt) <= Date.now())
+        return inputValidationFailure("customStatus.expiresAt", "range", "Must be a future timestamp")
     return Object.freeze({
         ...(text === undefined ? {} : { text }),
         ...(frozenEmoji === undefined ? {} : { emoji: frozenEmoji }),
@@ -130,19 +135,39 @@ function customStatus(value: unknown): FrozenCustomStatus | undefined {
     })
 }
 
-function customStatusEmoji(value: unknown): Readonly<CustomStatusEmoji> | undefined {
-    if (!record(value)) return undefined
-    if (Object.keys(value).length !== 1) return undefined
-    if (Object.hasOwn(value, "id"))
-        return typeof value.id === "string" && identifier(value.id) ? Object.freeze({ id: value.id }) : undefined
-    if (Object.hasOwn(value, "name"))
-        return typeof value.name === "string" &&
-            value.name.length >= 1 &&
-            value.name.length <= 32 &&
-            value.name.isWellFormed()
+function customStatusEmoji(value: unknown): Readonly<CustomStatusEmoji> | InputValidationFailure {
+    if (!record(value)) return inputValidationFailure("customStatus.emoji", "type", "Must be an emoji object")
+    if (Object.keys(value).length !== 1)
+        return inputValidationFailure(
+            "customStatus.emoji",
+            "allowedFields",
+            "Must provide exactly one field named id or name",
+        )
+    if (Object.hasOwn(value, "id")) {
+        if (typeof value.id !== "string")
+            return inputValidationFailure("customStatus.emoji.id", "type", "Must be a decimal ID string")
+        return identifier(value.id)
+            ? Object.freeze({ id: value.id })
+            : inputValidationFailure("customStatus.emoji.id", "format", "Must be a canonical decimal ID string")
+    }
+    if (Object.hasOwn(value, "name")) {
+        if (typeof value.name !== "string")
+            return inputValidationFailure("customStatus.emoji.name", "type", "Must be a Unicode emoji string")
+        if (value.name.length < 1 || value.name.length > 32)
+            return inputValidationFailure(
+                "customStatus.emoji.name",
+                "length",
+                "Must contain from 1 through 32 UTF-16 code units",
+            )
+        return value.name.isWellFormed()
             ? Object.freeze({ name: value.name })
-            : undefined
-    return undefined
+            : inputValidationFailure("customStatus.emoji.name", "format", "Must be a well-formed Unicode string")
+    }
+    return inputValidationFailure(
+        "customStatus.emoji",
+        "allowedFields",
+        "Must provide exactly one field named id or name",
+    )
 }
 
 function iso8601(value: string) {
@@ -151,13 +176,25 @@ function iso8601(value: string) {
 
 /** Returns an independent immutable snapshot, so later caller mutation cannot alter an accepted presence intent */
 export function validatePresenceInput(value: unknown): FrozenPresence | undefined {
-    if (!record(value) || Object.keys(value).some((key) => key !== "status" && key !== "customStatus")) return undefined
-    if (typeof value.status !== "string" || !statuses.has(value.status as PresenceStatus)) return undefined
+    const validated = presenceInput(value)
+    return validated instanceof InputValidationFailure ? undefined : validated
+}
+
+function presenceInput(value: unknown): FrozenPresence | InputValidationFailure {
+    if (!record(value)) return inputValidationFailure("input", "type", "Must be a presence input object")
+    if (Object.keys(value).some((key) => key !== "status" && key !== "customStatus"))
+        return inputValidationFailure("input", "allowedFields", "Only status and customStatus are accepted")
+    if (typeof value.status !== "string")
+        return inputValidationFailure("status", "type", "Must be one of online, idle, dnd, or invisible")
+    if (!statuses.has(value.status as PresenceStatus))
+        return inputValidationFailure("status", "allowedValue", "Must be one of online, idle, dnd, or invisible")
     const status = value.status as PresenceStatus
     if (!Object.hasOwn(value, "customStatus")) return Object.freeze({ status })
     if (value.customStatus === null) return Object.freeze({ status, customStatus: null })
     const frozenCustomStatus = customStatus(value.customStatus)
-    return frozenCustomStatus === undefined ? undefined : Object.freeze({ status, customStatus: frozenCustomStatus })
+    return frozenCustomStatus instanceof InputValidationFailure
+        ? frozenCustomStatus
+        : Object.freeze({ status, customStatus: frozenCustomStatus })
 }
 
 export function presenceUpdate(value: FrozenPresence): GatewayPresenceUpdate {
@@ -193,10 +230,15 @@ function memberSubscriptions(guildId: string, members: readonly string[]): Gatew
     })
 }
 
-function frozenMemberIds(value: unknown): readonly string[] | undefined {
-    if (!Array.isArray(value) || value.length > maxMembersPerGuild || !value.every(identifier)) return undefined
+function frozenMemberIds(value: unknown): readonly string[] | InputValidationFailure {
+    if (!Array.isArray(value))
+        return inputValidationFailure("memberIds", "type", "Must be an array of decimal member IDs")
+    if (!value.every(identifier))
+        return inputValidationFailure("memberIds", "format", "Each ID must be a canonical decimal string")
     const members = Object.freeze([...value])
-    return new Set(members).size === members.length ? members : undefined
+    return new Set(members).size === members.length
+        ? members
+        : inputValidationFailure("memberIds", "unique", "Must not contain duplicate member IDs")
 }
 
 function fitsGatewayMemberPayload(guildId: string, members: readonly string[]) {
@@ -238,18 +280,18 @@ export class PresenceOwner implements PresenceGatewayOwner {
         private readonly routeGuild: (guildId: string) => number | undefined = () => 0,
     ) {}
 
-    /** Accept, freeze and coalesce a valid local intent. False means invalid input or permanent owner closure */
-    set(value: unknown): boolean {
+    /** Accept, freeze and coalesce an intent, returning only SDK-authored validation detail for invalid input */
+    set(value: unknown): InputValidationFailure | false | undefined {
         if (this.#closed) return false
-        const next = validatePresenceInput(value)
-        if (next === undefined) return false
+        const next = presenceInput(value)
+        if (next instanceof InputValidationFailure) return next
         this.#intent =
             next.customStatus === undefined && this.#intent?.customStatus !== undefined
                 ? Object.freeze({ status: next.status, customStatus: this.#intent.customStatus })
                 : next
         this.#version += 1
         for (const session of this.#sessions.values()) this.#schedule(session)
-        return true
+        return undefined
     }
 
     /**
@@ -312,16 +354,20 @@ export class PresenceOwner implements PresenceGatewayOwner {
 
     /**
      * Replaces one guild's caller-selected member presence subscriptions. Empty input requests an unsubscribe.
-     * A successful return means bounded local acceptance only; provider acceptance and presence delivery remain unknown
+     * A successful return means bounded local acceptance only; provider acceptance and presence delivery remain unknown.
+     * Returns only SDK-authored input detail. Limits remain a distinct local policy failure
      */
-    setMembers(guildId: unknown, memberIds: unknown): "input" | "limit" | undefined {
-        if (this.#closed || !identifier(guildId)) return "input"
+    setMembers(guildId: unknown, memberIds: unknown): InputValidationFailure | "limit" | false | undefined {
+        if (this.#closed) return false
+        if (!identifier(guildId))
+            return inputValidationFailure("guildId", "format", "Must be a canonical decimal guild ID string")
+        if (Array.isArray(memberIds) && memberIds.length > maxMembersPerGuild) return "limit"
         const members = frozenMemberIds(memberIds)
-        if (members === undefined)
-            return Array.isArray(memberIds) && memberIds.length > maxMembersPerGuild ? "limit" : "input"
+        if (members instanceof InputValidationFailure) return members
         if (!fitsGatewayMemberPayload(guildId, members)) return "limit"
         const routedShard = this.routeGuild(guildId)
-        if (!validShard(routedShard)) return "input"
+        if (!validShard(routedShard))
+            return inputValidationFailure("guildId", "relationship", "Must route to a shard assigned to this client")
 
         const previous = this.#memberSelections.get(guildId)
         if (

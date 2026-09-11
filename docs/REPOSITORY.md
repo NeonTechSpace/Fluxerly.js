@@ -25,6 +25,7 @@ The documentation website remains a scaffold
 | [application.ts](/projects/sdk/src/internal/application.ts) | Current bot-token application allowlist projection, using shared REST without retention or application management |
 | [oauth.ts](/projects/sdk/src/internal/oauth.ts) | Standalone confidential OAuth client, explicit token operations and bearer reads, with application-owned consent callbacks, token storage and refresh coordination |
 | [api-errors.ts](/projects/sdk/src/api-errors.ts) | SDK-owned rejection classifications, carried through operation errors after bounded shared REST response inspection |
+| [input-validation.ts](/projects/sdk/src/input-validation.ts) | Safe local-input failure metadata; resource validators own constraints and applications own presentation |
 | [instance.ts](/projects/sdk/src/internal/instance.ts) | Shared lifetime endpoint discovery, selected-instance trust and unauthenticated bootstrap cleanup |
 | [effect-failures.ts](/projects/sdk/src/internal/effect-failures.ts) | REST/discovery cause-preserving error translation and deadlines, including cleanup defects during interruption |
 | [gateway.ts](/projects/sdk/src/internal/gateway.ts) | Gateway transport and protocol |
@@ -129,7 +130,7 @@ Run these commands from [projects/](/projects/) using the development Node versi
 | `pnpm build` | Compile the SDK with TypeScript 7 |
 | `pnpm --filter @neontechspace/fluxerly format` | Format SDK source, tests and configuration with Prettier |
 | `pnpm --filter @neontechspace/fluxerly format:check` | Check SDK formatting without writing files |
-| `pnpm check` | Check SDK formatting, build, typecheck source/tests, run Vitest and check isolated packed JavaScript/TypeScript consumers |
+| `pnpm check` | Check SDK formatting, build, paired public-client surface, source/test types, Vitest and isolated packed JavaScript/TypeScript consumers |
 | `pnpm --filter @neontechspace/fluxerly test:public-contract` | Check paired public client namespace names, runtime keys and JSDoc presence |
 | `pnpm --filter @neontechspace/fluxerly test:experiment:effect-transport` | Run the rejected Effect unstable HTTP/socket transport characterization outside the default SDK check |
 
@@ -203,7 +204,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:supervisor` | Two fixed child assignments, configuration acknowledgment, child gateway connections, fresh bot-self reads and orderly shutdown through both built APIs | Read-only sandbox API and gateway requests plus an owned loopback proof endpoint; no content or account-state changes |
 | `test:live:presence` | Interactive selected-guild member presence delivery, Op14 restore after a test-owned socket interruption and cleanup through both built APIs | No account-state changes by the harness; the authorized participant performs visible status transitions and the harness interrupts only its own socket |
 | `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
-| `test:live:optional-tools` | Builder-composed command reply, application-owned prefix change, cooldown feedback and router unsubscription through both built APIs | Temporary channel and test-bot command/reply messages; no human or member actions |
+| `test:live:optional-tools` | Builder-composed command reply, application-owned prefix change, cooldown and unmatched feedback, and router unsubscription through both built APIs | Temporary channel and test-bot command/reply messages; no human or member actions |
 | `test:live:consumer-features` | Forward snapshots, attachment-backed embeds, retained file metadata, non-voice flags, bot profile reads and lost-response reconciliation through both APIs | Journaled temporary channel/messages and uploads, test-owned response loss; profile GET may trigger provider expired-premium cleanup |
 | `test:live:typing` | One-shot typing, scoped refresh and completion/cancellation cleanup through both APIs | Temporary channel/messages and ephemeral typing notices; does not prove inbound typing delivery |
 | `test:live:typing:interactive` | Human-visible outgoing typing and selected-member inbound events through both APIs | Temporary channel and typing notices, with awaited refresh shutdown and verified channel removal |
@@ -259,6 +260,10 @@ For the scoped latest-private-message batch check, run `node tests/live/users.mj
 Set process-only `FLUXER_TEST_DM_USER_ID` to a currently authorized sandbox member.
 This mode verifies membership, creates marker-owned test DMs, checks batch failure/recovery and deletes the test messages, without profile, presence or group changes.
 It restores whether the bot had the conversation open and retains the users recovery journal if cleanup cannot be verified
+
+For read-only local-validation and user/private-channel cache checks, run `node tests/live/sdk.mjs default --quality` and then the `effect` mode from the built SDK directory.
+Supply currently authorized targets through process-only `FLUXER_TEST_DM_USER_ID` and `FLUXER_TEST_GROUP_DM_ID`; the selected group must be owned by that member.
+This mode uses the shared lock, verifies identity, rejects invalid inputs without dispatch and then reads the authorized account and existing group without sending messages or changing remote state
 
 Sharding checks use that lock and the same sandbox identity verification, without a recovery journal or remote resource creation.
 The harness explicitly skips owning-shard count replies while the provider fix remains undeployed; a passing run does not establish that path.

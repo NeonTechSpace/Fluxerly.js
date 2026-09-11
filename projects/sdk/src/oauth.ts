@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** Delegated identity scopes accepted by authorizationUrl, distinct from bot installation permissions */
 export const OAuthScopes = Object.freeze({
@@ -85,6 +86,8 @@ export type OAuthOperation =
 /** Expected OAuth failure with safe metadata. Only recognized OAuth error codes are retained, without bodies, descriptions, or credentials */
 export class OAuthOperationError extends Error {
     readonly _tag = "OAuthOperationError"
+    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    readonly inputValidation: InputValidationDetail | null
     constructor(
         readonly operation: OAuthOperation,
         readonly reason: "input" | "busy" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
@@ -95,9 +98,11 @@ export class OAuthOperationError extends Error {
         readonly retryAfterMs: number | null = null,
         /** Recognized invalid_grant, invalid_client, invalid_request, invalid_scope, unauthorized_client, or unsupported_grant_type code, otherwise null */
         readonly oauthError: string | null = null,
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(`OAuth operation ${operation} failed (${reason}; outcome ${outcome})`)
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 

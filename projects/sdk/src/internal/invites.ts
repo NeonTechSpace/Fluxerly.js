@@ -4,6 +4,7 @@ import type { ModerationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const hostedInvite = "https://fluxer.gg"
 
@@ -112,8 +113,9 @@ export function decodeInviteDelete(value: unknown): InviteDeleteEvent | undefine
     })
 }
 
-export function inviteFetch(code: string, inviteBase = hostedInvite): GuildRequest<Invite> | undefined {
-    if (!codeValue(code)) return undefined
+export function inviteFetch(code: string, inviteBase = hostedInvite): GuildRequest<Invite> | InputValidationFailure {
+    if (!codeValue(code))
+        return inputValidationFailure("code", "format", "Invite code must contain 1 through 128 URL-safe characters")
     return {
         guildId: "invites",
         bucket: "invites:code",
@@ -132,8 +134,13 @@ export function inviteList(
     kind: "guilds" | "channels",
     id: string,
     inviteBase = hostedInvite,
-): GuildRequest<readonly InviteMetadata[]> | undefined {
-    if (!identifier(id)) return undefined
+): GuildRequest<readonly InviteMetadata[]> | InputValidationFailure {
+    if (!identifier(id))
+        return inputValidationFailure(
+            kind === "guilds" ? "guildId" : "channelId",
+            "format",
+            "Resource IDs must be decimal strings",
+        )
     return {
         guildId: id,
         bucket: `${kind}:invites`,
@@ -165,28 +172,34 @@ export function inviteCreate(
     input?: InviteCreate,
     options?: ModerationOptions,
     inviteBase = hostedInvite,
-): GuildRequest<InviteMetadata> | undefined {
+): GuildRequest<InviteMetadata> | InputValidationFailure {
     const value = input === undefined ? {} : input
     const base = inviteList("channels", channelId, inviteBase)
     const audit = auditSettings(options)
-    if (
-        !base ||
-        !audit ||
-        !record(value) ||
-        Object.keys(value).some((key) => !["maxAgeSeconds", "maxUses", "unique", "temporary"].includes(key))
-    )
-        return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (audit instanceof InputValidationFailure) return audit
+    if (!record(value)) return inputValidationFailure("input", "type", "Invite input must be an object")
+    if (Object.keys(value).some((key) => !["maxAgeSeconds", "maxUses", "unique", "temporary"].includes(key)))
+        return inputValidationFailure(
+            "input",
+            "allowedFields",
+            "Invite input may contain only maxAgeSeconds, maxUses, unique, and temporary",
+        )
     const maxAgeSeconds = value.maxAgeSeconds === undefined ? 86_400 : value.maxAgeSeconds
     const maxUses = value.maxUses === undefined ? 0 : value.maxUses
     const unique = value.unique === undefined ? true : value.unique
     const temporary = value.temporary === undefined ? false : value.temporary
-    if (
-        !integer(maxAgeSeconds, 604_800) ||
-        !integer(maxUses, 100) ||
-        typeof unique !== "boolean" ||
-        typeof temporary !== "boolean"
-    )
-        return undefined
+    if (!integer(maxAgeSeconds, 604_800))
+        return inputValidationFailure(
+            "maxAgeSeconds",
+            "range",
+            "Invite maximum age must be an integer from 0 through 604,800 seconds",
+        )
+    if (!integer(maxUses, 100))
+        return inputValidationFailure("maxUses", "range", "Invite maximum uses must be an integer from 0 through 100")
+    if (typeof unique !== "boolean") return inputValidationFailure("unique", "type", "Invite unique must be a boolean")
+    if (typeof temporary !== "boolean")
+        return inputValidationFailure("temporary", "type", "Invite temporary must be a boolean")
     return {
         ...base,
         ...audit,
@@ -203,9 +216,10 @@ export function inviteDelete(
     code: string,
     options?: ModerationOptions,
     inviteBase = hostedInvite,
-): GuildRequest<void> | undefined {
+): GuildRequest<void> | InputValidationFailure {
     const base = inviteFetch(code, inviteBase)
     const audit = auditSettings(options)
-    if (!base || !audit) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (audit instanceof InputValidationFailure) return audit
     return { ...base, ...audit, method: "DELETE", status: 204, decode: () => undefined }
 }

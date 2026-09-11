@@ -7,6 +7,7 @@ import {
 } from "#sdk/member-search"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const joinSourceTypeValues = new Set<number>(Object.values(GuildMemberJoinSourceTypes))
 const queryKeys = new Set([
@@ -59,30 +60,79 @@ function joinSourceTypes(value: unknown): value is readonly GuildMemberJoinSourc
 }
 
 /** Validates and encodes one provider page request, preserving provider defaults without retaining caller input */
-export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQuery | undefined {
+export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQuery | InputValidationFailure {
     const input = query === undefined ? {} : query
-    if (!record(input) || Object.keys(input).some((key) => !queryKeys.has(key))) return undefined
+    if (!record(input)) return inputValidationFailure("query", "type", "Member search query must be an object")
+    if (Object.keys(input).some((key) => !queryKeys.has(key)))
+        return inputValidationFailure("query", "allowedFields", "Member search query contains an unsupported field")
     const limit = input.limit === undefined ? 25 : input.limit
     const offset = input.offset === undefined ? 0 : input.offset
-    if (
-        (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 100)) ||
-        !nonNegativeInteger(offset) ||
-        typeof limit !== "number" ||
-        !Number.isSafeInteger(limit) ||
-        limit < 1 ||
-        limit > 100 ||
-        (input.roleIds !== undefined && !identifiers(input.roleIds, 10)) ||
-        (input.joinedAtAfterSeconds !== undefined && !nonNegativeInteger(input.joinedAtAfterSeconds)) ||
-        (input.joinedAtBeforeSeconds !== undefined && !nonNegativeInteger(input.joinedAtBeforeSeconds)) ||
-        (input.userCreatedAtAfterSeconds !== undefined && !nonNegativeInteger(input.userCreatedAtAfterSeconds)) ||
-        (input.userCreatedAtBeforeSeconds !== undefined && !nonNegativeInteger(input.userCreatedAtBeforeSeconds)) ||
-        (input.joinSourceTypes !== undefined && !joinSourceTypes(input.joinSourceTypes)) ||
-        (input.sourceInviteCodes !== undefined && !texts(input.sourceInviteCodes, 10)) ||
-        (input.isBot !== undefined && typeof input.isBot !== "boolean") ||
-        (input.sortBy !== undefined && input.sortBy !== "joinedAt" && input.sortBy !== "relevance") ||
-        (input.sortOrder !== undefined && input.sortOrder !== "asc" && input.sortOrder !== "desc")
-    )
-        return undefined
+    if (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 100))
+        return inputValidationFailure(
+            "query.query",
+            "length",
+            "Member search text must contain at most 100 UTF-16 code units",
+        )
+    if (!nonNegativeInteger(offset))
+        return inputValidationFailure(
+            "query.offset",
+            "range",
+            "Member search offset must be a nonnegative safe integer",
+        )
+    if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+        return inputValidationFailure(
+            "query.limit",
+            "range",
+            "Member search limit must be an integer from 1 through 100",
+        )
+    if (input.roleIds !== undefined && !identifiers(input.roleIds, 10))
+        return inputValidationFailure(
+            "query.roleIds[]",
+            "format",
+            "Member search role IDs must be an array of at most 10 unique decimal strings",
+        )
+    if (input.joinedAtAfterSeconds !== undefined && !nonNegativeInteger(input.joinedAtAfterSeconds))
+        return inputValidationFailure(
+            "query.joinedAtAfterSeconds",
+            "range",
+            "Joined-after time must be a nonnegative safe integer",
+        )
+    if (input.joinedAtBeforeSeconds !== undefined && !nonNegativeInteger(input.joinedAtBeforeSeconds))
+        return inputValidationFailure(
+            "query.joinedAtBeforeSeconds",
+            "range",
+            "Joined-before time must be a nonnegative safe integer",
+        )
+    if (input.userCreatedAtAfterSeconds !== undefined && !nonNegativeInteger(input.userCreatedAtAfterSeconds))
+        return inputValidationFailure(
+            "query.userCreatedAtAfterSeconds",
+            "range",
+            "User-created-after time must be a nonnegative safe integer",
+        )
+    if (input.userCreatedAtBeforeSeconds !== undefined && !nonNegativeInteger(input.userCreatedAtBeforeSeconds))
+        return inputValidationFailure(
+            "query.userCreatedAtBeforeSeconds",
+            "range",
+            "User-created-before time must be a nonnegative safe integer",
+        )
+    if (input.joinSourceTypes !== undefined && !joinSourceTypes(input.joinSourceTypes))
+        return inputValidationFailure(
+            "query.joinSourceTypes[]",
+            "allowedValue",
+            "Join source types must be an array of at most 10 unique supported values",
+        )
+    if (input.sourceInviteCodes !== undefined && !texts(input.sourceInviteCodes, 10))
+        return inputValidationFailure(
+            "query.sourceInviteCodes[]",
+            "unique",
+            "Source invite codes must be an array of at most 10 unique strings",
+        )
+    if (input.isBot !== undefined && typeof input.isBot !== "boolean")
+        return inputValidationFailure("query.isBot", "type", "isBot must be a boolean")
+    if (input.sortBy !== undefined && input.sortBy !== "joinedAt" && input.sortBy !== "relevance")
+        return inputValidationFailure("query.sortBy", "allowedValue", "sortBy must be joinedAt or relevance")
+    if (input.sortOrder !== undefined && input.sortOrder !== "asc" && input.sortOrder !== "desc")
+        return inputValidationFailure("query.sortOrder", "allowedValue", "sortOrder must be asc or desc")
     const sourceTypes = input.joinSourceTypes === undefined ? undefined : [...input.joinSourceTypes]
     const inviteCodes = input.sourceInviteCodes === undefined ? undefined : [...input.sourceInviteCodes]
     const body = {
@@ -186,9 +236,13 @@ export function decodeMemberSearchPage(
 }
 
 /** Builds a remote-only POST page request. It omits cache admission and therefore cannot populate partial indexed hits */
-export function memberSearch(guildId: string, query?: MemberSearchQuery): GuildRequest<MemberSearchPage> | undefined {
+export function memberSearch(
+    guildId: string,
+    query?: MemberSearchQuery,
+): GuildRequest<MemberSearchPage> | InputValidationFailure {
     const encoded = encodeMemberSearchQuery(query)
-    if (!identifier(guildId) || !encoded) return undefined
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    if (encoded instanceof InputValidationFailure) return encoded
     return {
         guildId,
         bucket: "guild:members",

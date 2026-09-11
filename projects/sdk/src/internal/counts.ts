@@ -10,6 +10,7 @@ import {
     type GuildCountsResult,
 } from "#sdk/counts"
 import { ClientClosedError } from "#sdk/errors"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { withDeadline } from "./effect-failures.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import { identifier, record } from "./message.js"
@@ -72,23 +73,37 @@ const nonnegativeInteger = (value: unknown): value is number =>
 const shard = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 
-function copyIdentifiers(value: unknown, maximum: number): readonly string[] | undefined {
-    if (!Array.isArray(value) || value.length < 1 || value.length > maximum || !value.every(positiveIdentifier))
-        return undefined
+function copyIdentifiers(
+    value: unknown,
+    path: "guildIds" | "channelIds",
+    maximum: number,
+): readonly string[] | InputValidationFailure {
+    if (!Array.isArray(value)) return inputValidationFailure(path, "type", "Must be a non-empty array of canonical IDs")
+    if (value.length < 1 || value.length > maximum)
+        return inputValidationFailure(path, "length", `Must contain from 1 through ${maximum} IDs`)
+    if (!value.every(positiveIdentifier))
+        return inputValidationFailure(path, "format", "Each ID must be a canonical positive uint64 decimal string")
     const ids = Object.freeze([...value])
-    return new Set(ids).size === ids.length ? ids : undefined
+    return new Set(ids).size === ids.length
+        ? ids
+        : inputValidationFailure(path, "unique", "Must not contain duplicate IDs")
 }
 
-function timeout(value: unknown): number | undefined {
-    if (
-        value !== undefined &&
-        (!record(value) || Object.keys(value).some((key) => key !== "timeoutMs" && key !== "signal"))
-    )
-        return undefined
+function timeout(value: unknown): number | InputValidationFailure {
+    if (value !== undefined && !record(value))
+        return inputValidationFailure("options", "type", "Must be an options object when supplied")
+    if (value !== undefined && Object.keys(value).some((key) => key !== "timeoutMs" && key !== "signal"))
+        return inputValidationFailure("options", "allowedFields", "Only timeoutMs and signal are accepted")
     const duration = value === undefined || value.timeoutMs === undefined ? defaultTimeoutMs : value.timeoutMs
-    return typeof duration === "number" && Number.isSafeInteger(duration) && duration >= 1 && duration <= 2_147_483_647
+    if (typeof duration !== "number")
+        return inputValidationFailure("options.timeoutMs", "type", "Must be an integer number of milliseconds")
+    return Number.isSafeInteger(duration) && duration >= 1 && duration <= 2_147_483_647
         ? duration
-        : undefined
+        : inputValidationFailure(
+              "options.timeoutMs",
+              "range",
+              "Must be an integer from 1 through 2147483647 milliseconds",
+          )
 }
 
 function nonce(value: unknown): string | undefined {
@@ -245,11 +260,25 @@ export class CountOwner implements CountGatewayOwner {
         return Effect.suspend(() => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const guildRequest = operation === "guilds.fetchCounts"
-            const copiedIds = copyIdentifiers(ids, guildRequest ? 100 : 25)
+            const copiedIds = copyIdentifiers(ids, guildRequest ? "guildIds" : "channelIds", guildRequest ? 100 : 25)
+            if (copiedIds instanceof InputValidationFailure)
+                return Effect.fail(new CountOperationError(operation, "input", copiedIds.detail))
             const duration = timeout(options)
+            if (duration instanceof InputValidationFailure)
+                return Effect.fail(new CountOperationError(operation, "input", duration.detail))
             const channelGuildId = guildRequest ? undefined : positiveIdentifier(guildId) ? guildId : undefined
-            if (!copiedIds || duration === undefined || (!guildRequest && channelGuildId === undefined))
-                return Effect.fail(new CountOperationError(operation, "input"))
+            if (!guildRequest && channelGuildId === undefined)
+                return Effect.fail(
+                    new CountOperationError(
+                        operation,
+                        "input",
+                        inputValidationFailure(
+                            "guildId",
+                            "format",
+                            "Must be a canonical positive uint64 decimal string",
+                        ).detail,
+                    ),
+                )
             const routed = guildRequest
                 ? this.#routeGuilds(copiedIds)
                 : this.#routeGuilds(Object.freeze([channelGuildId!]))

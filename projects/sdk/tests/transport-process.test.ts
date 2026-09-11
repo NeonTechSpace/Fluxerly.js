@@ -11,27 +11,19 @@ function runChild(mode: string, url: string, entry = "./transport/sdk-process.mj
     })
     const open = Promise.withResolvers<void>()
     const completed = Promise.withResolvers<void>()
-    const state = Promise.withResolvers<number>()
-    let didComplete = false
     let stderr = ""
     child.stderr?.on("data", (data: Buffer) => {
         stderr += data.toString()
     })
-    child.on("message", (message: { event: string; readyState?: number }) => {
+    child.on("message", (message: { event: string }) => {
         if (message.event === "open") open.resolve()
-        if (message.event === "completed") {
-            didComplete = true
-            completed.resolve()
-        }
-        if (message.event === "state") state.resolve(message.readyState ?? -1)
+        if (message.event === "completed") completed.resolve()
     })
     const exited = once(child, "exit")
     return {
         child,
         open: open.promise,
         completed: completed.promise,
-        state: state.promise,
-        didComplete: () => didComplete,
         stderr: () => stderr,
         exited,
         stop: async () => {

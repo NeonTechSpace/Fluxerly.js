@@ -1,3 +1,5 @@
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
+
 /** A bot's visible session status. `offline` is intentionally excluded because Fluxer normalizes it to invisible while connected */
 export type PresenceStatus = "online" | "idle" | "dnd" | "invisible"
 
@@ -38,13 +40,18 @@ export interface PresenceInput {
 export class PresenceError extends Error {
     /** Stable discriminant for default Result failures */
     readonly _tag = "PresenceError"
+    /** SDK-owned local input detail, or null for local limits and non-input failures */
+    readonly inputValidation: InputValidationDetail | null
 
     constructor(
         /** The rejected operation phase, without retaining the input value */
         readonly reason: "input" | "limit" = "input",
+        /** Safe local input detail. It never retains rejected values, caller keys, credentials, or provider data */
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(reason === "limit" ? "Presence member selection exceeds a local limit" : "Presence input is invalid")
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 

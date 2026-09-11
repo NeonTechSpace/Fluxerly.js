@@ -10,6 +10,7 @@ import type {
     DiscoverySearchQuery,
 } from "#sdk/discovery"
 import type { GuildRequest } from "./guilds.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
 
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
@@ -57,8 +58,8 @@ function application(value: unknown, guildId: string): DiscoveryApplication | un
     })
 }
 
-export function discoveryStatus(guildId: string): GuildRequest<DiscoveryStatus> | undefined {
-    if (!identifier(guildId)) return undefined
+export function discoveryStatus(guildId: string): GuildRequest<DiscoveryStatus> | InputValidationFailure {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         guildId,
         bucket: "guild:discovery:status",
@@ -134,25 +135,60 @@ function discoveryGuild(value: unknown): DiscoveryGuild | undefined {
 }
 
 /** Build one volatile directory search page. Offset pagination has no snapshot or traversal guarantee */
-export function discoverySearch(query?: DiscoverySearchQuery): GuildRequest<DiscoverySearchPage> | undefined {
-    if (query !== undefined && !record(query)) return undefined
+export function discoverySearch(
+    query?: DiscoverySearchQuery,
+): GuildRequest<DiscoverySearchPage> | InputValidationFailure {
+    if (query !== undefined && !record(query))
+        return inputValidationFailure("query", "type", "Discovery search query must be an object")
     const input = query as DiscoverySearchQuery | undefined
     if (
         input !== undefined &&
-        (Object.keys(input).some(
+        Object.keys(input).some(
             (key) => !["query", "categoryId", "primaryLanguage", "tag", "sortBy", "limit", "offset"].includes(key),
-        ) ||
-            (input.query !== undefined && !text(input.query, 0, 100)) ||
-            (input.categoryId !== undefined && !integer(input.categoryId, 8)) ||
-            (input.primaryLanguage !== undefined &&
-                (!text(input.primaryLanguage, 2, 35) ||
-                    !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(input.primaryLanguage))) ||
-            (input.tag !== undefined && !text(input.tag, 0, 30)) ||
-            (input.sortBy !== undefined && !["memberCount", "onlineCount", "relevance"].includes(input.sortBy)) ||
-            (input.limit !== undefined && (!integer(input.limit, 48) || input.limit === 0)) ||
-            (input.offset !== undefined && !integer(input.offset)))
+        )
     )
-        return undefined
+        return inputValidationFailure(
+            "query",
+            "allowedFields",
+            "Discovery search query may contain only documented search fields",
+        )
+    if (input?.query !== undefined && !text(input.query, 0, 100))
+        return inputValidationFailure(
+            "query.query",
+            "length",
+            "Discovery query must contain at most 100 Unicode code points",
+        )
+    if (input?.categoryId !== undefined && !integer(input.categoryId, 8))
+        return inputValidationFailure(
+            "query.categoryId",
+            "range",
+            "Discovery category ID must be an integer from 0 through 8",
+        )
+    if (
+        input?.primaryLanguage !== undefined &&
+        (!text(input.primaryLanguage, 2, 35) || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(input.primaryLanguage))
+    )
+        return inputValidationFailure(
+            "query.primaryLanguage",
+            "format",
+            "Discovery primary language must be a 2 through 35 code point language tag",
+        )
+    if (input?.tag !== undefined && !text(input.tag, 0, 30))
+        return inputValidationFailure(
+            "query.tag",
+            "length",
+            "Discovery tag must contain at most 30 Unicode code points",
+        )
+    if (input?.sortBy !== undefined && !["memberCount", "onlineCount", "relevance"].includes(input.sortBy))
+        return inputValidationFailure(
+            "query.sortBy",
+            "allowedValue",
+            "Discovery sortBy must be memberCount, onlineCount, or relevance",
+        )
+    if (input?.limit !== undefined && (!integer(input.limit, 48) || input.limit === 0))
+        return inputValidationFailure("query.limit", "range", "Discovery limit must be an integer from 1 through 48")
+    if (input?.offset !== undefined && !integer(input.offset))
+        return inputValidationFailure("query.offset", "range", "Discovery offset must be a nonnegative 32-bit integer")
     const limit = input?.limit ?? 24
     const offset = input?.offset ?? 0
     const parameters = new URLSearchParams({ limit: String(limit), offset: String(offset) })
@@ -208,27 +244,42 @@ export function discoverySearch(query?: DiscoverySearchQuery): GuildRequest<Disc
     }
 }
 
-function body(input: DiscoveryApplicationInput | DiscoveryApplicationEdit, patch: boolean): string | undefined {
-    if (
-        !record(input) ||
-        Object.keys(input).some((key) => !["description", "categoryId", "primaryLanguage", "tags"].includes(key))
-    )
-        return undefined
-    if ((!patch || input.description !== undefined) && !text(input.description, 10, 300)) return undefined
-    if ((!patch || input.categoryId !== undefined) && !integer(input.categoryId, 8)) return undefined
+function body(input: DiscoveryApplicationInput | DiscoveryApplicationEdit, patch: boolean) {
+    if (!record(input)) return inputValidationFailure("input", "type", "Discovery application input must be an object")
+    if (Object.keys(input).some((key) => !["description", "categoryId", "primaryLanguage", "tags"].includes(key)))
+        return inputValidationFailure(
+            "input",
+            "allowedFields",
+            "Discovery application input may contain only description, categoryId, primaryLanguage, and tags",
+        )
+    if ((!patch || input.description !== undefined) && !text(input.description, 10, 300))
+        return inputValidationFailure(
+            "description",
+            "length",
+            "Discovery description must contain 10 through 300 characters",
+        )
+    if ((!patch || input.categoryId !== undefined) && !integer(input.categoryId, 8))
+        return inputValidationFailure("categoryId", "range", "Discovery categoryId must be an integer from 0 through 8")
     if (
         input.primaryLanguage !== undefined &&
         (!text(input.primaryLanguage, 2, 35) || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(input.primaryLanguage))
     )
-        return undefined
+        return inputValidationFailure("primaryLanguage", "format", "Primary language must be a valid language tag")
     let tags: string[] | undefined
     if (input.tags !== undefined) {
-        if (!Array.isArray(input.tags) || input.tags.length > 10) return undefined
+        if (!Array.isArray(input.tags) || input.tags.length > 10)
+            return inputValidationFailure("tags", "length", "Discovery tags must be an array with at most ten entries")
         tags = []
         for (const tag of input.tags) {
-            if (!text(tag, 2, 30)) return undefined
+            if (!text(tag, 2, 30))
+                return inputValidationFailure("tags[]", "length", "Discovery tags must contain 2 through 30 characters")
             const normalized = tag.trim().toLowerCase().replace(/\s+/g, " ")
-            if (!text(normalized, 2, 30) || !/^[\p{L}\p{N}][\p{L}\p{N} \-_+&]*$/u.test(normalized)) return undefined
+            if (!text(normalized, 2, 30) || !/^[\p{L}\p{N}][\p{L}\p{N} \-_+&]*$/u.test(normalized))
+                return inputValidationFailure(
+                    "tags[]",
+                    "format",
+                    "Discovery tags must use supported letters, numbers, and separators",
+                )
             if (!tags.includes(normalized)) tags.push(normalized)
         }
     }
@@ -238,17 +289,20 @@ function body(input: DiscoveryApplicationInput | DiscoveryApplicationEdit, patch
         primary_language: input.primaryLanguage,
         custom_tags: tags,
     })
-    return json === "{}" ? undefined : json
+    return json === "{}"
+        ? inputValidationFailure("input", "required", "Discovery application edit must contain a change")
+        : json
 }
 
 export function discoveryWrite(
     guildId: string,
     input: DiscoveryApplicationInput | DiscoveryApplicationEdit,
     patch = false,
-): GuildRequest<DiscoveryApplication> | undefined {
+): GuildRequest<DiscoveryApplication> | InputValidationFailure {
     const base = discoveryStatus(guildId),
         json = body(input, patch)
-    if (!base || json === undefined) return undefined
+    if (base instanceof InputValidationFailure) return base
+    if (json instanceof InputValidationFailure) return json
     return {
         ...base,
         bucket: "guild:discovery:update",
@@ -259,9 +313,9 @@ export function discoveryWrite(
     }
 }
 
-export function discoveryWithdraw(guildId: string): GuildRequest<void> | undefined {
+export function discoveryWithdraw(guildId: string): GuildRequest<void> | InputValidationFailure {
     const base = discoveryStatus(guildId)
-    if (!base) return undefined
+    if (base instanceof InputValidationFailure) return base
     return {
         ...base,
         bucket: "guild:discovery:update",

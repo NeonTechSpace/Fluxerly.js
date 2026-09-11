@@ -17,6 +17,7 @@ import type {
     RoleHoistPosition,
     RoleReference,
 } from "#sdk/guilds"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
 import type { ResourceRequest } from "./guild-cache.js"
 import type { ChannelCacheRequest } from "./channel-cache.js"
@@ -39,6 +40,8 @@ export interface GuildRequest<A> {
     readonly cache?: ResourceRequest
     readonly channelCache?: ChannelCacheRequest
 }
+
+type GuildValidationResult<A> = GuildRequest<A> | InputValidationFailure
 
 const nullableText = (value: unknown) => value === undefined || value === null || typeof value === "string"
 const positiveIdentifier = (value: unknown): value is string => identifier(value) && value !== "0"
@@ -254,8 +257,8 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
     })
 }
 
-export function guildFetch(guildId: string): GuildRequest<Guild> | undefined {
-    if (!identifier(guildId)) return undefined
+export function guildFetch(guildId: string): GuildValidationResult<Guild> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         guildId,
         bucket: "guild:read",
@@ -270,8 +273,12 @@ export function guildFetch(guildId: string): GuildRequest<Guild> | undefined {
     }
 }
 
-export function memberFetch(target: MemberReference): GuildRequest<GuildMember> | undefined {
-    if (!record(target) || !identifier(target.guildId) || !identifier(target.userId)) return undefined
+export function memberFetch(target: MemberReference): GuildValidationResult<GuildMember> {
+    if (!record(target)) return inputValidationFailure("target", "type", "Member targets must be objects")
+    if (!identifier(target.guildId))
+        return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
+    if (!identifier(target.userId))
+        return inputValidationFailure("target.userId", "format", "User IDs must be decimal strings")
     const { guildId, userId } = target
     return {
         guildId,
@@ -287,8 +294,8 @@ export function memberFetch(target: MemberReference): GuildRequest<GuildMember> 
     }
 }
 
-export function memberSelf(guildId: string): GuildRequest<GuildMember> | undefined {
-    if (!identifier(guildId)) return undefined
+export function memberSelf(guildId: string): GuildValidationResult<GuildMember> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         guildId,
         bucket: "guild:members",
@@ -300,11 +307,12 @@ export function memberSelf(guildId: string): GuildRequest<GuildMember> | undefin
     }
 }
 
-export function memberEditSelf(guildId: string, input: MemberProfileEdit): GuildRequest<GuildMember> | undefined {
+export function memberEditSelf(guildId: string, input: MemberProfileEdit): GuildValidationResult<GuildMember> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    if (!record(input)) return inputValidationFailure("input", "type", "Member profile input must be an object")
+    if (Object.keys(input).length === 0)
+        return inputValidationFailure("input", "required", "Member profile input must contain at least one field")
     if (
-        !identifier(guildId) ||
-        !record(input) ||
-        Object.keys(input).length === 0 ||
         Object.keys(input).some(
             (key) =>
                 ![
@@ -317,17 +325,37 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
                     "profileFlags",
                     "mentionFlags",
                 ].includes(key),
-        ) ||
-        (input.nickname !== undefined && input.nickname !== null && !text(input.nickname, 1, 32)) ||
-        (input.avatar !== undefined && input.avatar !== null && !imageDataUri(input.avatar)) ||
-        (input.banner !== undefined && input.banner !== null && !imageDataUri(input.banner)) ||
-        (input.bio !== undefined && input.bio !== null && !text(input.bio, 1, 320)) ||
-        (input.pronouns !== undefined && input.pronouns !== null && !text(input.pronouns, 1, 40)) ||
-        (input.accentColor !== undefined && input.accentColor !== null && !color(input.accentColor)) ||
-        (input.profileFlags !== undefined && input.profileFlags !== null && !nonNegativeInt32(input.profileFlags)) ||
-        (input.mentionFlags !== undefined && input.mentionFlags !== null && !mentionPreference(input.mentionFlags))
+        )
     )
-        return undefined
+        return inputValidationFailure(
+            "input",
+            "allowedFields",
+            "Member profile input may contain only documented profile fields",
+        )
+    if (input.nickname !== undefined && input.nickname !== null && !text(input.nickname, 1, 32))
+        return inputValidationFailure("nickname", "length", "Nickname must contain 1 through 32 Unicode code points")
+    if (input.avatar !== undefined && input.avatar !== null && !imageDataUri(input.avatar))
+        return inputValidationFailure("avatar", "format", "Avatar must be null or a base64 image data URI")
+    if (input.banner !== undefined && input.banner !== null && !imageDataUri(input.banner))
+        return inputValidationFailure("banner", "format", "Banner must be null or a base64 image data URI")
+    if (input.bio !== undefined && input.bio !== null && !text(input.bio, 1, 320))
+        return inputValidationFailure("bio", "length", "Bio must contain 1 through 320 Unicode code points")
+    if (input.pronouns !== undefined && input.pronouns !== null && !text(input.pronouns, 1, 40))
+        return inputValidationFailure("pronouns", "length", "Pronouns must contain 1 through 40 Unicode code points")
+    if (input.accentColor !== undefined && input.accentColor !== null && !color(input.accentColor))
+        return inputValidationFailure(
+            "accentColor",
+            "range",
+            "Accent color must be an integer from 0 through 16,777,215",
+        )
+    if (input.profileFlags !== undefined && input.profileFlags !== null && !nonNegativeInt32(input.profileFlags))
+        return inputValidationFailure(
+            "profileFlags",
+            "range",
+            "Profile flags must be an integer from 0 through 2,147,483,647",
+        )
+    if (input.mentionFlags !== undefined && input.mentionFlags !== null && !mentionPreference(input.mentionFlags))
+        return inputValidationFailure("mentionFlags", "allowedValue", "Mention flags must be 0, 1, or 2")
     const json = JSON.stringify({
         nick: input.nickname,
         avatar: input.avatar,
@@ -338,7 +366,9 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
         profile_flags: input.profileFlags,
         mention_flags: input.mentionFlags,
     })
-    if (json === "{}" || Buffer.byteLength(json) > 4_194_304) return undefined
+    if (json === "{}") return inputValidationFailure("input", "required", "Member profile input must encode a change")
+    if (Buffer.byteLength(json) > 4_194_304)
+        return inputValidationFailure("input", "size", "Member profile input must not exceed 4,194,304 encoded bytes")
     return {
         guildId,
         bucket: "guild:member:self:update",
@@ -355,14 +385,14 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
 export function memberNicknameEdit(
     target: MemberReference,
     nickname: string | null,
-): GuildRequest<GuildMember> | undefined {
-    if (
-        !record(target) ||
-        !identifier(target.guildId) ||
-        !identifier(target.userId) ||
-        (nickname !== null && !text(nickname, 1, 32))
-    )
-        return undefined
+): GuildValidationResult<GuildMember> {
+    if (!record(target)) return inputValidationFailure("target", "type", "Member targets must be objects")
+    if (!identifier(target.guildId))
+        return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
+    if (!identifier(target.userId))
+        return inputValidationFailure("target.userId", "format", "User IDs must be decimal strings")
+    if (nickname !== null && !text(nickname, 1, 32))
+        return inputValidationFailure("nickname", "length", "Nickname must be null or contain 1 through 32 characters")
     const { guildId, userId } = target
     return {
         guildId,
@@ -383,22 +413,22 @@ export function memberNicknameEdit(
 export function memberRolesSet(
     target: MemberReference,
     roleIds: readonly string[],
-): GuildRequest<GuildMember> | undefined {
-    if (
-        !record(target) ||
-        !positiveIdentifier(target.guildId) ||
-        !positiveIdentifier(target.userId) ||
-        !Array.isArray(roleIds) ||
-        roleIds.length > 250
-    )
-        return undefined
+): GuildValidationResult<GuildMember> {
+    if (!record(target)) return inputValidationFailure("target", "type", "Member targets must be objects")
+    if (!positiveIdentifier(target.guildId))
+        return inputValidationFailure("target.guildId", "format", "Guild IDs must be positive decimal strings")
+    if (!positiveIdentifier(target.userId))
+        return inputValidationFailure("target.userId", "format", "User IDs must be positive decimal strings")
+    if (!Array.isArray(roleIds)) return inputValidationFailure("roleIds", "type", "Role IDs must be an array")
+    if (roleIds.length > 250)
+        return inputValidationFailure("roleIds", "length", "A member role set may contain at most 250 IDs")
     const roles = [...roleIds]
-    if (
-        !roles.every(positiveIdentifier) ||
-        new Set(roles).size !== roles.length ||
-        roles.some((roleId) => roleId === target.guildId)
-    )
-        return undefined
+    if (!roles.every(positiveIdentifier))
+        return inputValidationFailure("roleIds[]", "format", "Role IDs must be positive decimal strings")
+    if (new Set(roles).size !== roles.length)
+        return inputValidationFailure("roleIds", "unique", "Role IDs must be unique")
+    if (roles.some((roleId) => roleId === target.guildId))
+        return inputValidationFailure("roleIds[]", "relationship", "The guild default role must be omitted")
     const { guildId, userId } = target
     return {
         guildId,
@@ -415,19 +445,17 @@ export function memberRolesSet(
     }
 }
 
-export function memberPage(guildId: string, query?: MemberQuery): GuildRequest<readonly GuildMember[]> | undefined {
+export function memberPage(guildId: string, query?: MemberQuery): GuildValidationResult<readonly GuildMember[]> {
     const input = query === undefined ? {} : query
-    if (!identifier(guildId) || !record(input) || Object.keys(input).some((key) => key !== "limit" && key !== "after"))
-        return undefined
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    if (!record(input)) return inputValidationFailure("query", "type", "Member query must be an object")
+    if (Object.keys(input).some((key) => key !== "limit" && key !== "after"))
+        return inputValidationFailure("query", "allowedFields", "Member query may contain only limit and after")
     const limit = input.limit === undefined ? 100 : input.limit
-    if (
-        typeof limit !== "number" ||
-        !Number.isInteger(limit) ||
-        limit < 1 ||
-        limit > 1000 ||
-        (input.after !== undefined && !identifier(input.after))
-    )
-        return undefined
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 1000)
+        return inputValidationFailure("query.limit", "range", "Member limit must be an integer from 1 through 1,000")
+    if (input.after !== undefined && !identifier(input.after))
+        return inputValidationFailure("query.after", "format", "Member cursor must be a decimal user ID string")
     const after = input.after as string | undefined
     const params = new URLSearchParams({ limit: String(limit) })
     if (after !== undefined) params.set("after", after)
@@ -453,15 +481,15 @@ export function memberPage(guildId: string, query?: MemberQuery): GuildRequest<r
     }
 }
 
-export function memberRole(target: MemberReference, roleId: string, add: boolean): GuildRequest<void> | undefined {
-    if (
-        !record(target) ||
-        !identifier(target.guildId) ||
-        !identifier(target.userId) ||
-        !identifier(roleId) ||
-        roleId === target.guildId
-    )
-        return undefined
+export function memberRole(target: MemberReference, roleId: string, add: boolean): GuildValidationResult<void> {
+    if (!record(target)) return inputValidationFailure("target", "type", "Member targets must be objects")
+    if (!identifier(target.guildId))
+        return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
+    if (!identifier(target.userId))
+        return inputValidationFailure("target.userId", "format", "User IDs must be decimal strings")
+    if (!identifier(roleId)) return inputValidationFailure("roleId", "format", "Role IDs must be decimal strings")
+    if (roleId === target.guildId)
+        return inputValidationFailure("roleId", "relationship", "The guild default role cannot be assigned explicitly")
     const { guildId, userId } = target
     return {
         guildId,
@@ -520,8 +548,8 @@ function decodeRoles(value: unknown, guildId: string): readonly GuildRole[] | un
     return Object.freeze(roles)
 }
 
-export function roleList(guildId: string): GuildRequest<readonly GuildRole[]> | undefined {
-    if (!identifier(guildId)) return undefined
+export function roleList(guildId: string): GuildValidationResult<readonly GuildRole[]> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         guildId,
         bucket: "guild:role:list",
@@ -533,24 +561,42 @@ export function roleList(guildId: string): GuildRequest<readonly GuildRole[]> | 
     }
 }
 
-function roleBody(input: RoleCreate | RoleEdit, create: boolean): string | undefined {
-    if (!record(input)) return undefined
+function roleBody(input: RoleCreate | RoleEdit, create: boolean): string | InputValidationFailure {
+    if (!record(input)) return inputValidationFailure("input", "type", "Role input must be an object")
     const keys = create
         ? ["name", "color", "permissions"]
         : ["name", "color", "permissions", "hoist", "hoistPosition", "mentionable"]
-    if (Object.keys(input).some((key) => !keys.includes(key))) return undefined
+    if (Object.keys(input).some((key) => !keys.includes(key)))
+        return inputValidationFailure("input", "allowedFields", "Role input may contain only documented role fields")
     const { name, color, permissions, hoist, hoistPosition, mentionable } = input
+    if (create && name === undefined) return inputValidationFailure("name", "required", "Role name is required")
     if (
-        (create && name === undefined) ||
-        (name !== undefined &&
-            (typeof name !== "string" || name.length > 200 || name.trim().length === 0 || [...name].length > 100)) ||
-        (color !== undefined && (!int32(color) || color < 0 || color > 0xffffff)) ||
-        (permissions !== undefined && !permission(permissions)) ||
-        (hoist !== undefined && typeof hoist !== "boolean") ||
-        (mentionable !== undefined && typeof mentionable !== "boolean") ||
-        (hoistPosition !== undefined && hoistPosition !== null && !int32(hoistPosition))
+        name !== undefined &&
+        (typeof name !== "string" || name.length > 200 || name.trim().length === 0 || [...name].length > 100)
     )
-        return undefined
+        return inputValidationFailure(
+            "name",
+            "length",
+            "Role name must contain 1 through 100 Unicode code points, at most 200 UTF-16 code units, and at least one non-whitespace character",
+        )
+    if (color !== undefined && (!int32(color) || color < 0 || color > 0xffffff))
+        return inputValidationFailure("color", "range", "Role color must be an integer from 0 through 16,777,215")
+    if (permissions !== undefined && !permission(permissions))
+        return inputValidationFailure(
+            "permissions",
+            "range",
+            "Role permissions must be a bigint from 0 through 18,446,744,073,709,551,615",
+        )
+    if (hoist !== undefined && typeof hoist !== "boolean")
+        return inputValidationFailure("hoist", "type", "Role hoist must be a boolean")
+    if (mentionable !== undefined && typeof mentionable !== "boolean")
+        return inputValidationFailure("mentionable", "type", "Role mentionable must be a boolean")
+    if (hoistPosition !== undefined && hoistPosition !== null && !int32(hoistPosition))
+        return inputValidationFailure(
+            "hoistPosition",
+            "range",
+            "Role hoist position must be null or an integer from -2,147,483,648 through 2,147,483,647",
+        )
     const body = {
         name,
         color: create ? (color ?? 0) : color,
@@ -560,13 +606,13 @@ function roleBody(input: RoleCreate | RoleEdit, create: boolean): string | undef
         mentionable,
     }
     const json = JSON.stringify(body)
-    return json === "{}" ? undefined : json
+    return json === "{}" ? inputValidationFailure("input", "required", "Role edit must contain a change") : json
 }
 
-export function roleCreate(guildId: string, input: RoleCreate): GuildRequest<GuildRole> | undefined {
-    if (!identifier(guildId)) return undefined
+export function roleCreate(guildId: string, input: RoleCreate): GuildValidationResult<GuildRole> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     const json = roleBody(input, true)
-    if (!json) return undefined
+    if (json instanceof InputValidationFailure) return json
     return {
         guildId,
         bucket: "guild:role:create",
@@ -582,11 +628,14 @@ export function roleCreate(guildId: string, input: RoleCreate): GuildRequest<Gui
     }
 }
 
-export function roleEdit(target: RoleReference, input: RoleEdit): GuildRequest<GuildRole> | undefined {
-    if (!record(target) || !identifier(target.guildId) || !identifier(target.id)) return undefined
+export function roleEdit(target: RoleReference, input: RoleEdit): GuildValidationResult<GuildRole> {
+    if (!record(target)) return inputValidationFailure("target", "type", "Role targets must be objects")
+    if (!identifier(target.guildId))
+        return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
+    if (!identifier(target.id)) return inputValidationFailure("target.id", "format", "Role IDs must be decimal strings")
     const { guildId, id } = target
     const json = roleBody(input, false)
-    if (!json) return undefined
+    if (json instanceof InputValidationFailure) return json
     return {
         guildId,
         bucket: "guild:role:update",
@@ -605,9 +654,13 @@ export function roleEdit(target: RoleReference, input: RoleEdit): GuildRequest<G
     }
 }
 
-export function roleDelete(target: RoleReference): GuildRequest<void> | undefined {
-    if (!record(target) || !identifier(target.guildId) || !identifier(target.id) || target.id === target.guildId)
-        return undefined
+export function roleDelete(target: RoleReference): GuildValidationResult<void> {
+    if (!record(target)) return inputValidationFailure("target", "type", "Role targets must be objects")
+    if (!identifier(target.guildId))
+        return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
+    if (!identifier(target.id)) return inputValidationFailure("target.id", "format", "Role IDs must be decimal strings")
+    if (target.id === target.guildId)
+        return inputValidationFailure("target.id", "relationship", "The guild default role cannot be deleted")
     return {
         guildId: target.guildId,
         bucket: "guild:role:delete",
@@ -619,26 +672,42 @@ export function roleDelete(target: RoleReference): GuildRequest<void> | undefine
     }
 }
 
-export function roleReorder(guildId: string, positions: readonly RolePosition[]): GuildRequest<void> | undefined {
-    if (!identifier(guildId) || !Array.isArray(positions) || positions.length === 0) return undefined
+export function roleReorder(guildId: string, positions: readonly RolePosition[]): GuildValidationResult<void> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    if (!Array.isArray(positions)) return inputValidationFailure("positions", "type", "Role positions must be an array")
+    if (positions.length === 0)
+        return inputValidationFailure("positions", "length", "Role positions must contain at least one entry")
     const ids = new Set<string>()
     const updates: RolePosition[] = []
     let bytes = 2
     for (const item of positions) {
-        if (
-            !record(item) ||
-            Object.keys(item).some((key) => key !== "id" && key !== "position") ||
-            !identifier(item.id) ||
-            item.id === guildId ||
-            ids.has(item.id) ||
-            typeof item.position !== "number" ||
-            !Number.isSafeInteger(item.position) ||
-            item.position < 0
-        )
-            return undefined
+        if (!record(item)) return inputValidationFailure("positions[]", "type", "Role position entries must be objects")
+        if (Object.keys(item).some((key) => key !== "id" && key !== "position"))
+            return inputValidationFailure(
+                "positions[]",
+                "allowedFields",
+                "Role position entries may contain only id and position",
+            )
+        if (!identifier(item.id))
+            return inputValidationFailure("positions[].id", "format", "Role IDs must be decimal strings")
+        if (item.id === guildId)
+            return inputValidationFailure(
+                "positions[].id",
+                "relationship",
+                "The guild default role cannot be reordered",
+            )
+        if (ids.has(item.id))
+            return inputValidationFailure("positions[].id", "unique", "Role position IDs must be unique")
+        if (typeof item.position !== "number" || !Number.isSafeInteger(item.position) || item.position < 0)
+            return inputValidationFailure(
+                "positions[].position",
+                "range",
+                "Role positions must be nonnegative safe integers",
+            )
         const copy = { id: item.id, position: item.position }
         bytes += Buffer.byteLength(JSON.stringify(copy)) + (updates.length ? 1 : 0)
-        if (bytes > 4_194_304) return undefined
+        if (bytes > 4_194_304)
+            return inputValidationFailure("positions", "size", "Role positions must not exceed 4,194,304 encoded bytes")
         ids.add(item.id)
         updates.push(copy)
     }
@@ -657,24 +726,44 @@ export function roleReorder(guildId: string, positions: readonly RolePosition[])
 export function roleSetHoistPositions(
     guildId: string,
     positions: readonly RoleHoistPosition[],
-): GuildRequest<void> | undefined {
-    if (!identifier(guildId) || !Array.isArray(positions) || positions.length === 0) return undefined
+): GuildValidationResult<void> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    if (!Array.isArray(positions))
+        return inputValidationFailure("positions", "type", "Role hoist positions must be an array")
+    if (positions.length === 0)
+        return inputValidationFailure("positions", "length", "Role hoist positions must contain at least one entry")
     const ids = new Set<string>()
     const updates: { id: string; hoist_position: number }[] = []
     let bytes = 2
     for (const item of positions) {
-        if (
-            !record(item) ||
-            Object.keys(item).some((key) => key !== "id" && key !== "hoistPosition") ||
-            !identifier(item.id) ||
-            item.id === guildId ||
-            ids.has(item.id) ||
-            !int32(item.hoistPosition)
-        )
-            return undefined
+        if (!record(item))
+            return inputValidationFailure("positions[]", "type", "Role hoist position entries must be objects")
+        if (Object.keys(item).some((key) => key !== "id" && key !== "hoistPosition"))
+            return inputValidationFailure(
+                "positions[]",
+                "allowedFields",
+                "Role hoist position entries may contain only id and hoistPosition",
+            )
+        if (!identifier(item.id))
+            return inputValidationFailure("positions[].id", "format", "Role IDs must be decimal strings")
+        if (item.id === guildId)
+            return inputValidationFailure("positions[].id", "relationship", "The guild default role cannot be hoisted")
+        if (ids.has(item.id))
+            return inputValidationFailure("positions[].id", "unique", "Role hoist position IDs must be unique")
+        if (!int32(item.hoistPosition))
+            return inputValidationFailure(
+                "positions[].hoistPosition",
+                "range",
+                "Role hoist positions must be integers from -2,147,483,648 through 2,147,483,647",
+            )
         const copy = { id: item.id, hoist_position: item.hoistPosition }
         bytes += Buffer.byteLength(JSON.stringify(copy)) + (updates.length ? 1 : 0)
-        if (bytes > 4_194_304) return undefined
+        if (bytes > 4_194_304)
+            return inputValidationFailure(
+                "positions",
+                "size",
+                "Role hoist positions must not exceed 4,194,304 encoded bytes",
+            )
         ids.add(item.id)
         updates.push(copy)
     }
@@ -690,8 +779,8 @@ export function roleSetHoistPositions(
     }
 }
 
-export function roleResetHoistPositions(guildId: string): GuildRequest<void> | undefined {
-    if (!identifier(guildId)) return undefined
+export function roleResetHoistPositions(guildId: string): GuildValidationResult<void> {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         guildId,
         bucket: "guild:role:hoist-positions",

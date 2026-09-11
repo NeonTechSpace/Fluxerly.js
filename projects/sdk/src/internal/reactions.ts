@@ -1,12 +1,21 @@
 import type { ReactionEmoji, ReactionEmojiInput, ReactionTarget, ReactionUser, ReactionUsersPage } from "#sdk/reactions"
+import { inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
 
 export function encodeReactionUsersQuery(query: unknown) {
     const input = query === undefined ? {} : query
-    if (!record(input) || Object.keys(input).some((key) => key !== "limit" && key !== "after")) return undefined
+    if (!record(input)) return inputValidationFailure("query", "type", "Reaction user query must be an object")
+    if (Object.keys(input).some((key) => key !== "limit" && key !== "after"))
+        return inputValidationFailure("query", "allowedFields", "Reaction user query may contain only limit and after")
     const limit = input.limit === undefined ? 25 : input.limit
-    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100) return undefined
-    if (input.after !== undefined && !identifier(input.after)) return undefined
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)
+        return inputValidationFailure(
+            "query.limit",
+            "range",
+            "Reaction user limit must be an integer from 1 through 100",
+        )
+    if (input.after !== undefined && !identifier(input.after))
+        return inputValidationFailure("query.after", "format", "Reaction user cursor must be a decimal ID string")
     const after = input.after as string | undefined
     const params = new URLSearchParams({ limit: String(limit) })
     if (after !== undefined) params.set("after", after)
@@ -15,7 +24,7 @@ export function encodeReactionUsersQuery(query: unknown) {
 
 export function decodeReactionUsersPage(
     value: unknown,
-    query: NonNullable<ReturnType<typeof encodeReactionUsersQuery>>,
+    query: { readonly limit: number; readonly after: string | undefined; readonly params: URLSearchParams },
 ): ReactionUsersPage | undefined {
     if (
         !record(value) ||

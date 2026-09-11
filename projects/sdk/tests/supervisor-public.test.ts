@@ -67,6 +67,7 @@ async function loopbackGateway({
     const signals: Signal[] = []
     const proofs: Proof[] = []
     const configureRequests: number[] = []
+    const configureEntered = Promise.withResolvers<number>()
     const malformedGatewayPackets: unknown[] = []
     const awaitingReady = new Map<import("ws").WebSocket, readonly [number, number]>()
     const server = createServer((request, response) => {
@@ -121,6 +122,7 @@ async function loopbackGateway({
                 return
             }
             configureRequests.push(shardId)
+            configureEntered.resolve(shardId)
             if (configureReleased) {
                 response.statusCode = 204
                 response.end()
@@ -214,6 +216,7 @@ async function loopbackGateway({
         signals,
         proofs,
         configureRequests,
+        configureEntered: configureEntered.promise,
         malformedGatewayPackets,
         readySends: () => readySends,
         releaseReady() {
@@ -350,7 +353,15 @@ test("default parent stop aborts held configure work without a late managed run"
         await fixture.close()
     })
     const starting = owner.start().catch(() => undefined)
-    await vi.waitFor(() => expect(fixture.configureRequests).toEqual([0]))
+    expect(
+        await Promise.race([
+            fixture.configureEntered,
+            starting.then(() => {
+                throw new Error("Supervisor settled before entering held configuration")
+            }),
+        ]),
+    ).toBe(0)
+    expect(fixture.configureRequests).toEqual([0])
     await owner.shutdown()
     fixture.releaseConfigureBarrier()
     await starting
@@ -629,7 +640,15 @@ test.each(["default", "native"] as const)(
             const starting = owner.start()
             await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5, timeout: 8_000 })
             expect(fixture.identifies[0]!.shardId).toBe(0)
-            await vi.waitFor(() => expect(fixture.configureRequests).toEqual([1]))
+            expect(
+                await Promise.race([
+                    fixture.configureEntered,
+                    starting.then(() => {
+                        throw new Error("Supervisor settled before entering held configuration")
+                    }),
+                ]),
+            ).toBe(1)
+            expect(fixture.configureRequests).toEqual([1])
             expect(owner.status().children.find((child) => child.id === "unacknowledged")).toMatchObject({
                 pid: expect.any(Number),
                 state: "running",

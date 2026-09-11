@@ -1,3 +1,5 @@
+import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
+
 /** Bounds for one demand-driven remote traversal, not a request to download a complete snapshot.
  * Each consumption starts independently and copies its inputs when consumption begins.
  * No background prefetch, persistence or cross-run deduplication. Existing page methods remain unchanged
@@ -65,13 +67,17 @@ export type PaginationOperation =
 export class PaginationError extends Error {
     /** Stable failure discriminator */
     readonly _tag = "PaginationError"
+    /** Frozen SDK-owned validation facts for local input failures, otherwise null */
+    readonly inputValidation: InputValidationDetail | null
     constructor(
         /** The traversal that failed, not proof that a page request was dispatched */
         readonly operation: PaginationOperation,
         /** Invalid input, no forward cursor progress, a further page exceeding maxPages, or a search index not ready */
         readonly reason: "input" | "cursorStalled" | "pageLimit" | "indexing",
+        inputValidation: InputValidationDetail | null = null,
     ) {
         super(`Pagination failed (${operation}, ${reason})`)
         this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }

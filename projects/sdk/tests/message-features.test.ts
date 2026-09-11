@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import { createClient, MessageFlags, type ForwardMessageInput } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 import { decodeMessage, encodeEdit, encodeForward } from "../src/internal/message.js"
+import { InputValidationFailure } from "../src/input-validation.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 afterEach(() => vi.unstubAllGlobals())
@@ -336,6 +337,6 @@ test.each(apiSurfaces)(
 )
 
 test("flags do not bypass edit body validation", () => {
-    expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, content: 42 })).toBeUndefined()
-    expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, attachments: [] })).toBeUndefined()
+    expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, content: 42 })).toBeInstanceOf(InputValidationFailure)
+    expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, attachments: [] })).toBeInstanceOf(InputValidationFailure)
 })

@@ -7,6 +7,7 @@ import { channelFetch } from "./channels.js"
 import type { ClientOwner } from "./client.js"
 import { guildFetch, memberFetch, roleList } from "./guilds.js"
 import { identifier, record } from "./message.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const allPermissions = (1n << 64n) - 1n
 const administrator = 1n << 3n
@@ -14,8 +15,8 @@ const administrator = 1n << 3n
 const unsigned64 = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= allPermissions
 
-const inputFailure = (operation: "permissions.calculate" | "permissions.fetch") =>
-    new GuildOperationError(operation, "input", "notDispatched")
+const inputFailure = (operation: "permissions.calculate" | "permissions.fetch", failure: InputValidationFailure) =>
+    new GuildOperationError(operation, "input", "notDispatched", null, null, null, failure.detail)
 
 const timeoutFailure = () => new GuildOperationError("permissions.fetch", "timeout", "notDispatched")
 
@@ -120,16 +121,39 @@ function validateChannel(value: unknown, guildId: string): PermissionChannel | u
     return { id: value.id, guildId: value.guildId, permissionOverwrites: decoded }
 }
 
-function validateInput(value: unknown): ValidatedInput | undefined {
-    if (!record(value) || !record(value.guild) || !identifier(value.guild.id) || !identifier(value.guild.ownerId))
-        return undefined
+function validateInput(value: unknown): ValidatedInput | InputValidationFailure {
+    if (!record(value)) return inputValidationFailure("input", "type", "Permission input must be an object")
+    if (!record(value.guild)) return inputValidationFailure("input.guild", "type", "Permission guild must be an object")
+    if (!identifier(value.guild.id))
+        return inputValidationFailure("input.guild.id", "format", "Permission guild ID must be a decimal string")
+    if (!identifier(value.guild.ownerId))
+        return inputValidationFailure(
+            "input.guild.ownerId",
+            "format",
+            "Permission guild owner ID must be a decimal string",
+        )
     const guild: PermissionGuild = { id: value.guild.id, ownerId: value.guild.ownerId }
     const member = validateMember(value.member, guild.id)
-    if (!member) return undefined
+    if (!member)
+        return inputValidationFailure(
+            "input.member",
+            "format",
+            "Permission member must match the guild and contain a decimal user ID and unique non-default role IDs",
+        )
     const roles = validateRoles(value.roles, guild.id, member)
-    if (!roles) return undefined
+    if (!roles)
+        return inputValidationFailure(
+            "input.roles[]",
+            "format",
+            "Permission roles must be unique same-guild roles with unsigned 64-bit permissions and cover the member roles",
+        )
     const channel = value.channel === undefined ? undefined : validateChannel(value.channel, guild.id)
-    if (value.channel !== undefined && !channel) return undefined
+    if (value.channel !== undefined && !channel)
+        return inputValidationFailure(
+            "input.channel",
+            "format",
+            "Permission channel must match the guild and contain unique valid role or member overwrites",
+        )
     return { guild, member, roles, channel }
 }
 
@@ -171,38 +195,59 @@ function calculate(input: ValidatedInput): bigint {
 export function calculatePermissions(input: PermissionInput): Effect.Effect<bigint, GuildOperationError> {
     return Effect.suspend(() => {
         const validated = validateInput(input)
-        return validated ? Effect.succeed(calculate(validated)) : Effect.fail(inputFailure("permissions.calculate"))
+        return validated instanceof InputValidationFailure
+            ? Effect.fail(inputFailure("permissions.calculate", validated))
+            : Effect.succeed(calculate(validated))
     })
 }
 
-function validateTarget(value: unknown): ValidatedTarget | undefined {
-    if (
-        !record(value) ||
-        Object.keys(value).some((key) => key !== "guildId" && key !== "userId" && key !== "channelId") ||
-        !identifier(value.guildId) ||
-        !identifier(value.userId) ||
-        (value.channelId !== undefined && !identifier(value.channelId))
-    )
-        return undefined
+function validateTarget(value: unknown): ValidatedTarget | InputValidationFailure {
+    if (!record(value)) return inputValidationFailure("target", "type", "Permission target must be an object")
+    if (Object.keys(value).some((key) => key !== "guildId" && key !== "userId" && key !== "channelId"))
+        return inputValidationFailure(
+            "target",
+            "allowedFields",
+            "Permission target may contain only guildId, userId, and channelId",
+        )
+    if (!identifier(value.guildId))
+        return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
+    if (!identifier(value.userId))
+        return inputValidationFailure("target.userId", "format", "User IDs must be decimal strings")
+    if (value.channelId !== undefined && !identifier(value.channelId))
+        return inputValidationFailure("target.channelId", "format", "Channel IDs must be decimal strings")
     return { guildId: value.guildId, userId: value.userId, channelId: value.channelId }
 }
 
-function validOptions(value: unknown): value is GuildOperationOptions | undefined {
-    return (
-        value === undefined ||
-        (record(value) &&
-            Object.keys(value).every((key) => key === "timeoutMs" || key === "signal") &&
-            (value.signal === undefined ||
-                (record(value.signal) &&
-                    typeof value.signal.aborted === "boolean" &&
-                    typeof value.signal.addEventListener === "function" &&
-                    typeof value.signal.removeEventListener === "function")) &&
-            (value.timeoutMs === undefined ||
-                (typeof value.timeoutMs === "number" &&
-                    Number.isSafeInteger(value.timeoutMs) &&
-                    value.timeoutMs > 0 &&
-                    value.timeoutMs <= 2_147_483_647)))
+function validateOptions(value: unknown): GuildOperationOptions | InputValidationFailure {
+    if (value === undefined) return {}
+    if (!record(value)) return inputValidationFailure("options", "type", "Permission fetch options must be an object")
+    if (Object.keys(value).some((key) => key !== "timeoutMs" && key !== "signal"))
+        return inputValidationFailure(
+            "options",
+            "allowedFields",
+            "Permission fetch options may contain only timeoutMs and signal",
+        )
+    if (
+        value.signal !== undefined &&
+        (!record(value.signal) ||
+            typeof value.signal.aborted !== "boolean" ||
+            typeof value.signal.addEventListener !== "function" ||
+            typeof value.signal.removeEventListener !== "function")
     )
+        return inputValidationFailure("options.signal", "type", "Permission fetch signal must be an AbortSignal")
+    if (
+        value.timeoutMs !== undefined &&
+        (typeof value.timeoutMs !== "number" ||
+            !Number.isSafeInteger(value.timeoutMs) ||
+            value.timeoutMs <= 0 ||
+            value.timeoutMs > 2_147_483_647)
+    )
+        return inputValidationFailure(
+            "options.timeoutMs",
+            "range",
+            "Permission fetch timeout must be an integer from 1 through 2,147,483,647",
+        )
+    return value
 }
 
 function remainingOptions(deadline: number): GuildOperationOptions | undefined {
@@ -234,8 +279,12 @@ export function fetchPermissions(
 ): Effect.Effect<bigint, GuildOperationFailure | ChannelOperationFailure> {
     return Effect.suspend(() => {
         const targetSnapshot = validateTarget(target)
-        if (!targetSnapshot || !validOptions(options)) return Effect.fail(inputFailure("permissions.fetch"))
-        const deadline = performance.now() + (options?.timeoutMs ?? 30_000)
+        if (targetSnapshot instanceof InputValidationFailure)
+            return Effect.fail(inputFailure("permissions.fetch", targetSnapshot))
+        const validatedOptions = validateOptions(options)
+        if (validatedOptions instanceof InputValidationFailure)
+            return Effect.fail(inputFailure("permissions.fetch", validatedOptions))
+        const deadline = performance.now() + (validatedOptions.timeoutMs ?? 30_000)
         const requestOptions = () => remainingOptions(deadline)
         const timedOut = () => Effect.fail(timeoutFailure())
         return Effect.gen(function* () {

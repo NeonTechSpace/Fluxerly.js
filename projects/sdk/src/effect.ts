@@ -987,8 +987,16 @@ export type { ResourceCacheSettings } from "./cache.js"
 
 type HierarchyOperation = "hierarchy.compare" | "hierarchy.isAbove" | "hierarchy.canManage"
 
-const hierarchyInputFailure = (operation: HierarchyOperation) =>
-    new GuildOperationError(operation, "input", "notDispatched")
+const hierarchyInputFailure = (operation: HierarchyOperation, path: string, explanation: string) =>
+    new GuildOperationError(
+        operation,
+        "input",
+        "notDispatched",
+        null,
+        null,
+        null,
+        inputValidationFailure(path, "format", explanation).detail,
+    )
 
 /**
  * Lazily compares two role snapshots in Fluxer's local hierarchy order
@@ -1002,7 +1010,13 @@ export function compareHierarchy(left: GuildRole, right: GuildRole): Effect.Effe
     return Effect.suspend(() => {
         const comparison = compareRoleHierarchy(left, right)
         return comparison === undefined
-            ? Effect.fail(hierarchyInputFailure("hierarchy.compare"))
+            ? Effect.fail(
+                  hierarchyInputFailure(
+                      "hierarchy.compare",
+                      "roles",
+                      "Role snapshots must contain same-guild decimal IDs and nonnegative 32-bit integer positions",
+                  ),
+              )
             : Effect.succeed(comparison)
     })
 }
@@ -1016,7 +1030,15 @@ export function compareHierarchy(left: GuildRole, right: GuildRole): Effect.Effe
 export function isAboveInHierarchy(left: GuildRole, right: GuildRole): Effect.Effect<boolean, GuildOperationError> {
     return Effect.suspend(() => {
         const above = isRoleAboveInHierarchy(left, right)
-        return above === undefined ? Effect.fail(hierarchyInputFailure("hierarchy.isAbove")) : Effect.succeed(above)
+        return above === undefined
+            ? Effect.fail(
+                  hierarchyInputFailure(
+                      "hierarchy.isAbove",
+                      "roles",
+                      "Role snapshots must contain same-guild decimal IDs and nonnegative 32-bit integer positions",
+                  ),
+              )
+            : Effect.succeed(above)
     })
 }
 
@@ -1051,7 +1073,13 @@ export function canManageHierarchy(input: RoleHierarchyInput): Effect.Effect<boo
     return Effect.suspend(() => {
         const manageable = evaluateMemberHierarchy(input)
         return manageable === undefined
-            ? Effect.fail(hierarchyInputFailure("hierarchy.canManage"))
+            ? Effect.fail(
+                  hierarchyInputFailure(
+                      "hierarchy.canManage",
+                      "input",
+                      "Hierarchy input must contain consistent guild, member, and unique role snapshots covering both members",
+                  ),
+              )
             : Effect.succeed(manageable)
     })
 }
@@ -1171,6 +1199,8 @@ import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, 
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
 export type { ApiErrorDetail } from "./api-errors.js"
+export type { InputValidationConstraint, InputValidationDetail } from "./input-validation.js"
+import { inputValidationFailure } from "./input-validation.js"
 export { MessageCleanupError } from "./message-cleanup.js"
 export { MessageFlags } from "./messages.js"
 export type { EventReadError, RegistrationError, SendError, MessageOperationFailure } from "./message-errors.js"

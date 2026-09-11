@@ -8,6 +8,7 @@ import { calculatePermissions } from "./permissions.js"
 import { memberSearch } from "./member-search.js"
 import { Pagination } from "./pagination.js"
 import { record } from "./message.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
@@ -20,16 +21,38 @@ export function searchMembers(
     options?: GuildOperationOptions,
 ) {
     return Effect.gen(function* () {
-        const invalid = () => new GuildOperationError("members.search", "input", "notDispatched")
+        const invalid = (failure: InputValidationFailure) =>
+            new GuildOperationError("members.search", "input", "notDispatched", null, null, null, failure.detail)
         const request = memberSearch(guildId, query)
-        if (
-            !request ||
-            (options !== undefined &&
-                (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal")))
-        )
-            return yield* Effect.fail(invalid())
+        if (request instanceof InputValidationFailure)
+            return yield* Effect.fail(
+                new GuildOperationError("members.search", "input", "notDispatched", null, null, null, request.detail),
+            )
+        if (options !== undefined && !record(options))
+            return yield* Effect.fail(
+                invalid(inputValidationFailure("options", "type", "Member search options must be an object")),
+            )
+        if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
+            return yield* Effect.fail(
+                invalid(
+                    inputValidationFailure(
+                        "options",
+                        "allowedFields",
+                        "Member search options may contain only timeoutMs and signal",
+                    ),
+                ),
+            )
         const timeout = options?.timeoutMs === undefined ? 30_000 : options.timeoutMs
-        if (!positive(timeout) || timeout > 2_147_483_647) return yield* Effect.fail(invalid())
+        if (!positive(timeout) || timeout > 2_147_483_647)
+            return yield* Effect.fail(
+                invalid(
+                    inputValidationFailure(
+                        "options.timeoutMs",
+                        "range",
+                        "Member search timeout must be a positive safe integer no greater than 2,147,483,647",
+                    ),
+                ),
+            )
         const body = JSON.parse(request.json!) as { join_source_type?: unknown[]; source_invite_code?: unknown[] }
         const sensitive = (body.join_source_type?.length ?? 0) > 0 || (body.source_invite_code?.length ?? 0) > 0
         const deadline = performance.now() + timeout
@@ -60,26 +83,66 @@ export function searchMemberPagination(
     options?: GuildOperationOptions,
 ) {
     return Effect.suspend(() => {
-        const invalid = () => Effect.fail(new PaginationError("members.iterateSearch", "input"))
-        if (
-            !record(filters) ||
-            "limit" in filters ||
-            !record(limits) ||
-            Object.keys(limits).some((key) => !["maxItems", "maxPages", "pageSize"].includes(key)) ||
-            !positive(limits.maxItems) ||
-            (options !== undefined && (!record(options) || Object.keys(options).some((key) => key !== "timeoutMs")))
-        )
-            return invalid()
+        const invalid = (failure: InputValidationFailure) =>
+            Effect.fail(new PaginationError("members.iterateSearch", "input", failure.detail))
+        if (!record(filters))
+            return invalid(inputValidationFailure("filters", "type", "Member search filters must be an object"))
+        if ("limit" in filters)
+            return invalid(
+                inputValidationFailure(
+                    "filters",
+                    "allowedFields",
+                    "Member search iteration filters cannot contain limit",
+                ),
+            )
+        if (!record(limits))
+            return invalid(inputValidationFailure("limits", "type", "Member search limits must be an object"))
+        if (Object.keys(limits).some((key) => !["maxItems", "maxPages", "pageSize"].includes(key)))
+            return invalid(
+                inputValidationFailure(
+                    "limits",
+                    "allowedFields",
+                    "Member search limits may contain only maxItems, maxPages, and pageSize",
+                ),
+            )
+        if (!positive(limits.maxItems))
+            return invalid(
+                inputValidationFailure("limits.maxItems", "range", "maxItems must be a positive safe integer"),
+            )
+        if (options !== undefined && !record(options))
+            return invalid(inputValidationFailure("options", "type", "Member search options must be an object"))
+        if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs"))
+            return invalid(
+                inputValidationFailure(
+                    "options",
+                    "allowedFields",
+                    "Native member search options may contain only timeoutMs",
+                ),
+            )
         const pageSize = limits.pageSize === undefined ? 100 : limits.pageSize,
             maxPages = limits.maxPages === undefined ? 100 : limits.maxPages
-        if (
-            !positive(pageSize) ||
-            pageSize > 100 ||
-            !positive(maxPages) ||
-            (options?.timeoutMs !== undefined && (!positive(options.timeoutMs) || options.timeoutMs > 2_147_483_647)) ||
-            !memberSearch(guildId, { ...filters, limit: pageSize })
-        )
-            return invalid()
+        if (!positive(pageSize) || pageSize > 100)
+            return invalid(
+                inputValidationFailure(
+                    "limits.pageSize",
+                    "range",
+                    "pageSize must be a positive safe integer no greater than 100",
+                ),
+            )
+        if (!positive(maxPages))
+            return invalid(
+                inputValidationFailure("limits.maxPages", "range", "maxPages must be a positive safe integer"),
+            )
+        if (options?.timeoutMs !== undefined && (!positive(options.timeoutMs) || options.timeoutMs > 2_147_483_647))
+            return invalid(
+                inputValidationFailure(
+                    "options.timeoutMs",
+                    "range",
+                    "Member search timeout must be a positive safe integer no greater than 2,147,483,647",
+                ),
+            )
+        const validated = memberSearch(guildId, { ...filters, limit: pageSize })
+        if (validated instanceof InputValidationFailure) return invalid(validated)
         const copied = JSON.parse(JSON.stringify(filters)) as Omit<MemberSearchQuery, "limit">
         const requestOptions = options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }
         const source = {

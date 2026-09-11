@@ -10,6 +10,7 @@ import type {
 } from "#sdk/audit-logs"
 import { AuditLogActions } from "#sdk/audit-logs"
 import { decodeUser } from "./users.js"
+import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 
@@ -174,27 +175,50 @@ interface EncodedAuditLogQuery {
     readonly params: URLSearchParams
 }
 
-function encodeQuery(query?: unknown): EncodedAuditLogQuery | undefined {
+function encodeQuery(query?: unknown): EncodedAuditLogQuery | InputValidationFailure {
     const input = query === undefined ? {} : query
     if (
         !record(input) ||
         Object.keys(input).some((key) => !["limit", "before", "after", "userId", "actionType"].includes(key))
     )
-        return undefined
+        return !record(input)
+            ? inputValidationFailure("query", "type", "Audit log query must be an object")
+            : inputValidationFailure(
+                  "query",
+                  "allowedFields",
+                  "Audit log query may contain only limit, before, after, userId, and actionType",
+              )
     const limit = input.limit === undefined ? 50 : input.limit
-    if (
-        typeof limit !== "number" ||
-        !Number.isInteger(limit) ||
-        limit < 1 ||
-        limit > 100 ||
-        (input.before !== undefined && !identifier(input.before)) ||
-        (input.after !== undefined && !identifier(input.after)) ||
-        (input.before !== undefined && input.after !== undefined) ||
-        (input.userId !== undefined && !identifier(input.userId)) ||
-        (input.actionType !== undefined && !actionType(input.actionType)) ||
-        (input.userId === undefined && input.actionType === undefined)
-    )
-        return undefined
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)
+        return inputValidationFailure("query.limit", "range", "Audit log limit must be an integer from 1 through 100")
+    if (input.before !== undefined && !identifier(input.before))
+        return inputValidationFailure(
+            "query.before",
+            "format",
+            "Audit log before cursor must be a decimal entry ID string",
+        )
+    if (input.after !== undefined && !identifier(input.after))
+        return inputValidationFailure(
+            "query.after",
+            "format",
+            "Audit log after cursor must be a decimal entry ID string",
+        )
+    if (input.before !== undefined && input.after !== undefined)
+        return inputValidationFailure(
+            "query",
+            "relationship",
+            "Audit log query cannot combine before and after cursors",
+        )
+    if (input.userId !== undefined && !identifier(input.userId))
+        return inputValidationFailure("query.userId", "format", "Audit log user IDs must be decimal strings")
+    if (input.actionType !== undefined && !actionType(input.actionType))
+        return inputValidationFailure(
+            "query.actionType",
+            "allowedValue",
+            "Audit log action type must be a supported action value",
+        )
+    if (input.userId === undefined && input.actionType === undefined)
+        return inputValidationFailure("query", "required", "Audit log query must select userId or actionType")
     const params = new URLSearchParams({ limit: String(limit) })
     if (input.before !== undefined) params.set("before", input.before)
     if (input.after !== undefined) params.set("after", input.after)
@@ -253,9 +277,10 @@ export function decodeAuditLogPage(value: unknown, query: EncodedAuditLogQuery):
 }
 
 /** Builds a remote-only, filtered audit-log page request without cache admission or a provider-side consolidation write */
-export function auditLogPage(guildId: string, query?: unknown): GuildRequest<AuditLogPage> | undefined {
+export function auditLogPage(guildId: string, query?: unknown): GuildRequest<AuditLogPage> | InputValidationFailure {
     const encoded = encodeQuery(query)
-    if (!identifier(guildId) || !encoded) return undefined
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    if (encoded instanceof InputValidationFailure) return encoded
     return {
         guildId,
         bucket: "guild:audit-logs",
