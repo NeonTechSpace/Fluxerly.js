@@ -1,7 +1,7 @@
-import { createServer } from "node:http"
+import { createServer, request as httpRequest } from "node:http"
 import { afterEach, describe, expect, test } from "vitest"
 import { Cause, Effect, Exit, Fiber, Scope } from "effect"
-import { oauth as defaultApi } from "../src/index.js"
+import { createClient, oauth as defaultApi } from "../src/index.js"
 import { oauth as native } from "../src/effect.js"
 
 let close: (() => Promise<void>) | undefined
@@ -19,9 +19,14 @@ async function fixture(
         | "discoveryStall"
         | "revokeRejected"
         | "revokeBody" = "normal",
+    webappPath = "",
 ) {
     const requests: Array<{ path: string; authorization?: string; body: string }> = []
+    let markRequestBodyStarted!: () => void
+    const requestBodyStarted = new Promise<void>((resolve) => (markRequestBodyStarted = resolve))
+    let base = ""
     const server = createServer(async (request, response) => {
+        markRequestBodyStarted()
         const body = await new Promise<string>((resolve) => {
             let text = ""
             request.on("data", (part) => (text += part))
@@ -36,7 +41,6 @@ async function fixture(
             response.statusCode = 400
             return response.end(JSON.stringify({ error: "invalid_request" }))
         }
-        const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
         if (request.url === "/.well-known/fluxer" && mode === "discoveryStall") return
         if (request.url === "/.well-known/fluxer")
             return response.end(
@@ -47,7 +51,7 @@ async function fixture(
                         gateway: base.replace("http", "ws"),
                         media: base,
                         static_cdn: base,
-                        webapp: base,
+                        webapp: `${base}${webappPath}`,
                         invite: base,
                     },
                     features: { presigned_attachment_uploads: false },
@@ -118,8 +122,11 @@ async function fixture(
         response.end(JSON.stringify({ error: "invalid_grant" }))
     })
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
-    close = () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-    return { base: `http://127.0.0.1:${(server.address() as { port: number }).port}`, requests }
+    base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    let closing: Promise<void> | undefined
+    close = () =>
+        (closing ??= new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))))
+    return { base, requests, requestBodyStarted }
 }
 
 afterEach(async () => {
@@ -128,6 +135,123 @@ afterEach(async () => {
 })
 
 describe("oauth", () => {
+    test("keeps fixture discovery endpoints available while closing an active request", async () => {
+        const { base, requestBodyStarted } = await fixture()
+        const settleWithin = <A>(value: Promise<A>, stage: string) =>
+            new Promise<A>((resolve, reject) => {
+                const timer = setTimeout(
+                    () => reject(new Error(`Fixture ${stage} did not settle within 1,000 ms`)),
+                    1_000,
+                )
+                void value.then(
+                    (result) => {
+                        clearTimeout(timer)
+                        resolve(result)
+                    },
+                    (error) => {
+                        clearTimeout(timer)
+                        reject(error)
+                    },
+                )
+            })
+        let resolveResponse!: (value: unknown) => void
+        let rejectResponse!: (reason: unknown) => void
+        const response = new Promise<unknown>((resolve, reject) => {
+            resolveResponse = resolve
+            rejectResponse = reject
+        })
+        const request = httpRequest(`${base}/.well-known/fluxer`, { method: "POST", agent: false }, (response) => {
+            let body = ""
+            response.setEncoding("utf8")
+            response.on("data", (part) => (body += part))
+            response.on("end", () => {
+                try {
+                    resolveResponse(JSON.parse(body))
+                } catch (error) {
+                    rejectResponse(error)
+                }
+            })
+        })
+        request.on("error", rejectResponse)
+        try {
+            request.write("pending")
+            await settleWithin(requestBodyStarted, "request start")
+            const stopping = close?.()
+            if (!stopping) throw new Error("Fixture did not register shutdown")
+            request.end()
+            await expect(settleWithin(response, "response")).resolves.toMatchObject({ endpoints: { webapp: base } })
+            request.destroy()
+            await settleWithin(stopping, "shutdown")
+        } finally {
+            request.destroy()
+        }
+    })
+
+    test.each([
+        ["root", "", ""],
+        ["path-prefixed", "/community", "/community"],
+        ["path-prefixed-with-trailing-slash", "/community/", "/community"],
+    ])(
+        "uses the normalized discovered %s web application base for default and native authorization URLs",
+        async (_, webappPath, expectedWebappPath) => {
+            const { base } = await fixture("normal", webappPath)
+            const input = {
+                redirectUri: "http://localhost/callback?return=one%20two",
+                scopes: ["identify", "guilds"] as const,
+                state: "state value",
+                codeChallenge: "a".repeat(43),
+            }
+            const expected = `${base}${expectedWebappPath}/oauth2/authorize?${new URLSearchParams({
+                client_id: "1",
+                response_type: "code",
+                redirect_uri: input.redirectUri,
+                scope: input.scopes.join(" "),
+                state: input.state,
+                code_challenge: input.codeChallenge,
+                code_challenge_method: "S256",
+            })}`
+
+            const installationClient = createClient({
+                token: "fixture-token",
+                instance: { url: base, allowInsecure: true },
+            })._unsafeUnwrap()
+            try {
+                const resolved = await installationClient.instance.resolve()
+                expect(resolved._unsafeUnwrap().links.installation("1")._unsafeUnwrap()).toBe(
+                    `${base}${expectedWebappPath}/oauth2/authorize?client_id=1&scope=bot`,
+                )
+            } finally {
+                await installationClient.shutdown()
+            }
+
+            const defaultClient = defaultApi.create({
+                clientId: "1",
+                clientSecret: "secret",
+                instance: { url: base, allowInsecure: true },
+            })
+            if (defaultClient.isErr()) throw defaultClient.error
+            try {
+                expect((await defaultClient.value.authorizationUrl(input))._unsafeUnwrap()).toBe(expected)
+            } finally {
+                await defaultClient.value.shutdown()
+            }
+
+            const nativeUrl = await Effect.runPromise(
+                Effect.scoped(
+                    Effect.gen(function* () {
+                        const client = yield* native.create({
+                            clientId: "1",
+                            clientSecret: "secret",
+                            instance: { url: base, allowInsecure: true },
+                        })
+                        return yield* client.authorizationUrl(input)
+                    }),
+                ),
+            )
+            expect(nativeUrl).toBe(expected)
+        },
+    )
+
     test("uses selected discovery, form and Basic authentication without bot credentials", async () => {
         const { base, requests } = await fixture()
         const made = defaultApi.create({

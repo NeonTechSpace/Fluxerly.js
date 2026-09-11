@@ -130,6 +130,8 @@ Run these commands from [projects/](/projects/) using the development Node versi
 | `pnpm --filter @neontechspace/fluxerly format` | Format SDK source, tests and configuration with Prettier |
 | `pnpm --filter @neontechspace/fluxerly format:check` | Check SDK formatting without writing files |
 | `pnpm check` | Check SDK formatting, build, typecheck source/tests, run Vitest and check isolated packed JavaScript/TypeScript consumers |
+| `pnpm --filter @neontechspace/fluxerly test:public-contract` | Check paired public client namespace names, runtime keys and JSDoc presence |
+| `pnpm --filter @neontechspace/fluxerly test:experiment:effect-transport` | Run the rejected Effect unstable HTTP/socket transport characterization outside the default SDK check |
 
 The SDK's [Prettier configuration](/projects/sdk/.prettierrc.json) sets a 120-column target and omits optional semicolons.
 Prettier reads 4-space indentation and LF endings from the shared [EditorConfig](/.editorconfig).
@@ -141,6 +143,12 @@ Local networking checks use owned loopback fixtures, not Fluxer credentials or l
 Run the packed-consumer check with Node.js 24.11.0 as well as the development runtime when changing runtime compatibility.
 Use `pnpm --filter @neontechspace/fluxerly test:package` after building with the development runtime.
 The check reports its actual Node version and uses that executable for its isolated consumers
+
+The Effect unstable HTTP/socket transport characterization remains opt-in because it demonstrates an adapter cleanup limitation, not a production transport choice.
+The default SDK checks retain selected `ws` transport coverage and built SDK natural-exit checks
+
+The public-client contract covers only its inventoried default/native client interfaces and direct runtime namespace keys.
+It does not compare member types or behavior, assess comment accuracy, or cover every type-only export
 
 Run `pnpm --filter @neontechspace/fluxerly test:cache:memory` for isolated GC-enabled retention checks.
 Run `pnpm --filter @neontechspace/fluxerly test:cache:workload` for local cache workloads.

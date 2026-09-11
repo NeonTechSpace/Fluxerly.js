@@ -307,7 +307,7 @@ export class OAuthOwner {
         }
         return this.#run("oauth.authorizationUrl", options, (_api, webapp) =>
             Effect.sync(() => {
-                const url = new URL("/oauth2/authorize", webapp)
+                const url = new URL("oauth2/authorize", `${webapp}/`)
                 url.search = new URLSearchParams({
                     client_id: this.clientId,
                     response_type: "code",

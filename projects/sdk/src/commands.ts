@@ -29,6 +29,19 @@ export type PrefixCommandRejection =
           readonly retryAtMs: number | null
       }
 
+/** A prefix matched but no command handler will run. Unmatched callbacks receive a frozen value and never trigger an automatic response */
+export type PrefixCommandUnmatched =
+    | {
+          /** The parser returned a valid command name that is not registered on this router snapshot */
+          readonly _tag: "CommandUnknownName"
+          /** Parser-supplied command name, before the router’s case-normalized lookup */
+          readonly name: string
+      }
+    | {
+          /** The parser declined the suffix, including prefix-only input. This does not classify a custom parser’s reason for declining */
+          readonly _tag: "CommandParserRejected"
+      }
+
 /** Prefix selection for one incoming message. Resolver work is synchronous and caller-owned */
 export type PrefixCommandPrefix =
     string | readonly string[] | ((message: Message) => string | readonly string[] | undefined)
@@ -103,7 +116,7 @@ export interface PrefixCommandsOptions {
     readonly prefix: PrefixCommandPrefix
     /**
      * Optional parser after prefix matching. The default trims leading whitespace, accepts only registered ASCII command-shaped names, preserves rawArgs and splits trimmed positional arguments on whitespace.
-     * Use this boundary for quoted arguments or another grammar. Custom-parser failures are reported through the attached event subscription’s safe handler-error path
+     * Use this boundary for quoted arguments or another grammar. Returning undefined is a parser decline, reported to an optional facade-specific onUnmatched callback without naming a cause. Thrown parser defects use the attached event subscription’s safe handler-error path
      */
     readonly parse?: (input: PrefixCommandParseInput) => PrefixCommandParse | undefined
     /** Ignore messages whose supplied author projection identifies a bot. Defaults to true */

@@ -2,7 +2,7 @@ import { Effect, Queue } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { Socket } from "effect/unstable/socket"
 
-/** Test-only candidate, not an SDK export or a selected production transport */
+/** Rejected transport characterization, not an SDK export or a selected production transport */
 export const fetchText = (url: string) =>
     Effect.gen(function* () {
         const client = yield* HttpClient.HttpClient

@@ -4,7 +4,4 @@ export default {
             conditions: ["fluxerly-source", "node", "development|production"],
         },
     },
-    test: {
-        exclude: ["**/node_modules/**", "**/.git/**", "tests/experiments/**"],
-    },
 }

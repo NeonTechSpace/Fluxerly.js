@@ -46,7 +46,11 @@ export class UserCache {
     }
     get<K extends Kind>(kind: K, id: string): UserResources[K] | undefined {
         this.#expire()
-        return this.#entries[kind].get(id)?.value as UserResources[K] | undefined
+        const entry = this.#entries[kind].get(id)
+        if (!entry) return undefined
+        this.#entries[kind].delete(id)
+        this.#entries[kind].set(id, entry)
+        return entry.value as UserResources[K]
     }
     diagnostics(kind: Kind): CacheDiagnostic {
         this.#expire()

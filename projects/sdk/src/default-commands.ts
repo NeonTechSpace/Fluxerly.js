@@ -7,6 +7,7 @@ import type {
     PrefixCommandParse,
     PrefixCommandParseInput,
     PrefixCommandRejection,
+    PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "#sdk/commands"
 import { parseQuotedPrefixCommand } from "#sdk/commands"
@@ -45,6 +46,27 @@ export interface DefaultPrefixCommandContext {
     readonly rawArgs: string
     /** Cooperative subscription signal. It cannot forcibly stop application promises */
     readonly signal: NonNullable<OperationOptions["signal"]>
+}
+
+/** Context retained only for one default unmatched-command callback invocation */
+export interface DefaultPrefixCommandUnmatchedContext {
+    /** Attached client. The router never connects, runs or shuts it down */
+    readonly client: Client
+    /** Frozen gateway message selected by the client subscription */
+    readonly message: Message
+    /** Exact prefix matched before the parser declined or lookup missed */
+    readonly prefix: string
+    /** Cooperative subscription signal. It cannot forcibly stop application promises */
+    readonly signal: NonNullable<OperationOptions["signal"]>
+}
+
+/** Default router construction options, including application-owned feedback for matched prefixes with no runnable command */
+export interface DefaultPrefixCommandsOptions extends PrefixCommandsOptions {
+    /** Optional feedback after the parser declines or returns an unregistered name. The router never sends a response, retries this callback or invokes it for ignored bots or unmatched prefixes */
+    readonly onUnmatched?: (
+        context: DefaultPrefixCommandUnmatchedContext,
+        unmatched: PrefixCommandUnmatched,
+    ) => void | Promise<void>
 }
 
 /** Caller-owned default cooldown storage. Claims must be atomic within whichever scope the store represents */
@@ -112,8 +134,8 @@ export interface DefaultPrefixCommandRouter {
 
 /** Default optional command tools. Construction is local and does not attach a subscription or connect a client */
 export interface DefaultCommands {
-    /** Create a local router or return ConfigurationError without rejected prefix/parser values. Unexpected getter defects throw safe SdkDefect commands without the caller value */
-    create(options: PrefixCommandsOptions): Result<DefaultPrefixCommandRouter, ConfigurationError>
+    /** Create a local router or return ConfigurationError without rejected prefix/parser values. onUnmatched remains application-owned and receives no automatic response helper. Unexpected getter defects throw safe SdkDefect commands without the caller value */
+    create(options: DefaultPrefixCommandsOptions): Result<DefaultPrefixCommandRouter, ConfigurationError>
     /** Parse quoted positional arguments without changing the router default parser. Unterminated quotes or trailing escapes return undefined for application policy */
     parseQuoted(input: PrefixCommandParseInput): PrefixCommandParse | undefined
     /** Create a bounded process-local cooldown store or return ConfigurationError for invalid options or claims */
@@ -122,8 +144,15 @@ export interface DefaultCommands {
 
 /** Implementation shared by the default public namespace */
 export const defaultCommands: DefaultCommands = Object.freeze({
-    create: (options: PrefixCommandsOptions) =>
-        attempt(() => freezeRouter(new DefaultPrefixCommandRouterOwner(new PrefixCommandRegistry(options)))),
+    create: (options: DefaultPrefixCommandsOptions) =>
+        attempt(() =>
+            freezeRouter(
+                new DefaultPrefixCommandRouterOwner(
+                    new PrefixCommandRegistry(options),
+                    snapshotDefaultOnUnmatched(options.onUnmatched),
+                ),
+            ),
+        ),
     parseQuoted: parseQuotedPrefixCommand,
     memoryCooldowns: (options: MemoryCooldownOptions | undefined) =>
         attempt(() => defaultMemoryCooldownStore(createMemoryCooldownStore(options))),
@@ -141,9 +170,14 @@ interface StoredDefaultCommand extends PrefixCommandDefinition {
 
 class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
     readonly #registry: PrefixCommandRegistry<StoredDefaultCommand>
+    readonly #onUnmatched?: DefaultPrefixCommandsOptions["onUnmatched"]
 
-    constructor(registry: PrefixCommandRegistry<StoredDefaultCommand>) {
+    constructor(
+        registry: PrefixCommandRegistry<StoredDefaultCommand>,
+        onUnmatched?: DefaultPrefixCommandsOptions["onUnmatched"],
+    ) {
         this.#registry = registry
+        this.#onUnmatched = onUnmatched
     }
 
     get commands(): readonly PrefixCommandMetadata[] {
@@ -152,7 +186,12 @@ class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
 
     register(command: DefaultPrefixCommand): Result<DefaultPrefixCommandRouter, ConfigurationError> {
         return attempt(() =>
-            freezeRouter(new DefaultPrefixCommandRouterOwner(this.#registry.register(snapshotDefaultCommand(command)))),
+            freezeRouter(
+                new DefaultPrefixCommandRouterOwner(
+                    this.#registry.register(snapshotDefaultCommand(command)),
+                    this.#onUnmatched,
+                ),
+            ),
         )
     }
 
@@ -172,6 +211,15 @@ class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
                     rawArgs: match.parse.rawArgs,
                     signal,
                 }),
+            unmatched: (match) =>
+                this.#onUnmatched === undefined
+                    ? Effect.void
+                    : defaultCallback(() =>
+                          this.#onUnmatched!(
+                              Object.freeze({ client, message, prefix: match.prefix, signal }),
+                              match.unmatched,
+                          ),
+                      ),
             guard: (definition, context) =>
                 definition.guard === undefined
                     ? Effect.succeed(true)
@@ -198,6 +246,14 @@ class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
             })
             .finally(() => signal.removeEventListener("abort", abort))
     }
+}
+
+function snapshotDefaultOnUnmatched(
+    value: DefaultPrefixCommandsOptions["onUnmatched"],
+): DefaultPrefixCommandsOptions["onUnmatched"] {
+    if (value !== undefined && typeof value !== "function")
+        throw new ConfigurationError("commands", "onUnmatched must be a function when supplied")
+    return value
 }
 
 function snapshotDefaultCommand(command: DefaultPrefixCommand): StoredDefaultCommand {

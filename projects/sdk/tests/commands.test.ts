@@ -368,6 +368,237 @@ test("quoted parsing, metadata snapshots and application-owned prefix lookups re
     await vi.waitFor(() => expect(received).toEqual(["!", "?"]))
 })
 
+test("default unmatched feedback receives frozen outcomes after dynamic prefix matching without bot or chat noise", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const prefixes = new Map([["40", "!"]])
+    const feedback: {
+        readonly content: string
+        readonly prefix: string
+        readonly tag: string
+        readonly name?: string
+        readonly frozenContext: boolean
+        readonly frozenOutcome: boolean
+        readonly signal: AbortSignal
+    }[] = []
+    const executed: string[] = []
+    const router = value(
+        commands.create({
+            prefix: (message) => prefixes.get(message.guildId ?? ""),
+            parse: commands.parseQuoted,
+            onUnmatched: (context, unmatched) => {
+                feedback.push({
+                    content: context.message.content,
+                    prefix: context.prefix,
+                    tag: unmatched._tag,
+                    ...(unmatched._tag === "CommandUnknownName" ? { name: unmatched.name } : {}),
+                    frozenContext: Object.isFrozen(context),
+                    frozenOutcome: Object.isFrozen(unmatched),
+                    signal: context.signal as AbortSignal,
+                })
+            },
+        }),
+    )
+    const registered = value(
+        router.register({
+            name: "ping",
+            execute: () => {
+                executed.push("ping")
+            },
+        }),
+    )
+    value(registered.attach(client))
+
+    remote.deliver("!missing", false, "40")
+    remote.deliver('!ping "unterminated', false, "40")
+    remote.deliver("!ping", true, "40")
+    remote.deliver("chat", false, "40")
+    await vi.waitFor(() => expect(feedback).toHaveLength(2))
+    expect(feedback).toEqual([
+        expect.objectContaining({
+            content: "!missing",
+            prefix: "!",
+            tag: "CommandUnknownName",
+            name: "missing",
+            frozenContext: true,
+            frozenOutcome: true,
+        }),
+        expect.objectContaining({
+            content: '!ping "unterminated',
+            prefix: "!",
+            tag: "CommandParserRejected",
+            frozenContext: true,
+            frozenOutcome: true,
+        }),
+    ])
+    expect(feedback.every((entry) => entry.signal.aborted === false)).toBe(true)
+    expect(executed).toEqual([])
+
+    const botFeedback: string[] = []
+    const botRouter = value(
+        commands.create({
+            prefix: "!",
+            ignoreBots: false,
+            onUnmatched: (_context, unmatched) => {
+                botFeedback.push(unmatched._tag)
+            },
+        }),
+    )
+    value(botRouter.attach(client))
+    remote.deliver("!missing", true, "40")
+    await vi.waitFor(() => expect(botFeedback).toEqual(["CommandUnknownName"]))
+    expect(feedback).toHaveLength(2)
+
+    prefixes.set("40", "?")
+    remote.deliver("?missing", false, "40")
+    remote.deliver("?ping", false, "40")
+    await vi.waitFor(() => expect(feedback).toHaveLength(3))
+    await vi.waitFor(() => expect(executed).toEqual(["ping"]))
+    expect(feedback[2]).toMatchObject({ content: "?missing", prefix: "?", tag: "CommandUnknownName", name: "missing" })
+})
+
+test("native unmatched feedback preserves caller context across dynamic prefixes without bot or chat noise", async () => {
+    const remote = await fixture()
+    const { client, registration } = await nativeClient()
+    const PrefixService = Context.Service<{ readonly value: "native-unmatched" }>("native-unmatched")
+    const prefixes = new Map([["40", "!"]])
+    const feedback: {
+        readonly content: string
+        readonly prefix: string
+        readonly tag: string
+        readonly value: string
+    }[] = []
+    const executed: string[] = []
+    const router = await Effect.runPromise(
+        nativeCommands.create({
+            prefix: (message) => prefixes.get(message.guildId ?? ""),
+            parse: nativeCommands.parseQuoted,
+            onUnmatched: (context, unmatched) =>
+                Effect.service(PrefixService).pipe(
+                    Effect.tap(({ value }) =>
+                        Effect.sync(() => {
+                            expect(Object.isFrozen(context)).toBe(true)
+                            expect(Object.isFrozen(unmatched)).toBe(true)
+                            feedback.push({
+                                content: context.message.content,
+                                prefix: context.prefix,
+                                tag: unmatched._tag,
+                                value,
+                            })
+                        }),
+                    ),
+                ),
+        }),
+    )
+    const registered = await Effect.runPromise(
+        router.register({ name: "ping", execute: () => Effect.sync(() => executed.push("ping")) }),
+    )
+    await Effect.runPromise(
+        registered
+            .attach(client)
+            .pipe(Effect.provideService(PrefixService, { value: "native-unmatched" }), Scope.provide(registration)),
+    )
+
+    remote.deliver("!missing", false, "40")
+    remote.deliver('!ping "unterminated', false, "40")
+    remote.deliver("!ping", true, "40")
+    remote.deliver("chat", false, "40")
+    await vi.waitFor(() => expect(feedback).toHaveLength(2))
+    expect(feedback).toEqual([
+        { content: "!missing", prefix: "!", tag: "CommandUnknownName", value: "native-unmatched" },
+        { content: '!ping "unterminated', prefix: "!", tag: "CommandParserRejected", value: "native-unmatched" },
+    ])
+    expect(executed).toEqual([])
+
+    prefixes.set("40", "?")
+    remote.deliver("?missing", false, "40")
+    remote.deliver("?ping", false, "40")
+    await vi.waitFor(() => expect(feedback).toHaveLength(3))
+    await vi.waitFor(() => expect(executed).toEqual(["ping"]))
+    expect(feedback[2]).toEqual({
+        content: "?missing",
+        prefix: "?",
+        tag: "CommandUnknownName",
+        value: "native-unmatched",
+    })
+})
+
+test("default unmatched callback failure reports safely and its signal stays cooperative after cancellation", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const errors: unknown[] = []
+    const feedback: string[] = []
+    let slowSignal: AbortSignal | undefined
+    let release: (() => void) | undefined
+    const pending = new Promise<void>((resolve) => {
+        release = resolve
+    })
+    const router = value(
+        commands.create({
+            prefix: "!",
+            onUnmatched: (context, unmatched) => {
+                if (unmatched._tag === "CommandUnknownName" && unmatched.name === "broken")
+                    return Promise.reject(new Error("private unmatched feedback failure"))
+                if (unmatched._tag === "CommandUnknownName" && unmatched.name === "slow") {
+                    slowSignal = context.signal as AbortSignal
+                    return pending
+                }
+                feedback.push(unmatched._tag)
+            },
+        }),
+    )
+    const subscription = value(
+        router.attach(client, {
+            onError: (report) => {
+                errors.push(report)
+            },
+        }),
+    )
+    remote.deliver("!broken")
+    remote.deliver("!missing")
+    await vi.waitFor(() => expect(errors).toEqual([{ event: "messageCreate", kind: "handler" }]))
+    await vi.waitFor(() => expect(feedback).toEqual(["CommandUnknownName"]))
+    remote.deliver("!slow")
+    await vi.waitFor(() => expect(slowSignal).toBeDefined())
+    subscription.unsubscribe()
+    expect(slowSignal!.aborted).toBe(true)
+    release!()
+})
+
+test("native unmatched callback failure reports safely and registration-scope cancellation stops later feedback", async () => {
+    const remote = await fixture()
+    const { client, registration } = await nativeClient()
+    const errors: string[] = []
+    const feedback: string[] = []
+    const router = await Effect.runPromise(
+        nativeCommands.create({
+            prefix: "!",
+            onUnmatched: (_context, unmatched) =>
+                unmatched._tag === "CommandUnknownName" && unmatched.name === "broken"
+                    ? Effect.die("private unmatched feedback failure")
+                    : Effect.sync(() => feedback.push(unmatched._tag)),
+        }),
+    )
+    await Effect.runPromise(
+        router
+            .attach(client, {
+                onError: () =>
+                    Effect.sync(() => {
+                        errors.push("handler")
+                    }),
+            })
+            .pipe(Scope.provide(registration)),
+    )
+    remote.deliver("!broken")
+    remote.deliver("!missing")
+    await vi.waitFor(() => expect(errors).toEqual(["handler"]))
+    await vi.waitFor(() => expect(feedback).toEqual(["CommandUnknownName"]))
+    await Effect.runPromise(Scope.close(registration, Exit.void))
+    remote.deliver("!missing")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(feedback).toEqual(["CommandUnknownName"])
+})
+
 test("default rejection callback defects use subscription reporting without handler execution", async () => {
     const remote = await fixture()
     const client = await defaultClient()

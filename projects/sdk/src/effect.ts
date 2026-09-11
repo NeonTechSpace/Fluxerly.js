@@ -610,7 +610,7 @@ export type {
  * Expected failures remain in the typed channel; interruption and sanitized cleanup defects remain in the Effect cause
  */
 export interface OAuthClient {
-    /** Lazily resolve discovery and build an S256 authorization URL. State and PKCE values remain caller-owned */
+    /** Lazily resolve discovery and build an S256 authorization URL from its web application base, including any advertised path. State and PKCE values remain caller-owned */
     authorizationUrl(
         input: OAuthAuthorizationInput,
         options?: OAuthOperationOptions,
@@ -700,6 +700,7 @@ export type {
     PrefixCommandParseInput,
     PrefixCommandPrefix,
     PrefixCommandRejection,
+    PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "./commands.js"
 export type {
@@ -708,6 +709,8 @@ export type {
     NativePrefixCommand,
     NativePrefixCommandContext,
     NativePrefixCommandCooldown,
+    NativePrefixCommandUnmatchedContext,
+    NativePrefixCommandsOptions,
     NativePrefixCommandRouter,
 } from "./native-commands.js"
 import { nativeCommands } from "./native-commands.js"
@@ -737,7 +740,7 @@ import { makeNativeSupervisor } from "./native-supervisor.js"
 /**
  * Optional builders and prefix-command routing above direct client primitives.
  * Builders return independent plain payload snapshots. Command routing is lazy, attaches one existing bounded messageCreate subscription in the caller’s scope and never connects the client or creates a detached runtime.
- * Guards, cooldown keys and handler Effects remain application-owned. Commands do not fetch permissions, send replies or retry failures
+ * Guards, cooldown keys, unmatched feedback and handler Effects remain application-owned. The router does not fetch permissions, send replies or retry failures
  *
  * @example
  * ```ts
@@ -745,7 +748,14 @@ import { makeNativeSupervisor } from "./native-supervisor.js"
  * import { builders, commands, type Client } from "@neontechspace/fluxerly/effect"
  *
  * export const installPing = (client: Client) => Effect.gen(function* () {
- *     const router = yield* commands.create({ prefix: "!" })
+ *     const router = yield* commands.create({
+ *         prefix: "!",
+ *         parse: commands.parseQuoted,
+ *         onUnmatched: ({ client, message }, unmatched) =>
+ *             unmatched._tag === "CommandUnknownName"
+ *                 ? client.messages.reply(message, builders.message().content(`Unknown command: ${unmatched.name}`).build()).pipe(Effect.asVoid)
+ *                 : Effect.void,
+ *     })
  *     const registered = yield* router.register({
  *         name: "ping",
  *         execute: ({ client, message }) => client.messages.reply(message, builders.message().content("Pong").build()).pipe(Effect.asVoid),
@@ -2321,7 +2331,7 @@ export interface Guilds {
      * Failure after dispatch may leave a ban and separately queued message deletion applied
      *
      * Dispatched actions invalidate this member's retained snapshot even on rejection.
-     * Requested message cleanup evicts this author's cached messages across guilds, since messages lack guild IDs.
+     * Requested message cleanup deliberately evicts this author's cached messages across all guilds, including known unrelated scope, because messages need not carry guild IDs.
      * The cleanup job can finish later. A later cache hit does not establish that its message survived the job
      *
      * Bans may also block rejoining through provider-side IP/email checks. Unban restores neither messages nor membership.
@@ -2917,7 +2927,7 @@ export interface WebhookClient {
 export interface ClientCache {
     /**
      * Lazily return up to limit already-observed frozen projections from one configured cache category in current eviction order.
-     * Users/directMessages use observation order. Other categories use least-to-most-recent order
+     * Entries use least-to-most-recent order. Local lookups promote recency, while enumeration does not
      *
      * Omit limit for 100 entries. A positive safe integer from 1 through 1,000 is required.
      * Execution releases expired entries before the snapshot and does not refresh data or change the eviction order.
@@ -3266,7 +3276,7 @@ export interface CurrentBotApplication {
  * Interruptions remain in the Effect cause and defects die
  */
 export interface Users {
-    /** Local optional-cache lookup by decimal ID, without a request. May miss or be stale; closed clients fail */
+    /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not observation age. May miss or be stale; closed clients fail */
     get(id: string): Effect.Effect<User | undefined, UserOperationFailure>
     /** Fetch a public account snapshot remotely by decimal ID; unknown IDs fail with notFound */
     fetch(id: string, options?: UserOperationOptions): Effect.Effect<User, UserOperationFailure>
@@ -3313,7 +3323,7 @@ export interface DirectMessages {
      * ```
      */
     send(userId: string, input: ReplyInput, options?: SendOptions): Effect.Effect<Message, SendError>
-    /** Local optional-cache lookup by decimal ID, without a request. May miss or be stale; closed clients fail */
+    /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not observation age. May miss or be stale; closed clients fail */
     get(id: string): Effect.Effect<DirectMessageChannel | undefined, UserOperationFailure>
     /** Open or reopen a one-to-one conversation. Privacy checks may prevent delivery even after opening succeeds */
     open(userId: string, options?: UserOperationOptions): Effect.Effect<DirectMessageChannel, UserOperationFailure>

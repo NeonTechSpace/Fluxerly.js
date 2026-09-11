@@ -7,6 +7,7 @@ import type {
     PrefixCommandParse,
     PrefixCommandParseInput,
     PrefixCommandRejection,
+    PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "#sdk/commands"
 import { ConfigurationError } from "#sdk/errors"
@@ -21,6 +22,12 @@ export interface PrefixCommandMatch<D extends PrefixCommandDefinition> {
     readonly definition: D
     readonly prefix: string
     readonly parse: PrefixCommandParse
+}
+
+/** Prefix and frozen unmatched result retained only while an attached router dispatches one message */
+export interface PrefixCommandUnmatchedMatch {
+    readonly prefix: string
+    readonly unmatched: PrefixCommandUnmatched
 }
 
 /** Shared immutable command lookup state. Entry-point adapters own callback and error boundaries */
@@ -63,7 +70,7 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition> {
         )
     }
 
-    resolve(message: Message): PrefixCommandMatch<D> | undefined {
+    resolve(message: Message): PrefixCommandMatch<D> | PrefixCommandUnmatchedMatch | undefined {
         if (this.#options.ignoreBots !== false && message.author.isBot) return undefined
         const prefix = this.matchPrefix(message)
         if (prefix === undefined) return undefined
@@ -73,10 +80,19 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition> {
             source: message.content.slice(prefix.length),
         })
         const parsed = this.#options.parse === undefined ? defaultParse(input) : this.#options.parse(input)
-        if (parsed === undefined) return undefined
+        if (parsed === undefined)
+            return Object.freeze({
+                prefix,
+                unmatched: Object.freeze({ _tag: "CommandParserRejected" }),
+            })
         const parse = copyParse(parsed)
         const definition = this.#definitions.get(this.normalize(parse.name))
-        return definition === undefined ? undefined : Object.freeze({ definition, prefix, parse })
+        return definition === undefined
+            ? Object.freeze({
+                  prefix,
+                  unmatched: Object.freeze({ _tag: "CommandUnknownName", name: parse.name }),
+              })
+            : Object.freeze({ definition, prefix, parse })
     }
 
     private matchPrefix(message: Message): string | undefined {
@@ -205,6 +221,8 @@ export interface CommandDispatchAdapter<D extends PrefixCommandDefinition, C, E 
     readonly cooldown?: (definition: D, context: C) => Effect.Effect<CommandCooldownClaim, E, R>
     /** Optional contextual rejection feedback. It runs through the existing subscription error boundary and never sends a response itself */
     readonly reject?: (definition: D, context: C, rejection: PrefixCommandRejection) => Effect.Effect<unknown, E, R>
+    /** Optional application-owned feedback for a parser decline or unregistered parsed name */
+    readonly unmatched?: (match: PrefixCommandUnmatchedMatch) => Effect.Effect<unknown, E, R>
     readonly execute: (definition: D, context: C) => Effect.Effect<unknown, E, R>
     /** Return false after default cancellation so a later callback never starts */
     readonly active?: () => boolean
@@ -222,8 +240,14 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, E, R>(
             : (Effect.suspend(() => (adapter.active!() ? Effect.void : Effect.interrupt)) as Effect.Effect<void>)
     return Effect.gen(function* () {
         yield* active()
-        const matched = yield* configurationEffect(() => registry.resolve(message))
-        if (matched === undefined) return
+        const resolved = yield* configurationEffect(() => registry.resolve(message))
+        if (resolved === undefined) return
+        if ("unmatched" in resolved) {
+            yield* active()
+            if (adapter.unmatched !== undefined) yield* adapter.unmatched(resolved)
+            return
+        }
+        const matched = resolved
         const context = adapter.context(matched)
         yield* active()
         const permitted = yield* adapter.guard(matched.definition, context)
@@ -258,7 +282,12 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, E, R>(
 }
 
 function copyOptions(value: PrefixCommandsOptions): Readonly<PrefixCommandsOptions> {
-    validateObjectShape(value, ["prefix", "parse", "ignoreBots", "caseSensitive"], "commands", "Prefix command options")
+    validateObjectShape(
+        value,
+        ["prefix", "parse", "ignoreBots", "caseSensitive", "onUnmatched"],
+        "commands",
+        "Prefix command options",
+    )
     if (typeof value.prefix !== "string" && !Array.isArray(value.prefix) && typeof value.prefix !== "function")
         throw new ConfigurationError("prefix", "prefix must be a string, string array or resolver")
     if (typeof value.prefix === "string" && value.prefix.length === 0)

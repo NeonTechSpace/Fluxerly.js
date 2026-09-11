@@ -479,6 +479,7 @@ export type {
     PrefixCommandParseInput,
     PrefixCommandPrefix,
     PrefixCommandRejection,
+    PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "./commands.js"
 export type {
@@ -487,6 +488,8 @@ export type {
     DefaultPrefixCommand,
     DefaultPrefixCommandContext,
     DefaultPrefixCommandCooldown,
+    DefaultPrefixCommandUnmatchedContext,
+    DefaultPrefixCommandsOptions,
     DefaultPrefixCommandRouter,
 } from "./default-commands.js"
 import { defaultCommands } from "./default-commands.js"
@@ -516,14 +519,22 @@ import { makeDefaultSupervisor } from "./default-supervisor.js"
 /**
  * Optional builders and prefix-command routing above direct client primitives.
  * Builders return independent plain payload snapshots. Command routing remains inactive until attach and reuses one existing bounded messageCreate subscription without connecting the client.
- * Guards, cooldown keys and handlers remain application-owned. Commands do not fetch permissions, send replies or retry failures
+ * Guards, cooldown keys, unmatched feedback and handlers remain application-owned. The router does not fetch permissions, send replies or retry failures
  *
  * @example
  * ```ts
  * import { builders, commands, type Client } from "@neontechspace/fluxerly"
  *
  * export function installPing(client: Client) {
- *     const created = commands.create({ prefix: "!" })
+ *     const created = commands.create({
+ *         prefix: "!",
+ *         parse: commands.parseQuoted,
+ *         onUnmatched: async ({ client, message }, unmatched) => {
+ *             if (unmatched._tag !== "CommandUnknownName") return
+ *             const sent = await client.messages.reply(message, builders.message().content(`Unknown command: ${unmatched.name}`).build())
+ *             if (sent.isErr()) throw sent.error
+ *         },
+ *     })
  *     if (created.isErr()) return created
  *     const router = created.value
  *     const registered = router.register({
@@ -2005,7 +2016,7 @@ export interface Guilds {
      * Failure after dispatch may leave a ban and separately queued message deletion applied
      *
      * Dispatched actions invalidate this member's retained snapshot even on rejection.
-     * Requested message cleanup evicts this author's cached messages across guilds, since messages lack guild IDs.
+     * Requested message cleanup deliberately evicts this author's cached messages across all guilds, including known unrelated scope, because messages need not carry guild IDs.
      * The cleanup job can finish later. A later cache hit does not establish that its message survived the job
      *
      * Bans may also block rejoining through provider-side IP/email checks. Unban restores neither messages nor membership.
@@ -2675,7 +2686,7 @@ export interface WebhookClient {
 export interface ClientCache {
     /**
      * Return up to limit already-observed frozen projections from one configured cache category in current eviction order.
-     * Users/directMessages use observation order. Other categories use least-to-most-recent order
+     * Entries use least-to-most-recent order. Local lookups promote recency, while enumeration does not
      *
      * Omit limit for 100 entries. A positive safe integer from 1 through 1,000 is required.
      * Expired entries are released before the snapshot. Enumeration does not refresh data or change the eviction order.
@@ -3238,7 +3249,7 @@ export interface CurrentBotApplication {
  * Abort returns CancelledError after cleanup; unexpected defects reject with SdkDefect
  */
 export interface Users {
-    /** Local optional-cache lookup by decimal ID, without a request. May miss or be stale; closed clients fail */
+    /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not observation age. May miss or be stale; closed clients fail */
     get(id: string): Result<User | undefined, UserOperationFailure>
     /** Fetch a public account snapshot remotely by decimal ID; unknown IDs fail with notFound */
     fetch(id: string, options?: DefaultUserOperationOptions): ResultAsync<User, UserOperationFailure | CancelledError>
@@ -3289,7 +3300,7 @@ export interface DirectMessages {
         input: ReplyInput,
         options?: DefaultSendOptions,
     ): ResultAsync<Message, SendError | CancelledError>
-    /** Local optional-cache lookup by decimal ID, without a request. May miss or be stale; closed clients fail */
+    /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not observation age. May miss or be stale; closed clients fail */
     get(id: string): Result<DirectMessageChannel | undefined, UserOperationFailure>
     /** Open or reopen a one-to-one conversation. Privacy checks may prevent delivery even after opening succeeds */
     open(
@@ -4423,7 +4434,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
  * Expected failures are Result errors; unexpected cleanup defects reject with SdkDefect without upstream text
  */
 export interface OAuthClient {
-    /** Build an S256 authorization URL from the selected instance's discovered web application base. State and PKCE values remain caller-owned */
+    /** Build an S256 authorization URL from the selected instance's discovered web application base, including any advertised path. State and PKCE values remain caller-owned */
     authorizationUrl(
         input: OAuthAuthorizationInput,
         options?: DefaultOAuthOperationOptions,

@@ -7,6 +7,7 @@ import type {
     PrefixCommandParse,
     PrefixCommandParseInput,
     PrefixCommandRejection,
+    PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "#sdk/commands"
 import { parseQuotedPrefixCommand } from "#sdk/commands"
@@ -41,6 +42,25 @@ export interface NativePrefixCommandContext {
     readonly args: readonly string[]
     /** Parser-defined argument remainder */
     readonly rawArgs: string
+}
+
+/** Context retained only while one native unmatched-command callback Effect runs in the caller’s scope */
+export interface NativePrefixCommandUnmatchedContext {
+    /** Attached client. The router never connects, runs or shuts it down */
+    readonly client: Client
+    /** Frozen gateway message selected by the client subscription */
+    readonly message: Message
+    /** Exact prefix matched before the parser declined or lookup missed */
+    readonly prefix: string
+}
+
+/** Native router construction options, including application-owned feedback for matched prefixes with no runnable command */
+export interface NativePrefixCommandsOptions<E = never, R = never> extends PrefixCommandsOptions {
+    /** Optional feedback Effect after the parser declines or returns an unregistered name. It keeps caller Effect context and interruption, and the router never sends a response, retries it or invokes it for ignored bots or unmatched prefixes */
+    readonly onUnmatched?: (
+        context: NativePrefixCommandUnmatchedContext,
+        unmatched: PrefixCommandUnmatched,
+    ) => Effect.Effect<unknown, E, R>
 }
 
 /** Caller-owned native cooldown storage. Its claim may be immediate or preserve the handler’s Effect environment */
@@ -108,8 +128,10 @@ export interface NativePrefixCommandRouter<R = never> {
 
 /** Native optional command tools with lazy creation, registration and local-store claims */
 export interface NativeCommands {
-    /** Lazily create a local router without attaching a subscription or connecting a client. Unexpected creation defects remain in the Effect cause */
-    create(options: PrefixCommandsOptions): Effect.Effect<NativePrefixCommandRouter, ConfigurationError>
+    /** Lazily create a local router without attaching a subscription or connecting a client. onUnmatched remains application-owned and receives no automatic response helper. Unexpected creation defects remain in the Effect cause */
+    create<E = never, R = never>(
+        options: NativePrefixCommandsOptions<E, R>,
+    ): Effect.Effect<NativePrefixCommandRouter<R>, ConfigurationError>
     /** Parse quoted positional arguments without changing the router default parser. Unterminated quotes or trailing escapes return undefined for application policy */
     parseQuoted(input: PrefixCommandParseInput): PrefixCommandParse | undefined
     /** Lazily create a bounded process-local cooldown store */
@@ -118,8 +140,15 @@ export interface NativeCommands {
 
 /** Implementation shared by the native public namespace */
 export const nativeCommands: NativeCommands = Object.freeze({
-    create: (options: PrefixCommandsOptions) =>
-        configurationEffect(() => freezeRouter(new NativePrefixCommandRouterOwner(new PrefixCommandRegistry(options)))),
+    create: <E, R>(options: NativePrefixCommandsOptions<E, R>) =>
+        configurationEffect(() =>
+            freezeRouter(
+                new NativePrefixCommandRouterOwner<R>(
+                    new PrefixCommandRegistry(options),
+                    snapshotNativeOnUnmatched(options.onUnmatched),
+                ),
+            ),
+        ),
     parseQuoted: parseQuotedPrefixCommand,
     memoryCooldowns: (options: MemoryCooldownOptions | undefined) =>
         configurationEffect(() => nativeMemoryCooldownStore(createMemoryCooldownStore(options))),
@@ -137,9 +166,11 @@ interface StoredNativeCommand extends PrefixCommandDefinition {
 
 class NativePrefixCommandRouterOwner<R = never> implements NativePrefixCommandRouter<R> {
     readonly #registry: PrefixCommandRegistry<StoredNativeCommand>
+    readonly #onUnmatched?: StoredNativeOnUnmatched
 
-    constructor(registry: PrefixCommandRegistry<StoredNativeCommand>) {
+    constructor(registry: PrefixCommandRegistry<StoredNativeCommand>, onUnmatched?: StoredNativeOnUnmatched) {
         this.#registry = registry
+        if (onUnmatched !== undefined) this.#onUnmatched = onUnmatched
     }
 
     get commands(): readonly PrefixCommandMetadata[] {
@@ -151,7 +182,10 @@ class NativePrefixCommandRouterOwner<R = never> implements NativePrefixCommandRo
     ): Effect.Effect<NativePrefixCommandRouter<R | R2>, ConfigurationError> {
         return configurationEffect(() =>
             freezeRouter(
-                new NativePrefixCommandRouterOwner<R | R2>(this.#registry.register(snapshotNativeCommand(command))),
+                new NativePrefixCommandRouterOwner<R | R2>(
+                    this.#registry.register(snapshotNativeCommand(command)),
+                    this.#onUnmatched,
+                ),
             ),
         )
     }
@@ -178,6 +212,17 @@ class NativePrefixCommandRouterOwner<R = never> implements NativePrefixCommandRo
                     args: Object.freeze([...match.parse.args]),
                     rawArgs: match.parse.rawArgs,
                 }),
+            unmatched: (match) =>
+                this.#onUnmatched === undefined
+                    ? Effect.void
+                    : nativeCallback(
+                          () =>
+                              this.#onUnmatched!(
+                                  Object.freeze({ client, message, prefix: match.prefix }),
+                                  match.unmatched,
+                              ),
+                          "A native command onUnmatched callback must return an Effect",
+                      ),
             guard: (definition, context) =>
                 definition.guard === undefined
                     ? Effect.succeed(true)
@@ -200,6 +245,19 @@ class NativePrefixCommandRouterOwner<R = never> implements NativePrefixCommandRo
                 ),
         }) as Effect.Effect<void, ConfigurationError, R>
     }
+}
+
+type StoredNativeOnUnmatched = (
+    context: NativePrefixCommandUnmatchedContext,
+    unmatched: PrefixCommandUnmatched,
+) => Effect.Effect<unknown, unknown, unknown>
+
+function snapshotNativeOnUnmatched<E, R>(
+    value: NativePrefixCommandsOptions<E, R>["onUnmatched"],
+): StoredNativeOnUnmatched | undefined {
+    if (value !== undefined && typeof value !== "function")
+        throw new ConfigurationError("commands", "onUnmatched must be a function when supplied")
+    return value as StoredNativeOnUnmatched | undefined
 }
 
 function snapshotNativeCommand<E, R>(command: NativePrefixCommand<E, R>): StoredNativeCommand {

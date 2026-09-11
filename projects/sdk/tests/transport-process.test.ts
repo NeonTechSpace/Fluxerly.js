@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 import { expect, onTestFinished, test } from "vitest"
 import { startServer } from "./transport/server.js"
 
-function runChild(mode: string, url: string, entry = "./transport/process.mjs") {
+function runChild(mode: string, url: string, entry = "./transport/sdk-process.mjs") {
     const child = spawn(process.execPath, [fileURLToPath(new URL(entry, import.meta.url)), mode, url], {
         stdio: ["ignore", "pipe", "pipe", "ipc"],
         windowsHide: true,
@@ -41,50 +41,19 @@ function runChild(mode: string, url: string, entry = "./transport/process.mjs") 
     }
 }
 
-test.each(["http", "socket", "pending", "ws", "ws-pending"])(
-    "%s transport releases the child process after completion",
-    async (mode) => {
-        const pending = mode === "pending" || mode === "ws-pending"
-        const server = await startServer({ holdHandshake: pending, holdClose: mode === "ws" })
-        const run = runChild(mode, mode === "http" ? server.httpUrl : server.socketUrl)
-        onTestFinished(async () => {
-            await run.stop()
-            await server.close()
-        })
-        try {
-            if (mode !== "http") {
-                if (pending) await server.upgraded
-                else await run.open
-                if (mode === "ws") await server.receivedClose
-                run.child.send!("interrupt")
-            }
-            await run.completed
-            const [code, signal] = await run.exited
-            expect({ code, signal }).toEqual({ code: 0, signal: null })
-            expect(run.stderr()).toBe("")
-        } finally {
-            await run.stop()
-            await server.close()
-        }
-    },
-)
-
-test("an uncooperative peer leaves native WebSocket shutdown pending until the peer closes", async () => {
-    const server = await startServer({ holdClose: true })
-    const run = runChild("socket", server.socketUrl)
+test.each(["ws", "ws-pending"])("selected %s transport releases the child process after completion", async (mode) => {
+    const pending = mode === "ws-pending"
+    const server = await startServer({ holdHandshake: pending, holdClose: mode === "ws" })
+    const run = runChild(mode, server.socketUrl, "./transport/ws-process.mjs")
     onTestFinished(async () => {
         await run.stop()
         await server.close()
     })
     try {
-        await run.open
+        if (pending) await server.upgraded
+        else await run.open
+        if (mode === "ws") await server.receivedClose
         run.child.send!("interrupt")
-        await server.receivedClose
-        run.child.send!("inspect")
-        expect(await run.state).toBe(WebSocket.CLOSING)
-        expect(run.didComplete()).toBe(false)
-        // No undocumented handle access or fake successful timeout can force native closure
-        await server.releaseClose()
         await run.completed
         const [code, signal] = await run.exited
         expect({ code, signal }).toEqual({ code: 0, signal: null })
@@ -100,7 +69,7 @@ test.each(["default", "native", "default-pending", "native-pending", "default-fo
     async (mode) => {
         const pending = mode.endsWith("pending")
         const server = await startServer({ holdHandshake: pending, holdClose: mode.endsWith("forced") })
-        const run = runChild(mode, server.socketUrl, "./transport/sdk-process.mjs")
+        const run = runChild(mode, server.socketUrl)
         onTestFinished(async () => {
             await run.stop()
             await server.close()

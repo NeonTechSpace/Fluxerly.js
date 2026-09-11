@@ -1,8 +1,8 @@
 import type { Message } from "./messages.js"
 
-/** Optional guild/member/role/channel retention, independently bounded across the entire client for each enabled resource.
+/** Optional non-message resource retention, independently bounded across the entire client for each enabled resource.
  * Off by default. True or an options object enables the resource. REST calls and event delivery never require caching.
- * Retains encountered frozen projections, not a complete guild replica. No persistence, preload or background refresh.
+ * Retains encountered frozen projections, not a complete remote replica. No persistence, preload or background refresh.
  * LRU capacity eviction favors repeated lookups. Expiry, conflicting observations and connection gaps can cause misses.
  * Gaps clear snapshots even after resume. Pre-gap requests cannot repopulate them. Shutdown releases SDK-held references.
  * Reads stay remote and writes are never suppressed by cached state
@@ -46,7 +46,7 @@ export interface CachePolicyErrorReport {
  * Dispatched batch deletion evicts selected messages even on rejection and blocks already-started response admission.
  * Other retained messages remain, although overlapping or older responses may skip cache admission
  *
- * Banning with message deletion evicts the author's messages across guilds, since projections lack guild IDs.
+ * Banning with message deletion deliberately evicts the author's messages across all guilds, including known unrelated scope, because projections need not carry guild IDs.
  * That server job is asynchronous. Later observations may precede its completion and are not proof a message survived
  */
 export interface MessageCacheSettings {

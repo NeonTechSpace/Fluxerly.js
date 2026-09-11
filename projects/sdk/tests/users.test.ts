@@ -430,6 +430,62 @@ test.each(modes)("%s keeps user and direct-message caches opt-in, bounded and ex
     expect(await expiring.getUser()).toBeUndefined()
 })
 
+test.each(modes)(
+    "%s promotes user and direct-message cache lookups without promoting diagnostics or enumeration",
+    async (mode) => {
+        rest(async (url) => {
+            const path = new URL(url).pathname
+            if (path.startsWith("/v1/users/")) return Response.json(user(path.split("/").at(-1)!))
+            return Response.json(directMessage(path.split("/").at(-1)!))
+        })
+        const settings = { maxEntries: 2, maxBytes: 4_194_304 }
+        const lru = await setup(mode, { users: settings, directMessages: settings })
+
+        await lru.fetchUser("30")
+        await lru.fetchUser("31")
+        expect((await lru.getUser("30"))?.id).toBe("30")
+        await lru.fetchUser("32")
+        expect(await lru.getUser("31")).toBeUndefined()
+        expect((await lru.getUser("30"))?.id).toBe("30")
+        expect((await lru.getUser("32"))?.id).toBe("32")
+        expect(lru.diagnostics().caches.users).toMatchObject({
+            retainedEntries: 2,
+            maxEntries: 2,
+            maxBytes: 4_194_304,
+        })
+
+        await lru.fetchDirectMessage("10")
+        await lru.fetchDirectMessage("11")
+        expect((await lru.getDirectMessage("10"))?.id).toBe("10")
+        await lru.fetchDirectMessage("12")
+        expect(await lru.getDirectMessage("11")).toBeUndefined()
+        expect((await lru.getDirectMessage("10"))?.id).toBe("10")
+        expect((await lru.getDirectMessage("12"))?.id).toBe("12")
+        expect(lru.diagnostics().caches.directMessages).toMatchObject({
+            retainedEntries: 2,
+            maxEntries: 2,
+            maxBytes: 4_194_304,
+        })
+
+        const observed = await setup(mode, { users: settings, directMessages: settings })
+        await observed.fetchUser("40")
+        await observed.fetchUser("41")
+        expect((await observed.cacheEntries("users")).map((entry) => entry.id)).toEqual(["40", "41"])
+        expect(observed.diagnostics().caches.users.retainedEntries).toBe(2)
+        await observed.fetchUser("42")
+        expect(await observed.getUser("40")).toBeUndefined()
+        expect((await observed.getUser("41"))?.id).toBe("41")
+
+        await observed.fetchDirectMessage("20")
+        await observed.fetchDirectMessage("21")
+        expect((await observed.cacheEntries("directMessages")).map((entry) => entry.id)).toEqual(["20", "21"])
+        expect(observed.diagnostics().caches.directMessages.retainedEntries).toBe(2)
+        await observed.fetchDirectMessage("22")
+        expect(await observed.getDirectMessage("20")).toBeUndefined()
+        expect((await observed.getDirectMessage("21"))?.id).toBe("21")
+    },
+)
+
 test.each(modes)("%s prevents an overlapping stale user read from replacing a gateway observation", async (mode) => {
     const dispatch = await gateway()
     let delayed = false
@@ -628,6 +684,9 @@ async function setup(mode: (typeof modes)[number], cache: ClientOptions["cache"]
         native,
         close,
         connect: async () => (defaultApi ? unwrap(await defaultApi.connect()) : run(native!.connect())),
+        diagnostics: () => (defaultApi ? defaultApi.diagnostics() : native!.diagnostics()),
+        cacheEntries: async (kind: "users" | "directMessages") =>
+            defaultApi ? unwrap(defaultApi.cache.entries(kind)) : run(native!.cache.entries(kind)),
         getUser: async (id = "30") => (defaultApi ? unwrap(defaultApi.users.get(id)) : run(native!.users.get(id))),
         getDirectMessage: async (id = "10") =>
             defaultApi ? unwrap(defaultApi.directMessages.get(id)) : run(native!.directMessages.get(id)),

@@ -53,11 +53,11 @@ export interface ClientOptions {
      */
     readonly cache?: {
         /** Public account snapshots from explicit reads and complete user events, never partial message authors.
-         * Concurrent reads use latest-admitted retention. Gateway gaps and shutdown release snapshots
+         * Local lookups promote LRU recency without renewing observation age. Concurrent reads use latest-admitted retention. Gateway gaps and shutdown release snapshots
          */
         readonly users?: boolean | ResourceCacheSettings
         /** Private conversations from explicit reads and complete channel events, without initial enumeration.
-         * Mutations and recipient changes clear private-channel retention; gaps and shutdown release snapshots
+         * Local lookups promote LRU recency without renewing observation age. Mutations and recipient changes clear private-channel retention; gaps and shutdown release snapshots
          */
         readonly directMessages?: boolean | ResourceCacheSettings
         /** Guild identity snapshots from explicit reads and guild create/update events, never nested member/role preload.

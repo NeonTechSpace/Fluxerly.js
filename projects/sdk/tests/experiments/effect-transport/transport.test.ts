@@ -3,8 +3,8 @@ import { Cause, Deferred, Effect, Exit } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { Socket } from "effect/unstable/socket"
 import { expect, onTestFinished, test } from "vitest"
-import { fetchText, runSocket } from "./transport/candidate.js"
-import { startServer } from "./transport/server.js"
+import { fetchText, runSocket } from "./candidate.js"
+import { startServer } from "../../transport/server.js"
 
 test("HTTP candidate reads a local response", async () => {
     const server = await startServer()

@@ -33,6 +33,8 @@
         "build": "tsc -p tsconfig.json",
         "test": "vitest run",
         "test:types": "tsc -p tsconfig.test.json",
+        "test:public-contract": "node tests/public-client-contract.mjs",
+        "test:experiment:effect-transport": "tsc -p tsconfig.experiment.json && vitest run --config vitest.experiments.config.ts tests/experiments/effect-transport",
         "test:package": "node tests/package-check.mjs",
         "test:live": "node tests/live/sandbox.mjs",
         "test:live:sdk": "pnpm run build && node tests/live/sdk.mjs default && node tests/live/sdk.mjs effect",
@@ -91,7 +93,7 @@
         "test:cache:memory": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/cache-memory.mjs",
         "test:cache:workload": "pnpm run build && node tests/cache-workload.mjs default && node tests/cache-workload.mjs effect",
         "test:rest:queue": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/rest-queue-workload.mjs default && node --expose-gc --max-old-space-size=512 tests/rest-queue-workload.mjs effect",
-        "check": "pnpm run format:check && pnpm run build && pnpm run test:types && pnpm run test && pnpm run test:package"
+        "check": "pnpm run format:check && pnpm run build && pnpm run test:public-contract && pnpm run test:types && pnpm run test && pnpm run test:package"
     },
     "dependencies": {
         "effect": "4.0.0-rc.112",
