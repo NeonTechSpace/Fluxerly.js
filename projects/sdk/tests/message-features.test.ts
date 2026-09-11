@@ -336,6 +336,43 @@ test.each(apiSurfaces)(
     },
 )
 
+test.each(apiSurfaces)("send rejects sparse allowed mentions before discovery through the %s API", async (surface) => {
+    const requests = fixture()
+    if (surface === "default") {
+        const client = unwrap(createClient({ token: "fixture" }))
+        try {
+            const result = await client.messages.send("20", {
+                content: "sparse",
+                allowedMentions: { users: new Array(1) },
+            })
+            expect(result.isErr() && result.error).toMatchObject({
+                _tag: "MessageError",
+                reason: "input",
+                delivery: "notSent",
+            })
+        } finally {
+            unwrap(await client.shutdown())
+        }
+    } else {
+        await Effect.runPromise(
+            Effect.scoped(
+                Effect.gen(function* () {
+                    const client = yield* createNative({ token: "fixture" })
+                    const failure = yield* client.messages
+                        .send("20", { content: "sparse", allowedMentions: { users: new Array(1) } })
+                        .pipe(Effect.flip)
+                    expect(failure).toMatchObject({
+                        _tag: "MessageError",
+                        reason: "input",
+                        delivery: "notSent",
+                    })
+                }),
+            ),
+        )
+    }
+    expect(requests).toEqual([])
+})
+
 test("flags do not bypass edit body validation", () => {
     expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, content: 42 })).toBeInstanceOf(InputValidationFailure)
     expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, attachments: [] })).toBeInstanceOf(InputValidationFailure)

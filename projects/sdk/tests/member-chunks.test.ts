@@ -305,6 +305,7 @@ for (const mode of ["default", "native"] as const) {
             [{ all: false }, undefined, "20"],
             [{ all: true, limit: 1 }, undefined, "20"],
             [{ userIds: [] }, undefined, "20"],
+            [{ userIds: new Array(1) }, undefined, "20"],
             [{ userIds: ["30", "30"] }, undefined, "20"],
             [{ userIds: Array.from({ length: 101 }, (_, i) => String(i + 1)) }, undefined, "20"],
             [{ userIds: ["0"] }, undefined, "20"],

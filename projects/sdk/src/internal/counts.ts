@@ -81,7 +81,7 @@ function copyIdentifiers(
     if (!Array.isArray(value)) return inputValidationFailure(path, "type", "Must be a non-empty array of canonical IDs")
     if (value.length < 1 || value.length > maximum)
         return inputValidationFailure(path, "length", `Must contain from 1 through ${maximum} IDs`)
-    if (!value.every(positiveIdentifier))
+    if (!Array.from(value).every(positiveIdentifier))
         return inputValidationFailure(path, "format", "Each ID must be a canonical positive uint64 decimal string")
     const ids = Object.freeze([...value])
     return new Set(ids).size === ids.length

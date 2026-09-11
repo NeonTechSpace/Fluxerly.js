@@ -85,7 +85,7 @@ function settings(guildId: unknown, query: unknown, options: unknown): Settings 
             return inputValidationFailure("query.userIds", "type", "Must be an array of canonical user IDs")
         if (query.userIds.length < 1 || query.userIds.length > 100)
             return inputValidationFailure("query.userIds", "length", "Must contain from 1 through 100 user IDs")
-        if (!query.userIds.every(positiveId))
+        if (!Array.from(query.userIds).every(positiveId))
             return inputValidationFailure(
                 "query.userIds",
                 "format",

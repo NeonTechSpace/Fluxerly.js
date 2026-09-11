@@ -456,6 +456,7 @@ test.each(publicModes)(
         const fixture = await publicGateway()
         const api = await publicDriver(mode)
         try {
+            api.invalidMembers("40", new Array(1), "input")
             api.setMembers("40", ["30"])
             api.invalidMembers("invalid", ["30"], "input")
             api.invalidMembers(

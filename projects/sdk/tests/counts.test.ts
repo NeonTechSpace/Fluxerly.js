@@ -333,6 +333,7 @@ for (const mode of ["default", "native"] as const) {
                 ["18446744073709551616"],
                 ["9".repeat(10_000)],
                 Array.from({ length: 101 }, (_, index) => String(index + 1)),
+                new Array(1),
             ]) {
                 await expect(client.guild(ids)).resolves.toMatchObject({ kind: "failure", error: { reason: "input" } })
             }
@@ -341,6 +342,7 @@ for (const mode of ["default", "native"] as const) {
                 ["1", []],
                 ["1", ["1", "1"]],
                 ["1", Array.from({ length: 26 }, (_, index) => String(index + 1))],
+                ["1", new Array(1)],
             ] as const)
                 await expect(client.channels(guildId, ids)).resolves.toMatchObject({
                     kind: "failure",

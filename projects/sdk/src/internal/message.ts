@@ -534,7 +534,7 @@ function encodeAllowedMentions(value: unknown) {
                 "length",
                 "Mention selections may contain at most 100 IDs",
             )
-        if (Array.isArray(list) && !list.every(identifier))
+        if (Array.isArray(list) && !Array.from(list).every(identifier))
             return inputValidationFailure(
                 `allowedMentions.${key}[]`,
                 "format",

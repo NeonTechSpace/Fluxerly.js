@@ -144,6 +144,32 @@ class RestFailure extends Error {
     }
 }
 
+// Keep the named REST metadata at one constructor boundary; domain tags and operation types stay distinct
+function operationFailure<Operation extends string, Failure>(
+    error: RestFailure | ClientClosedError,
+    ErrorType: new (
+        operation: Operation,
+        reason: RestFailure["reason"],
+        outcome: Outcome,
+        status: number | null,
+        retryAfterMs: number | null,
+        apiError: ApiErrorDetail | null,
+        inputValidation: InputValidationDetail | null,
+    ) => Failure,
+    operation: NoInfer<Operation>,
+): Failure | ClientClosedError {
+    if (!(error instanceof RestFailure)) return error
+    return new ErrorType(
+        operation,
+        error.reason,
+        error.outcome,
+        error.status,
+        error.retryAfterMs,
+        error.apiError,
+        error.inputValidation,
+    )
+}
+
 function localInputFailure(path: string, constraint: InputValidationConstraint, explanation: string): RestFailure {
     return new RestFailure(
         "input",
@@ -1044,21 +1070,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          "typing",
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "typing")))
     }
 
     fetchHistory(
@@ -1085,21 +1097,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          "fetchHistory",
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "fetchHistory")))
     }
 
     search(
@@ -1131,21 +1129,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          "search",
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "search")))
     }
 
     edit(
@@ -1193,21 +1177,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          "deleteAttachment",
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "deleteAttachment")))
     }
 
     deleteMany(
@@ -1256,21 +1226,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          "deleteMany",
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "deleteMany")))
     }
 
     fetchReactionUsers(
@@ -1315,21 +1271,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          "fetchReactionUsers",
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "fetchReactionUsers")))
     }
 
     fetchPins(
@@ -1360,21 +1302,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          "fetchPins",
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "fetchPins")))
     }
 
     pin(
@@ -1403,21 +1331,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          operation,
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, operation)))
     }
 
     reaction(
@@ -1464,21 +1378,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          operation,
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, operation)))
     }
 
     #manage<A>(
@@ -1512,21 +1412,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new MessageOperationError(
-                          operation,
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, operation)))
     }
 
     #exchange<A>(
@@ -1806,21 +1692,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new GuildOperationError(
-                          operation,
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, GuildOperationError, operation)))
     }
 
     channel<A>(
@@ -1864,21 +1736,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new ChannelOperationError(
-                          operation,
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, ChannelOperationError, operation)))
     }
 
     user<A>(
@@ -1921,21 +1779,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new UserOperationError(
-                          operation,
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, UserOperationError, operation)))
     }
 
     application<A>(
@@ -1975,21 +1819,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new BotApplicationOperationError(
-                          operation,
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, BotApplicationOperationError, operation)))
     }
 
     webhook<A>(
@@ -2038,21 +1868,7 @@ export class RestOwner {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause((error) =>
-                error instanceof RestFailure
-                    ? new WebhookOperationError(
-                          operation,
-                          error.reason,
-                          error.outcome,
-                          error.status,
-                          error.retryAfterMs,
-                          error.apiError,
-                          error.inputValidation,
-                      )
-                    : error,
-            ),
-        )
+        }).pipe(mapFailureCause((error) => operationFailure(error, WebhookOperationError, operation)))
     }
 
     #execute<A>(

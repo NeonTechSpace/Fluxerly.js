@@ -76,6 +76,11 @@ Keep public API signatures and caller documentation in source, and user guides/r
 Use [SDK tests](/projects/sdk/tests/) for behavior checks and [packed consumers](/projects/sdk/tests/consumers/) for package-boundary checks.
 The build emits ignored files under `projects/sdk/dist/`, which must not be edited by hand
 
+For shared error changes, start at [REST translation](/projects/sdk/src/internal/rest.ts) and [cause preservation](/projects/sdk/src/internal/effect-failures.ts).
+Operation error constructors live with their public resource types, not only in errors.ts; message failures have their own [module](/projects/sdk/src/message-errors.ts).
+Use [local validation checks](/projects/sdk/tests/input-validation.test.ts), [provider rejection checks](/projects/sdk/tests/webhooks.test.ts) and [combined cleanup failures](/projects/sdk/tests/cleanup-failures.test.ts) for their distinct boundaries.
+For client lifetime changes, [network checks](/projects/sdk/tests/network.test.ts) cover startup and closure, [recovery checks](/projects/sdk/tests/recovery.test.ts) cover retry/resume, and [supervisor child failures](/projects/sdk/tests/supervisor-child-failures.test.ts) cover process ownership
+
 The [SDK import rule](/projects/sdk/AGENTS.md) uses package-private `#sdk/*` aliases across source areas, with short sibling imports kept relative.
 The SDK manifest maps these aliases to compiled output by default; TypeScript's NodeNext build resolves that output mapping back to source.
 The [test compiler configuration](/projects/sdk/tsconfig.test.json) and [Vitest configuration](/projects/sdk/vitest.config.ts) enable the `fluxerly-source` condition to select source directly.

@@ -233,7 +233,7 @@ function memberSubscriptions(guildId: string, members: readonly string[]): Gatew
 function frozenMemberIds(value: unknown): readonly string[] | InputValidationFailure {
     if (!Array.isArray(value))
         return inputValidationFailure("memberIds", "type", "Must be an array of decimal member IDs")
-    if (!value.every(identifier))
+    if (!Array.from(value).every(identifier))
         return inputValidationFailure("memberIds", "format", "Each ID must be a canonical decimal string")
     const members = Object.freeze([...value])
     return new Set(members).size === members.length

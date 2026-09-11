@@ -171,6 +171,24 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s rejects sparse search filters before discovery", async (mode) => {
+    const client = await setup(mode)
+    const fetch = vi.fn()
+    stubFetchWithHostedDiscovery(fetch)
+    for (const query of [
+        { channelIds: new Array(1) },
+        { contents: new Array(1) },
+        { authorTypes: new Array(1) },
+        { cursor: new Array(1) },
+    ])
+        await expect(settle(client.messages.search({ channelId: "20" }, query))).rejects.toMatchObject({
+            operation: "search",
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    expect(fetch).not.toHaveBeenCalled()
+})
+
 test.each(modes)("%s preserves an empty provider cursor without inventing a page cursor", async (mode) => {
     const client = await setup(mode)
     const sent: unknown[] = []

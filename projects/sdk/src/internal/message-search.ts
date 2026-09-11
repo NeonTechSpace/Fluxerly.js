@@ -65,14 +65,14 @@ const integer = (value: unknown, minimum: number, maximum: number): value is num
     typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum
 
 function identifiers(value: unknown, maximum: number): value is readonly string[] {
-    return Array.isArray(value) && value.length <= maximum && value.every(identifier)
+    return Array.isArray(value) && value.length <= maximum && Array.from(value).every(identifier)
 }
 
 function texts(value: unknown, maximum: number, length: number): value is readonly string[] {
     return (
         Array.isArray(value) &&
         value.length <= maximum &&
-        value.every((item) => typeof item === "string" && item.length >= 1 && item.length <= length)
+        Array.from(value).every((item) => typeof item === "string" && item.length >= 1 && item.length <= length)
     )
 }
 
@@ -80,7 +80,7 @@ function literals(value: unknown, maximum: number, allowed: ReadonlySet<string>)
     return (
         Array.isArray(value) &&
         value.length <= maximum &&
-        value.every((item) => typeof item === "string" && allowed.has(item))
+        Array.from(value).every((item) => typeof item === "string" && allowed.has(item))
     )
 }
 
@@ -123,7 +123,10 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
             "range",
             "Message search page must be an integer from 1 through 400",
         )
-    if (cursor !== undefined && (!Array.isArray(cursor) || !cursor.every((item) => typeof item === "string")))
+    if (
+        cursor !== undefined &&
+        (!Array.isArray(cursor) || !Array.from(cursor).every((item) => typeof item === "string"))
+    )
         return inputValidationFailure("query.cursor[]", "type", "Message search cursor entries must be strings")
     if (cursor !== undefined && input.page !== undefined)
         return inputValidationFailure("query", "relationship", "Message search query cannot combine cursor and page")
