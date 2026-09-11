@@ -144,6 +144,48 @@ export interface PresenceUpdateBulk {
     readonly presences: readonly PresenceUpdate[]
 }
 
+/**
+ * One frozen non-media voice connection observed through a guild gateway session.
+ * `channelId: null` is a disconnect observation. A server move can appear as a disconnect followed by a join under a new connection ID.
+ * Fluxer filters observations by channel visibility. Connection gaps can miss transitions, and the SDK performs no lookup or retention
+ */
+export interface VoiceState {
+    /** Guild that owns the voice channel */
+    readonly guildId: string
+    /** Current voice channel, or null when this connection disconnected */
+    readonly channelId: string | null
+    /** Connected member's user ID */
+    readonly userId: string
+    /** Provider connection identity, suitable for targeting one connection in a move or disconnect */
+    readonly connectionId: string
+    /** Gateway session identity when Fluxer supplied one */
+    readonly sessionId?: string
+    /** Server-controlled mute flag */
+    readonly isMuted: boolean
+    /** Server-controlled deafen flag */
+    readonly isDeafened: boolean
+    /** Participant-controlled mute flag */
+    readonly isSelfMuted: boolean
+    /** Participant-controlled deafen flag */
+    readonly isSelfDeafened: boolean
+    /** Whether Fluxer reports this connection as mobile */
+    readonly isMobile: boolean
+    /** Whether Fluxer currently suppresses this connection from speaking */
+    readonly isSuppressed: boolean
+}
+
+/**
+ * Visibility-filtered voice states delivered inside one available `GUILD_CREATE` snapshot.
+ * Register before connecting to observe startup snapshots. An empty `voiceStates` array means Fluxer supplied an empty initial collection; no event is emitted when the collection is absent.
+ * This is neither a complete guild roster nor a retained cache, and later connection gaps can make it stale immediately
+ */
+export interface VoiceStateSnapshot {
+    /** Guild whose available snapshot supplied the collection */
+    readonly guildId: string
+    /** Frozen provider-order connection states, possibly empty */
+    readonly voiceStates: readonly VoiceState[]
+}
+
 /** Implemented gateway events and their frozen payloads. No subscription history, cache reconstruction or REST-generated notifications */
 export interface EventMap extends GuildLifecycleEvents {
     /** Complete public account update, never private account settings */
@@ -154,6 +196,10 @@ export interface EventMap extends GuildLifecycleEvents {
     readonly directMessageUpdate: import("./users.js").DirectMessageChannel
     /** Visible online guild presences after availability recovery, delivered as one batch and never flattened */
     readonly presenceUpdateBulk: PresenceUpdateBulk
+    /** One visibility-filtered initial connection collection from an available guild snapshot, including an explicit empty collection */
+    readonly voiceStateSnapshot: VoiceStateSnapshot
+    /** One subsequent visible connection join, state change, move phase or disconnect; no initial reconstruction or cache update */
+    readonly voiceStateUpdate: VoiceState
     /** Private conversation closed, left or deleted for this bot, not proof of deletion for others */
     readonly directMessageDelete: { readonly id: string }
     /** Recipient added; invalidates private-channel cache without synthesizing a membership list */

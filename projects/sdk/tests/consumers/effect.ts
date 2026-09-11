@@ -1,4 +1,4 @@
-import { Context, Effect, type Scope } from "effect"
+import { Context, Effect, Stream, type Scope } from "effect"
 import {
     createClient,
     oauth,
@@ -51,6 +51,9 @@ import {
     type CollectorResult,
     type CollectorRegistrationError,
     type MemberReference,
+    type VoiceConnectionReference,
+    type VoiceState,
+    type VoiceStateSnapshot,
     type RoleHierarchyInput,
     type InstanceOptions,
     type ResolvedInstance,
@@ -623,6 +626,38 @@ export function moderationOperations(client: Client, target: import("@neontechsp
     })
 }
 
+/** Packed declarations expose non-media guild voice moderation and observations */
+export function voiceOperations(client: Client, target: VoiceConnectionReference, channelId: string) {
+    return Effect.gen(function* () {
+        const moved = yield* client.members.move(target, channelId)
+        const muted: boolean | undefined = moved.isMuted
+        const deafened: boolean | undefined = moved.isDeafened
+        yield* client.members.disconnect(target)
+        yield* client.members.setMute(target, true)
+        yield* client.members.setDeaf(target, false)
+        const initial = yield* client.on("voiceStateSnapshot", (snapshot) =>
+            Effect.sync(() => {
+                const current: VoiceStateSnapshot = snapshot
+                void current.voiceStates
+            }),
+        )
+        const updates = client.events("voiceStateUpdate")
+        yield* client.on("voiceStateUpdate", (state) =>
+            Effect.sync(() => {
+                const current: VoiceState = state
+                const channel: string | null = current.channelId
+                void channel
+            }),
+        )
+        // @ts-expect-error Server deafen state is boolean
+        client.members.setDeaf(target, "yes")
+        // @ts-expect-error Connection IDs are strings
+        const invalid: VoiceConnectionReference = { ...target, connectionId: 1 }
+        void invalid
+        return { muted, deafened, initial, updates }
+    })
+}
+
 export function useAttachments(client: Client, channelId: string) {
     return Effect.gen(function* () {
         const file = { data: new Uint8Array([1, 2]), filename: "fixture.bin" }
@@ -636,6 +671,10 @@ export function useAttachments(client: Client, channelId: string) {
             maxBytes: 1_024,
             timeoutMs: 5_000,
         })
+        yield* Stream.runForEach(
+            client.attachments.stream(attachment, { maxBytes: 1_024, timeoutMs: 5_000 }),
+            (chunk) => Effect.sync(() => void chunk),
+        )
         yield* client.messages.reply(sent, { attachments: [file] })
         yield* client.messages.edit(sent, { attachments: [{ id: attachment.id }, file] })
         yield* client.messages.edit(sent, { content: "Cleared", attachments: [] })
@@ -649,6 +688,8 @@ export function useAttachments(client: Client, channelId: string) {
         })
         // @ts-expect-error Bounded downloads require maxBytes
         client.attachments.download(attachment, {})
+        // @ts-expect-error Bounded streamed downloads require maxBytes
+        client.attachments.stream(attachment, {})
         // @ts-expect-error Attachment input lists remain readonly
         sources.push({ file: structuralAttachmentFile, filename: "later.bin" })
         // @ts-expect-error Received arrays are immutable

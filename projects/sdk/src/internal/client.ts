@@ -84,6 +84,7 @@ import type {
     SendOptions,
 } from "#sdk/messages"
 import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "#sdk/attachments"
+import type { AttachmentDownloadSource } from "./rest.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const cacheKinds = [
@@ -734,6 +735,16 @@ export class ClientOwner {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.download(attachment, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+    streamAttachment(
+        attachment: Attachment,
+        options?: AttachmentDownloadOptions,
+    ): Effect.Effect<AttachmentDownloadSource, AttachmentDownloadFailure> {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.openDownload(attachment, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }

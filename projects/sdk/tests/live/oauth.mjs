@@ -5,7 +5,8 @@ import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:f
 import { parseEnv } from "node:util"
 import { Effect, Exit, Scope } from "effect"
 
-// Manual OAuth check. It is never suitable for CI, schedules, or unattended runs
+// Default mode requires manual consent; --no-consent performs only explicit read and URL-construction checks
+// Neither mode is part of CI or schedules
 // Prerequisites: An authorized sandbox application, FLUXER_TEST_CLIENT_SECRET, and this exact registered redirect URI
 const noConsent = process.argv.includes("--no-consent")
 const mode = process.argv.slice(2).find((argument) => argument !== "--no-consent")

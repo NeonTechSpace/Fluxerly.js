@@ -126,6 +126,213 @@ async function completeCleanup(actions: readonly (() => void | PromiseLike<void>
     if (failures.length > 1) throw new AggregateError(failures, "REST cleanup failed")
 }
 
+/** One one-shot media response reader. It retains one client HTTP slot until EOF, cancellation, or release */
+export class AttachmentDownloadSource {
+    #reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    #response: Response | undefined
+    #opening: Promise<Response> | undefined
+    #ended = false
+    #closed = false
+    #reading = false
+    #total = 0
+    #failure: AttachmentDownloadFailure | undefined
+    #interrupted = false
+    #close: Promise<void> | undefined
+    #defectRecorded = false
+    #defectObserved = false
+    #timer: ReturnType<typeof setTimeout> | undefined
+    #removeSignal: (() => void) | undefined
+
+    constructor(
+        private readonly controller: AbortController,
+        private readonly maxBytes: number,
+        deadline: number,
+        private readonly release: () => void,
+        private readonly onClose: () => void,
+        private readonly onDefect: () => void,
+        private readonly onDefectObserved: () => void,
+    ) {
+        const remaining = deadline - Date.now()
+        this.#timer = setTimeout(() => this.fail(new AttachmentDownloadError("timeout")), Math.max(1, remaining))
+    }
+
+    open(url: string): Promise<Response> {
+        this.#opening = fetch(url, { method: "GET", redirect: "error", signal: this.controller.signal }).then(
+            (response) => {
+                this.#response = response
+                return response
+            },
+        )
+        return this.#opening.catch((error) => {
+            throw this.#failure ?? error
+        })
+    }
+
+    accept(response: Response, verifyLength = true) {
+        if (this.#closed) throw this.#failure ?? new ClientClosedError()
+        this.#response = response
+        const declared = response.headers.get("content-length")
+        if (verifyLength && declared !== null) {
+            if (!/^\d+$/.test(declared)) throw new AttachmentDownloadError("response", response.status)
+            if (Number(declared) > this.maxBytes) throw new AttachmentDownloadError("tooLarge", response.status)
+        }
+        this.#reader = response.body?.getReader()
+    }
+
+    /** Bind default cancellation through the source so it also releases an idle stream */
+    bindSignal(
+        signal: {
+            readonly aborted: boolean
+            addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void
+            removeEventListener(type: "abort", listener: () => void): void
+        },
+        onClose: () => void,
+    ) {
+        const abort = () => this.interrupt()
+        signal.addEventListener("abort", abort, { once: true })
+        this.#removeSignal = () => {
+            signal.removeEventListener("abort", abort)
+            onClose()
+        }
+        if (signal.aborted) abort()
+    }
+
+    interrupt() {
+        if (this.#closed) return
+        this.#interrupted = true
+        this.#closeInBackground()
+    }
+
+    fail(error: AttachmentDownloadFailure) {
+        if (this.#closed) return
+        this.#failure = error
+        this.#closeInBackground()
+    }
+
+    #closeInBackground() {
+        void this.close().catch(() => {
+            // A later source finalizer or operation boundary retains this cleanup defect
+        })
+    }
+
+    #recordDefect() {
+        if (this.#defectRecorded) return
+        this.#defectRecorded = true
+        this.onDefect()
+    }
+
+    async #finish() {
+        if (this.#closed) return
+        this.#closed = true
+        clearTimeout(this.#timer)
+        this.#timer = undefined
+        this.controller.abort()
+        // Await a late response before releasing its body or declaring the operation closed
+        await this.#opening?.catch(() => undefined)
+        this.#opening = undefined
+        const reader = this.#reader
+        this.#reader = undefined
+        const response = this.#response
+        this.#response = undefined
+        const removeSignal = this.#removeSignal
+        this.#removeSignal = undefined
+        const cancel = async (body: Pick<ReadableStream<Uint8Array>, "cancel">) => {
+            try {
+                await body.cancel()
+            } catch (error) {
+                if (error !== this.controller.signal.reason) throw error
+            }
+        }
+        try {
+            await completeCleanup([
+                () => this.controller.abort(),
+                ...(!this.#ended && reader ? [() => cancel(reader)] : []),
+                ...(reader ? [() => reader.releaseLock()] : []),
+                ...(!reader && response && !response.bodyUsed && response.body ? [() => cancel(response.body!)] : []),
+                () => removeSignal?.(),
+                () => this.release(),
+            ])
+        } catch {
+            const defect = new AttachmentStreamCleanupError()
+            this.#recordDefect()
+            throw defect
+        } finally {
+            this.onClose()
+        }
+    }
+
+    close(): Promise<void> {
+        this.#close ??= this.#finish().catch((error) => {
+            this.#recordDefect()
+            throw error
+        })
+        return this.#close
+    }
+
+    readonly closeEffect: Effect.Effect<void> = Effect.promise(() =>
+        this.close().catch((error) => {
+            if (!this.#defectObserved) {
+                this.#defectObserved = true
+                this.onDefectObserved()
+            }
+            throw error
+        }),
+    )
+
+    readonly next: Effect.Effect<Uint8Array | undefined, AttachmentDownloadFailure> = Effect.suspend(() => {
+        if (this.#interrupted) return Effect.interrupt.pipe(Effect.ensuring(this.closeEffect))
+        if (this.#failure) return Effect.fail(this.#failure).pipe(Effect.ensuring(this.closeEffect))
+        if (this.#closed || this.#ended) return Effect.succeed(undefined)
+        if (this.#reading) return Effect.fail(new AttachmentDownloadError("busy"))
+        const reader = this.#reader
+        if (!reader) {
+            this.#ended = true
+            return this.closeEffect.pipe(Effect.as(undefined))
+        }
+        this.#reading = true
+        return Effect.tryPromise({
+            try: async () => {
+                const value = await reader.read()
+                if (this.#interrupted) throw new AttachmentDownloadError("network", this.#response?.status ?? null)
+                if (this.#failure) throw this.#failure
+                if (value.done) {
+                    this.#ended = true
+                    return undefined
+                }
+                if (!(value.value instanceof Uint8Array) || !(value.value.buffer instanceof ArrayBuffer))
+                    throw new AttachmentDownloadError("response", this.#response?.status ?? null)
+                this.#total += value.value.byteLength
+                if (!Number.isSafeInteger(this.#total) || this.#total > this.maxBytes)
+                    throw new AttachmentDownloadError("tooLarge", this.#response?.status ?? null)
+                return value.value
+            },
+            catch: (error) =>
+                this.#failure ??
+                (error instanceof AttachmentDownloadError
+                    ? error
+                    : new AttachmentDownloadError("network", this.#response?.status ?? null)),
+        }).pipe(
+            Effect.catchIf(
+                () => this.#interrupted,
+                () => Effect.interrupt,
+            ),
+            Effect.catchIf(
+                () => this.#failure !== undefined,
+                () => Effect.fail(this.#failure!),
+            ),
+            Effect.ensuring(
+                Effect.sync(() => {
+                    this.#reading = false
+                }),
+            ),
+            Effect.flatMap((value) =>
+                value === undefined ? this.closeEffect.pipe(Effect.as(undefined)) : Effect.succeed(value),
+            ),
+            Effect.onExit((exit) => (Exit.isFailure(exit) ? this.closeEffect : Effect.void)),
+        )
+    })
+}
+
 function completeSourceCleanup(sources: readonly AttachmentTransferSource[]) {
     return completeCleanup(sources.map((source) => () => source.close()))
 }
@@ -168,6 +375,14 @@ function operationFailure<Operation extends string, Failure>(
         error.apiError,
         error.inputValidation,
     )
+}
+
+/** Internal-only cleanup defect. Never retain an untrusted reader's thrown value */
+class AttachmentStreamCleanupError extends Error {
+    constructor() {
+        super("Attachment stream cleanup failed")
+        this.name = "AttachmentStreamCleanupError"
+    }
 }
 
 function localInputFailure(path: string, constraint: InputValidationConstraint, explanation: string): RestFailure {
@@ -348,6 +563,8 @@ export class RestOwner {
     #globalUntil = 0
     #timer: ReturnType<typeof setTimeout> | undefined
     #controllers = new Set<AbortController>()
+    #downloads = new Set<AttachmentDownloadSource>()
+    #unobservedDownloadDefects = 0
     #operations = new Set<Deferred.Deferred<void>>()
     #instance: InstanceEndpointContext | undefined
 
@@ -740,6 +957,189 @@ export class RestOwner {
                     ),
                 ),
         )
+    }
+
+    openDownload(
+        attachment: Attachment,
+        options?: AttachmentDownloadOptions,
+    ): Effect.Effect<AttachmentDownloadSource, AttachmentDownloadFailure> {
+        const owner = this
+        return Effect.suspend((): Effect.Effect<AttachmentDownloadSource, AttachmentDownloadFailure> => {
+            if (owner.#closed) return Effect.fail(new ClientClosedError())
+            if (!record(options))
+                return Effect.fail(
+                    new AttachmentDownloadError(
+                        "input",
+                        null,
+                        inputValidationFailure("options", "type", "Attachment download options must be an object")
+                            .detail,
+                    ),
+                )
+            const maxBytes = options.maxBytes
+            const attachmentUrl = attachment?.url
+            if (Object.keys(options).some((key) => key !== "maxBytes" && key !== "timeoutMs" && key !== "signal"))
+                return Effect.fail(
+                    new AttachmentDownloadError(
+                        "input",
+                        null,
+                        inputValidationFailure(
+                            "options",
+                            "allowedFields",
+                            "Attachment download options may contain only maxBytes, timeoutMs, and signal",
+                        ).detail,
+                    ),
+                )
+            const signal = (options as Record<string, unknown>).signal
+            if (
+                signal !== undefined &&
+                (!record(signal) ||
+                    typeof signal.aborted !== "boolean" ||
+                    typeof signal.addEventListener !== "function" ||
+                    typeof signal.removeEventListener !== "function")
+            )
+                return Effect.fail(
+                    new AttachmentDownloadError(
+                        "input",
+                        null,
+                        inputValidationFailure(
+                            "options.signal",
+                            "type",
+                            "Attachment signal must be AbortSignal-compatible",
+                        ).detail,
+                    ),
+                )
+            if (
+                typeof maxBytes !== "number" ||
+                !Number.isSafeInteger(maxBytes) ||
+                maxBytes <= 0 ||
+                maxBytes > 52_428_800
+            )
+                return Effect.fail(
+                    new AttachmentDownloadError(
+                        "input",
+                        null,
+                        inputValidationFailure(
+                            "options.maxBytes",
+                            "range",
+                            "Attachment maxBytes must be an integer from 1 through 52,428,800",
+                        ).detail,
+                    ),
+                )
+            const timeout = options.timeoutMs === undefined ? 30_000 : options.timeoutMs
+            if (
+                typeof timeout !== "number" ||
+                !Number.isSafeInteger(timeout) ||
+                timeout <= 0 ||
+                timeout > 2_147_483_647
+            )
+                return Effect.fail(
+                    new AttachmentDownloadError(
+                        "input",
+                        null,
+                        inputValidationFailure(
+                            "options.timeoutMs",
+                            "range",
+                            "Attachment timeoutMs must be an integer from 1 through 2,147,483,647 milliseconds",
+                        ).detail,
+                    ),
+                )
+            const operation = Deferred.makeUnsafe<void>()
+            owner.#operations.add(operation)
+            const complete = () => {
+                owner.#operations.delete(operation)
+                Deferred.doneUnsafe(operation, Effect.void)
+            }
+            let source: AttachmentDownloadSource | undefined
+            const deadline = Date.now() + timeout
+            return Effect.gen(function* () {
+                const resolved = owner.#instance
+                const instance =
+                    resolved ??
+                    (yield* Effect.acquireUseRelease(
+                        Effect.interruptible(owner.#acquire("media:discovery", 0, 0, false)),
+                        () => owner.resolveInstance(),
+                        (release) => Effect.sync(release),
+                    ).pipe(
+                        mapFailureCause((error) =>
+                            error instanceof ClientClosedError
+                                ? error
+                                : error instanceof RestFailure
+                                  ? new AttachmentDownloadError(
+                                        error.reason === "busy" ? "busy" : "network",
+                                        error.status,
+                                    )
+                                  : new AttachmentDownloadError(
+                                        "network",
+                                        error instanceof ConnectionError ? error.status : null,
+                                    ),
+                        ),
+                    ))
+                if (!resolved) owner.#instance = instance
+                const url = attachmentDownloadUrl(attachmentUrl, instance)
+                if (!url) return yield* Effect.fail(new AttachmentDownloadError("untrustedUrl"))
+                const release = yield* owner
+                    .#acquire("media:download", 0, 0, false)
+                    .pipe(Effect.interruptible)
+                    .pipe(
+                        mapFailureCause((error) =>
+                            error instanceof ClientClosedError
+                                ? error
+                                : error instanceof RestFailure
+                                  ? new AttachmentDownloadError(
+                                        error.reason === "busy" ? "busy" : "network",
+                                        error.status,
+                                    )
+                                  : new AttachmentDownloadError("network"),
+                        ),
+                    )
+                const controller = new AbortController()
+                owner.#controllers.add(controller)
+                source = new AttachmentDownloadSource(
+                    controller,
+                    maxBytes,
+                    deadline,
+                    release,
+                    () => {
+                        owner.#controllers.delete(controller)
+                        owner.#downloads.delete(source!)
+                        complete()
+                    },
+                    () => {
+                        owner.#unobservedDownloadDefects = Math.min(
+                            Number.MAX_SAFE_INTEGER,
+                            owner.#unobservedDownloadDefects + 1,
+                        )
+                    },
+                    () => {
+                        if (owner.#unobservedDownloadDefects < Number.MAX_SAFE_INTEGER)
+                            owner.#unobservedDownloadDefects = Math.max(0, owner.#unobservedDownloadDefects - 1)
+                    },
+                )
+                owner.#downloads.add(source)
+                const response = yield* Effect.tryPromise({
+                    try: () => source!.open(url),
+                    catch: (error) =>
+                        error instanceof AttachmentDownloadError ? error : new AttachmentDownloadError("network", null),
+                })
+                try {
+                    source.accept(response, response.ok)
+                } catch (error) {
+                    return yield* Effect.fail(
+                        error instanceof AttachmentDownloadError || error instanceof ClientClosedError
+                            ? error
+                            : new AttachmentDownloadError("network", response.status),
+                    )
+                }
+                if (controller.signal.aborted) return yield* Effect.fail(new ClientClosedError())
+                if (!response.ok) return yield* Effect.fail(new AttachmentDownloadError("response", response.status))
+                return source
+            }).pipe(
+                withDeadline(timeout, () => new AttachmentDownloadError("timeout")),
+                Effect.onExit((exit) =>
+                    Exit.isFailure(exit) ? (source ? source.closeEffect : Effect.sync(complete)) : Effect.void,
+                ),
+            )
+        })
     }
 
     download(
@@ -2067,6 +2467,7 @@ export class RestOwner {
         this.#buckets.clear()
         this.#instance = undefined
         for (const item of pending) item.resume(Effect.fail(new ClientClosedError()))
+        for (const source of this.#downloads) source.fail(new ClientClosedError())
         for (const controller of this.#controllers) controller.abort()
     }
     shutdown(): Effect.Effect<void> {
@@ -2075,7 +2476,15 @@ export class RestOwner {
             return Effect.forEach([...this.#operations], (operation) => Deferred.await(operation), {
                 discard: true,
                 concurrency: "unbounded",
-            })
+            }).pipe(
+                Effect.andThen(
+                    Effect.suspend(() => {
+                        const defects = this.#unobservedDownloadDefects
+                        this.#unobservedDownloadDefects = 0
+                        return defects > 0 ? Effect.die(new AttachmentStreamCleanupError()) : Effect.void
+                    }),
+                ),
+            )
         })
     }
 }

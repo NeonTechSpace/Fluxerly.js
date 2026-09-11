@@ -83,6 +83,7 @@ export class ConfigurationError extends Error {
 /** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
 export type Operation =
     | "attachments.download"
+    | "attachments.stream"
     | "instance.resolve"
     | "attachments.download"
     | "presence.set"

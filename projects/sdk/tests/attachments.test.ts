@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Scope } from "effect"
+import { Cause, Effect, Exit, Scope, Stream } from "effect"
 import { once } from "node:events"
 import { createServer, type ServerResponse } from "node:http"
 import { setImmediate as turn } from "node:timers/promises"
@@ -98,6 +98,8 @@ async function driver(
             defaultApi
                 ? unwrap(await defaultApi.attachments.download(input, options))
                 : run(native!.attachments.download(input, options)),
+        stream: (input: Attachment, options: { maxBytes: number; timeoutMs?: number; signal?: AbortSignal }) =>
+            defaultApi!.attachments.stream(input, options),
         native,
     }
 }
@@ -159,6 +161,18 @@ async function loopbackDownloadFixture(handleAttachment: (response: ServerRespon
             await new Promise<void>((resolve) => server.close(() => resolve()))
         },
     }
+}
+
+function chunks(values: readonly Uint8Array<ArrayBuffer>[], onCancel?: () => void) {
+    let index = 0
+    return new ReadableStream<Uint8Array<ArrayBuffer>>({
+        pull(controller) {
+            const value = values[index++]
+            if (value) controller.enqueue(value)
+            else controller.close()
+        },
+        ...(onCancel ? { cancel: onCancel } : {}),
+    })
 }
 
 async function requestJson(init: RequestInit, headers: Headers): Promise<any> {
@@ -1647,6 +1661,625 @@ test.each(modes)("%s bounds trusted attachment downloads without proxy fallback 
         reason: "untrustedUrl",
     })
 })
+
+test.each(modes)("%s streams attachment chunks lazily, one time, and releases an early consumer", async (mode) => {
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 99,
+        flags: 0,
+        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+    }
+    let fetches = 0
+    let cancelled = 0
+    transport({
+        download: async () => {
+            fetches++
+            return new Response(
+                chunks([new Uint8Array([4, 5]), new Uint8Array([6])], () => cancelled++),
+                { status: 200 },
+            )
+        },
+    })
+    const api = await driver(mode)
+    if (mode === "default") {
+        const stream = api.stream(input, { maxBytes: 3 })
+        expect(fetches).toBe(0)
+        const iterator = stream[Symbol.asyncIterator]()
+        const first = await iterator.next()
+        expect(first).toMatchObject({ done: false, value: { value: new Uint8Array([4, 5]) } })
+        expect(fetches).toBe(1)
+        await iterator.return?.()
+        await vi.waitFor(() => expect(cancelled).toBe(1))
+        const repeated = stream[Symbol.asyncIterator]()
+        await expect(repeated.next()).resolves.toMatchObject({ value: { error: { reason: "busy" } } })
+    } else {
+        const stream = api.native!.attachments.stream(input, { maxBytes: 3 })
+        expect(fetches).toBe(0)
+        const first = await Effect.runPromise(Stream.runHead(stream))
+        expect(first).toMatchObject({ _tag: "Some", value: new Uint8Array([4, 5]) })
+        await vi.waitFor(() => expect(cancelled).toBe(1))
+        const repeated = await Effect.runPromise(Effect.flip(Stream.runHead(stream)))
+        expect(repeated).toMatchObject({ reason: "busy" })
+    }
+})
+
+test.each(modes)(
+    "%s rejects streamed header and runtime byte overages without reading beyond its limit",
+    async (mode) => {
+        const input: Attachment = {
+            id: "40",
+            filename: "fixture.bin",
+            size: 0,
+            flags: 0,
+            url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        }
+        let call = 0
+        transport({
+            download: async () => {
+                call++
+                return call === 1
+                    ? new Response(chunks([new Uint8Array([1])]), { headers: { "content-length": "3" } })
+                    : new Response(chunks([new Uint8Array([1]), new Uint8Array([2])]))
+            },
+        })
+        const api = await driver(mode)
+        if (mode === "default") {
+            const header = await api.stream(input, { maxBytes: 2 })[Symbol.asyncIterator]().next()
+            expect(header).toMatchObject({ value: { error: { reason: "tooLarge" } } })
+            const iterator = api.stream(input, { maxBytes: 1 })[Symbol.asyncIterator]()
+            expect(await iterator.next()).toMatchObject({ value: { value: new Uint8Array([1]) } })
+            expect(await iterator.next()).toMatchObject({ value: { error: { reason: "tooLarge" } } })
+        } else {
+            const header = await Effect.runPromise(
+                Effect.flip(Stream.runDrain(api.native!.attachments.stream(input, { maxBytes: 2 }))),
+            )
+            expect(header).toMatchObject({ reason: "tooLarge" })
+            const runtime = await Effect.runPromise(
+                Effect.flip(Stream.runDrain(api.native!.attachments.stream(input, { maxBytes: 1 }))),
+            )
+            expect(runtime).toMatchObject({ reason: "tooLarge" })
+        }
+    },
+)
+
+test.each(modes)("%s releases an idle attachment stream during client shutdown", async (mode) => {
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 0,
+        flags: 0,
+        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+    }
+    let cancelled = 0
+    transport({
+        download: async () => new Response(chunks([new Uint8Array([1]), new Uint8Array([2])], () => cancelled++)),
+    })
+    const api = await driver(mode)
+    let consumption: Promise<unknown> | undefined
+    const pause = Promise.withResolvers<void>()
+    const delivered = Promise.withResolvers<void>()
+    if (mode === "default") {
+        const iterator = api.stream(input, { maxBytes: 2 })[Symbol.asyncIterator]()
+        await iterator.next()
+    } else {
+        consumption = Effect.runPromise(
+            Effect.result(
+                Stream.runForEach(api.native!.attachments.stream(input, { maxBytes: 2 }), () =>
+                    Effect.promise(() => {
+                        delivered.resolve()
+                        return pause.promise
+                    }),
+                ),
+            ),
+        )
+        await delivered.promise
+    }
+    await api.close()
+    pause.resolve()
+    if (consumption) expect(await consumption).toMatchObject({ failure: { _tag: "ClientClosedError" } })
+    expect(cancelled).toBe(1)
+})
+
+test.each(modes)("%s rejects untrusted streamed media before a credential-free GET", async (mode) => {
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 1,
+        flags: 0,
+        url: "https://other.test/attachments/20/40",
+    }
+    const fetch = transport()
+    const api = await driver(mode)
+    if (mode === "default") {
+        const result = await api.stream(input, { maxBytes: 1 })[Symbol.asyncIterator]().next()
+        expect(result).toMatchObject({ value: { error: { reason: "untrustedUrl" } } })
+    } else {
+        const result = await Effect.runPromise(
+            Effect.flip(Stream.runDrain(api.native!.attachments.stream(input, { maxBytes: 1 }))),
+        )
+        expect(result).toMatchObject({ reason: "untrustedUrl" })
+    }
+    expect(fetch.mock.calls).toHaveLength(1)
+})
+
+test.each(modes)("%s cancels a pending streamed read and admits a later stream", async (mode) => {
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 1,
+        flags: 0,
+        url: "https://media.fluxer.app/attachments/20/40/fixture.bin",
+    }
+    let release: (() => void) | undefined
+    let starts = 0
+    transport({
+        download: async () => {
+            starts++
+            if (starts > 1) return new Response(new Uint8Array([9]))
+            return new Response(new ReadableStream({ pull: () => new Promise<void>((resolve) => (release = resolve)) }))
+        },
+    })
+    const api = await driver(mode)
+    const controller = new AbortController()
+    if (mode === "default") {
+        const iterator = api.stream(input, { maxBytes: 1, signal: controller.signal })[Symbol.asyncIterator]()
+        const pending = iterator.next()
+        await vi.waitFor(() => expect(release).toBeTypeOf("function"))
+        controller.abort()
+        await expect(pending).resolves.toMatchObject({ value: { error: { _tag: "CancelledError" } } })
+        const later = await api.stream(input, { maxBytes: 1 })[Symbol.asyncIterator]().next()
+        expect(later).toMatchObject({ value: { value: new Uint8Array([9]) } })
+    } else {
+        const pending = Effect.runPromiseExit(Stream.runDrain(api.native!.attachments.stream(input, { maxBytes: 1 })), {
+            signal: controller.signal,
+        })
+        await vi.waitFor(() => expect(release).toBeTypeOf("function"))
+        controller.abort()
+        const exit = await pending
+        expect(Exit.isFailure(exit)).toBe(true)
+        const later = await Effect.runPromise(Stream.runHead(api.native!.attachments.stream(input, { maxBytes: 1 })))
+        expect(later).toMatchObject({ value: new Uint8Array([9]) })
+    }
+    release?.()
+})
+
+test("default validates malformed streamed signals and leaves never-started streams inert", async () => {
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 1,
+        flags: 0,
+        url: "https://media.fluxer.app/attachments/20/40/fixture.bin",
+    }
+    const fetch = transport({ download: async () => new Response(new Uint8Array([1])) })
+    const api = await driver("default")
+    const malformed = api.stream(input, { maxBytes: 1, signal: {} as AbortSignal })[Symbol.asyncIterator]()
+    await expect(malformed.next()).resolves.toMatchObject({ value: { error: { reason: "input" } } })
+    const controller = new AbortController()
+    controller.abort()
+    const aborted = api.stream(input, { maxBytes: 1, signal: controller.signal })[Symbol.asyncIterator]()
+    await expect(aborted.next()).resolves.toMatchObject({ value: { error: { _tag: "CancelledError" } } })
+    expect(fetch.mock.calls).toHaveLength(0)
+})
+
+test.each(modes)("%s composes a bounded streamed download into one finite upload", async (mode) => {
+    const input: Attachment = {
+        id: "40",
+        filename: "fixture.bin",
+        size: 0,
+        flags: 0,
+        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+    }
+    const uploaded: Uint8Array[] = []
+    transport({
+        download: async () => new Response(chunks([new Uint8Array([7]), new Uint8Array([8])])),
+        put: async (init) => {
+            uploaded.push(await readBytes(init))
+            return new Response(null, { status: 200 })
+        },
+    })
+    const api = await driver(mode)
+    if (mode === "default") {
+        const iterator = api.stream(input, { maxBytes: 2 })[Symbol.asyncIterator]()
+        const reader = {
+            async read() {
+                const next = await iterator.next()
+                if (next.done) return { done: true as const }
+                if (next.value.isErr()) throw next.value.error
+                return { done: false as const, value: next.value.value }
+            },
+            async cancel() {
+                await iterator.return?.()
+            },
+            releaseLock() {},
+        }
+        await api.send({ attachments: [{ stream: { getReader: () => reader }, size: 2, filename: "copied.bin" }] })
+    } else {
+        const readable = Stream.toReadableStream(api.native!.attachments.stream(input, { maxBytes: 2 }))
+        await api.send({ attachments: [{ stream: readable, size: 2, filename: "copied.bin" }] })
+    }
+    expect(uploaded).toEqual([new Uint8Array([7, 8])])
+})
+
+const streamInput: Attachment = {
+    id: "40",
+    filename: "fixture.bin",
+    size: 1,
+    flags: 0,
+    url: "https://media.fluxer.app/attachments/20/40/fixture.bin",
+}
+
+test.each(modes)("%s cancels streaming GET acquisition and awaits a late response body", async (mode) => {
+    const entered = Promise.withResolvers<AbortSignal>()
+    const response = Promise.withResolvers<Response>()
+    let cancelled = false
+    transport({
+        download: async (_url, init) => {
+            entered.resolve(init.signal as AbortSignal)
+            return response.promise
+        },
+    })
+    const api = await driver(mode)
+    const controller = new AbortController()
+    let settled = false
+    const pending =
+        mode === "default"
+            ? api.stream(streamInput, { maxBytes: 1, signal: controller.signal })[Symbol.asyncIterator]().next()
+            : Effect.runPromiseExit(Stream.runDrain(api.native!.attachments.stream(streamInput, { maxBytes: 1 })), {
+                  signal: controller.signal,
+              })
+    void pending.then(() => {
+        settled = true
+    })
+    const signal = await entered.promise
+    controller.abort()
+    try {
+        await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 500 })
+        expect(settled).toBe(false)
+    } finally {
+        response.resolve(
+            new Response(
+                new ReadableStream({
+                    cancel: () => {
+                        cancelled = true
+                    },
+                }),
+            ),
+        )
+    }
+    const result = await pending
+    expect(cancelled).toBe(true)
+    if (mode === "default") expect(result).toMatchObject({ value: { error: { _tag: "CancelledError" } } })
+    else
+        expect(
+            Exit.isFailure(result as Exit.Exit<unknown, unknown>) &&
+                Cause.hasInterruptsOnly((result as Exit.Failure<unknown, unknown>).cause),
+        ).toBe(true)
+})
+
+test.each(modes)(
+    "%s streaming cancellation during discovery releases the bootstrap before completion",
+    async (mode) => {
+        const entered = Promise.withResolvers<void>()
+        const response = Promise.withResolvers<Response>()
+        let cancelled = false
+        const fetch = transport({
+            discovery: async () => {
+                entered.resolve()
+                return response.promise
+            },
+        })
+        const api = await driver(mode)
+        const controller = new AbortController()
+        const pending =
+            mode === "default"
+                ? api.stream(streamInput, { maxBytes: 1, signal: controller.signal })[Symbol.asyncIterator]().next()
+                : Effect.runPromiseExit(Stream.runDrain(api.native!.attachments.stream(streamInput, { maxBytes: 1 })), {
+                      signal: controller.signal,
+                  })
+        await entered.promise
+        controller.abort()
+        response.resolve(
+            new Response(
+                new ReadableStream({
+                    cancel: () => {
+                        cancelled = true
+                    },
+                }),
+            ),
+        )
+        await pending
+        expect(cancelled).toBe(true)
+        expect(fetch).toHaveBeenCalledTimes(1)
+    },
+)
+
+test.each(
+    modes.flatMap(
+        (mode) =>
+            [
+                [mode, "idle"],
+                [mode, "reading"],
+            ] as const,
+    ),
+)("%s streamed deadline closes an %s consumer without another pull", async (mode, phase) => {
+    const cancelled = Promise.withResolvers<void>()
+    const pause = Promise.withResolvers<void>()
+    transport({
+        download: async () =>
+            new Response(
+                new ReadableStream({
+                    start: (controller) => {
+                        if (phase === "idle") controller.enqueue(new Uint8Array([1]))
+                    },
+                    cancel: () => {
+                        cancelled.resolve()
+                    },
+                }),
+            ),
+    })
+    const api = await driver(mode)
+    let pending: Promise<unknown>
+    if (mode === "default") {
+        const iterator = api.stream(streamInput, { maxBytes: 2, timeoutMs: 100 })[Symbol.asyncIterator]()
+        if (phase === "idle") await iterator.next()
+        pending = phase === "idle" ? cancelled.promise.then(() => iterator.next()) : iterator.next()
+    } else {
+        const stream = api.native!.attachments.stream(streamInput, { maxBytes: 2, timeoutMs: 100 })
+        pending = Effect.runPromise(
+            Effect.result(
+                Stream.runForEach(stream, () => (phase === "idle" ? Effect.promise(() => pause.promise) : Effect.void)),
+            ),
+        )
+    }
+    try {
+        await cancelled.promise
+    } finally {
+        pause.resolve()
+    }
+    const result = await pending
+    expect(result).toMatchObject(
+        mode === "default" ? { value: { error: { reason: "timeout" } } } : { failure: { reason: "timeout" } },
+    )
+})
+
+test("default return interrupts a pending pull and never-started streams own no signal listener", async () => {
+    const entered = Promise.withResolvers<void>()
+    let cancelled = 0
+    transport({
+        download: async () =>
+            new Response(
+                new ReadableStream({
+                    pull: () => {
+                        entered.resolve()
+                    },
+                    cancel: () => {
+                        cancelled++
+                    },
+                }),
+            ),
+    })
+    const api = await driver("default")
+    const controller = new AbortController()
+    const add = vi.spyOn(controller.signal, "addEventListener")
+    const remove = vi.spyOn(controller.signal, "removeEventListener")
+    const iterator = api.stream(streamInput, { maxBytes: 1, signal: controller.signal })[Symbol.asyncIterator]()
+    expect(add).not.toHaveBeenCalled()
+    const unused = api.stream(streamInput, { maxBytes: 1, signal: controller.signal })[Symbol.asyncIterator]()
+    await unused.return?.()
+    expect(add).not.toHaveBeenCalled()
+    const pending = iterator.next()
+    await entered.promise
+    await iterator.return?.()
+    await pending
+    expect(cancelled).toBe(1)
+    expect(remove).toHaveBeenCalledTimes(add.mock.calls.length)
+})
+
+test.each(modes)("%s preserves sanitized streamed response cleanup defects", async (mode) => {
+    const marker = "private-reader-secret"
+    transport({
+        download: async () =>
+            new Response(
+                new ReadableStream({
+                    cancel: () => {
+                        throw new Error(marker)
+                    },
+                }),
+                { status: 403 },
+            ),
+    })
+    const api = await driver(mode)
+    if (mode === "default") {
+        const rejected = api.stream(streamInput, { maxBytes: 1 })[Symbol.asyncIterator]().next()
+        await expect(rejected).rejects.toBeInstanceOf(SdkDefect)
+        await rejected.catch((error) => expect(String(error)).not.toContain(marker))
+    } else {
+        const exit = await Effect.runPromiseExit(
+            Stream.runDrain(api.native!.attachments.stream(streamInput, { maxBytes: 1 })),
+        )
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+            expect(Cause.hasDies(exit.cause)).toBe(true)
+            expect(exit.cause.reasons).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({ _tag: "Fail", error: expect.objectContaining({ reason: "response" }) }),
+                ]),
+            )
+            expect(Cause.pretty(exit.cause)).not.toContain(marker)
+        }
+    }
+})
+
+test("default shutdown retains an abandoned idle stream's neutral cleanup defect", async () => {
+    const cancelled = Promise.withResolvers<void>()
+    transport({
+        download: async () =>
+            new Response(
+                new ReadableStream({
+                    start: (controller) => controller.enqueue(new Uint8Array([1])),
+                    cancel: () => {
+                        cancelled.resolve()
+                        throw new Error("private abandoned cleanup")
+                    },
+                }),
+            ),
+    })
+    const client = createClient({ token: "fixture-only-not-a-credential" })._unsafeUnwrap()
+    const controller = new AbortController()
+    const iterator = client.attachments
+        .stream(streamInput, { maxBytes: 2, signal: controller.signal })
+        [Symbol.asyncIterator]()
+    try {
+        await iterator.next()
+        controller.abort()
+        await cancelled.promise
+        await expect(client.shutdown()).rejects.toBeInstanceOf(SdkDefect)
+    } finally {
+        await Promise.resolve(client.shutdown()).catch(() => undefined)
+    }
+})
+
+test("default overlapping streaming pulls do not read twice or cancel the first pull", async () => {
+    const ready = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array<ArrayBuffer>>>()
+    let cancellations = 0
+    transport({
+        download: async () =>
+            new Response(
+                new ReadableStream<Uint8Array<ArrayBuffer>>({
+                    start: (controller) => ready.resolve(controller),
+                    cancel: () => {
+                        cancellations++
+                    },
+                }),
+            ),
+    })
+    const api = await driver("default")
+    const iterator = api.stream(streamInput, { maxBytes: 2 })[Symbol.asyncIterator]()
+    const first = iterator.next()
+    const controller = await ready.promise
+    await expect(iterator.next()).resolves.toMatchObject({ value: { error: { reason: "busy" } } })
+    expect(cancellations).toBe(0)
+    controller.enqueue(new Uint8Array([1]))
+    await expect(first).resolves.toMatchObject({ value: { value: new Uint8Array([1]) } })
+    controller.close()
+    await expect(iterator.next()).resolves.toMatchObject({ done: true })
+})
+
+test("observing one streamed cleanup defect does not discard another abandoned source's failure", async () => {
+    transport({
+        download: async () =>
+            new Response(
+                new ReadableStream({
+                    start: (controller) => controller.enqueue(new Uint8Array([1])),
+                    cancel: () => {
+                        throw new Error("private cleanup")
+                    },
+                }),
+            ),
+    })
+    const client = createClient({ token: "fixture-only-not-a-credential" })._unsafeUnwrap()
+    const controllers = [new AbortController(), new AbortController()]
+    const iterators = controllers.map((controller) =>
+        client.attachments.stream(streamInput, { maxBytes: 2, signal: controller.signal })[Symbol.asyncIterator](),
+    )
+    try {
+        await Promise.all(iterators.map((iterator) => iterator.next()))
+        controllers.forEach((controller) => controller.abort())
+        await turn()
+        await expect(iterators[0]!.next()).rejects.toBeInstanceOf(SdkDefect)
+        await expect(client.shutdown()).rejects.toBeInstanceOf(SdkDefect)
+    } finally {
+        await Promise.resolve(client.shutdown()).catch(() => undefined)
+    }
+})
+
+test("default idle streaming shutdown removes the caller signal listener", async () => {
+    transport({
+        download: async () =>
+            new Response(new ReadableStream({ start: (controller) => controller.enqueue(new Uint8Array([1])) })),
+    })
+    const api = await driver("default")
+    const controller = new AbortController()
+    const add = vi.spyOn(controller.signal, "addEventListener")
+    const remove = vi.spyOn(controller.signal, "removeEventListener")
+    await api.stream(streamInput, { maxBytes: 2, signal: controller.signal })[Symbol.asyncIterator]().next()
+    await api.close()
+    expect(add).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledTimes(1)
+})
+
+test("native streaming interruption retains a neutral reader cleanup defect", async () => {
+    const reading = Promise.withResolvers<void>()
+    const cancelEntered = Promise.withResolvers<void>()
+    const releaseCancel = Promise.withResolvers<void>()
+    const marker = "private stream interruption secret"
+    transport({
+        download: async () =>
+            new Response(
+                new ReadableStream({
+                    pull: () => {
+                        reading.resolve()
+                    },
+                    cancel: async () => {
+                        cancelEntered.resolve()
+                        await releaseCancel.promise
+                        throw new Error(marker)
+                    },
+                }),
+            ),
+    })
+    const api = await driver("native")
+    const controller = new AbortController()
+    let finished = false
+    const pending = Effect.runPromiseExit(
+        Stream.runDrain(api.native!.attachments.stream(streamInput, { maxBytes: 1 })),
+        { signal: controller.signal },
+    )
+    void pending.then(() => {
+        finished = true
+    })
+    await reading.promise
+    controller.abort()
+    await cancelEntered.promise
+    expect(finished).toBe(false)
+    releaseCancel.resolve()
+    const exit = await pending
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+        expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+        expect(Cause.hasDies(exit.cause)).toBe(true)
+        expect(Cause.pretty(exit.cause)).not.toContain(marker)
+    }
+})
+
+test.each(modes)(
+    "%s early streaming exit releases a real HTTP response without treating its own abort as a defect",
+    async (mode) => {
+        let closed = false
+        const fixture = await loopbackDownloadFixture((response) => {
+            response.writeHead(200)
+            response.write("chunk")
+            response.once("close", () => {
+                closed = true
+            })
+        })
+        const api = await driver(mode, { instance: { url: fixture.origin, allowInsecure: true } })
+        const input = { ...streamInput, url: `${fixture.origin}/attachments/20/40/fixture.bin` }
+        try {
+            if (mode === "default") {
+                const iterator = api.stream(input, { maxBytes: 10 })[Symbol.asyncIterator]()
+                await iterator.next()
+                await iterator.return?.()
+            } else await Effect.runPromise(Stream.runHead(api.native!.attachments.stream(input, { maxBytes: 10 })))
+            await vi.waitFor(() => expect(closed).toBe(true))
+        } finally {
+            await api.close()
+            await fixture.close()
+        }
+    },
+)
 
 test.each(modes)("%s keeps a real declared-size download rejection expected after body cleanup", async (mode) => {
     let closed = false

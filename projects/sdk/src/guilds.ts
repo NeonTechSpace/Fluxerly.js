@@ -230,6 +230,12 @@ export interface MemberReference {
     readonly userId: string
 }
 
+/** Identifies one member and, optionally, one of that member's active voice connections */
+export interface VoiceConnectionReference extends MemberReference {
+    /** Provider connection ID from a voice-state observation. Omit to target every active connection for this member */
+    readonly connectionId?: string
+}
+
 /** Frozen member projection shared by REST and member-add/update events, not a live permission result */
 export interface GuildMember extends MemberReference {
     /** ISO 8601 timeout expiry, null when cleared, omitted when unavailable. A past timestamp is not an active timeout */
@@ -254,6 +260,10 @@ export interface GuildMember extends MemberReference {
     readonly profileFlags?: number | null
     /** Guild reply-mention preference, preserving absent versus null */
     readonly mentionFlags?: MemberMentionPreference | null
+    /** Whether Fluxer reports this member as server-muted, omitted when the member projection does not include voice flags */
+    readonly isMuted?: boolean
+    /** Whether Fluxer reports this member as server-deafened, omitted when the member projection does not include voice flags */
+    readonly isDeafened?: boolean
 }
 
 /** Known Fluxer guild-profile bit flags. Other nonnegative 32-bit bits can be observed for forward compatibility */
@@ -546,6 +556,10 @@ export type GuildOperation =
     | "members.fetchPage"
     | "members.editSelf"
     | "members.setNickname"
+    | "members.move"
+    | "members.disconnect"
+    | "members.setMute"
+    | "members.setDeaf"
     | "members.setRoles"
     | "members.addRole"
     | "members.removeRole"

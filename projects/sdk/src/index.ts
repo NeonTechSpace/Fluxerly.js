@@ -7,6 +7,7 @@ import {
     type DefaultMemberChunkOptions,
 } from "./member-chunks.js"
 import { memberChunkIterationOptions } from "#sdk/internal/member-chunks"
+import type { AttachmentDownloadSource } from "#sdk/internal/rest"
 export { MemberChunkError } from "./member-chunks.js"
 export type {
     MemberChunk,
@@ -413,6 +414,7 @@ export type {
 } from "./embeds.js"
 export type { MessageBody } from "./messages.js"
 export { AttachmentDownloadError } from "./attachments.js"
+import { AttachmentDownloadError } from "./attachments.js"
 export type {
     Attachment,
     AttachmentBytesInput,
@@ -428,8 +430,14 @@ export type {
     AttachmentStreamReaderOptions,
     AttachmentStreamSource,
     DefaultAttachmentDownloadOptions,
+    DefaultAttachmentStreamOptions,
 } from "./attachments.js"
-import type { Attachment, AttachmentDownloadFailure, DefaultAttachmentDownloadOptions } from "./attachments.js"
+import type {
+    Attachment,
+    AttachmentDownloadFailure,
+    DefaultAttachmentDownloadOptions,
+    DefaultAttachmentStreamOptions,
+} from "./attachments.js"
 import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "./reactions.js"
 export type {
     ReactionEmojiInput,
@@ -646,6 +654,7 @@ import {
     type RoleEdit,
     type GuildMember,
     type MemberReference,
+    type VoiceConnectionReference,
     type MemberQuery,
     type GuildOperationFailure,
     type DefaultGuildOperationOptions,
@@ -663,6 +672,7 @@ export type {
     RoleEdit,
     GuildMember,
     MemberReference,
+    VoiceConnectionReference,
     MemberQuery,
     GuildOperation,
     GuildOperationFailure,
@@ -683,7 +693,15 @@ import {
     roleSetHoistPositions,
     roleResetHoistPositions,
 } from "#sdk/internal/guilds"
-import { memberTimeout, memberKick, guildBan, guildUnban, guildBans } from "#sdk/internal/moderation"
+import {
+    memberTimeout,
+    memberKick,
+    memberVoiceMove,
+    memberVoiceFlag,
+    guildBan,
+    guildUnban,
+    guildBans,
+} from "#sdk/internal/moderation"
 import type { BanInput, GuildBan, DefaultModerationOptions } from "./guilds.js"
 export type { BanInput, GuildBan, ModerationOptions, DefaultModerationOptions } from "./guilds.js"
 import {
@@ -809,6 +827,8 @@ export type {
     TypingStart,
     PresenceUpdate,
     PresenceUpdateBulk,
+    VoiceState,
+    VoiceStateSnapshot,
 } from "./events.js"
 
 /** Subscription-local controls. Closing a subscription does not close the client */
@@ -854,6 +874,30 @@ export interface Attachments {
         attachment: Attachment,
         options: DefaultAttachmentDownloadOptions,
     ): ResultAsync<Uint8Array, AttachmentDownloadFailure | CancelledError>
+    /** Lazily read attachment.url as one-use chunks after matching this instance's media `/attachments/` base path.
+     * The first next starts discovery, shared four-slot media admission and GET. Each later next reads at most one response chunk, with no SDK byte packing, spooling, retry or durable storage
+     *
+     * maxBytes is required and bounds bytes delivered across this consumption at 50 MiB. A declared Content-Length above it fails before the first chunk, while runtime counting remains authoritative.
+     * timeoutMs defaults to 30,000 across opening, consumer pauses and reads. Early loop exit, return, throw, signal cancellation, failures and shutdown cancel the body, await reader cleanup and release the slot.
+     * This iterable is single-consumption. Expected failures yield one Err, including safe local busy/network/response/limit/deadline reasons. Defects reject with SdkDefect and retain cleanup defects.
+     * Overlapping next calls return a local busy error without starting another read or cancelling the pending pull
+     *
+     * The GET sends no Authorization header, follows no redirect, caches nothing and never uses proxyUrl. Attachment size and expiry metadata do not establish availability or byte safety
+     * @example
+     * ```ts
+     * import type { Attachment, Client } from "@neontechspace/fluxerly"
+     * export async function downloadChunks(client: Client, attachment: Attachment) {
+     *     for await (const chunk of client.attachments.stream(attachment, { maxBytes: 1_024 })) {
+     *         if (chunk.isErr()) return chunk
+     *         void chunk.value
+     *     }
+     * }
+     * ```
+     */
+    stream(
+        attachment: Attachment,
+        options: DefaultAttachmentStreamOptions,
+    ): AsyncIterable<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>
 }
 
 /**
@@ -2327,6 +2371,55 @@ export interface Members {
         nickname: string | null,
         options?: DefaultGuildOperationOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    /** Move an already-connected member to one positive decimal voice-channel ID.
+     * Requires MoveMembers plus Fluxer's hierarchy and destination visibility/connect checks. Supplying target.connectionId
+     * targets only that observed connection; omission targets every active connection for the member.
+     * HTTP 200 returns a frozen member projection after Fluxer accepts the move, not proof that the participant reconnected.
+     * A visible move can emit voiceStateUpdate first with channelId null, then with a new connection ID in the destination.
+     * The request starts immediately. Do not retry an unknown result; cancellation cannot undo a dispatched move.
+     * Shared moderation deadlines, auditReason validation, confirmed-429 retries and member-cache invalidation apply
+     * @example
+     * ```ts
+     * import type { Client, VoiceConnectionReference } from "@neontechspace/fluxerly"
+     * export function moveVoiceConnection(client: Client, target: VoiceConnectionReference, channelId: string) {
+     *     return client.members.move(target, channelId, { auditReason: "Moved to support" })
+     * }
+     * ```
+     */
+    move(
+        target: VoiceConnectionReference,
+        channelId: string,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    /** Disconnect one observed connection, or every active connection when target.connectionId is omitted.
+     * Requires MoveMembers and returns the HTTP member projection without waiting for voiceStateUpdate.
+     * Repeating after completion can fail because the target is no longer connected. Unknown outcomes must be reconciled from
+     * later observations rather than retried. Uses move's execution, audit, permission and cache-invalidation rules
+     */
+    disconnect(
+        target: VoiceConnectionReference,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    /** Set or clear Fluxer's server mute flag for one currently connected member.
+     * Requires MuteMembers and provider hierarchy rules. Returns an HTTP member projection with isMuted, without waiting for
+     * a voice-state event. This does not control the participant's self-mute state or join a voice channel.
+     * Starts immediately with move's deadline, audit, retry, cancellation and member-cache invalidation rules
+     */
+    setMute(
+        target: MemberReference,
+        muted: boolean,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    /** Set or clear Fluxer's server deafen flag for one currently connected member.
+     * Requires DeafenMembers and provider hierarchy rules. Returns an HTTP member projection with isDeafened, without waiting
+     * for a voice-state event. This does not control the participant's self-deafen state or join a voice channel.
+     * Starts immediately with move's deadline, audit, retry, cancellation and member-cache invalidation rules
+     */
+    setDeaf(
+        target: MemberReference,
+        deafened: boolean,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
     /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts
      *
      * Requires ModerateMembers and provider hierarchy rules. The provider rejects self and administrator targets.
@@ -3501,6 +3594,138 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 }
             },
         })
+    const attachmentStream = (
+        attachment: Attachment,
+        options: DefaultAttachmentStreamOptions,
+    ): AsyncIterable<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>> => {
+        let consumed = false
+        return Object.freeze({
+            [Symbol.asyncIterator](): AsyncIterator<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>> {
+                if (consumed) {
+                    let delivered = false
+                    return {
+                        async next() {
+                            if (delivered) return { done: true, value: undefined }
+                            delivered = true
+                            return { done: false, value: err(new AttachmentDownloadError("busy")) }
+                        },
+                        async return() {
+                            return { done: true, value: undefined }
+                        },
+                        async throw(
+                            error?: unknown,
+                        ): Promise<IteratorResult<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>> {
+                            throw error
+                        },
+                    }
+                }
+                consumed = true
+                const controller = new AbortController()
+                const signal = options?.signal
+                let removeSignal: (() => void) | undefined
+                let source: AttachmentDownloadSource | undefined
+                let opening:
+                    ResultAsync<AttachmentDownloadSource, AttachmentDownloadFailure | CancelledError> | undefined
+                let closed = false
+                let bound = false
+                let pulling = false
+                const bindSignal = () => {
+                    if (
+                        removeSignal ||
+                        !signal ||
+                        typeof signal.aborted !== "boolean" ||
+                        typeof signal.addEventListener !== "function" ||
+                        typeof signal.removeEventListener !== "function"
+                    )
+                        return
+                    const abort = () => controller.abort()
+                    signal.addEventListener("abort", abort, { once: true })
+                    removeSignal = () => signal.removeEventListener("abort", abort)
+                    if (signal.aborted) abort()
+                }
+                const open = () => {
+                    bindSignal()
+                    opening ??= execute(owner.streamAttachment(attachment, options), "attachments.stream", {
+                        signal: controller.signal,
+                    })
+                    return opening
+                }
+                const detach = async () => {
+                    removeSignal?.()
+                    removeSignal = undefined
+                    controller.abort()
+                    const opened = opening && (await opening)
+                    if (!opened || opened.isErr()) return
+                    const cleaned = await execute((source ?? opened.value).closeEffect, "attachments.stream")
+                    if (cleaned.isErr()) throw cleaned.error
+                }
+                const bind = () => {
+                    if (bound) return
+                    bound = true
+                    source!.bindSignal(controller.signal, () => {
+                        removeSignal?.()
+                        removeSignal = undefined
+                    })
+                }
+                return {
+                    async next(): Promise<
+                        IteratorResult<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>
+                    > {
+                        if (closed) return { done: true, value: undefined }
+                        if (pulling) return { done: false, value: err(new AttachmentDownloadError("busy")) }
+                        pulling = true
+                        try {
+                            const opened = await open()
+                            if (opened.isErr()) {
+                                closed = true
+                                await detach()
+                                return { done: false, value: err(opened.error) }
+                            }
+                            source = opened.value
+                            bind()
+                            if (closed) return { done: true, value: undefined }
+                            const chunk = await execute(source.next, "attachments.stream")
+                            if (chunk.isErr()) {
+                                closed = true
+                                await detach()
+                                return { done: false, value: err(chunk.error) }
+                            }
+                            if (chunk.value === undefined) {
+                                closed = true
+                                await detach()
+                                return { done: true, value: undefined }
+                            }
+                            return { done: false, value: ok(chunk.value) }
+                        } catch (error) {
+                            closed = true
+                            await detach()
+                            throw error
+                        } finally {
+                            pulling = false
+                        }
+                    },
+                    async return(): Promise<
+                        IteratorResult<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>
+                    > {
+                        if (!closed) {
+                            closed = true
+                            await detach()
+                        }
+                        return { done: true, value: undefined }
+                    },
+                    async throw(
+                        error?: unknown,
+                    ): Promise<IteratorResult<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>> {
+                        if (!closed) {
+                            closed = true
+                            await detach()
+                        }
+                        throw error
+                    },
+                }
+            },
+        })
+    }
     const subscription = (source: Pick<EventSource, "stop" | "closed">): Subscription =>
         Object.freeze({
             unsubscribe: () => source.stop(),
@@ -4017,6 +4242,34 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         "members.setNickname",
                         options,
                     ),
+                move: (target: VoiceConnectionReference, channelId: string, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("members.move", () => memberVoiceMove(target, channelId, options), options),
+                        "members.move",
+                        options,
+                    ),
+                disconnect: (target: VoiceConnectionReference, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("members.disconnect", () => memberVoiceMove(target, null, options), options),
+                        "members.disconnect",
+                        options,
+                    ),
+                setMute: (target: MemberReference, muted: boolean, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild("members.setMute", () => memberVoiceFlag(target, "mute", muted, options), options),
+                        "members.setMute",
+                        options,
+                    ),
+                setDeaf: (target: MemberReference, deafened: boolean, options?: DefaultModerationOptions) =>
+                    execute(
+                        owner.guild(
+                            "members.setDeaf",
+                            () => memberVoiceFlag(target, "deaf", deafened, options),
+                            options,
+                        ),
+                        "members.setDeaf",
+                        options,
+                    ),
                 timeout: (target: MemberReference, durationMs: number, options?: DefaultModerationOptions) =>
                     execute(
                         owner.guild("members.timeout", () => memberTimeout(target, durationMs, options), options),
@@ -4128,6 +4381,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             attachments: Object.freeze({
                 download: (attachment: Attachment, options: DefaultAttachmentDownloadOptions) =>
                     execute(owner.downloadAttachment(attachment, options), "attachments.download", options),
+                stream: (attachment: Attachment, options: DefaultAttachmentStreamOptions) =>
+                    attachmentStream(attachment, options),
             }),
             messages: Object.freeze({
                 iterateHistory: (id: string, query: HistoryIterationQuery, options?: DefaultMessageOperationOptions) =>

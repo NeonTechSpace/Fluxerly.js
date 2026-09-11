@@ -208,6 +208,9 @@ export interface AttachmentDownloadOptions {
 /** Default attachment download options with cooperative cancellation for this GET only */
 export interface DefaultAttachmentDownloadOptions extends AttachmentDownloadOptions, OperationOptions {}
 
+/** Default attachment-stream options with cooperative cancellation for this one consumption */
+export interface DefaultAttachmentStreamOptions extends AttachmentDownloadOptions, OperationOptions {}
+
 /** Expected bounded attachment-download failure, without a URL, response body or credential */
 export class AttachmentDownloadError extends Error {
     readonly _tag = "AttachmentDownloadError"

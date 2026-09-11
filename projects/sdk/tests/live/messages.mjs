@@ -3472,6 +3472,12 @@ try {
                         assert.ok(result.isErr())
                         return result.error
                     },
+                    stream: async function* (attachment, options) {
+                        for await (const result of client.attachments.stream(attachment, options)) {
+                            assert.ok(result.isOk())
+                            yield result.value
+                        }
+                    },
                     cancelDownload: async (attachment, size, signal) => {
                         const result = await client.attachments.download(attachment, {
                             maxBytes: size,
@@ -4285,6 +4291,8 @@ try {
                             download: (attachment, options) => run(client.attachments.download(attachment, options)),
                             downloadFailure: (attachment, options) =>
                                 Effect.runPromise(client.attachments.download(attachment, options).pipe(Effect.flip)),
+                            stream: (attachment, options) =>
+                                Stream.toAsyncIterable(client.attachments.stream(attachment, options)),
                             cancelDownload: async (attachment, size, signal) => {
                                 const cancelled = await Effect.runPromiseExit(
                                     client.attachments.download(attachment, { maxBytes: size, timeoutMs: 60_000 }),

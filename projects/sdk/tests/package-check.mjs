@@ -84,6 +84,19 @@ function enclosingStatement(sourceFile, declaration) {
     )
 }
 
+function declarationComments(owner, sourceFile) {
+    const comments = []
+    // Include nested public types, but not comments inside function implementations
+    const visit = (node) => {
+        for (const comment of node.jsDoc ?? []) comments.push(comment.getText(sourceFile))
+        node.forEachChild((child) => {
+            if (child !== node.body) visit(child)
+        })
+    }
+    visit(owner)
+    return comments
+}
+
 function collectExportedOwnerComments(project, sourceRoot, entry, cache) {
     const cached = cache.get(entry)
     if (cached) return cached
@@ -101,9 +114,7 @@ function collectExportedOwnerComments(project, sourceRoot, entry, cache) {
             if (!owner) continue
             const ownerEntry = sourceEntry(sourceRoot, ownerSource)
             const entryComments = comments.get(ownerEntry) ?? []
-            for (const comment of owner.jsDoc ?? []) entryComments.push(comment.getText(ownerSource))
-            for (const member of owner.members ?? [])
-                for (const comment of member.jsDoc ?? []) entryComments.push(comment.getText(ownerSource))
+            entryComments.push(...declarationComments(owner, ownerSource))
             comments.set(ownerEntry, entryComments)
         }
     }
@@ -126,7 +137,7 @@ function assertExportedOwnerCommentGuards() {
     )
     writeFileSync(
         join(sourceRoot, "shared.ts"),
-        `/** reexported fixture documentation */\nexport interface Shared {\n    /** reexported member documentation */\n    readonly value: string\n}\n`,
+        `/** reexported fixture documentation */\nexport type Shared = {\n    /** reexported member documentation */\n    readonly value: string\n} & {\n    /** nested member documentation */\n    readonly options: {\n        /** nested option documentation */\n        readonly enabled: boolean\n    }\n}\n`,
     )
     const api = new API({ cwd: temporary })
     try {
@@ -139,6 +150,8 @@ function assertExportedOwnerCommentGuards() {
         assert.deepEqual(comments.get("shared")?.map(normalizeComment), [
             "/** reexported fixture documentation */",
             "/** reexported member documentation */",
+            "/** nested member documentation */",
+            "/** nested option documentation */",
         ])
     } finally {
         api.close()
@@ -314,6 +327,16 @@ try {
         const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
         const publicExamples = examples(publicSource)
         const publicFixtureInventory = [
+            {
+                name: "downloadChunks",
+                matches: (example) => /function downloadChunks/.test(example),
+                file: () => "attachment-stream-example.ts",
+            },
+            {
+                name: "moveVoiceConnection",
+                matches: (example) => /(?:function|const) moveVoiceConnection/.test(example),
+                file: () => "voice-example.ts",
+            },
             {
                 name: "optional-tools",
                 matches: (example) => /(?:function|const) installPing/.test(example),

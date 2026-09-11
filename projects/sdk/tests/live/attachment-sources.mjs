@@ -150,7 +150,26 @@ async function verifyDownload(ops, rawFetch, attachment, size, digest) {
     const bytes = await ops.download(attachment, { maxBytes: size, timeoutMs: 60_000 })
     assert.equal(bytes.byteLength, size)
     assert.equal(createHash("sha256").update(bytes).digest("hex"), digest)
+    const hash = createHash("sha256")
+    let streamed = 0
+    for await (const chunk of ops.stream(attachment, { maxBytes: size, timeoutMs: 60_000 })) {
+        streamed += chunk.byteLength
+        assert.ok(streamed <= size)
+        hash.update(chunk)
+    }
+    assert.equal(streamed, size)
+    assert.equal(hash.digest("hex"), digest)
     await digestRaw(rawFetch, attachment, size, digest)
+}
+
+async function verifyStreamEarlyReturn(ops, attachment, size) {
+    const iterator = ops.stream(attachment, { maxBytes: size, timeoutMs: 60_000 })[Symbol.asyncIterator]()
+    const first = await iterator.next()
+    assert.equal(first.done, false)
+    assert.ok(first.value.byteLength > 0)
+    await iterator.return()
+    const reused = await ops.download(attachment, { maxBytes: size, timeoutMs: 60_000 })
+    assert.equal(reused.byteLength, size)
 }
 
 async function sendAndReadback(ops, rawFetch, setStage, report, source, filename, size, digest, label) {
@@ -331,6 +350,9 @@ export async function verifyAttachmentSources({ ops, channelId, rawFetch, getFet
         assert.equal(tooSmall?._tag, "AttachmentDownloadError")
         assert.equal(tooSmall?.reason, "tooLarge")
         report("attachment_sources_download_too_small", true)
+        setStage("attachment_sources_stream_early_return_and_slot_reuse")
+        await verifyStreamEarlyReturn(ops, fileAttachment, fileBytes)
+        report("attachment_sources_stream_early_return_and_slot_reuse", true)
         await verifyCancellation(ops, fileAttachment, fileBytes, getFetch, setFetch, setStage, report)
 
         const streamSalt = 29

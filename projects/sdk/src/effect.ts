@@ -578,7 +578,7 @@ import {
     webhookMessage,
     webhookMessageDelete,
 } from "#sdk/internal/webhooks"
-import { Deferred, Effect, Scope, type Stream } from "effect"
+import { Deferred, Effect, Scope, Stream } from "effect"
 import {
     createPkce,
     type OAuthAuthorizationInput,
@@ -852,6 +852,7 @@ export type {
 } from "./embeds.js"
 export type { MessageBody } from "./messages.js"
 export { AttachmentDownloadError } from "./attachments.js"
+import { AttachmentDownloadError } from "./attachments.js"
 export type {
     Attachment,
     AttachmentBytesInput,
@@ -867,6 +868,7 @@ export type {
     AttachmentStreamReaderOptions,
     AttachmentStreamSource,
     DefaultAttachmentDownloadOptions,
+    DefaultAttachmentStreamOptions,
 } from "./attachments.js"
 import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "./attachments.js"
 import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "./reactions.js"
@@ -960,6 +962,7 @@ import type {
     RoleEdit,
     GuildMember,
     MemberReference,
+    VoiceConnectionReference,
     MemberQuery,
     GuildOperationFailure,
     GuildOperationOptions,
@@ -977,6 +980,7 @@ export type {
     RoleEdit,
     GuildMember,
     MemberReference,
+    VoiceConnectionReference,
     MemberQuery,
     GuildOperation,
     GuildOperationFailure,
@@ -996,7 +1000,15 @@ import {
     roleSetHoistPositions,
     roleResetHoistPositions,
 } from "#sdk/internal/guilds"
-import { memberTimeout, memberKick, guildBan, guildUnban, guildBans } from "#sdk/internal/moderation"
+import {
+    memberTimeout,
+    memberKick,
+    memberVoiceMove,
+    memberVoiceFlag,
+    guildBan,
+    guildUnban,
+    guildBans,
+} from "#sdk/internal/moderation"
 import type { BanInput, GuildBan, ModerationOptions } from "./guilds.js"
 export type { BanInput, GuildBan, ModerationOptions } from "./guilds.js"
 import type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
@@ -1268,6 +1280,8 @@ export type {
     TypingStart,
     PresenceUpdate,
     PresenceUpdateBulk,
+    VoiceState,
+    VoiceStateSnapshot,
 } from "./events.js"
 
 /** Scoped subscription controls, separate from client ownership */
@@ -1299,6 +1313,31 @@ export interface Attachments {
         attachment: Attachment,
         options: AttachmentDownloadOptions,
     ): Effect.Effect<Uint8Array, AttachmentDownloadFailure>
+    /** Lazily read attachment.url as one-use chunks after matching this instance's media `/attachments/` base path.
+     * The first pull starts discovery, shared four-slot media admission and GET. Each later pull reads at most one response chunk, with no SDK byte packing, spooling, retry or durable storage
+     *
+     * maxBytes is required and bounds bytes delivered across this consumption at 50 MiB. A declared Content-Length above it fails before the first chunk, while runtime counting remains authoritative
+     *
+     * timeoutMs defaults to 30,000 across opening, consumer pauses and reads. Scope interruption, early stream completion, failures and shutdown cancel the body, await reader cleanup and release the slot
+     *
+     * This Stream is single-consumption. Expected failures retain their native Effect causes, including safe local busy/network/response/limit/deadline reasons and client closure
+     *
+     * The GET sends no Authorization header, follows no redirect, caches nothing and never uses proxyUrl. Attachment size and expiry metadata do not establish availability or byte safety
+     * @example
+     * ```ts
+     * import { Effect, Stream } from "effect"
+     * import type { Attachment, Client } from "@neontechspace/fluxerly/effect"
+     * export function downloadChunks(client: Client, attachment: Attachment) {
+     *     return Stream.runForEach(client.attachments.stream(attachment, { maxBytes: 1_024 }), (chunk) =>
+     *         Effect.sync(() => void chunk),
+     *     )
+     * }
+     * ```
+     */
+    stream(
+        attachment: Attachment,
+        options: AttachmentDownloadOptions,
+    ): Stream.Stream<Uint8Array, AttachmentDownloadFailure>
 }
 
 /**
@@ -2659,6 +2698,54 @@ export interface Members {
         nickname: string | null,
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
+    /** Lazily move an already-connected member to one positive decimal voice-channel ID.
+     * Requires MoveMembers plus Fluxer's hierarchy and destination visibility/connect checks. Supplying target.connectionId
+     * targets only that observed connection; omission targets every active connection for the member.
+     * HTTP 200 returns a frozen member projection after Fluxer accepts the move, not proof that the participant reconnected.
+     * A visible move can emit voiceStateUpdate first with channelId null, then with a new connection ID in the destination.
+     * Do not repeat an interrupted or unknown write; interruption awaits cleanup but cannot undo dispatch.
+     * Shared moderation deadlines, auditReason validation, confirmed-429 retries and member-cache invalidation apply
+     * @example
+     * ```ts
+     * import type { Client, VoiceConnectionReference } from "@neontechspace/fluxerly/effect"
+     * export const moveVoiceConnection = (client: Client, target: VoiceConnectionReference, channelId: string) =>
+     *     client.members.move(target, channelId, { auditReason: "Moved to support" })
+     * ```
+     */
+    move(
+        target: VoiceConnectionReference,
+        channelId: string,
+        options?: ModerationOptions,
+    ): Effect.Effect<GuildMember, GuildOperationFailure>
+    /** Lazily disconnect one observed connection, or every active connection when target.connectionId is omitted.
+     * Requires MoveMembers and returns the HTTP member projection without waiting for voiceStateUpdate.
+     * Repeating after completion can fail because the target is no longer connected. Reconcile an unknown outcome from later
+     * observations instead of repeating it. Uses move's execution, audit, permission and cache-invalidation rules
+     */
+    disconnect(
+        target: VoiceConnectionReference,
+        options?: ModerationOptions,
+    ): Effect.Effect<GuildMember, GuildOperationFailure>
+    /** Lazily set or clear Fluxer's server mute flag for one currently connected member.
+     * Requires MuteMembers and provider hierarchy rules. Returns an HTTP member projection with isMuted, without waiting for
+     * a voice-state event. This does not control the participant's self-mute state or join a voice channel.
+     * Uses move's context, interruption, deadline, audit, retry and member-cache invalidation rules
+     */
+    setMute(
+        target: MemberReference,
+        muted: boolean,
+        options?: ModerationOptions,
+    ): Effect.Effect<GuildMember, GuildOperationFailure>
+    /** Lazily set or clear Fluxer's server deafen flag for one currently connected member.
+     * Requires DeafenMembers and provider hierarchy rules. Returns an HTTP member projection with isDeafened, without waiting
+     * for a voice-state event. This does not control the participant's self-deafen state or join a voice channel.
+     * Uses move's context, interruption, deadline, audit, retry and member-cache invalidation rules
+     */
+    setDeaf(
+        target: MemberReference,
+        deafened: boolean,
+        options?: ModerationOptions,
+    ): Effect.Effect<GuildMember, GuildOperationFailure>
     /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts
      *
      * Requires ModerateMembers and provider hierarchy rules. The provider rejects self and administrator targets.
@@ -3645,6 +3732,14 @@ export function createClient<E = never, R = never>(
                     owner.guild("members.editSelf", () => memberEditSelf(guildId, input), options),
                 setNickname: (target: MemberReference, nickname: string | null, options?: GuildOperationOptions) =>
                     owner.guild("members.setNickname", () => memberNicknameEdit(target, nickname), options),
+                move: (target: VoiceConnectionReference, channelId: string, options?: ModerationOptions) =>
+                    owner.guild("members.move", () => memberVoiceMove(target, channelId, options), options),
+                disconnect: (target: VoiceConnectionReference, options?: ModerationOptions) =>
+                    owner.guild("members.disconnect", () => memberVoiceMove(target, null, options), options),
+                setMute: (target: MemberReference, muted: boolean, options?: ModerationOptions) =>
+                    owner.guild("members.setMute", () => memberVoiceFlag(target, "mute", muted, options), options),
+                setDeaf: (target: MemberReference, deafened: boolean, options?: ModerationOptions) =>
+                    owner.guild("members.setDeaf", () => memberVoiceFlag(target, "deaf", deafened, options), options),
                 timeout: (target: MemberReference, durationMs: number, options?: ModerationOptions) =>
                     owner.guild("members.timeout", () => memberTimeout(target, durationMs, options), options),
                 clearTimeout: (target: MemberReference, options?: ModerationOptions) =>
@@ -3695,6 +3790,28 @@ export function createClient<E = never, R = never>(
             attachments: Object.freeze({
                 download: (attachment: Attachment, options: AttachmentDownloadOptions) =>
                     owner.downloadAttachment(attachment, options),
+                stream: (attachment: Attachment, options: AttachmentDownloadOptions) => {
+                    let consumed = false
+                    return Stream.unwrap(
+                        Effect.suspend(() => {
+                            if (consumed) return Effect.fail(new AttachmentDownloadError("busy"))
+                            consumed = true
+                            return Effect.gen(function* () {
+                                const source = yield* Effect.acquireRelease(
+                                    Effect.interruptible(owner.streamAttachment(attachment, options)),
+                                    (source) => source.closeEffect,
+                                )
+                                return Stream.unfold(undefined, () =>
+                                    source.next.pipe(
+                                        Effect.map((chunk) =>
+                                            chunk === undefined ? undefined : ([chunk, undefined] as const),
+                                        ),
+                                    ),
+                                )
+                            })
+                        }),
+                    )
+                },
             }),
             messages: Object.freeze({
                 iterateHistory: (id: string, query: HistoryIterationQuery, options?: MessageOperationOptions) =>

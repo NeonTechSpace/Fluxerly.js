@@ -81,6 +81,7 @@
         "test:live:pins": "pnpm run build && node tests/live/messages.mjs default --pins && node tests/live/messages.mjs effect --pins",
         "test:live:guilds": "pnpm run build && node tests/live/messages.mjs default --guilds && node tests/live/messages.mjs effect --guilds",
         "test:live:guild-events": "pnpm run build && node tests/live/guild-events.mjs default && node tests/live/guild-events.mjs effect",
+        "test:live:voice": "pnpm run build && node tests/live/guild-events.mjs default --voice && node tests/live/guild-events.mjs effect --voice",
         "test:live:channels": "pnpm run build && node tests/live/messages.mjs default --channels && node tests/live/messages.mjs effect --channels",
         "test:live:history": "pnpm run build && node tests/live/messages.mjs default --history && node tests/live/messages.mjs effect --history",
         "test:live:search": "pnpm run build && node tests/live/messages.mjs default --search && node tests/live/messages.mjs effect --search",

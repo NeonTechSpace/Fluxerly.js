@@ -169,7 +169,7 @@ It reports rejection, timeout, latency and process-memory observations; it does 
 Run live checks only against the authorized test bot and server, from [projects/](/projects/).
 The SDK-local, Git-ignored `.env.test.local` must provide `FLUXER_TEST_GUILD_ID`, `FLUXER_TEST_APPLICATION_ID` and `FLUXER_TEST_BOT_TOKEN`.
 The checks verify bot/application/server identity.
-Only the manual OAuth checks also use the application client secret.
+OAuth checks also use the application client secret.
 Never print credentials or private payloads when diagnosing a failure
 
 Run a table entry as `pnpm --filter @neontechspace/fluxerly <script>`.
@@ -210,6 +210,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:supervisor` | Two fixed child assignments, configuration acknowledgment, child gateway connections, fresh bot-self reads and orderly shutdown through both built APIs | Read-only sandbox API and gateway requests plus an owned loopback proof endpoint; no content or account-state changes |
 | `test:live:presence` | Interactive selected-guild member presence delivery, Op14 restore after a test-owned socket interruption and cleanup through both built APIs | No account-state changes by the harness; the authorized participant performs visible status transitions and the harness interrupts only its own socket |
 | `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
+| `test:live:nonce` | Caller nonce suppression, generated defaults and lost-response reconciliation through both built APIs | Journaled temporary channel/messages and one test-owned response loss per API; cleanup verifies channel deletion |
 | `test:live:optional-tools` | Builder-composed command reply, application-owned prefix change, cooldown and unmatched feedback, and router unsubscription through both built APIs | Temporary channel and test-bot command/reply messages; no human or member actions |
 | `test:live:consumer-features` | Forward snapshots, attachment-backed embeds, retained file metadata, non-voice flags, bot profile reads and lost-response reconciliation through both APIs | Journaled temporary channel/messages and uploads, test-owned response loss; profile GET may trigger provider expired-premium cleanup |
 | `test:live:typing` | One-shot typing, scoped refresh and completion/cancellation cleanup through both APIs | Temporary channel/messages and ephemeral typing notices; does not prove inbound typing delivery |
@@ -236,6 +237,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:pins` | Pin/unpin, explicit pages, pin status/events and recovery | Temporary channel/messages and pins, server-created pin notices, plus test-socket termination |
 | `test:live:guilds` | Guild/member reads, reaction-driven role assignment, role management/events, optional caches and recovery | Temporary channel/messages, two zero-permission test roles with assignment only to the designated bot, plus test-socket termination and test-owned response loss |
 | `test:live:guild-events` | Bot-session guild create delivery after READY | Read-only gateway connection to the existing sandbox guild; fails when it is unavailable or the bounded event wait expires |
+| `test:live:voice` | Initial voice snapshots and member mute/deaf flags through both built APIs | Read-only sandbox gateway/member observations; no participant moderation, joining or media |
 | `test:live:channels` | Guild channel management, permission overwrites, inheritance, events/cache and recovery | Temporary channels/categories, overwrites targeting only the bot and test guild's everyone role, test-socket termination and test-owned response loss |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
 | `test:live:cleanup` | REST guild summaries, bot-self hierarchy and bounded message cleanup through both APIs | Temporary channel and test-bot messages, with one lost batch response. Uses the existing channel recovery journal and verifies test-owned cleanup |

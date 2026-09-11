@@ -4,7 +4,14 @@ import { decodeMessage, decodeDeletion, decodeBulkDeletion, record, identifier }
 import { decodeUser, decodeDirectMessage } from "./users.js"
 import { decodeReaction, reactionEvents } from "./reactions.js"
 import { decodePinsUpdate } from "./pins.js"
-import { decodeGuildEvent, decodeGuildLifecycleEvent, guildEvents, guildLifecycleEvents } from "./guilds.js"
+import {
+    decodeGuildEvent,
+    decodeGuildLifecycleEvent,
+    decodeVoiceState,
+    decodeVoiceStateSnapshot,
+    guildEvents,
+    guildLifecycleEvents,
+} from "./guilds.js"
 import { decodeChannelEvent, channelEvents } from "./channels.js"
 import { decodeExpressionUpdate } from "./expressions.js"
 import { decodeInviteDelete, decodeInviteMetadata } from "./invites.js"
@@ -252,6 +259,22 @@ export const runGateway = (
                                     return
                                 }
                                 session.sequence = payload.s
+                                let guildCreateUpdate: ReturnType<typeof decodeGuildLifecycleEvent> | undefined
+                                let guildCreateVoiceSnapshot: ReturnType<typeof decodeVoiceStateSnapshot>
+                                if (payload.t === "GUILD_CREATE") {
+                                    guildCreateUpdate = decodeGuildLifecycleEvent(payload.t, body)
+                                    if (!guildCreateUpdate) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    if (record(body) && Object.hasOwn(body, "voice_states")) {
+                                        guildCreateVoiceSnapshot = decodeVoiceStateSnapshot(body)
+                                        if (!guildCreateVoiceSnapshot) {
+                                            protocolFailure()
+                                            return
+                                        }
+                                    }
+                                }
                                 if (
                                     payload.t === "GUILD_CREATE" ||
                                     payload.t === "GUILD_UPDATE" ||
@@ -277,13 +300,33 @@ export const runGateway = (
                                     onDispatch("userUpdate", user, Buffer.byteLength(data.toString()))
                                 } else if (Object.hasOwn(guildLifecycleEvents, payload.t)) {
                                     const event = payload.t as keyof typeof guildLifecycleEvents
-                                    const update = decodeGuildLifecycleEvent(event, body)
+                                    const update =
+                                        payload.t === "GUILD_CREATE"
+                                            ? guildCreateUpdate
+                                            : decodeGuildLifecycleEvent(event, body)
                                     if (!update) {
                                         protocolFailure()
                                         return
                                     }
                                     onDispatch(guildLifecycleEvents[event], update, Buffer.byteLength(data.toString()))
-                                    if (payload.t === "GUILD_CREATE") presence?.guildCreate(update.id)
+                                    if (payload.t === "GUILD_CREATE") {
+                                        presence?.guildCreate(update.id)
+                                        if (guildCreateVoiceSnapshot)
+                                            onDispatch(
+                                                "voiceStateSnapshot",
+                                                guildCreateVoiceSnapshot,
+                                                Buffer.byteLength(data.toString()),
+                                            )
+                                    }
+                                } else if (payload.t === "VOICE_STATE_UPDATE") {
+                                    // Private calls use the same dispatch name with an explicit null guild ID
+                                    if (record(body) && body.guild_id === null) return
+                                    const voiceState = decodeVoiceState(body)
+                                    if (!voiceState) {
+                                        protocolFailure()
+                                        return
+                                    }
+                                    onDispatch("voiceStateUpdate", voiceState, Buffer.byteLength(data.toString()))
                                 } else if (payload.t === "PRESENCE_UPDATE") {
                                     const presence = decodePresenceUpdate(body)
                                     if (!presence) {

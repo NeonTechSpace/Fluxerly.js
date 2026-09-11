@@ -17,6 +17,7 @@ import type {
     RoleHoistPosition,
     RoleReference,
 } from "#sdk/guilds"
+import type { VoiceState, VoiceStateSnapshot } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
 import type { ResourceRequest } from "./guild-cache.js"
@@ -138,6 +139,55 @@ export function decodeGuildSnapshot(value: unknown): Guild | undefined {
     return decodeGuild(value.properties)
 }
 
+export function decodeVoiceState(value: unknown, expectedGuildId?: string): VoiceState | undefined {
+    if (
+        !record(value) ||
+        !identifier(value.guild_id) ||
+        (expectedGuildId !== undefined && value.guild_id !== expectedGuildId) ||
+        (value.channel_id !== null && !identifier(value.channel_id)) ||
+        !identifier(value.user_id) ||
+        typeof value.connection_id !== "string" ||
+        [...value.connection_id].length < 1 ||
+        [...value.connection_id].length > 32 ||
+        (value.session_id !== undefined &&
+            value.session_id !== null &&
+            (typeof value.session_id !== "string" || value.session_id.length === 0)) ||
+        typeof value.mute !== "boolean" ||
+        typeof value.deaf !== "boolean" ||
+        typeof value.self_mute !== "boolean" ||
+        typeof value.self_deaf !== "boolean" ||
+        typeof value.is_mobile !== "boolean" ||
+        typeof value.suppress !== "boolean"
+    )
+        return undefined
+    return Object.freeze({
+        guildId: value.guild_id,
+        channelId: value.channel_id,
+        userId: value.user_id,
+        connectionId: value.connection_id,
+        ...(typeof value.session_id === "string" ? { sessionId: value.session_id } : {}),
+        isMuted: value.mute,
+        isDeafened: value.deaf,
+        isSelfMuted: value.self_mute,
+        isSelfDeafened: value.self_deaf,
+        isMobile: value.is_mobile,
+        isSuppressed: value.suppress,
+    })
+}
+
+export function decodeVoiceStateSnapshot(value: unknown): VoiceStateSnapshot | undefined {
+    if (!record(value) || !identifier(value.id) || !Array.isArray(value.voice_states)) return undefined
+    const connectionIds = new Set<string>()
+    const voiceStates: VoiceState[] = []
+    for (const item of value.voice_states) {
+        const state = decodeVoiceState(item, value.id)
+        if (!state || state.channelId === null || connectionIds.has(state.connectionId)) return undefined
+        connectionIds.add(state.connectionId)
+        voiceStates.push(state)
+    }
+    return Object.freeze({ guildId: value.id, voiceStates: Object.freeze(voiceStates) })
+}
+
 export function decodeGuild(value: unknown): Guild | undefined {
     if (
         !record(value) ||
@@ -231,6 +281,8 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         (value.mention_flags !== undefined &&
             value.mention_flags !== null &&
             !mentionPreference(value.mention_flags)) ||
+        (value.mute !== undefined && typeof value.mute !== "boolean") ||
+        (value.deaf !== undefined && typeof value.deaf !== "boolean") ||
         (value.communication_disabled_until !== undefined &&
             value.communication_disabled_until !== null &&
             (typeof value.communication_disabled_until !== "string" ||
@@ -254,6 +306,8 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         ...(value.accent_color === undefined ? {} : { accentColor: value.accent_color as number | null }),
         ...(value.profile_flags === undefined ? {} : { profileFlags: value.profile_flags as number | null }),
         ...(value.mention_flags === undefined ? {} : { mentionFlags: value.mention_flags as 0 | 1 | 2 | null }),
+        ...(value.mute === undefined ? {} : { isMuted: value.mute as boolean }),
+        ...(value.deaf === undefined ? {} : { isDeafened: value.deaf as boolean }),
     })
 }
 

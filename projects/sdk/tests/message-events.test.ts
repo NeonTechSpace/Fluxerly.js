@@ -10,8 +10,11 @@ import {
     type MessageBulkDeletion,
     type PresenceUpdate,
     type PresenceUpdateBulk,
+    type VoiceState,
+    type VoiceStateSnapshot,
 } from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
+import { decodeVoiceState, decodeVoiceStateSnapshot } from "../src/internal/guilds.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "" }))
@@ -88,8 +91,32 @@ const presenceBulkWire = (overrides: Record<string, unknown> = {}) => ({
     ],
     ...overrides,
 })
+const voiceStateWire = (overrides: Record<string, unknown> = {}) => ({
+    guild_id: "40",
+    channel_id: "41",
+    user_id: "30",
+    connection_id: "voice-connection",
+    session_id: "voice-session",
+    mute: false,
+    deaf: true,
+    self_mute: true,
+    self_deaf: false,
+    is_mobile: true,
+    suppress: false,
+    self_video: true,
+    self_stream: true,
+    viewer_stream_keys: ["ignored-media-field"],
+    e2ee_capable: true,
+    member: { user: { id: "30", username: "not projected" } },
+    ...overrides,
+})
+const guildSnapshotWire = (voiceStates?: readonly unknown[]) => ({
+    id: "40",
+    properties: { id: "40", owner_id: "30", name: "fixture", features: [] },
+    ...(voiceStates === undefined ? {} : { voice_states: voiceStates }),
+})
 
-async function fixture() {
+async function fixture(initialGuild?: unknown) {
     const sockets: import("ws").WebSocket[] = []
     let sequence = 1
     let requests = 0
@@ -110,8 +137,11 @@ async function fixture() {
         socket.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } }))
         socket.on("message", (data) => {
             const packet = JSON.parse(data.toString())
-            if (packet.op === 2)
+            if (packet.op === 2) {
                 socket.send(JSON.stringify({ op: 0, s: 1, t: "READY", d: { session_id: "fixture-session" } }))
+                if (initialGuild !== undefined)
+                    socket.send(JSON.stringify({ op: 0, s: ++sequence, t: "GUILD_CREATE", d: initialGuild }))
+            }
             if (packet.op === 1) socket.send(JSON.stringify({ op: 11 }))
         })
     })
@@ -531,6 +561,138 @@ test("the provider's 500-entry presence batch retains context through the public
     expect(batch.presences).toHaveLength(500)
     expect(batch.presences[499]).toMatchObject({ guildId: "40", userId: "500" })
     expect(Object.isFrozen(batch.presences[499])).toBe(true)
+})
+
+test("voice decoders distinguish an explicit empty initial snapshot and reject sparse or cross-guild states", () => {
+    expect(decodeVoiceStateSnapshot(guildSnapshotWire([]))).toEqual({ guildId: "40", voiceStates: [] })
+    expect(decodeVoiceStateSnapshot(guildSnapshotWire())).toBeUndefined()
+    expect(decodeVoiceStateSnapshot(guildSnapshotWire([voiceStateWire({ guild_id: "41" })]))).toBeUndefined()
+    expect(decodeVoiceState({ ...voiceStateWire(), self_mute: undefined })).toBeUndefined()
+    expect(decodeVoiceState({ ...voiceStateWire(), connection_id: "" })).toBeUndefined()
+    expect(decodeVoiceState(voiceStateWire({ session_id: null }))).not.toHaveProperty("sessionId")
+})
+
+test("default voice subscriptions expose the initial visible snapshot and subsequent move phases without media fields", async () => {
+    const server = await fixture(guildSnapshotWire([voiceStateWire()]))
+    const client = defaultApi()
+    const snapshots: VoiceStateSnapshot[] = []
+    const updates: VoiceState[] = []
+    value(
+        client.on("voiceStateSnapshot", (snapshot) => {
+            snapshots.push(snapshot)
+        }),
+    )
+    value(
+        client.on("voiceStateUpdate", (state) => {
+            updates.push(state)
+        }),
+    )
+    const initial = value(client.events("voiceStateSnapshot"))
+    const transitions = value(client.events("voiceStateUpdate"))
+    value(await client.connect())
+
+    const snapshot = value(await initial.next())!
+    const expectedInitial = {
+        guildId: "40",
+        channelId: "41",
+        userId: "30",
+        connectionId: "voice-connection",
+        sessionId: "voice-session",
+        isMuted: false,
+        isDeafened: true,
+        isSelfMuted: true,
+        isSelfDeafened: false,
+        isMobile: true,
+        isSuppressed: false,
+    }
+    expect(snapshot).toEqual({ guildId: "40", voiceStates: [expectedInitial] })
+    expect(
+        Object.isFrozen(snapshot) && Object.isFrozen(snapshot.voiceStates) && Object.isFrozen(snapshot.voiceStates[0]),
+    ).toBe(true)
+    for (const omitted of ["selfVideo", "selfStream", "viewerStreamKeys", "e2eeCapable", "member"])
+        expect(snapshot.voiceStates[0]).not.toHaveProperty(omitted)
+
+    server.dispatch("VOICE_STATE_UPDATE", voiceStateWire({ channel_id: null }))
+    server.dispatch(
+        "VOICE_STATE_UPDATE",
+        voiceStateWire({ channel_id: "42", connection_id: "replacement-connection", mute: true, deaf: false }),
+    )
+    expect(value(await transitions.next())).toMatchObject({ channelId: null, connectionId: "voice-connection" })
+    expect(value(await transitions.next())).toMatchObject({
+        channelId: "42",
+        connectionId: "replacement-connection",
+        isMuted: true,
+        isDeafened: false,
+    })
+    await vi.waitFor(() => expect([snapshots.length, updates.length]).toEqual([1, 2]))
+    expect(server.requests).toBe(0)
+})
+
+test("native voice callbacks preserve context and deliver an explicit empty initial collection", async () => {
+    const server = await fixture(guildSnapshotWire([]))
+    const snapshots: VoiceStateSnapshot[] = []
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createNative({ token: "fixture-only-not-a-credential" })
+                const callback = yield* client.on("voiceStateSnapshot", (snapshot) =>
+                    Effect.gen(function* () {
+                        expect((yield* References.CurrentLogAnnotations).fixture).toBe("voice")
+                        snapshots.push(snapshot)
+                    }),
+                )
+                const stream = yield* Effect.forkScoped(
+                    Stream.runCollect(client.events("voiceStateSnapshot").pipe(Stream.take(1))),
+                )
+                yield* client.connect()
+                expect(yield* Fiber.join(stream)).toEqual([{ guildId: "40", voiceStates: [] }])
+                yield* Effect.promise(() =>
+                    vi.waitFor(() => expect(snapshots).toEqual([{ guildId: "40", voiceStates: [] }])),
+                )
+                yield* callback.unsubscribe()
+                yield* callback.waitForClose()
+            }),
+        ).pipe(Effect.annotateLogs("fixture", "voice")),
+    )
+    expect(server.requests).toBe(0)
+})
+
+test("a malformed supplied initial voice collection closes the gateway instead of emitting a partial snapshot", async () => {
+    const server = await fixture(
+        guildSnapshotWire([voiceStateWire(), voiceStateWire({ connection_id: "voice-connection" })]),
+    )
+    const client = defaultApi()
+    const guilds: unknown[] = []
+    const snapshots: VoiceStateSnapshot[] = []
+    value(
+        client.on("guildCreate", (guild) => {
+            guilds.push(guild)
+        }),
+    )
+    value(
+        client.on("voiceStateSnapshot", (snapshot) => {
+            snapshots.push(snapshot)
+        }),
+    )
+    const closed = client.waitForClose()
+    value(await client.connect())
+    const outcome = await closed
+    expect(outcome.isErr() && outcome.error).toMatchObject({ _tag: "ConnectionError", reason: "protocol" })
+    expect(guilds).toEqual([])
+    expect(snapshots).toEqual([])
+    expect(server.requests).toBe(0)
+})
+
+test("private-call voice updates are ignored without interrupting guild voice observations", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const transitions = value(client.events("voiceStateUpdate"))
+    value(await client.connect())
+
+    server.dispatch("VOICE_STATE_UPDATE", voiceStateWire({ guild_id: null, member: null }))
+    server.dispatch("VOICE_STATE_UPDATE", voiceStateWire())
+    expect(value(await transitions.next())).toMatchObject({ guildId: "40", connectionId: "voice-connection" })
+    expect(client.state).toBe("Connected")
 })
 
 test("REST edit/delete acknowledgements do not synthesize gateway events", async () => {

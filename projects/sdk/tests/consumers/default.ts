@@ -54,6 +54,9 @@ import {
     type DefaultCollectorOptions,
     type CollectorResult,
     type MemberReference,
+    type VoiceConnectionReference,
+    type VoiceState,
+    type VoiceStateSnapshot,
     type RoleHierarchyInput,
     type InstanceOptions,
     type ResolvedInstance,
@@ -314,6 +317,10 @@ export async function useAttachments(client: Client, channelId: string) {
     const downloaded = await client.attachments.download(attachment, { maxBytes: 1_024, timeoutMs: 5_000 })
     if (downloaded.isErr()) return downloaded
     const bytes: Uint8Array = downloaded.value
+    for await (const chunk of client.attachments.stream(attachment, { maxBytes: 1_024, timeoutMs: 5_000 })) {
+        if (chunk.isErr()) return chunk
+        void chunk.value
+    }
     await client.messages.reply(sent.value, { attachments: [file] })
     await client.messages.edit(sent.value, { attachments: [{ id: attachment.id }, file] })
     await client.messages.edit(sent.value, { content: "Cleared", attachments: [] })
@@ -325,6 +332,8 @@ export async function useAttachments(client: Client, channelId: string) {
     client.messages.send(channelId, { attachments: [{ stream: structuralAttachmentStream, filename: "unknown.bin" }] })
     // @ts-expect-error Bounded downloads require maxBytes
     client.attachments.download(attachment, {})
+    // @ts-expect-error Bounded streamed downloads require maxBytes
+    client.attachments.stream(attachment, {})
     // @ts-expect-error Attachment input lists remain readonly
     sources.push({ file: structuralAttachmentFile, filename: "later.bin" })
     // @ts-expect-error Received metadata is immutable
@@ -639,6 +648,33 @@ export function moderationOperations(client: Client, target: import("@neontechsp
     // @ts-expect-error A string cannot be passed as a numeric timeout duration
     client.members.timeout(target, "60")
     return [clear, kick, create, remove, list, subscription]
+}
+
+/** Packed declarations expose non-media guild voice moderation and observations */
+export function voiceOperations(client: Client, target: VoiceConnectionReference, channelId: string) {
+    const move = client.members.move(target, channelId).map((member) => {
+        const muted: boolean | undefined = member.isMuted
+        const deafened: boolean | undefined = member.isDeafened
+        return { muted, deafened }
+    })
+    const disconnect = client.members.disconnect(target)
+    const mute = client.members.setMute(target, true)
+    const deafen = client.members.setDeaf(target, false)
+    const initial = client.on("voiceStateSnapshot", (snapshot) => {
+        const current: VoiceStateSnapshot = snapshot
+        void current.voiceStates
+    })
+    const updates = client.on("voiceStateUpdate", (state) => {
+        const current: VoiceState = state
+        const channel: string | null = current.channelId
+        void channel
+    })
+    // @ts-expect-error Server mute state is boolean
+    client.members.setMute(target, "yes")
+    // @ts-expect-error Connection IDs are strings
+    const invalid: VoiceConnectionReference = { ...target, connectionId: 1 }
+    void invalid
+    return { move, disconnect, mute, deafen, initial, updates }
 }
 
 /** Typechecked event registration fragments with payload inference for each event name */
