@@ -129,19 +129,25 @@ function value<A, E>(result: { isErr(): boolean; value?: A; error?: E }): A {
     return result.value!
 }
 
-test("text send and reply work disconnected, preserve payloads, suppress mentions and return frozen plain snapshots", async () => {
+test("text send and reply retain caller nonces, preserve payloads, suppress mentions and return frozen plain snapshots", async () => {
     const server = await fixture()
     const client = defaultApi()
-    const sent = value(await client.messages.send("20", { content: "  hello  " }))
+    const sent = value(await client.messages.send("20", { content: "  hello  ", nonce: "send-correlation" }))
     expect(sent.content).toBe("  hello  ")
     expect(Object.isFrozen(sent)).toBe(true)
     expect(Object.isFrozen(sent.author)).toBe(true)
     expect("reply" in sent).toBe(false)
     value(
-        await client.messages.reply(sent, { content: "reply", allowedMentions: { users: ["30"], repliedUser: true } }),
+        await client.messages.reply(sent, {
+            content: "reply",
+            nonce: 42,
+            allowedMentions: { users: ["30"], repliedUser: true },
+        }),
     )
     expect(server.requests[0]!.allowed_mentions).toEqual({ parse: [], users: [], roles: [], replied_user: false })
     expect(server.requests[1]!.message_reference).toEqual({ message_id: "99", channel_id: "20", type: 0 })
+    expect(server.requests[0]!.nonce).toBe("send-correlation")
+    expect(server.requests[1]!.nonce).toBe("42")
     expect(server.requests[1]!.allowed_mentions.replied_user).toBe(true)
     expect((await client.messages.reply({ id: "404", channelId: "20" }, { content: "reply" })).isErr()).toBe(true)
     expect(server.requests).toHaveLength(3)
@@ -316,14 +322,15 @@ test("native stream is lazy, scoped and live with no history replay", async () =
     expect(messages.map((message: Message) => message.id)).toEqual(["10", "11"])
 })
 
-test("confirmed rate limits retry with the same nonce, while server failure and malformed success never resend", async () => {
+test("confirmed rate limits retain a caller nonce, while server failure and malformed success never resend", async () => {
     const server = await fixture()
     const client = defaultApi()
     server.control.status = 429
     server.control.failOnce = true
-    value(await client.messages.send("20", { content: "retry" }))
+    value(await client.messages.send("20", { content: "retry", nonce: "known-429" }))
     expect(server.requests).toHaveLength(2)
-    expect(server.requests[0]!.nonce).toBe(server.requests[1]!.nonce)
+    expect(server.requests[0]!.nonce).toBe("known-429")
+    expect(server.requests[1]!.nonce).toBe("known-429")
     server.control.status = 500
     const rejected = await client.messages.send("20", { content: "do not repeat" })
     expect(rejected.isErr() && rejected.error._tag === "MessageError" && rejected.error.delivery).toBe("unknown")
@@ -363,6 +370,11 @@ test("invalid options and message inputs fail without network work; native sends
         { content: "" },
         { content: "hi", allowedMentions: null },
         { content: "hi", messageReference: null },
+        { content: "hi", nonce: "" },
+        { content: "hi", nonce: "x".repeat(33) },
+        { content: "hi", nonce: -1 },
+        { content: "hi", nonce: Number.MAX_SAFE_INTEGER + 1 },
+        { content: "hi", nonce: true },
     ]) {
         expect((await client.messages.send("20", input as any)).isErr()).toBe(true)
     }

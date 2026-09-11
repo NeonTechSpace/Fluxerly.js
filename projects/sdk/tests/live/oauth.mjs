@@ -7,7 +7,8 @@ import { Effect, Exit, Scope } from "effect"
 
 // Manual OAuth check. It is never suitable for CI, schedules, or unattended runs
 // Prerequisites: An authorized sandbox application, FLUXER_TEST_CLIENT_SECRET, and this exact registered redirect URI
-const mode = process.argv[2]
+const noConsent = process.argv.includes("--no-consent")
+const mode = process.argv.slice(2).find((argument) => argument !== "--no-consent")
 const redirectUri = "http://localhost:3000/auth/fluxer/callback"
 const callbackPath = "/auth/fluxer/callback"
 const apiBase = "https://api.fluxer.app"
@@ -209,7 +210,7 @@ const cleanup = {
 const deadlineAt = Date.now() + 300_000
 
 try {
-    assert.ok(mode === "default" || mode === "effect")
+    assert.ok((mode === "default" || mode === "effect") && process.argv.length === (noConsent ? 4 : 3))
     const env = parseEnv(readFileSync(environment, "utf8"))
     const clientId = env.FLUXER_TEST_APPLICATION_ID
     const botToken = env.FLUXER_TEST_BOT_TOKEN
@@ -268,109 +269,165 @@ try {
         scope = Scope.makeUnsafe()
         client = await operation(sdk.oauth.create({ clientId, clientSecret }))
     }
-    const pkce = sdk.oauth.createPkce()
-    const state = randomBytes(32).toString("base64url")
-    stage = "callback_listener"
-    const listener = await openCallbackListener(state)
-    server = listener.server
-    stage = "authorization_url"
-    const authorizationUrl = await operation(
-        client.authorizationUrl(
-            {
-                redirectUri,
-                scopes: [sdk.OAuthScopes.Identify, sdk.OAuthScopes.Guilds],
-                state,
-                codeChallenge: pkce.challenge,
-            },
-            { timeoutMs: 15_000 },
-        ),
-    )
-    const url = new URL(authorizationUrl)
-    assert.equal(url.searchParams.get("client_id"), clientId)
-    assert.equal(url.searchParams.get("state"), state)
-    assert.equal(url.searchParams.get("code_challenge"), pkce.challenge)
-    assert.equal(url.searchParams.get("scope"), "identify guilds")
-    assert.equal(url.searchParams.has("client_secret"), false)
-    assert.equal(url.searchParams.has("code_verifier"), false)
-    report(stage, { passed: true, authorizationUrl })
-
-    stage = "awaiting_consent"
-    const remainingConsentMs = deadlineAt - Date.now()
-    assert.ok(remainingConsentMs > 0)
-    report(stage, { passed: true, consentWaitSeconds: Math.floor(remainingConsentMs / 1_000) })
-    const consentTimer = setTimeout(
-        () => listener.cancel(new HarnessFailure("awaiting_consent", { reason: "deadline" })),
-        remainingConsentMs,
-    )
-    let code
-    try {
-        code = await listener.callback
-    } finally {
-        clearTimeout(consentTimer)
-    }
-    stage = "exchange_code"
-    try {
-        currentTokens = await operation(
-            client.exchangeCode({ code, redirectUri, codeVerifier: pkce.verifier }, { timeoutMs: 15_000 }),
+    if (noConsent) {
+        const pkce = sdk.oauth.createPkce()
+        const state = randomBytes(32).toString("base64url")
+        stage = "combined_authorization_url"
+        const authorizationUrl = await operation(
+            client.authorizationUrl(
+                {
+                    redirectUri,
+                    scopes: [sdk.OAuthScopes.Identify, sdk.OAuthScopes.Bot],
+                    state,
+                    codeChallenge: pkce.challenge,
+                    guildId: env.FLUXER_TEST_GUILD_ID,
+                    permissions: 0n,
+                    disableGuildSelect: true,
+                },
+                { timeoutMs: 15_000 },
+            ),
         )
-        issuedPairs.push(currentTokens)
-    } catch (error) {
-        tokenMutationUncertain = hasUnknownOAuthFailure(error)
-        throw error
+        const url = new URL(authorizationUrl)
+        assert.equal(url.searchParams.get("client_id"), clientId)
+        assert.equal(url.searchParams.get("state"), state)
+        assert.equal(url.searchParams.get("code_challenge"), pkce.challenge)
+        assert.equal(url.searchParams.get("scope"), "identify bot")
+        assert.equal(url.searchParams.get("response_type"), "code")
+        assert.equal(url.searchParams.get("guild_id"), env.FLUXER_TEST_GUILD_ID)
+        assert.equal(url.searchParams.get("permissions"), "0")
+        assert.equal(url.searchParams.get("disable_guild_select"), "true")
+        assert.equal(url.searchParams.has("client_secret"), false)
+        assert.equal(url.searchParams.has("code_verifier"), false)
+        report(stage, { passed: true, navigated: false, codeGrantRequested: true })
+
+        const invalidToken = randomBytes(32).toString("base64url")
+        stage = "inactive_introspection"
+        const sdkIntrospection = await operation(client.introspect(invalidToken, { timeoutMs: 15_000 }))
+        assert.deepEqual(sdkIntrospection, { active: false })
+        await verifyToken(invalidToken, false)
+        report(stage, { passed: true, independentlyConfirmed: true })
+
+        stage = "invalid_bearer_connections"
+        let rejected = false
+        try {
+            await operation(client.fetchConnections(randomBytes(32).toString("base64url"), { timeoutMs: 15_000 }))
+        } catch (error) {
+            assert.equal(error?._tag, "OAuthOperationError")
+            assert.equal(error?.reason, "rejected")
+            rejected = true
+        }
+        assert.equal(rejected, true)
+        assert.deepEqual(await operation(client.introspect(invalidToken, { timeoutMs: 15_000 })), { active: false })
+        report(stage, { passed: true, clientRemainedUsable: true })
+    } else {
+        const pkce = sdk.oauth.createPkce()
+        const state = randomBytes(32).toString("base64url")
+        stage = "callback_listener"
+        const listener = await openCallbackListener(state)
+        server = listener.server
+        stage = "authorization_url"
+        const authorizationUrl = await operation(
+            client.authorizationUrl(
+                {
+                    redirectUri,
+                    scopes: [sdk.OAuthScopes.Identify, sdk.OAuthScopes.Guilds],
+                    state,
+                    codeChallenge: pkce.challenge,
+                },
+                { timeoutMs: 15_000 },
+            ),
+        )
+        const url = new URL(authorizationUrl)
+        assert.equal(url.searchParams.get("client_id"), clientId)
+        assert.equal(url.searchParams.get("state"), state)
+        assert.equal(url.searchParams.get("code_challenge"), pkce.challenge)
+        assert.equal(url.searchParams.get("scope"), "identify guilds")
+        assert.equal(url.searchParams.has("client_secret"), false)
+        assert.equal(url.searchParams.has("code_verifier"), false)
+        report(stage, { passed: true, authorizationUrl })
+
+        stage = "awaiting_consent"
+        const remainingConsentMs = deadlineAt - Date.now()
+        assert.ok(remainingConsentMs > 0)
+        report(stage, { passed: true, consentWaitSeconds: Math.floor(remainingConsentMs / 1_000) })
+        const consentTimer = setTimeout(
+            () => listener.cancel(new HarnessFailure("awaiting_consent", { reason: "deadline" })),
+            remainingConsentMs,
+        )
+        let code
+        try {
+            code = await listener.callback
+        } finally {
+            clearTimeout(consentTimer)
+        }
+        stage = "exchange_code"
+        try {
+            currentTokens = await operation(
+                client.exchangeCode({ code, redirectUri, codeVerifier: pkce.verifier }, { timeoutMs: 15_000 }),
+            )
+            issuedPairs.push(currentTokens)
+        } catch (error) {
+            tokenMutationUncertain = hasUnknownOAuthFailure(error)
+            throw error
+        }
+        report(stage, { passed: true })
+        await verifyToken(currentTokens.accessToken, true)
+        await verifyToken(currentTokens.refreshToken, true)
+
+        stage = "sdk_bearer_reads"
+        const identity = await operation(client.fetchIdentity(currentTokens.accessToken, { timeoutMs: 15_000 }))
+        const guilds = await operation(
+            client.fetchGuilds(currentTokens.accessToken, { limit: 200 }, { timeoutMs: 15_000 }),
+        )
+        assert.match(identity.id, /^\d+$/)
+        assert.ok(Array.isArray(guilds))
+        report(stage, { passed: true, guildCount: guilds.length })
+
+        stage = "independent_bearer_reads"
+        const rawIdentity = await bearerGet("/oauth2/userinfo", currentTokens.accessToken, "userinfo_read")
+        const rawGuilds = await bearerGet(
+            "/users/@me/guilds?limit=200&with_counts=false",
+            currentTokens.accessToken,
+            "guilds_read",
+        )
+        assert.equal(rawIdentity.id, identity.id)
+        assert.ok(Array.isArray(rawGuilds))
+        assert.deepEqual(
+            rawGuilds.map((guild) => guild.id),
+            guilds.map((guild) => guild.id),
+        )
+        report(stage, { passed: true, identityMatches: true, guildCount: rawGuilds.length })
+
+        stage = "refresh_rotation"
+        const previousTokens = currentTokens
+        try {
+            currentTokens = await operation(client.refresh(currentTokens.refreshToken, { timeoutMs: 15_000 }))
+            issuedPairs.push(currentTokens)
+        } catch (error) {
+            tokenMutationUncertain = hasUnknownOAuthFailure(error)
+            throw error
+        }
+        assert.notEqual(currentTokens.accessToken, previousTokens.accessToken)
+        assert.notEqual(currentTokens.refreshToken, previousTokens.refreshToken)
+        await verifyToken(previousTokens.refreshToken, false)
+        await verifyToken(currentTokens.accessToken, true)
+        await verifyToken(currentTokens.refreshToken, true)
+        const refreshedIdentity = await operation(
+            client.fetchIdentity(currentTokens.accessToken, { timeoutMs: 15_000 }),
+        )
+        assert.equal(refreshedIdentity.id, identity.id)
+        report(stage, { passed: true, identityMatches: true })
+
+        stage = "access_revocation"
+        cleanup.accessRevocationAttempted = true
+        await operation(
+            client.revoke({ token: currentTokens.accessToken, tokenTypeHint: "access_token" }, { timeoutMs: 15_000 }),
+        )
+        accessRevoked = true
+        await verifyRevokedIdentity(currentTokens.accessToken)
+        accessRevocationConfirmed = true
+        report(stage, { passed: true, revokedIdentityRejected: true })
     }
-    report(stage, { passed: true })
-    await verifyToken(currentTokens.accessToken, true)
-    await verifyToken(currentTokens.refreshToken, true)
-
-    stage = "sdk_bearer_reads"
-    const identity = await operation(client.fetchIdentity(currentTokens.accessToken, { timeoutMs: 15_000 }))
-    const guilds = await operation(client.fetchGuilds(currentTokens.accessToken, { limit: 200 }, { timeoutMs: 15_000 }))
-    assert.match(identity.id, /^\d+$/)
-    assert.ok(Array.isArray(guilds))
-    report(stage, { passed: true, guildCount: guilds.length })
-
-    stage = "independent_bearer_reads"
-    const rawIdentity = await bearerGet("/oauth2/userinfo", currentTokens.accessToken, "userinfo_read")
-    const rawGuilds = await bearerGet(
-        "/users/@me/guilds?limit=200&with_counts=false",
-        currentTokens.accessToken,
-        "guilds_read",
-    )
-    assert.equal(rawIdentity.id, identity.id)
-    assert.ok(Array.isArray(rawGuilds))
-    assert.deepEqual(
-        rawGuilds.map((guild) => guild.id),
-        guilds.map((guild) => guild.id),
-    )
-    report(stage, { passed: true, identityMatches: true, guildCount: rawGuilds.length })
-
-    stage = "refresh_rotation"
-    const previousTokens = currentTokens
-    try {
-        currentTokens = await operation(client.refresh(currentTokens.refreshToken, { timeoutMs: 15_000 }))
-        issuedPairs.push(currentTokens)
-    } catch (error) {
-        tokenMutationUncertain = hasUnknownOAuthFailure(error)
-        throw error
-    }
-    assert.notEqual(currentTokens.accessToken, previousTokens.accessToken)
-    assert.notEqual(currentTokens.refreshToken, previousTokens.refreshToken)
-    await verifyToken(previousTokens.refreshToken, false)
-    await verifyToken(currentTokens.accessToken, true)
-    await verifyToken(currentTokens.refreshToken, true)
-    const refreshedIdentity = await operation(client.fetchIdentity(currentTokens.accessToken, { timeoutMs: 15_000 }))
-    assert.equal(refreshedIdentity.id, identity.id)
-    report(stage, { passed: true, identityMatches: true })
-
-    stage = "access_revocation"
-    cleanup.accessRevocationAttempted = true
-    await operation(
-        client.revoke({ token: currentTokens.accessToken, tokenTypeHint: "access_token" }, { timeoutMs: 15_000 }),
-    )
-    accessRevoked = true
-    await verifyRevokedIdentity(currentTokens.accessToken)
-    accessRevocationConfirmed = true
-    report(stage, { passed: true, revokedIdentityRejected: true })
 } catch (error) {
     report(error instanceof HarnessFailure ? error.check : stage, {
         passed: false,

@@ -49,7 +49,8 @@ export function decodeMessage(value: unknown): Message | undefined {
         (value.type !== undefined && !int32(value.type)) ||
         (value.flags !== undefined && !int32(value.flags)) ||
         (value.guild_id !== undefined && !identifier(value.guild_id)) ||
-        (value.mention_everyone !== undefined && typeof value.mention_everyone !== "boolean")
+        (value.mention_everyone !== undefined && typeof value.mention_everyone !== "boolean") ||
+        (value.nonce !== undefined && value.nonce !== null && typeof value.nonce !== "string")
     )
         return undefined
     if (value.webhook_id != null && !identifier(value.webhook_id)) return undefined
@@ -86,6 +87,7 @@ export function decodeMessage(value: unknown): Message | undefined {
         id: value.id,
         channelId: value.channel_id,
         content: value.content,
+        ...(value.nonce === undefined ? {} : { nonce: value.nonce }),
         ...(value.webhook_id == null ? {} : { webhookId: value.webhook_id }),
         ...(value.pinned === undefined ? {} : { pinned: value.pinned }),
         ...(value.timestamp === undefined ? {} : { createdAt: value.timestamp }),
@@ -346,7 +348,7 @@ export function decodeBulkDeletion(value: unknown): MessageBulkDeletion | undefi
 }
 
 /** Unknown input fields fail before dispatch; unknown wire response fields are not copied into snapshots */
-export function encodeMessage(channelId: unknown, input: unknown, nonce: string): EncodedBody | MessageError {
+export function encodeMessage(channelId: unknown, input: unknown, defaultNonce: string): EncodedBody | MessageError {
     const invalid = (failure: InputValidationFailure) =>
         new MessageError("input", "notSent", null, null, null, failure.detail)
     if (!identifier(channelId))
@@ -357,6 +359,7 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
             (key) =>
                 ![
                     "content",
+                    "nonce",
                     "embeds",
                     "attachments",
                     "stickerIds",
@@ -370,9 +373,11 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
             inputValidationFailure(
                 "input",
                 "allowedFields",
-                "Message input may contain only content, embeds, attachments, stickerIds, allowedMentions, messageReference, and flags",
+                "Message input may contain only content, nonce, embeds, attachments, stickerIds, allowedMentions, messageReference, and flags",
             ),
         )
+    const nonce = encodeNonce(input.nonce, defaultNonce)
+    if (nonce instanceof InputValidationFailure) return invalid(nonce)
     const attachments = encodeAttachments(input.attachments, false)
     if (attachments instanceof InputValidationFailure) return invalid(attachments)
     const body = encodeBody(input, attachments.uploadedFilenames)
@@ -451,20 +456,22 @@ export function encodeMessage(channelId: unknown, input: unknown, nonce: string)
 }
 
 /** Forward inputs encode only Fluxer's source reference and optional media selectors */
-export function encodeForward(channelId: unknown, input: unknown, nonce: string): EncodedBody | MessageError {
+export function encodeForward(channelId: unknown, input: unknown, defaultNonce: string): EncodedBody | MessageError {
     const invalid = (failure: InputValidationFailure) =>
         new MessageError("input", "notSent", null, null, null, failure.detail)
     if (!identifier(channelId))
         return invalid(inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings"))
     if (!record(input)) return invalid(inputValidationFailure("input", "type", "Forward input must be an object"))
-    if (Object.keys(input).some((key) => !["source", "attachmentIds", "embedIndices"].includes(key)))
+    if (Object.keys(input).some((key) => !["source", "nonce", "attachmentIds", "embedIndices"].includes(key)))
         return invalid(
             inputValidationFailure(
                 "input",
                 "allowedFields",
-                "Forward input may contain only source, attachmentIds, and embedIndices",
+                "Forward input may contain only source, nonce, attachmentIds, and embedIndices",
             ),
         )
+    const nonce = encodeNonce(input.nonce, defaultNonce)
+    if (nonce instanceof InputValidationFailure) return invalid(nonce)
     const source = input.source
     if (!reference(source))
         return invalid(
@@ -512,6 +519,19 @@ export function encodeForward(channelId: unknown, input: unknown, nonce: string)
             },
         }),
     }
+}
+
+function encodeNonce(value: unknown, defaultNonce: string): string | InputValidationFailure {
+    if (value === undefined) return defaultNonce
+    if (typeof value === "string") {
+        if (value.length >= 1 && value.length <= 32) return value
+        return inputValidationFailure("nonce", "length", "Message nonces must contain from 1 through 32 characters")
+    }
+    if (typeof value === "number") {
+        if (Number.isSafeInteger(value) && value >= 0) return String(value)
+        return inputValidationFailure("nonce", "range", "Message nonce numbers must be nonnegative safe integers")
+    }
+    return inputValidationFailure("nonce", "type", "Message nonces must be strings or nonnegative safe integers")
 }
 
 function encodeAllowedMentions(value: unknown) {

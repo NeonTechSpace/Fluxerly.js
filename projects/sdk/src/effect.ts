@@ -582,9 +582,11 @@ import { Deferred, Effect, Scope, type Stream } from "effect"
 import {
     createPkce,
     type OAuthAuthorizationInput,
+    type OAuthConnection,
     type OAuthCodeExchangeInput,
     type OAuthConfig,
     type OAuthIdentity,
+    type OAuthIntrospection,
     type OAuthOperationFailure,
     type OAuthTokens,
     type OAuthOperationOptions,
@@ -593,9 +595,13 @@ import { makeOAuthOwner } from "#sdk/internal/oauth"
 export { createPkce, OAuthOperationError, OAuthScopes } from "./oauth.js"
 export type {
     OAuthAuthorizationInput,
+    OAuthActiveIntrospection,
+    OAuthConnection,
     OAuthCodeExchangeInput,
     OAuthConfig,
     OAuthIdentity,
+    OAuthInactiveIntrospection,
+    OAuthIntrospection,
     OAuthOperation,
     OAuthOperationFailure,
     OAuthOperationOptions,
@@ -605,12 +611,12 @@ export type {
 } from "./oauth.js"
 
 /**
- * Standalone delegated OAuth client whose creating scope owns shutdown, not browser sessions, callbacks, token stores, or refresh coordination.
+ * Standalone delegated OAuth client whose creating scope owns shutdown, not browser sessions, callbacks, token stores, consent, installation policy, or refresh coordination.
  * It copies the client secret until shutdown, admits at most eight concurrent operations with no queue, caps response bodies at 1 MiB, and never retries requests automatically.
  * Expected failures remain in the typed channel; interruption and sanitized cleanup defects remain in the Effect cause
  */
 export interface OAuthClient {
-    /** Lazily resolve discovery and build an S256 authorization URL from its web application base, including any advertised path. State and PKCE values remain caller-owned */
+    /** Lazily resolve discovery and build an S256 authorization URL from its web application base, including any advertised path. Bot target and permission parameters are consent hints, not installation or authorization proof. State and PKCE values remain caller-owned */
     authorizationUrl(
         input: OAuthAuthorizationInput,
         options?: OAuthOperationOptions,
@@ -638,12 +644,19 @@ export interface OAuthClient {
         query?: GuildListQuery,
         options?: OAuthOperationOptions,
     ): Effect.Effect<readonly GuildListSummary[], OAuthOperationFailure>
+    /** Lazily read the full delegated connections list with a bearer token that has Fluxer's connections scope. This creates, verifies, reorders, and retains no connections */
+    fetchConnections(
+        accessToken: string,
+        options?: OAuthOperationOptions,
+    ): Effect.Effect<readonly OAuthConnection[], OAuthOperationFailure>
+    /** Lazily inspect one access or refresh token using this client's Basic credentials. Inactive does not identify revocation, expiry, ownership, or token existence */
+    introspect(token: string, options?: OAuthOperationOptions): Effect.Effect<OAuthIntrospection, OAuthOperationFailure>
     /** Clear copied confidential credentials, reject new work, abort active requests, and await their fetch and response-reader cleanup. Native callers retain any cleanup defect or interruption in the Effect cause */
     shutdown(): Effect.Effect<void>
 }
 
 /**
- * Opt-in delegated OAuth construction. The creating scope owns shutdown, while state validation, callback correlation, storage, and refresh coordination remain application-owned
+ * Opt-in delegated OAuth construction. The creating scope owns shutdown, while state validation, callback correlation, consent, storage, installation policy, and refresh coordination remain application-owned
  *
  * @example
  * ```ts
@@ -656,9 +669,11 @@ export interface OAuthClient {
  *         const pkce = oauth.createPkce()
  *         return yield* client.authorizationUrl({
  *             redirectUri: "https://app.example.test/oauth/callback",
- *             scopes: [OAuthScopes.Identify],
+ *             scopes: [OAuthScopes.Identify, OAuthScopes.Bot],
  *             state: "caller-correlated-state",
  *             codeChallenge: pkce.challenge,
+ *             guildId: "456",
+ *             permissions: 0n,
  *         })
  *     }),
  * )
@@ -684,6 +699,9 @@ export const oauth = Object.freeze({
                     owner.fetchIdentity(accessToken, options),
                 fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: OAuthOperationOptions) =>
                     owner.fetchGuilds(accessToken, query, options),
+                fetchConnections: (accessToken: string, options?: OAuthOperationOptions) =>
+                    owner.fetchConnections(accessToken, options),
+                introspect: (token: string, options?: OAuthOperationOptions) => owner.introspect(token, options),
                 shutdown: () => owner.shutdown(),
             })
         }),
@@ -1234,6 +1252,7 @@ export type {
     MessageBulkDeletion,
     MessageReference,
     MessageInput,
+    MessageNonce,
     ReplyInput,
     AllowedMentions,
     SendOptions,
@@ -1729,6 +1748,9 @@ export interface Messages {
      * Shared admission allows four active requests and 256 pending bodies or 4 MiB of pending JSON.
      * Only confirmed rate-limit rejections retry within the deadline. Ambiguous sends never retry automatically
      *
+     * Input nonce accepts a 1-32 character string or nonnegative safe integer. Omission creates one SDK nonce per execution, while an explicit nonce is retained through confirmed rate-limit retries.
+     * Fluxer duplicate suppression is best effort for five minutes after persistence. It is not durable idempotency, exactly-once delivery or a concurrent atomicity guarantee
+     *
      * Interruption awaits owned HTTP cleanup but cannot undo a server-side creation.
      * Typed failures, defects and interruption retain native channels, including cleanup causes
      */
@@ -1741,7 +1763,9 @@ export interface Messages {
      * Returns the created message after HTTP, with frozen messageSnapshots rather than live views of later source edits.
      * Uses send's shared admission, optional destination-message caching and 30,000 ms default total deadline
      *
-     * Fluxer checks source access and destination permissions. Only confirmed rate-limit rejection retries.
+     * Fluxer checks source access and destination permissions. Only confirmed rate-limit rejection retries
+     *
+     * Input nonce follows send's 1-32 character string/nonnegative-safe-integer contract, SDK-generated default and retry preservation. Fluxer's five-minute suppression is best effort, not durable idempotency or exactly-once delivery.
      * A lost response or interruption after dispatch may leave a created forward. No rollback or exactly-once guarantee.
      * Expected failures use MessageError or ClientClosedError. Defects and interruption retain native causes and await cleanup
      * @example
@@ -1786,6 +1810,7 @@ export interface Messages {
     ): Effect.Effect<A, E | MessageOperationFailure, R>
     /**
      * Lazy reply helper over send. Missing references fail, without unreferenced fallback or default author notification.
+     * Input nonce follows send's caller correlation and retry contract. A lost response remains unknown and the SDK does not replay it.
      * The returned reply is eligible for the same cache intake as send.
      * File inputs use send's per-execution snapshot, size, budget and cleanup rules
      */

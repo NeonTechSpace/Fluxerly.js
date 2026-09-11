@@ -1,6 +1,8 @@
 import { Context, Effect, type Scope } from "effect"
 import {
     createClient,
+    oauth,
+    OAuthScopes,
     colors,
     permissionBits,
     text,
@@ -29,6 +31,7 @@ import {
     type MessageOperationFailure,
     type InputValidationDetail,
     type Message,
+    type MessageNonce,
     type MessageHistoryQuery,
     type MessageSearchContext,
     type MessageSearchPage,
@@ -62,8 +65,32 @@ import {
     type WebhookMessageReference,
     type WebhookTokenEdit,
     type SupervisorWaitOptions,
+    type OAuthClient,
+    type OAuthConnection,
+    type OAuthIntrospection,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+/** Packed declaration coverage for combined code-grant URLs, connections reads, and confidential introspection */
+export function oauthCompletion(client: OAuthClient) {
+    const pkce = oauth.createPkce()
+    return Effect.gen(function* () {
+        const authorization = yield* client.authorizationUrl({
+            redirectUri: "https://app.example.test/oauth/callback",
+            scopes: [OAuthScopes.Identify, OAuthScopes.Bot],
+            state: "caller-owned-state",
+            codeChallenge: pkce.challenge,
+            guildId: "1",
+            permissions: 0n,
+            disableGuildSelect: true,
+        })
+        const connections = yield* client.fetchConnections("delegated-access-token")
+        const introspection: OAuthIntrospection = yield* client.introspect("candidate-token")
+        const connection: OAuthConnection | undefined = connections[0]
+        void connection
+        return { authorization, introspection }
+    })
+}
 
 /** Packed declaration coverage for token lifecycle and tagged webhook references */
 export const webhookReferenceTypes = (client: WebhookClient) => {
@@ -228,14 +255,19 @@ export function supervisorTypes(entry: string) {
 
 export const useConsumerFeatures = (client: Client, channelId: string, source: MessageReference, userId: string) =>
     Effect.gen(function* () {
-        const input: ForwardMessageInput = { source, attachmentIds: [], embedIndices: [0] }
+        const correlation: MessageNonce = 42
+        const input: ForwardMessageInput = { source, nonce: correlation, attachmentIds: [], embedIndices: [0] }
         const forwarded = yield* client.messages.forward(channelId, input)
         const snapshot: MessageSnapshot | undefined = forwarded.messageSnapshots?.[0]
         const sent = yield* client.messages.send(channelId, {
             attachments: [{ data: new Uint8Array([1, 2]), filename: "chart.png" }],
             embeds: [{ image: { url: "attachment://chart.png" } }],
             flags: MessageFlags.SuppressNotifications,
+            nonce: "packed-send-nonce",
         })
+        const reply = yield* client.messages.reply(sent, { content: "Packed reply", nonce: "packed-reply-nonce" })
+        const returnedNonce: string | null | undefined = reply.nonce
+        void returnedNonce
         yield* client.messages.edit(sent, { flags: MessageFlags.SuppressEmbeds })
         yield* client.messages.edit(sent, {
             attachments: sent.attachments.map(({ id }) => ({ id, title: "Chart", description: null })),

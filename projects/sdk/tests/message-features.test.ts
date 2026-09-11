@@ -162,6 +162,13 @@ test("received forward snapshots retain nullable response state and freeze every
     ).toBeUndefined()
 })
 
+test("received message nonces preserve omitted and explicit null response states", () => {
+    expect(decodeMessage(message())?.nonce).toBeUndefined()
+    expect(decodeMessage(message({ nonce: null }))?.nonce).toBeNull()
+    expect(decodeMessage(message({ nonce: "returned-correlation" }))?.nonce).toBe("returned-correlation")
+    expect(decodeMessage(message({ nonce: 7 }))).toBeUndefined()
+})
+
 test("default and native forward calls use the shared create route without extra body fields", async () => {
     const requests = fixture()
     const defaultApi = unwrap(createClient({ token: "fixture" }))
@@ -213,11 +220,13 @@ test.each(apiSurfaces)(
         })
         await forwardSuccess(surface, {
             source: { id: "10", channelId: "30" },
+            nonce: "forward-429",
             attachmentIds: ["40"],
             embedIndices: [0],
         })
         expect(requests).toHaveLength(2)
-        expect(requests[0]?.nonce).toBe(requests[1]?.nonce)
+        expect(requests[0]?.nonce).toBe("forward-429")
+        expect(requests[1]?.nonce).toBe("forward-429")
         expect(requests[1]?.message_reference).toEqual({
             message_id: "10",
             channel_id: "30",
@@ -229,6 +238,27 @@ test.each(apiSurfaces)(
 )
 
 test.each(apiSurfaces)(
+    "forward generates distinct valid nonces when omitted and retains one through a 429 retry via the %s API",
+    async (surface) => {
+        const requests: Record<string, unknown>[] = []
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+            requests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+            return requests.length === 1
+                ? Response.json({ retry_after: 0.01 }, { status: 429 })
+                : Response.json(forwardedMessage())
+        })
+        await forwardSuccess(surface, { source: { id: "10", channelId: "30" } })
+        await forwardSuccess(surface, { source: { id: "10", channelId: "30" } })
+        expect(requests).toHaveLength(3)
+        expect(requests[0]?.nonce).toMatch(/^.{1,32}$/)
+        expect(requests[1]?.nonce).toMatch(/^.{1,32}$/)
+        expect(requests[2]?.nonce).toMatch(/^.{1,32}$/)
+        expect(requests[0]?.nonce).toBe(requests[1]?.nonce)
+        expect(requests[1]?.nonce).not.toBe(requests[2]?.nonce)
+    },
+)
+
+test.each(apiSurfaces)(
     "forward does not retry after a dispatched request loses its response through the %s API",
     async (surface) => {
         const requests: Record<string, unknown>[] = []
@@ -236,11 +266,22 @@ test.each(apiSurfaces)(
             requests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
             throw new TypeError("fixture lost response")
         })
-        const failure = await forwardFailure(surface, { source: { id: "10", channelId: "30" } })
+        const failure = await forwardFailure(surface, {
+            source: { id: "10", channelId: "30" },
+            nonce: "forward-unknown",
+        })
         expect(failure).toMatchObject({ _tag: "MessageError", delivery: "unknown" })
         expect(requests).toHaveLength(1)
+        expect(requests[0]?.nonce).toBe("forward-unknown")
     },
 )
+
+test.each(apiSurfaces)("forward rejects invalid caller nonces before dispatch through the %s API", async (surface) => {
+    const requests = fixture()
+    const failure = await forwardFailure(surface, { source: { id: "10", channelId: "30" }, nonce: "" })
+    expect(failure).toMatchObject({ _tag: "MessageError", reason: "input", delivery: "notSent" })
+    expect(requests).toHaveLength(0)
+})
 
 test("forward copies selectors before waiting for REST admission", async () => {
     type HeldRequest = { body: Record<string, unknown>; resolve(response: Response): void }

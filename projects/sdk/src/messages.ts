@@ -24,6 +24,8 @@ export interface MessageReference {
  * ```
  */
 export interface Message extends MessageReference {
+    /** Client nonce returned by Fluxer. Null is an explicit provider value, while omission means this observation supplied none */
+    readonly nonce?: string | null
     /** Webhook ID when supplied by Fluxer. Missing/null wire values omit this field, without inferring identity from the author */
     readonly webhookId?: string
     /** Pin status supplied by Fluxer. Omitted means unknown, not false. Snapshots do not update in place */
@@ -194,6 +196,9 @@ export const MessageFlags = Object.freeze({
 /** One writable non-voice message flag. Combine values with bitwise OR before assigning `flags` */
 export type MessageFlag = (typeof MessageFlags)[keyof typeof MessageFlags]
 
+/** Fluxer's client-generated message identifier. Strings contain 1 through 32 UTF-16 code units; numbers are nonnegative safe integers and are encoded as decimal strings */
+export type MessageNonce = string | number
+
 /** Text, embeds, file uploads or stickers. TypeScript does not establish nonempty content.
  * Stickers can be sent by bots and webhooks but cannot be replaced through message edits
  * @example
@@ -253,6 +258,8 @@ type Body<A> =
  * Unknown input keys are rejected. Use `messages.forward` for immutable source snapshots. An `attachment://` image or thumbnail URL needs one matching new image upload in this request
  */
 export type MessageInput = MessageBody & {
+    /** Optional caller-controlled correlation identifier. Fluxer suppresses a matching nonce best-effort for five minutes after persistence. Omit it for one SDK-generated nonce per send execution */
+    readonly nonce?: MessageNonce
     /** Mention notifications are disabled by default, including the replied-to author */
     readonly allowedMentions?: AllowedMentions
     /** Optional reply reference. Its channelId must match the send destination */
@@ -262,13 +269,15 @@ export type MessageInput = MessageBody & {
 }
 
 /** Reply helper input. The reference comes from reply's first argument */
-export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions" | "flags">
+export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions" | "flags" | "nonce">
 
 /** Create an immutable forward without fetching or validating the source locally, or uploading new content.
  * A nonempty media selector creates a media-only forward, omitting source text. Omit both selectors to copy source text and media.
  * Empty arrays alone behave like omitted selectors; they do not request a text-only forward
  */
 export interface ForwardMessageInput {
+    /** Optional caller-controlled correlation identifier. Fluxer suppresses a matching nonce best-effort for five minutes after persistence. Omit it for one SDK-generated nonce per forward execution */
+    readonly nonce?: MessageNonce
     /** Source message to capture. Its channel may differ from the destination channel, and the SDK does not fetch it */
     readonly source: MessageReference
     /** Up to ten source attachment IDs to copy. A nonempty list makes the forward media-only */

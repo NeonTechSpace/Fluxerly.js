@@ -44,6 +44,7 @@ const cleanupCheck = process.argv[3] === "--cleanup"
 const moderation = process.argv[3] === "--moderation"
 const search = process.argv[3] === "--search"
 const optionalTools = process.argv[3] === "--optional-tools"
+const nonceOnly = process.argv[3] === "--nonce-only"
 // This probe verifies outbound REST lifetime through both APIs, not delivery of the bot's own typing notices
 const typing = process.argv[3] === "--typing"
 let moderationUserId = process.env.FLUXER_TEST_MODERATION_USER_ID
@@ -2435,6 +2436,80 @@ async function prepareHistory(channelId, botId) {
     }
 }
 
+async function verifyNonce(ops, channelId) {
+    const marker = randomUUID().replaceAll("-", "").slice(0, 8)
+    const selected = `${marker}-s`
+    stage = "nonce_selected_send"
+    const first = await ops.send({ content: `${marker}-first`, nonce: selected })
+    assert.equal(first.nonce, selected)
+    const duplicate = await ops.send({ content: `${marker}-first`, nonce: selected })
+    assert.equal(duplicate.id, first.id)
+    assert.equal(duplicate.nonce, selected)
+    const selectedReadback = await api("GET", `/channels/${channelId}/messages/${first.id}`)
+    assert.equal(selectedReadback.status, 200)
+    assert.equal(selectedReadback.data?.id, first.id)
+    assert.equal(selectedReadback.data?.content, `${marker}-first`)
+    report(stage, true)
+
+    stage = "nonce_omitted_defaults"
+    const generatedA = await ops.send({ content: `${marker}-generated-a` })
+    const generatedB = await ops.send({ content: `${marker}-generated-b` })
+    assert.match(generatedA.nonce ?? "", /^.{1,32}$/)
+    assert.match(generatedB.nonce ?? "", /^.{1,32}$/)
+    assert.notEqual(generatedA.nonce, generatedB.nonce)
+    assert.notEqual(generatedA.id, generatedB.id)
+    report(stage, true)
+
+    stage = "nonce_reply_and_forward"
+    const reply = await ops.reply(first, { content: `${marker}-reply`, nonce: `${marker}-r` })
+    const forward = await ops.forward(channelId, {
+        source: first,
+        nonce: `${marker}-f`,
+    })
+    assert.equal(reply.nonce, `${marker}-r`)
+    assert.equal(forward.nonce, `${marker}-f`)
+    for (const sent of [reply, forward]) {
+        const readback = await api("GET", `/channels/${channelId}/messages/${sent.id}`)
+        assert.equal(readback.status, 200)
+        assert.equal(readback.data?.id, sent.id)
+    }
+    report(stage, true)
+
+    stage = "nonce_lost_response_no_replay"
+    const lostNonce = `${marker}-u`
+    const lostContent = `${marker}-unknown`
+    const originalFetch = globalThis.fetch
+    let submits = 0
+    globalThis.fetch = async (...args) => {
+        const request = args[1]
+        const url = new URL(String(args[0]))
+        if (url.pathname === `/v1/channels/${channelId}/messages` && request?.method === "POST") {
+            const payload = JSON.parse(String(request.body))
+            if (payload.nonce === lostNonce) {
+                submits++
+                const response = await originalFetch(...args)
+                assert.ok(response.ok)
+                await response.body?.cancel()
+                throw new TypeError("nonce fixture lost response")
+            }
+        }
+        return originalFetch(...args)
+    }
+    try {
+        const failure = await ops.sendUnknown({ content: lostContent, nonce: lostNonce })
+        assert.equal(failure?._tag, "MessageError")
+        assert.equal(failure?.delivery, "unknown")
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+    assert.equal(submits, 1)
+    const history = await api("GET", `/channels/${channelId}/messages?limit=100`)
+    assert.equal(history.status, 200)
+    assert.ok(Array.isArray(history.data))
+    assert.equal(history.data.filter((message) => message.content === lostContent).length, 1)
+    report(stage, true)
+}
+
 async function verifyCollectors(open, send, channelId, botId, interrupt) {
     const marker = `collector-${randomUUID()}`
     const filter = (message) => message.author.id === botId && message.content.startsWith(marker)
@@ -2709,6 +2784,7 @@ try {
                     moderation ||
                     search ||
                     optionalTools ||
+                    nonceOnly ||
                     typing)),
     )
     stage = "sandbox_lock"
@@ -2808,6 +2884,28 @@ try {
             assert.ok(sent.isOk())
             return sent.value
         }
+        if (nonceOnly)
+            await verifyNonce(
+                {
+                    send: async (input) => cacheSend(channel.id, input),
+                    reply: async (target, input) => {
+                        const sent = await client.messages.reply(target, input)
+                        assert.ok(sent.isOk())
+                        return sent.value
+                    },
+                    forward: async (destination, input) => {
+                        const sent = await client.messages.forward(destination, input)
+                        assert.ok(sent.isOk())
+                        return sent.value
+                    },
+                    sendUnknown: async (input) => {
+                        const result = await client.messages.send(channel.id, input)
+                        assert.ok(result.isErr())
+                        return result.error
+                    },
+                },
+                channel.id,
+            )
         const done = Promise.withResolvers()
         const stopState = forceRecovery
             ? client.observeState((state) => {
@@ -3549,6 +3647,20 @@ try {
                         return cached.value
                     }
                     const cacheSend = (channelId, input) => Effect.runPromise(client.messages.send(channelId, input))
+                    if (nonceOnly)
+                        yield* Effect.promise(() =>
+                            verifyNonce(
+                                {
+                                    send: (input) => cacheSend(channel.id, input),
+                                    reply: (target, input) => Effect.runPromise(client.messages.reply(target, input)),
+                                    forward: (destination, input) =>
+                                        Effect.runPromise(client.messages.forward(destination, input)),
+                                    sendUnknown: (input) =>
+                                        Effect.runPromise(client.messages.send(channel.id, input).pipe(Effect.flip)),
+                                },
+                                channel.id,
+                            ),
+                        )
                     if (search) {
                         yield* Effect.promise(() =>
                             verifyMessageSearch(

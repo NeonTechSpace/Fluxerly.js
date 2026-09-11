@@ -14,6 +14,7 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
+import { API } from "typescript/unstable/sync"
 
 const sdk = fileURLToPath(new URL("../", import.meta.url))
 const fixtureDirectory = fileURLToPath(new URL("./consumers/", import.meta.url))
@@ -56,6 +57,99 @@ function writeNamedExampleFixtures(consumer, source, fixtures) {
     }
 }
 
+const sourceCommentApi = new API({ cwd: sdk })
+const sourceCommentSnapshot = sourceCommentApi.updateSnapshot({ openProjects: ["tsconfig.json"] })
+const sourceCommentProject = sourceCommentSnapshot
+    .getProjects()
+    .find((candidate) => candidate.configFileName.endsWith("/tsconfig.json"))
+assert.ok(sourceCommentProject, "TypeScript project was not loaded")
+const symbolIsAlias = 1 << 21
+
+const publicCommentOwners = new Map()
+
+function sourceEntry(sourceRoot, sourceFile) {
+    const relativePath = relative(sourceRoot, sourceFile.fileName).replaceAll("\\", "/")
+    assert.ok(
+        relativePath.endsWith(".ts") && !relativePath.startsWith("../"),
+        `Unsupported public comment owner ${sourceFile.fileName}`,
+    )
+    return relativePath.slice(0, -3)
+}
+
+function enclosingStatement(sourceFile, declaration) {
+    return sourceFile.statements.find(
+        (statement) =>
+            statement.index === declaration.index ||
+            statement.declarationList?.declarations?.some((candidate) => candidate.index === declaration.index),
+    )
+}
+
+function collectExportedOwnerComments(project, sourceRoot, entry, cache) {
+    const cached = cache.get(entry)
+    if (cached) return cached
+    const sourceFile = project.program.getSourceFile(`${sourceRoot}/${entry}.ts`)
+    assert.ok(sourceFile, `Source entry src/${entry}.ts was not loaded`)
+    const module = project.checker.getSymbolAtLocation(sourceFile)
+    assert.ok(module, `Source entry src/${entry}.ts is not a module`)
+    const comments = new Map()
+    for (const exported of project.checker.getExportsOfModule(module)) {
+        const symbol = exported.flags & symbolIsAlias ? project.checker.getAliasedSymbol(exported) : exported
+        for (const declaration of symbol.declarations) {
+            const ownerSource = project.program.getSourceFile(declaration.path)
+            if (!ownerSource) continue
+            const owner = enclosingStatement(ownerSource, declaration)
+            if (!owner) continue
+            const ownerEntry = sourceEntry(sourceRoot, ownerSource)
+            const entryComments = comments.get(ownerEntry) ?? []
+            for (const comment of owner.jsDoc ?? []) entryComments.push(comment.getText(ownerSource))
+            for (const member of owner.members ?? [])
+                for (const comment of member.jsDoc ?? []) entryComments.push(comment.getText(ownerSource))
+            comments.set(ownerEntry, entryComments)
+        }
+    }
+    cache.set(entry, comments)
+    return comments
+}
+
+function exportedOwnerComments(entry) {
+    return collectExportedOwnerComments(sourceCommentProject, join(sdk, "src"), entry, publicCommentOwners)
+}
+
+function assertExportedOwnerCommentGuards() {
+    const temporary = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-comment-guard-"))
+    const sourceRoot = join(temporary, "src")
+    mkdirSync(sourceRoot)
+    writeFileSync(join(temporary, "tsconfig.json"), JSON.stringify({ compilerOptions: { module: "NodeNext" } }))
+    writeFileSync(
+        join(sourceRoot, "entry.ts"),
+        `/** direct fixture documentation */\nexport const direct = 1\nexport type { Shared } from "./shared.js"\n`,
+    )
+    writeFileSync(
+        join(sourceRoot, "shared.ts"),
+        `/** reexported fixture documentation */\nexport interface Shared {\n    /** reexported member documentation */\n    readonly value: string\n}\n`,
+    )
+    const api = new API({ cwd: temporary })
+    try {
+        const snapshot = api.updateSnapshot({ openProjects: ["tsconfig.json"] })
+        const project = snapshot.getProjects().find((candidate) => candidate.configFileName.endsWith("/tsconfig.json"))
+        assert.ok(project, "Comment guard fixture project was not loaded")
+        const comments = collectExportedOwnerComments(project, sourceRoot, "entry", new Map())
+        const normalizeComment = (comment) => comment.replace(/\s+/g, " ").trim()
+        assert.deepEqual(comments.get("entry")?.map(normalizeComment), ["/** direct fixture documentation */"])
+        assert.deepEqual(comments.get("shared")?.map(normalizeComment), [
+            "/** reexported fixture documentation */",
+            "/** reexported member documentation */",
+        ])
+    } finally {
+        api.close()
+        const target = realpathSync(temporary)
+        assert.equal(dirname(target), realpathSync(tmpdir()))
+        rmSync(target, { recursive: true })
+    }
+}
+
+assertExportedOwnerCommentGuards()
+
 const temporaryRoot = realpathSync(tmpdir())
 const temporary = mkdtempSync(join(temporaryRoot, "fluxerly-package-check-"))
 try {
@@ -74,7 +168,15 @@ try {
         mkdirSync(consumer)
         const dependencies = { [manifest.name]: `file:${tarball.replaceAll("\\", "/")}` }
         if (kind === "effect") dependencies.effect = manifest.dependencies.effect
-        writeFileSync(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module", dependencies }))
+        writeFileSync(
+            join(consumer, "package.json"),
+            JSON.stringify({
+                private: true,
+                type: "module",
+                dependencies,
+                devDependencies: { "@types/node": manifest.devDependencies["@types/node"] },
+            }),
+        )
         writeFileSync(join(consumer, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
         packageManager(["install", "--offline", "--strict-peer-dependencies"], consumer)
 
@@ -171,24 +273,17 @@ try {
                 readFileSync(join(installed, declaration), "utf8"),
                 readFileSync(join(sdk, declaration), "utf8"),
             )
-            const source = readFileSync(join(sdk, `src/${entry}.ts`), "utf8")
             const normalizeComment = (text) => text.replace(/\s+/g, " ").trim()
-            const emitted = [...readFileSync(join(installed, declaration), "utf8").matchAll(/\/\*\*[\s\S]*?\*\//g)].map(
-                ([comment]) => normalizeComment(comment),
-            )
-            // The default standalone OAuth facade follows the main client implementation
-            let publicSource =
-                entry === "index" || entry === "effect" ? source.split("export function createClient")[0] : source
-            if (entry === "index") {
-                const oauthInterface = source.indexOf("export interface OAuthClient")
-                assert.ok(oauthInterface > 0)
-                publicSource += source.slice(source.lastIndexOf("/**", oauthInterface))
-            }
-            for (const [comment] of publicSource.matchAll(/\/\*\*[\s\S]*?\*\//g)) {
-                assert.ok(
-                    emitted.includes(normalizeComment(comment)),
-                    `Public comment missing from packed ${declaration}`,
+            for (const [owner, comments] of exportedOwnerComments(entry)) {
+                const ownerDeclaration = readFileSync(join(installed, `dist/${owner}.d.ts`), "utf8")
+                const emitted = [...ownerDeclaration.matchAll(/\/\*\*[\s\S]*?\*\//g)].map(([comment]) =>
+                    normalizeComment(comment),
                 )
+                for (const comment of comments)
+                    assert.ok(
+                        emitted.includes(normalizeComment(comment)),
+                        `Public comment missing from packed dist/${owner}.d.ts`,
+                    )
             }
         }
         const defaultDeclarations = readFileSync(join(installed, "dist/index.d.ts"), "utf8")
@@ -212,6 +307,8 @@ try {
         if (kind === "default") assert.equal(existsSync(join(consumer, "node_modules/effect")), false)
         copyFileSync(join(fixtureDirectory, `${kind}.mjs`), join(consumer, "consumer.mjs"))
         process.stdout.write(run(process.execPath, ["--enable-source-maps", "consumer.mjs"], consumer, 10_000))
+        copyFileSync(join(fixtureDirectory, "workflow.mjs"), join(consumer, "workflow.mjs"))
+        process.stdout.write(run(process.execPath, ["--enable-source-maps", "workflow.mjs", kind], consumer, 15_000))
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
         const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
@@ -253,6 +350,13 @@ try {
             })),
         ]
         writeNamedExampleFixtures(consumer, publicSource, publicFixtureInventory)
+        writeNamedExampleFixtures(consumer, publicSource, [
+            {
+                name: "runBot",
+                matches: (example) => /(?:async function|const) runBot/.test(example),
+                file: () => "run-bot-example.ts",
+            },
+        ])
         const hierarchySource =
             kind === "default" ? readFileSync(join(sdk, "src/role-hierarchy.ts"), "utf8") : publicSource
         const hierarchyExamples = examples(hierarchySource).filter((example) =>
@@ -479,9 +583,27 @@ try {
                     lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                 },
                 include: ["*.ts"],
+                exclude: ["run-bot-example.ts"],
             }),
         )
         run(process.execPath, [compiler, "-p", "tsconfig.json"], consumer)
+        writeFileSync(
+            join(consumer, "run-bot-tsconfig.json"),
+            JSON.stringify({
+                compilerOptions: {
+                    target: "ES2024",
+                    module: "NodeNext",
+                    types: ["node"],
+                    strict: true,
+                    exactOptionalPropertyTypes: true,
+                    noUncheckedIndexedAccess: true,
+                    noEmit: true,
+                    lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+                },
+                files: ["run-bot-example.ts"],
+            }),
+        )
+        run(process.execPath, [compiler, "-p", "run-bot-tsconfig.json"], consumer)
         const invocation =
             kind === "default"
                 ? "import { createAndReadState } from './out/consumer.js'; if (createAndReadState('fixture-only-not-a-credential') !== 'Disconnected') throw Error('Unexpected state')"
@@ -490,6 +612,7 @@ try {
         console.log(`${kind} TypeScript 7 packed consumer passed`)
     }
 } finally {
+    sourceCommentApi.close()
     const target = realpathSync(temporary)
     assert.equal(dirname(target), temporaryRoot)
     assert.ok(target.startsWith(`${temporaryRoot}${sep}`) && resolve(target) === resolve(temporary))

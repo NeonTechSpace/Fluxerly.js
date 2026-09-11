@@ -3,7 +3,9 @@ import type {
     OAuthAuthorizationInput,
     OAuthCodeExchangeInput,
     OAuthConfig,
+    OAuthConnection,
     OAuthIdentity,
+    OAuthIntrospection,
     OAuthOperation,
     OAuthOperationError,
     OAuthOperationOptions,
@@ -21,6 +23,8 @@ import { InputValidationFailure, inputValidationFailure, type InputValidationCon
 const maximumResponseBytes = 1_048_576
 const maximumConcurrentRequests = 8
 const defaultTimeoutMs = 30_000
+const maximumPermissionBits = (1n << 64n) - 1n
+const maximumInt32 = 2_147_483_647
 
 /** Carries no upstream text, payload, credential, or cause into either public boundary */
 class OAuthResponseCleanupDefect extends Error {
@@ -104,6 +108,66 @@ function identity(value: unknown): OAuthIdentity | undefined {
         avatar: value.avatar,
         ...(value.email === undefined ? {} : { email: value.email }),
         ...(value.verified === undefined ? {} : { verified: value.verified }),
+    })
+}
+
+function connections(value: unknown): readonly OAuthConnection[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const result: OAuthConnection[] = []
+    for (const item of value) {
+        if (
+            !record(item) ||
+            typeof item.id !== "string" ||
+            (item.type !== "bsky" && item.type !== "domain") ||
+            typeof item.name !== "string" ||
+            typeof item.verified !== "boolean" ||
+            typeof item.visibility_flags !== "number" ||
+            !Number.isSafeInteger(item.visibility_flags) ||
+            item.visibility_flags < 0 ||
+            item.visibility_flags > maximumInt32 ||
+            typeof item.sort_order !== "number" ||
+            !Number.isSafeInteger(item.sort_order) ||
+            item.sort_order < 0 ||
+            item.sort_order > maximumInt32
+        )
+            return undefined
+        result.push(
+            Object.freeze({
+                id: item.id,
+                type: item.type,
+                name: item.name,
+                verified: item.verified,
+                visibilityFlags: item.visibility_flags,
+                sortOrder: item.sort_order,
+            }),
+        )
+    }
+    return Object.freeze(result)
+}
+
+function introspection(value: unknown): OAuthIntrospection | undefined {
+    if (!record(value) || typeof value.active !== "boolean") return undefined
+    if (!value.active) return Object.freeze({ active: false })
+    if (
+        !identifier(value.client_id) ||
+        (value.sub !== undefined && !identifier(value.sub)) ||
+        typeof value.scope !== "string" ||
+        (value.token_type !== "Bearer" && value.token_type !== "refresh_token") ||
+        typeof value.iat !== "number" ||
+        !Number.isSafeInteger(value.iat) ||
+        value.iat < 0 ||
+        (value.exp !== undefined &&
+            (typeof value.exp !== "number" || !Number.isSafeInteger(value.exp) || value.exp < 0))
+    )
+        return undefined
+    return Object.freeze({
+        active: true,
+        clientId: value.client_id,
+        ...(value.sub === undefined ? {} : { subjectId: value.sub }),
+        tokenType: value.token_type,
+        scopes: Object.freeze(value.scope.split(/[\s+]+/).filter(Boolean)),
+        issuedAtUnixSeconds: value.iat,
+        ...(value.exp === undefined ? {} : { expiresAtUnixSeconds: value.exp }),
     })
 }
 
@@ -339,13 +403,72 @@ export class OAuthOwner {
             return Effect.fail(
                 inputError("oauth.authorizationUrl", "scopes", "length", "OAuth scopes must be a non-empty array"),
             )
-        if (Array.from(input.scopes).some((scope) => !["identify", "email", "guilds", "connections"].includes(scope)))
+        if (
+            Array.from(input.scopes).some(
+                (scope) => !["identify", "email", "guilds", "connections", "bot"].includes(scope),
+            )
+        )
             return Effect.fail(
                 inputError(
                     "oauth.authorizationUrl",
                     "scopes[]",
                     "allowedValue",
-                    "OAuth scopes must be identify, email, guilds, or connections",
+                    "OAuth scopes must be identify, email, guilds, connections, or bot",
+                ),
+            )
+        const botScope = input.scopes.includes("bot")
+        const installationInput =
+            input.guildId !== undefined ||
+            input.channelId !== undefined ||
+            input.permissions !== undefined ||
+            input.disableGuildSelect !== undefined
+        if (installationInput && !botScope)
+            return Effect.fail(
+                inputError(
+                    "oauth.authorizationUrl",
+                    "botInstallation",
+                    "required",
+                    "Bot installation options require the bot scope",
+                ),
+            )
+        if (input.guildId !== undefined && !identifier(input.guildId))
+            return Effect.fail(
+                inputError("oauth.authorizationUrl", "guildId", "format", "Guild target must be a decimal ID"),
+            )
+        if (input.channelId !== undefined && !identifier(input.channelId))
+            return Effect.fail(
+                inputError("oauth.authorizationUrl", "channelId", "format", "Channel target must be a decimal ID"),
+            )
+        if (input.guildId !== undefined && input.channelId !== undefined)
+            return Effect.fail(
+                inputError(
+                    "oauth.authorizationUrl",
+                    "channelId",
+                    "relationship",
+                    "Channel target cannot be used with guild target",
+                ),
+            )
+        if (
+            input.permissions !== undefined &&
+            (typeof input.permissions !== "bigint" ||
+                input.permissions < 0n ||
+                input.permissions > maximumPermissionBits)
+        )
+            return Effect.fail(
+                inputError(
+                    "oauth.authorizationUrl",
+                    "permissions",
+                    "range",
+                    "Bot permissions must be an unsigned 64-bit bitfield",
+                ),
+            )
+        if (input.disableGuildSelect !== undefined && typeof input.disableGuildSelect !== "boolean")
+            return Effect.fail(
+                inputError(
+                    "oauth.authorizationUrl",
+                    "disableGuildSelect",
+                    "type",
+                    "disableGuildSelect must be a boolean",
                 ),
             )
         const request = {
@@ -353,11 +476,15 @@ export class OAuthOwner {
             scopes: Object.freeze([...input.scopes]),
             state: input.state,
             codeChallenge: input.codeChallenge,
+            guildId: input.guildId,
+            channelId: input.channelId,
+            permissions: input.permissions,
+            disableGuildSelect: input.disableGuildSelect,
         }
         return this.#run("oauth.authorizationUrl", options, (_api, webapp) =>
             Effect.sync(() => {
                 const url = new URL("oauth2/authorize", `${webapp}/`)
-                url.search = new URLSearchParams({
+                const query = new URLSearchParams({
                     client_id: this.clientId,
                     response_type: "code",
                     redirect_uri: request.redirectUri,
@@ -365,7 +492,13 @@ export class OAuthOwner {
                     state: request.state,
                     code_challenge: request.codeChallenge,
                     code_challenge_method: "S256",
-                }).toString()
+                })
+                if (request.guildId !== undefined) query.set("guild_id", request.guildId)
+                if (request.channelId !== undefined) query.set("channel_id", request.channelId)
+                if (request.permissions !== undefined) query.set("permissions", request.permissions.toString())
+                if (request.disableGuildSelect !== undefined)
+                    query.set("disable_guild_select", String(request.disableGuildSelect))
+                url.search = query.toString()
                 return url.toString()
             }),
         )
@@ -684,6 +817,58 @@ export class OAuthOwner {
                 request.path,
                 { method: "GET", headers: { authorization: `Bearer ${accessToken}` } },
                 request.decode,
+                progress,
+            ),
+        )
+    }
+
+    fetchConnections(
+        accessToken: string,
+        options?: OAuthOperationOptions,
+    ): Effect.Effect<readonly OAuthConnection[], OAuthOperationError | ClientClosedError> {
+        if (!text(accessToken))
+            return Effect.fail(
+                inputError(
+                    "oauth.fetchConnections",
+                    "accessToken",
+                    "required",
+                    "Access token must be a non-empty string",
+                ),
+            )
+        return this.#run("oauth.fetchConnections", options, (api, _webapp, _secret, progress) =>
+            this.#request(
+                "oauth.fetchConnections",
+                api,
+                "/users/@me/connections",
+                { method: "GET", headers: { authorization: `Bearer ${accessToken}` } },
+                connections,
+                progress,
+            ),
+        )
+    }
+
+    introspect(
+        token: string,
+        options?: OAuthOperationOptions,
+    ): Effect.Effect<OAuthIntrospection, OAuthOperationError | ClientClosedError> {
+        if (!text(token))
+            return Effect.fail(
+                inputError("oauth.introspect", "token", "required", "Inspected token must be a non-empty string"),
+            )
+        return this.#run("oauth.introspect", options, (api, _webapp, secret, progress) =>
+            this.#request(
+                "oauth.introspect",
+                api,
+                "/oauth2/introspect",
+                {
+                    method: "POST",
+                    headers: {
+                        authorization: `Basic ${Buffer.from(`${this.clientId}:${secret}`).toString("base64")}`,
+                        "content-type": "application/x-www-form-urlencoded",
+                    },
+                    body: new URLSearchParams({ token }).toString(),
+                },
+                introspection,
                 progress,
             ),
         )

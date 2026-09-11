@@ -3,12 +3,13 @@ import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** Delegated identity scopes accepted by authorizationUrl, distinct from bot installation permissions */
+/** Delegated identity and bot-installation scopes accepted by authorizationUrl */
 export const OAuthScopes = Object.freeze({
     Identify: "identify",
     Email: "email",
     Guilds: "guilds",
     Connections: "connections",
+    Bot: "bot",
 })
 
 export type OAuthScope = (typeof OAuthScopes)[keyof typeof OAuthScopes]
@@ -27,12 +28,20 @@ export interface OAuthConfig {
 export interface OAuthAuthorizationInput {
     /** Exact registered redirect, using HTTPS or loopback HTTP, without embedded credentials or a fragment */
     readonly redirectUri: string
-    /** At least one delegated scope from OAuthScopes */
+    /** At least one delegated or bot-installation scope from OAuthScopes */
     readonly scopes: readonly OAuthScope[]
     /** Nonempty unpredictable caller-generated value, which the application must verify on the callback */
     readonly state: string
     /** S256 base64url challenge, exactly 43 characters, paired with the callback's retained verifier */
     readonly codeChallenge: string
+    /** Optional guild installation target for the bot scope. This hint neither proves membership nor grants permissions */
+    readonly guildId?: string
+    /** Optional group-DM installation target for the bot scope. Mutually exclusive with guildId and not proof of installation */
+    readonly channelId?: string
+    /** Optional unsigned 64-bit bot permission bitfield, serialized as a decimal provider parameter without local authorization */
+    readonly permissions?: bigint
+    /** Optional bot-scope consent-interface hint that suppresses guild selection. It does not establish a selected target */
+    readonly disableGuildSelect?: boolean
 }
 
 /** Caller-owned authorization-code callback values */
@@ -67,6 +76,39 @@ export interface OAuthIdentity {
     readonly verified?: boolean | null
 }
 
+/** One immutable connection returned only by the delegated connections-scoped endpoint */
+export interface OAuthConnection {
+    readonly id: string
+    readonly type: string
+    readonly name: string
+    readonly verified: boolean
+    readonly visibilityFlags: number
+    readonly sortOrder: number
+}
+
+/** Inactive confidential introspection result. Fluxer intentionally does not identify whether the token was unknown, expired, revoked, or issued to another client */
+export interface OAuthInactiveIntrospection {
+    readonly active: false
+}
+
+/** Active confidential introspection result for this client application's access or refresh token */
+export interface OAuthActiveIntrospection {
+    readonly active: true
+    readonly clientId: string
+    /** Subject account ID when Fluxer includes one. Its absence does not make an otherwise active access token inactive */
+    readonly subjectId?: string
+    readonly tokenType: "Bearer" | "refresh_token"
+    /** Granted scopes parsed from Fluxer's space-separated response, with no authorization decision or retention */
+    readonly scopes: readonly string[]
+    /** Provider-reported Unix seconds when this token was issued */
+    readonly issuedAtUnixSeconds: number
+    /** Provider-reported Unix seconds for an access token. Refresh-token results omit this field */
+    readonly expiresAtUnixSeconds?: number
+}
+
+/** Explicit confidential token liveness result. An inactive result is intentionally not a revocation finding */
+export type OAuthIntrospection = OAuthInactiveIntrospection | OAuthActiveIntrospection
+
 export interface OAuthOperationOptions {
     /** Total milliseconds across discovery and one request, default 30,000. Cleanup can take longer */
     readonly timeoutMs?: number
@@ -82,6 +124,8 @@ export type OAuthOperation =
     | "oauth.revoke"
     | "oauth.fetchIdentity"
     | "oauth.fetchGuilds"
+    | "oauth.fetchConnections"
+    | "oauth.introspect"
 
 /** Expected OAuth failure with safe metadata. Only recognized OAuth error codes are retained, without bodies, descriptions, or credentials */
 export class OAuthOperationError extends Error {

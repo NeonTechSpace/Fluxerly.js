@@ -1,5 +1,7 @@
 import {
     createClient,
+    oauth,
+    OAuthScopes,
     colors,
     permissionBits,
     text,
@@ -25,6 +27,7 @@ import {
     type ShardState,
     type ShardingOptions,
     type Message,
+    type MessageNonce,
     type MessageHistoryQuery,
     type MessageSearchContext,
     type MessageSearchPage,
@@ -65,8 +68,36 @@ import {
     type WebhookMessageReference,
     type WebhookTokenEdit,
     type SupervisorWaitOptions,
+    type OAuthClient,
+    type OAuthConnection,
+    type OAuthIntrospection,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+/** Packed declaration coverage for combined code-grant URLs, connections reads, and confidential introspection */
+export async function oauthCompletion(client: OAuthClient) {
+    const pkce = oauth.createPkce()
+    const authorization = await client.authorizationUrl({
+        redirectUri: "https://app.example.test/oauth/callback",
+        scopes: [OAuthScopes.Identify, OAuthScopes.Bot],
+        state: "caller-owned-state",
+        codeChallenge: pkce.challenge,
+        guildId: "1",
+        permissions: 0n,
+        disableGuildSelect: true,
+    })
+    const connections = await client.fetchConnections("delegated-access-token")
+    const introspection = await client.introspect("candidate-token")
+    if (connections.isOk()) {
+        const connection: OAuthConnection | undefined = connections.value[0]
+        void connection
+    }
+    if (introspection.isOk()) {
+        const status: OAuthIntrospection = introspection.value
+        if (!status.active) void status.active
+    }
+    return { authorization, connections, introspection }
+}
 
 /** Packed declaration coverage for token lifecycle and tagged webhook references */
 export function webhookReferenceTypes(client: WebhookClient) {
@@ -212,7 +243,8 @@ export function supervisorTypes(entry: string) {
 }
 
 export async function useConsumerFeatures(client: Client, channelId: string, source: MessageReference, userId: string) {
-    const input: ForwardMessageInput = { source, attachmentIds: [], embedIndices: [0] }
+    const correlation: MessageNonce = 42
+    const input: ForwardMessageInput = { source, nonce: correlation, attachmentIds: [], embedIndices: [0] }
     const forwarded = await client.messages.forward(channelId, input)
     if (forwarded.isErr()) return forwarded
     const snapshot: MessageSnapshot | undefined = forwarded.value.messageSnapshots?.[0]
@@ -220,8 +252,13 @@ export async function useConsumerFeatures(client: Client, channelId: string, sou
         attachments: [{ data: new Uint8Array([1, 2]), filename: "chart.png" }],
         embeds: [{ image: { url: "attachment://chart.png" } }],
         flags: MessageFlags.SuppressNotifications,
+        nonce: "packed-send-nonce",
     })
     if (sent.isErr()) return sent
+    const reply = await client.messages.reply(sent.value, { content: "Packed reply", nonce: "packed-reply-nonce" })
+    if (reply.isErr()) return reply
+    const returnedNonce: string | null | undefined = reply.value.nonce
+    void returnedNonce
     await client.messages.edit(sent.value, { flags: MessageFlags.SuppressEmbeds })
     await client.messages.edit(sent.value, {
         attachments: sent.value.attachments.map(({ id }) => ({ id, title: "Chart", description: null })),

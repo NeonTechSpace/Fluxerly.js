@@ -18,12 +18,24 @@ async function fixture(
         | "stallBody"
         | "discoveryStall"
         | "revokeRejected"
-        | "revokeBody" = "normal",
+        | "revokeBody"
+        | "connectionsMalformed"
+        | "connectionsForbidden"
+        | "connectionsStall"
+        | "connectionsEmptyStrings"
+        | "connectionsOutOfRange"
+        | "introspectionMalformed"
+        | "introspectionNoSubject"
+        | "introspectionInactive"
+        | "introspectionRefresh"
+        | "introspectionLarge" = "normal",
     webappPath = "",
 ) {
     const requests: Array<{ path: string; authorization?: string; body: string }> = []
     let markRequestBodyStarted!: () => void
     const requestBodyStarted = new Promise<void>((resolve) => (markRequestBodyStarted = resolve))
+    let markConnectionRequestStarted!: () => void
+    const connectionRequestStarted = new Promise<void>((resolve) => (markConnectionRequestStarted = resolve))
     let base = ""
     const server = createServer(async (request, response) => {
         markRequestBodyStarted()
@@ -37,6 +49,7 @@ async function fixture(
             ...(request.headers.authorization === undefined ? {} : { authorization: request.headers.authorization }),
             body,
         })
+        if (request.url === "/users/@me/connections") markConnectionRequestStarted()
         if (request.headers.authorization?.startsWith("Basic ") && new URLSearchParams(body).has("client_id")) {
             response.statusCode = 400
             return response.end(JSON.stringify({ error: "invalid_request" }))
@@ -91,6 +104,24 @@ async function fixture(
         }
         if (request.url === "/oauth2/token/revoke" && mode === "revokeBody") return response.end("not json")
         if (request.url === "/oauth2/token/revoke") return response.end()
+        if (request.url === "/oauth2/introspect" && mode === "introspectionMalformed")
+            return response.end(JSON.stringify({ active: true, client_id: "1" }))
+        if (request.url === "/oauth2/introspect" && mode === "introspectionInactive")
+            return response.end(JSON.stringify({ active: false }))
+        if (request.url === "/oauth2/introspect" && mode === "introspectionLarge")
+            return response.end("x".repeat(1_048_577))
+        if (request.url === "/oauth2/introspect")
+            return response.end(
+                JSON.stringify({
+                    active: true,
+                    client_id: "1",
+                    ...(mode === "introspectionNoSubject" ? {} : { sub: "2" }),
+                    scope: mode === "introspectionNoSubject" ? "" : "identify connections bot",
+                    token_type: mode === "introspectionRefresh" ? "refresh_token" : "Bearer",
+                    ...(mode === "introspectionRefresh" ? {} : { exp: 1_800_000_000 }),
+                    iat: 1_700_000_000,
+                }),
+            )
         if (request.url === "/oauth2/userinfo")
             return response.end(
                 JSON.stringify({
@@ -118,6 +149,26 @@ async function fixture(
                     },
                 ]),
             )
+        if (request.url === "/users/@me/connections" && mode === "connectionsStall") return
+        if (request.url === "/users/@me/connections" && mode === "connectionsForbidden") {
+            response.statusCode = 403
+            return response.end(JSON.stringify({ message: "private connections must not escape" }))
+        }
+        if (request.url === "/users/@me/connections" && mode === "connectionsMalformed")
+            return response.end(JSON.stringify([{ id: "connection" }]))
+        if (request.url === "/users/@me/connections")
+            return response.end(
+                JSON.stringify([
+                    {
+                        id: mode === "connectionsEmptyStrings" ? "" : "connection",
+                        type: "domain",
+                        name: mode === "connectionsEmptyStrings" ? "" : "example.test",
+                        verified: true,
+                        visibility_flags: mode === "connectionsOutOfRange" ? 2_147_483_648 : 1,
+                        sort_order: 0,
+                    },
+                ]),
+            )
         response.statusCode = 404
         response.end(JSON.stringify({ error: "invalid_grant" }))
     })
@@ -126,7 +177,7 @@ async function fixture(
     let closing: Promise<void> | undefined
     close = () =>
         (closing ??= new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))))
-    return { base, requests, requestBodyStarted }
+    return { base, requests, requestBodyStarted, connectionRequestStarted }
 }
 
 afterEach(async () => {
@@ -252,6 +303,158 @@ describe("oauth", () => {
         },
     )
 
+    test("builds combined code-grant authorization URLs with bounded bot installation hints", async () => {
+        const { base } = await fixture()
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (made.isErr()) throw made.error
+        try {
+            const result = await made.value.authorizationUrl({
+                redirectUri: "http://localhost/callback",
+                scopes: ["identify", "bot"],
+                state: "state",
+                codeChallenge: "a".repeat(43),
+                guildId: "2",
+                permissions: (1n << 64n) - 1n,
+                disableGuildSelect: true,
+            })
+            const url = new URL(result._unsafeUnwrap())
+            expect(url.searchParams.get("scope")).toBe("identify bot")
+            expect(url.searchParams.get("response_type")).toBe("code")
+            expect(url.searchParams.get("guild_id")).toBe("2")
+            expect(url.searchParams.get("permissions")).toBe("18446744073709551615")
+            expect(url.searchParams.get("disable_guild_select")).toBe("true")
+        } finally {
+            await made.value.shutdown()
+        }
+    })
+
+    test("keeps bot-only code-grant group-DM targets consistent across default and native clients", async () => {
+        const { base } = await fixture()
+        const input = {
+            redirectUri: "http://localhost/callback",
+            scopes: ["bot"] as const,
+            state: "state",
+            codeChallenge: "a".repeat(43),
+            channelId: "2",
+            permissions: 0n,
+        }
+        const defaultClient = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (defaultClient.isErr()) throw defaultClient.error
+        try {
+            const defaultUrl = (await defaultClient.value.authorizationUrl(input))._unsafeUnwrap()
+            const nativeUrl = await Effect.runPromise(
+                Effect.scoped(
+                    Effect.gen(function* () {
+                        const client = yield* native.create({
+                            clientId: "1",
+                            clientSecret: "secret",
+                            instance: { url: base, allowInsecure: true },
+                        })
+                        return yield* client.authorizationUrl(input)
+                    }),
+                ),
+            )
+            expect(nativeUrl).toBe(defaultUrl)
+            const url = new URL(defaultUrl)
+            expect(url.searchParams.get("scope")).toBe("bot")
+            expect(url.searchParams.get("response_type")).toBe("code")
+            expect(url.searchParams.get("channel_id")).toBe("2")
+            expect(url.searchParams.get("guild_id")).toBeNull()
+        } finally {
+            await defaultClient.value.shutdown()
+        }
+    })
+
+    test.each([
+        [{ permissions: 1n << 64n }, "permissions", "range"],
+        [{ guildId: "1", channelId: "2" }, "channelId", "relationship"],
+        [{ scopes: ["identify"] as const, guildId: "1" }, "botInstallation", "required"],
+    ] as const)(
+        "rejects invalid installation input before discovery through both clients",
+        async (override, path, constraint) => {
+            const { base, requests } = await fixture()
+            const input = {
+                redirectUri: "http://localhost/callback",
+                scopes: ["bot"] as const,
+                state: "state",
+                codeChallenge: "a".repeat(43),
+                ...override,
+            }
+            const defaultClient = defaultApi.create({
+                clientId: "1",
+                clientSecret: "secret",
+                instance: { url: base, allowInsecure: true },
+            })
+            if (defaultClient.isErr()) throw defaultClient.error
+            try {
+                expect(await defaultClient.value.authorizationUrl(input)).toMatchObject({
+                    error: { reason: "input", outcome: "notDispatched", inputValidation: { path, constraint } },
+                })
+                await expect(
+                    Effect.runPromise(
+                        Effect.scoped(
+                            Effect.gen(function* () {
+                                const client = yield* native.create({
+                                    clientId: "1",
+                                    clientSecret: "secret",
+                                    instance: { url: base, allowInsecure: true },
+                                })
+                                return yield* client.authorizationUrl(input)
+                            }),
+                        ),
+                    ),
+                ).rejects.toMatchObject({
+                    reason: "input",
+                    outcome: "notDispatched",
+                    inputValidation: { path, constraint },
+                })
+                expect(requests).toHaveLength(0)
+            } finally {
+                await defaultClient.value.shutdown()
+            }
+        },
+    )
+
+    test("preserves empty provider connection identifiers and names allowed by the response schema", async () => {
+        const { base } = await fixture("connectionsEmptyStrings")
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (made.isErr()) throw made.error
+        try {
+            expect((await made.value.fetchConnections("access"))._unsafeUnwrap()[0]).toMatchObject({ id: "", name: "" })
+        } finally {
+            await made.value.shutdown()
+        }
+    })
+
+    test("rejects connection fields beyond Fluxer's nonnegative Int32 response domain", async () => {
+        const { base } = await fixture("connectionsOutOfRange")
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (made.isErr()) throw made.error
+        try {
+            expect(await made.value.fetchConnections("access")).toMatchObject({
+                error: { reason: "response", outcome: "rejected", status: 200 },
+            })
+        } finally {
+            await made.value.shutdown()
+        }
+    })
+
     test("uses selected discovery, form and Basic authentication without bot credentials", async () => {
         const { base, requests } = await fixture()
         const made = defaultApi.create({
@@ -277,11 +480,30 @@ describe("oauth", () => {
         expect(tokens._unsafeUnwrap().scopes).toEqual(["identify", "guilds", "future"])
         expect((await client.fetchIdentity("access"))._unsafeUnwrap().id).toBe("1")
         expect((await client.fetchGuilds("access"))._unsafeUnwrap()[0]?.id).toBe("2")
+        expect((await client.fetchConnections("access"))._unsafeUnwrap()[0]).toMatchObject({
+            id: "connection",
+            visibilityFlags: 1,
+        })
+        expect((await client.introspect("access"))._unsafeUnwrap()).toMatchObject({
+            active: true,
+            clientId: "1",
+            subjectId: "2",
+            scopes: ["identify", "connections", "bot"],
+        })
         expect((await client.revoke({ token: "access" })).isOk()).toBe(true)
         expect(requests.find((entry) => entry.path === "/oauth2/token")?.authorization).toMatch(/^Basic /)
+        expect(requests.find((entry) => entry.path === "/oauth2/introspect")).toMatchObject({
+            authorization: expect.stringMatching(/^Basic /),
+            body: "token=access",
+        })
         expect(
             requests
-                .filter((entry) => entry.path === "/oauth2/userinfo" || entry.path.startsWith("/users/@me/guilds"))
+                .filter(
+                    (entry) =>
+                        entry.path === "/oauth2/userinfo" ||
+                        entry.path.startsWith("/users/@me/guilds") ||
+                        entry.path === "/users/@me/connections",
+                )
                 .every((entry) => entry.authorization === "Bearer access"),
         ).toBe(true)
         await client.shutdown()
@@ -297,11 +519,122 @@ describe("oauth", () => {
                         clientSecret: "secret",
                         instance: { url: base, allowInsecure: true },
                     })
-                    return yield* client.fetchIdentity("access")
+                    const connections = yield* client.fetchConnections("access")
+                    const token = yield* client.introspect("access")
+                    const identity = yield* client.fetchIdentity("access")
+                    return { connections, token, identity }
                 }),
             ),
         )
-        expect(result.id).toBe("1")
+        expect(result.identity.id).toBe("1")
+        expect(result.connections[0]?.type).toBe("domain")
+        expect(result.token).toMatchObject({ active: true, tokenType: "Bearer" })
+    })
+
+    test.each([
+        ["connectionsMalformed", "fetchConnections", "access"],
+        ["introspectionMalformed", "introspect", "access"],
+        ["introspectionLarge", "introspect", "access"],
+    ] as const)("rejects malformed or oversized %s read bodies without exposing them", async (mode, method, value) => {
+        const { base } = await fixture(mode)
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (made.isErr()) throw made.error
+        try {
+            const result = await made.value[method](value)
+            expect(result).toMatchObject({ error: { reason: "response", outcome: "rejected", status: 200 } })
+        } finally {
+            await made.value.shutdown()
+        }
+    })
+
+    test.each([
+        ["introspectionInactive", false],
+        ["introspectionNoSubject", true],
+    ] as const)("projects %s introspection without inferring token lifecycle state", async (mode, subjectAbsent) => {
+        const { base } = await fixture(mode)
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (made.isErr()) throw made.error
+        try {
+            const result = (await made.value.introspect("access"))._unsafeUnwrap()
+            if (!result.active) expect(Object.keys(result)).toEqual(["active"])
+            else {
+                expect(result).toMatchObject({
+                    active: true,
+                    clientId: "1",
+                    scopes: subjectAbsent ? [] : ["identify", "connections", "bot"],
+                })
+                if (subjectAbsent) expect(result.scopes).toEqual([])
+                expect(Object.hasOwn(result, "subjectId")).toBe(!subjectAbsent)
+            }
+        } finally {
+            await made.value.shutdown()
+        }
+    })
+
+    test("projects active refresh introspection without inventing an access expiry", async () => {
+        const { base } = await fixture("introspectionRefresh")
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (made.isErr()) throw made.error
+        try {
+            const result = (await made.value.introspect("refresh"))._unsafeUnwrap()
+            expect(result).toMatchObject({
+                active: true,
+                tokenType: "refresh_token",
+                issuedAtUnixSeconds: 1_700_000_000,
+            })
+            expect(Object.hasOwn(result, "expiresAtUnixSeconds")).toBe(false)
+        } finally {
+            await made.value.shutdown()
+        }
+    })
+
+    test("keeps a delegated connection permission failure private and leaves the client usable", async () => {
+        const { base } = await fixture("connectionsForbidden")
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (made.isErr()) throw made.error
+        try {
+            const denied = await made.value.fetchConnections("access")
+            expect(denied).toMatchObject({ error: { reason: "rejected", outcome: "rejected", status: 403 } })
+            expect(JSON.stringify(denied)).not.toContain("private connections")
+            expect((await made.value.fetchIdentity("access"))._unsafeUnwrap().id).toBe("1")
+        } finally {
+            await made.value.shutdown()
+        }
+    })
+
+    test("cancels a dispatched delegated connection read and awaits its cleanup", async () => {
+        const { base, connectionRequestStarted } = await fixture("connectionsStall")
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (made.isErr()) throw made.error
+        const controller = new AbortController()
+        try {
+            const operation = made.value.fetchConnections("access", { signal: controller.signal })
+            await connectionRequestStarted
+            controller.abort()
+            expect(await operation).toMatchObject({ error: { _tag: "CancelledError" } })
+        } finally {
+            await made.value.shutdown()
+        }
     })
 
     test("validates supplied state, PKCE, redirect and scope before discovery", async () => {
@@ -323,6 +656,7 @@ describe("oauth", () => {
         const pkce = defaultApi.createPkce()
         expect(pkce.verifier).not.toBe(pkce.challenge)
         expect(pkce.challenge).toMatch(/^[A-Za-z0-9_-]+$/)
+        await made.value.shutdown()
     })
 
     test.each(["rejected", "serverError", "malformed", "large"] as const)(
