@@ -1,7 +1,14 @@
 import type { OperationOptions } from "./client.js"
 import type { InstanceOptions } from "./instance.js"
 import type { ClientClosedError } from "./errors.js"
-import type { AllowedMentions, MessageBody, MessageOperationOptions } from "./messages.js"
+import type { ApiErrorDetail } from "./api-errors.js"
+import type {
+    AllowedMentions,
+    ForwardMessageInput,
+    MessageBody,
+    MessageOperationOptions,
+    MessageReference,
+} from "./messages.js"
 import type { EmbedInput } from "./embeds.js"
 
 /** Frozen remote webhook metadata, deliberately excluding the credential and creator's private fields */
@@ -52,8 +59,26 @@ export interface WebhookEdit {
     readonly channelId?: string
 }
 
-/** Webhook delivery reuses message body/mention inputs without requiring a known channel or bot token */
-export type WebhookMessageInput = MessageBody & {
+/** Explicit same-channel reply target for one webhook send */
+export interface WebhookReplyReference {
+    /** Distinguishes this reply from a forward without structural inference */
+    readonly type: "reply"
+    /** Existing message in this webhook's current channel. Fluxer validates identity and replyable message type */
+    readonly target: MessageReference
+}
+
+/** Immutable same-channel source snapshot for one webhook forward */
+export interface WebhookForwardReference {
+    /** Distinguishes this forward from a reply without structural inference */
+    readonly type: "forward"
+    /** Existing forward source and optional source-media selectors. Fluxer captures a snapshot without fetching it through the SDK */
+    readonly source: ForwardMessageInput
+}
+
+/** Tagged webhook reference passed to send. A reply carries message content; a forward copies only the source snapshot */
+export type WebhookMessageReference = WebhookReplyReference | WebhookForwardReference
+
+type WebhookMessageOptions = {
     /** Writable non-voice MessageFlags bits. Omit for Fluxer's default; voice flags and unknown bits are rejected */
     readonly flags?: number
     /** Explicit notification permissions, default none */
@@ -62,6 +87,22 @@ export type WebhookMessageInput = MessageBody & {
     readonly username?: string
     /** Per-message HTTP(S) avatar URL fetched by Fluxer, not by the SDK */
     readonly avatarUrl?: string
+}
+
+/** Webhook delivery without requiring a known channel or bot token.
+ * A reply can include default message content and uploads. A forward accepts no content, embeds, stickers or uploads, but can override
+ * the webhook identity, flags or mention policy while Fluxer creates the source snapshot. Fluxer rejects a missing or cross-channel target
+ */
+export type WebhookMessageInput =
+    | (MessageBody & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference })
+    | (WebhookMessageOptions & { readonly messageReference: WebhookForwardReference })
+
+/** Token-authenticated webhook settings. Channel moves remain bot-management only */
+export interface WebhookTokenEdit {
+    /** New nonblank name, 1–80 Unicode code points */
+    readonly name?: string
+    /** Image data URI, or null to remove the avatar */
+    readonly avatar?: string | null
 }
 
 /** Supply content, embeds or flags. Fluxer's webhook edit route cannot replace or upload attachments */
@@ -108,6 +149,9 @@ export type WebhookOperation =
     | "webhooks.fetchGuild"
     | "webhooks.edit"
     | "webhooks.delete"
+    | "webhooks.fetchToken"
+    | "webhooks.editToken"
+    | "webhooks.deleteToken"
     | "webhooks.send"
     | "webhooks.fetchMessage"
     | "webhooks.editMessage"
@@ -128,6 +172,8 @@ export class WebhookOperationError extends Error {
         readonly status: number | null = null,
         /** Server-required delay in milliseconds when available */
         readonly retryAfterMs: number | null = null,
+        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
         super(`Webhook operation ${operation} failed (${reason}, outcome ${outcome})`)
         this.name = this._tag

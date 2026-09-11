@@ -6,7 +6,28 @@ export interface PrefixCommandDefinition {
     readonly name: string
     /** Additional names for the same command. Aliases share the command’s case-sensitivity setting and cannot collide with another command */
     readonly aliases?: readonly string[]
+    /** Optional concise text for application-defined help. The router copies it without interpreting or displaying it */
+    readonly description?: string
+    /** Optional invocation syntax for application-defined help. The router copies it without parsing or displaying it */
+    readonly usage?: string
 }
+
+/** Immutable command identity and help text exposed by a router without handlers, guards, cooldown stores or parser state */
+export interface PrefixCommandMetadata extends PrefixCommandDefinition {}
+
+/** Why a matched command did not reach its handler. Rejection callbacks receive a frozen value and never trigger an automatic response */
+export type PrefixCommandRejection =
+    | { readonly _tag: "CommandGuardRejected" }
+    | {
+          readonly _tag: "CommandCooldownActive"
+          /** Unix epoch milliseconds when this key can acquire again */
+          readonly retryAtMs: number
+      }
+    | {
+          readonly _tag: "CommandCooldownCapacity"
+          /** Earliest known Unix epoch milliseconds that may release capacity, or null when the store cannot provide one */
+          readonly retryAtMs: number | null
+      }
 
 /** Prefix selection for one incoming message. Resolver work is synchronous and caller-owned */
 export type PrefixCommandPrefix =
@@ -30,6 +51,50 @@ export interface PrefixCommandParse {
     readonly args: readonly string[]
     /** Remaining text after the command name. The default parser removes separator whitespace but does not parse quotes */
     readonly rawArgs: string
+}
+
+/**
+ * Parse a command suffix with quoted positional arguments. It removes separator whitespace after the command name, preserves `rawArgs` exactly like the default parser, supports single or double quotes and lets `\\` escape the next character.
+ * Unterminated quotes and a trailing escape return undefined rather than a configuration error, so a custom parser or application policy can choose whether to provide feedback. The default router parser remains whitespace-only
+ */
+export function parseQuotedPrefixCommand(input: PrefixCommandParseInput): PrefixCommandParse | undefined {
+    const source = input.source.trimStart()
+    if (source.length === 0) return undefined
+    const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(source)
+    const name = match?.[1]
+    if (name === undefined || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)) return undefined
+    const rawArgs = match?.[2] ?? ""
+    const args: string[] = []
+    let current = ""
+    let quote: "'" | '"' | undefined
+    let started = false
+    for (let index = 0; index < rawArgs.length; index += 1) {
+        const character = rawArgs[index]!
+        if (character === "\\") {
+            if (index + 1 === rawArgs.length) return undefined
+            current += rawArgs[index + 1]!
+            started = true
+            index += 1
+        } else if (quote !== undefined) {
+            if (character === quote) quote = undefined
+            else current += character
+        } else if (character === "'" || character === '"') {
+            quote = character
+            started = true
+        } else if (/\s/.test(character)) {
+            if (started) {
+                args.push(current)
+                current = ""
+                started = false
+            }
+        } else {
+            current += character
+            started = true
+        }
+    }
+    if (quote !== undefined) return undefined
+    if (started) args.push(current)
+    return { name, rawArgs, args }
 }
 
 /** Local configuration for a prefix-command router. Creating a router neither subscribes nor connects a client */

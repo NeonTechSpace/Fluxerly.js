@@ -3,8 +3,13 @@ import type {
     CommandCooldownRequest,
     MemoryCooldownOptions,
     PrefixCommandDefinition,
+    PrefixCommandMetadata,
+    PrefixCommandParse,
+    PrefixCommandParseInput,
+    PrefixCommandRejection,
     PrefixCommandsOptions,
 } from "#sdk/commands"
+import { parseQuotedPrefixCommand } from "#sdk/commands"
 import type { OperationOptions } from "#sdk/client"
 import { ConfigurationError, SdkDefect } from "#sdk/errors"
 import {
@@ -63,10 +68,15 @@ export interface DefaultPrefixCommandCooldown {
     readonly key?: (context: DefaultPrefixCommandContext) => string
 }
 
-/** One default prefix command. The router snapshots metadata and retains only its guard, execute, cooldown key and store references. It neither interprets handler return values nor sends automatic responses */
+/** One default prefix command. The router snapshots metadata and retains only its guard, onReject, execute, cooldown key and store references. It neither interprets handler return values nor sends automatic responses */
 export interface DefaultPrefixCommand extends PrefixCommandDefinition {
-    /** Optional authorization or policy decision. False skips cooldown and execution without replying */
+    /** Optional authorization or policy decision. False skips cooldown and execution without an automatic response, while onReject can provide application-owned feedback */
     readonly guard?: (context: DefaultPrefixCommandContext) => boolean | Promise<boolean>
+    /** Optional feedback after a false guard or rejected cooldown. It receives no automatic response helper and any failure uses the attached subscription’s safe error reporting without retry */
+    readonly onReject?: (
+        context: DefaultPrefixCommandContext,
+        rejection: PrefixCommandRejection,
+    ) => void | Promise<void>
     /** Optional admission limit acquired after a successful guard and before execution */
     readonly cooldown?: DefaultPrefixCommandCooldown
     /** Application work for a matched, allowed command. Rejection is reported by the attached subscription without retry */
@@ -89,6 +99,8 @@ export interface MemoryCooldownStore {
 
 /** Registered default commands. Register returns a new immutable router snapshot */
 export interface DefaultPrefixCommandRouter {
+    /** Frozen registration-order help metadata. Entries contain only copied name, aliases, description and usage values */
+    readonly commands: readonly PrefixCommandMetadata[]
     /** Validate and add one command to a separate router snapshot. Existing routers and attachments stay unchanged */
     register(command: DefaultPrefixCommand): Result<DefaultPrefixCommandRouter, ConfigurationError>
     /**
@@ -102,6 +114,8 @@ export interface DefaultPrefixCommandRouter {
 export interface DefaultCommands {
     /** Create a local router or return ConfigurationError without rejected prefix/parser values. Unexpected getter defects throw safe SdkDefect commands without the caller value */
     create(options: PrefixCommandsOptions): Result<DefaultPrefixCommandRouter, ConfigurationError>
+    /** Parse quoted positional arguments without changing the router default parser. Unterminated quotes or trailing escapes return undefined for application policy */
+    parseQuoted(input: PrefixCommandParseInput): PrefixCommandParse | undefined
     /** Create a bounded process-local cooldown store or return ConfigurationError for invalid options or claims */
     memoryCooldowns(options?: MemoryCooldownOptions): Result<MemoryCooldownStore, ConfigurationError>
 }
@@ -110,12 +124,17 @@ export interface DefaultCommands {
 export const defaultCommands: DefaultCommands = Object.freeze({
     create: (options: PrefixCommandsOptions) =>
         attempt(() => freezeRouter(new DefaultPrefixCommandRouterOwner(new PrefixCommandRegistry(options)))),
+    parseQuoted: parseQuotedPrefixCommand,
     memoryCooldowns: (options: MemoryCooldownOptions | undefined) =>
         attempt(() => defaultMemoryCooldownStore(createMemoryCooldownStore(options))),
 })
 
 interface StoredDefaultCommand extends PrefixCommandDefinition {
     readonly guard?: (context: DefaultPrefixCommandContext) => boolean | Promise<boolean>
+    readonly onReject?: (
+        context: DefaultPrefixCommandContext,
+        rejection: PrefixCommandRejection,
+    ) => void | Promise<void>
     readonly cooldown?: DefaultPrefixCommandCooldown
     readonly execute: (context: DefaultPrefixCommandContext) => void | Promise<void>
 }
@@ -125,6 +144,10 @@ class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
 
     constructor(registry: PrefixCommandRegistry<StoredDefaultCommand>) {
         this.#registry = registry
+    }
+
+    get commands(): readonly PrefixCommandMetadata[] {
+        return this.#registry.commands
     }
 
     register(command: DefaultPrefixCommand): Result<DefaultPrefixCommandRouter, ConfigurationError> {
@@ -153,6 +176,10 @@ class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
                 definition.guard === undefined
                     ? Effect.succeed(true)
                     : defaultCallback(() => definition.guard!(context)),
+            reject: (definition, context, rejection) =>
+                definition.onReject === undefined
+                    ? Effect.void
+                    : defaultCallback(() => definition.onReject!(context, rejection)),
             cooldown: (definition, context) =>
                 definition.cooldown === undefined
                     ? Effect.succeed({ _tag: "CooldownAcquired", retryAtMs: Number.MAX_SAFE_INTEGER })
@@ -174,10 +201,21 @@ class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
 }
 
 function snapshotDefaultCommand(command: DefaultPrefixCommand): StoredDefaultCommand {
-    validateCommandShape(command, ["name", "aliases", "guard", "cooldown", "execute"])
+    validateCommandShape(command, [
+        "name",
+        "aliases",
+        "description",
+        "usage",
+        "guard",
+        "onReject",
+        "cooldown",
+        "execute",
+    ])
     if (typeof command.execute !== "function") throw new ConfigurationError("command", "A command must provide execute")
     if (command.guard !== undefined && typeof command.guard !== "function")
         throw new ConfigurationError("command", "guard must be a function when supplied")
+    if (command.onReject !== undefined && typeof command.onReject !== "function")
+        throw new ConfigurationError("command", "onReject must be a function when supplied")
     validateCommandCooldown(command.cooldown)
     const identity = snapshotCommandIdentity(command)
     const cooldown = command.cooldown
@@ -185,6 +223,7 @@ function snapshotDefaultCommand(command: DefaultPrefixCommand): StoredDefaultCom
         ...identity,
         execute: command.execute,
         ...(command.guard === undefined ? {} : { guard: command.guard }),
+        ...(command.onReject === undefined ? {} : { onReject: command.onReject }),
         ...(cooldown === undefined
             ? {}
             : {

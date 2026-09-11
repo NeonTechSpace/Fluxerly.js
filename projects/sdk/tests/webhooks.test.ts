@@ -1,10 +1,10 @@
 import { inspect } from "node:util"
 import { createServer } from "node:http"
 import { once } from "node:events"
-import { Effect, Exit, Scope } from "effect"
+import { Cause, Effect, Exit, Scope } from "effect"
 import type { ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { createClient, createWebhookClient, type WebhookClientOptions } from "../src/index.js"
+import { SdkDefect, createClient, createWebhookClient, type WebhookClientOptions } from "../src/index.js"
 import { createClient as createNative, createWebhookClient as createNativeWebhook } from "../src/effect.js"
 import { hostedOperationCalls, stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
@@ -167,6 +167,120 @@ test.each(modes)("%s sends and manages owned messages without bot authentication
     expect(calls.slice(1).every((call) => call.url.endsWith("/messages/400"))).toBe(true)
 })
 
+test.each(modes)("%s manages its webhook through token routes without closing local ownership", async (mode) => {
+    const calls: { url: string; method: string; body: unknown; authorization: string | null }[] = []
+    let deleted = false
+    stubFetchWithHostedDiscovery(
+        vi.fn(async (url: string, init: RequestInit) => {
+            calls.push({
+                url,
+                method: init.method!,
+                body: init.body ? JSON.parse(String(init.body)) : undefined,
+                authorization: new Headers(init.headers).get("authorization"),
+            })
+            if (deleted) return new Response(null, { status: 404 })
+            if (init.method === "DELETE") {
+                deleted = true
+                return new Response(null, { status: 204 })
+            }
+            return Response.json(metadata({ creator_id: "999", user: { token: secret }, private: secret }))
+        }),
+    )
+    const { webhook } = await setup(mode)
+    expect(await settle(webhook.fetch())).toEqual({
+        id: "100",
+        guildId: "200",
+        channelId: "300",
+        name: "Deployments",
+        avatar: null,
+    })
+    expect(await settle(webhook.edit({ name: "Rotated", avatar: null }))).toMatchObject({ name: "Deployments" })
+    await settle(webhook.delete())
+    await expect(settle(webhook.fetch())).rejects.toMatchObject({ reason: "notFound", outcome: "rejected" })
+    expect(calls.map((call) => [call.url, call.method, call.body, call.authorization])).toEqual([
+        [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "GET", undefined, null],
+        [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "PATCH", { name: "Rotated", avatar: null }, null],
+        [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "DELETE", undefined, null],
+        [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "GET", undefined, null],
+    ])
+})
+
+test.each(modes)("%s encodes tagged webhook reply and forward references", async (mode) => {
+    const bodies: Record<string, unknown>[] = []
+    let status = 200
+    stubFetchWithHostedDiscovery(
+        vi.fn(async (_url: string, init: RequestInit) => {
+            bodies.push(JSON.parse(String(init.body)))
+            return status === 200
+                ? Response.json(
+                      message({
+                          message_snapshots: [
+                              { content: "source", timestamp: "2026-09-11T12:00:00.000Z", type: 0, flags: 0 },
+                          ],
+                      }),
+                  )
+                : Response.json({}, { status })
+        }),
+    )
+    const { webhook } = await setup(mode)
+    await settle(
+        webhook.send({
+            content: "reply",
+            messageReference: { type: "reply", target: { id: "401", channelId: "300" } },
+        }),
+    )
+    const forwarded = await settle(
+        webhook.send({
+            messageReference: {
+                type: "forward",
+                source: { source: { id: "401", channelId: "300" }, attachmentIds: ["501"], embedIndices: [0] },
+            },
+            username: "Forwarder",
+            avatarUrl: "https://example.com/forwarder.png",
+            flags: 4,
+            allowedMentions: { everyone: true },
+        }),
+    )
+    expect(bodies).toEqual([
+        expect.objectContaining({ message_reference: { message_id: "401", channel_id: "300", type: 0 } }),
+        expect.objectContaining({
+            message_reference: {
+                message_id: "401",
+                channel_id: "300",
+                type: 1,
+                attachment_ids: ["501"],
+                embed_indices: [0],
+            },
+            username: "Forwarder",
+            avatar_url: "https://example.com/forwarder.png",
+            flags: 4,
+        }),
+    ])
+    expect(forwarded.messageSnapshots?.[0]?.content).toBe("source")
+    for (const input of [
+        {
+            content: "not a forward",
+            messageReference: { type: "forward", source: { source: { id: "401", channelId: "300" } } },
+        },
+        { messageReference: { type: "reply", target: { id: "401", channelId: "bad" } } },
+        { content: "missing reply target", messageReference: { type: "reply" } },
+        { content: "null reply target", messageReference: { type: "reply", target: null } },
+        { content: "malformed reply target", messageReference: { type: "reply", target: { id: "401" } } },
+    ])
+        await expect(settle(webhook.send(input as never))).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    status = 400
+    await expect(
+        settle(
+            webhook.send({
+                messageReference: { type: "forward", source: { source: { id: "401", channelId: "301" } } },
+            }),
+        ),
+    ).rejects.toMatchObject({ reason: "rejected", outcome: "rejected", status: 400 })
+})
+
 test.each(modes)("%s preserves supplied metadata from webhook message responses without hydration", async (mode) => {
     const fetch = vi.fn(async () => Response.json(metadataMessage()))
     stubFetchWithHostedDiscovery(fetch)
@@ -213,6 +327,8 @@ test.each(modes)("%s rejects invalid input before any dispatch", async (mode) =>
         () => bot.webhooks.create("300", { name: " " }),
         () => bot.webhooks.edit("100", {}),
         () => bot.webhooks.delete("100", { auditReason: "line\nbreak" }),
+        () => webhook.edit({ channelId: "300" } as never),
+        () => webhook.edit({}),
         () => webhook.send({ content: "x", avatarUrl: "file:///private" }),
         () => webhook.send({ content: "x", username: " " }),
         () => webhook.fetchMessage("../400"),
@@ -435,6 +551,251 @@ test.each(modes)("%s retries transient reads but never retries rejected or serve
     }
 })
 
+test.each(modes)("%s exposes only reviewed API rejection detail", async (mode) => {
+    const privateMessage = "private provider detail"
+    stubFetchWithHostedDiscovery(
+        vi.fn(async () => {
+            const body = JSON.stringify({ code: "MISSING_PERMISSIONS", message: privateMessage })
+            return new Response(body, {
+                status: 403,
+                headers: { "content-length": String(Buffer.byteLength(body)), "content-type": "application/json" },
+            })
+        }),
+    )
+    const { webhook } = await setup(mode)
+    let failure: unknown
+    try {
+        await settle(webhook.send({ content: "x" }))
+    } catch (error) {
+        failure = error
+    }
+    expect(failure).toMatchObject({
+        _tag: "WebhookOperationError",
+        reason: "rejected",
+        outcome: "rejected",
+        status: 403,
+        apiError: {
+            code: "missingPermissions",
+            explanation: "The provider reports that the bot lacks a required permission",
+        },
+    })
+    expect(JSON.stringify(failure)).not.toContain(privateMessage)
+})
+
+test.each(modes)("%s classifies finite chunked API errors without Content-Length", async (mode) => {
+    const codes = [
+        ["MISSING_ACCESS", "missingAccess"],
+        ["MISSING_PERMISSIONS", "missingPermissions"],
+        ["COMMUNICATION_DISABLED", "communicationDisabled"],
+        ["CANNOT_SEND_MESSAGES_TO_USER", "cannotSendMessagesToUser"],
+    ] as const
+    for (const [providerCode, code] of codes) {
+        stubFetchWithHostedDiscovery(
+            vi.fn(
+                async () =>
+                    new Response(
+                        new ReadableStream({
+                            start(controller) {
+                                controller.enqueue(new TextEncoder().encode(`{"code":"${providerCode}"}`))
+                                controller.close()
+                            },
+                        }),
+                        { status: 403, headers: { "content-type": "application/json" } },
+                    ),
+            ),
+        )
+        const { webhook } = await setup(mode)
+        await expect(settle(webhook.send({ content: "x" }))).rejects.toMatchObject({ apiError: { code } })
+    }
+})
+
+test.each(modes)("%s rejects unsafe API error details", async (mode) => {
+    for (const providerCode of ["UNKNOWN", "__proto__", "constructor"]) {
+        stubFetchWithHostedDiscovery(vi.fn(async () => Response.json({ code: providerCode }, { status: 403 })))
+        const { webhook } = await setup(mode)
+        await expect(settle(webhook.send({ content: "x" }))).rejects.toMatchObject({ apiError: null })
+    }
+})
+
+test.each(modes)("%s drops deceptively short oversized API error bodies", async (mode) => {
+    let cancelled = false
+    stubFetchWithHostedDiscovery(
+        vi.fn(
+            async () =>
+                new Response(
+                    new ReadableStream({
+                        start(controller) {
+                            controller.enqueue(
+                                new TextEncoder().encode(
+                                    `{"code":"MISSING_PERMISSIONS","private":"${"x".repeat(9_000)}"}`,
+                                ),
+                            )
+                        },
+                        cancel() {
+                            cancelled = true
+                        },
+                    }),
+                    { status: 403, headers: { "content-length": "1", "content-type": "application/json" } },
+                ),
+        ),
+    )
+    const { webhook } = await setup(mode)
+    await expect(settle(webhook.send({ content: "x" }))).rejects.toMatchObject({ apiError: null, outcome: "rejected" })
+    expect(cancelled).toBe(true)
+})
+
+test.each(modes)("%s bounds stalled API error reads and releases their body", async (mode) => {
+    let reading!: () => void
+    const started = new Promise<void>((resolve) => {
+        reading = resolve
+    })
+    let cancelled = false
+    stubFetchWithHostedDiscovery(
+        vi.fn(
+            async () =>
+                new Response(
+                    new ReadableStream({
+                        pull() {
+                            reading()
+                            return new Promise<void>(() => undefined)
+                        },
+                        cancel() {
+                            cancelled = true
+                        },
+                    }),
+                    { status: 403, headers: { "content-type": "application/json" } },
+                ),
+        ),
+    )
+    const { webhook } = await setup(mode)
+    const operation = settle(webhook.send({ content: "x" }))
+    await started
+    await expect(operation).rejects.toMatchObject({
+        _tag: "WebhookOperationError",
+        outcome: "rejected",
+        apiError: null,
+    })
+    expect(cancelled).toBe(true)
+})
+
+test.each(modes)("%s cancels stalled API error reads without retaining their body", async (mode) => {
+    let reading!: () => void
+    const started = new Promise<void>((resolve) => {
+        reading = resolve
+    })
+    let cancelled = false
+    const controller = new AbortController()
+    stubFetchWithHostedDiscovery(
+        vi.fn(
+            async () =>
+                new Response(
+                    new ReadableStream({
+                        pull() {
+                            reading()
+                            return new Promise<void>(() => undefined)
+                        },
+                        cancel() {
+                            cancelled = true
+                        },
+                    }),
+                    { status: 403, headers: { "content-type": "application/json" } },
+                ),
+        ),
+    )
+    const { webhook } = await setup(mode)
+    if (mode === "default") {
+        const operation = settle(webhook.send({ content: "x" }, { signal: controller.signal }))
+        await started
+        controller.abort()
+        await expect(operation).rejects.toMatchObject({ _tag: "CancelledError" })
+    } else {
+        const operation = Effect.runPromiseExit(
+            (webhook as import("../src/effect.js").WebhookClient).send({ content: "x" }),
+            { signal: controller.signal },
+        )
+        await started
+        controller.abort()
+        const exit = await operation
+        expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    }
+    expect(cancelled).toBe(true)
+})
+
+test.each(modes)("%s retains a rejected outcome when API error body cleanup defects", async (mode) => {
+    const privateMarker = "private API error cleanup marker"
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on("unhandledRejection", onUnhandled)
+    onTestFinished(() => {
+        process.off("unhandledRejection", onUnhandled)
+    })
+    stubFetchWithHostedDiscovery(
+        vi.fn(
+            async () =>
+                new Response(
+                    new ReadableStream({
+                        pull() {
+                            return new Promise<void>(() => undefined)
+                        },
+                        cancel() {
+                            return Promise.reject(new Error(privateMarker))
+                        },
+                    }),
+                    { status: 403, headers: { "content-type": "application/json" } },
+                ),
+        ),
+    )
+    const { webhook } = await setup(mode)
+    if (mode === "default") {
+        const error = await settle(webhook.send({ content: "x" })).catch((failure) => failure)
+        expect(error).toBeInstanceOf(SdkDefect)
+        expect(error).toMatchObject({
+            operation: "webhooks.send",
+            reasons: expect.arrayContaining([
+                {
+                    kind: "Failure",
+                    failure: expect.objectContaining({ _tag: "WebhookOperationError", outcome: "rejected" }),
+                },
+                { kind: "Defect" },
+            ]),
+        })
+        expect(JSON.stringify(error)).not.toContain(privateMarker)
+        expect(String(error)).not.toContain(privateMarker)
+    } else {
+        const exit = await Effect.runPromiseExit(
+            (webhook as import("../src/effect.js").WebhookClient).send({ content: "x" }),
+        )
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+            expect(exit.cause.reasons).toContainEqual(
+                expect.objectContaining({
+                    _tag: "Fail",
+                    error: expect.objectContaining({ _tag: "WebhookOperationError", outcome: "rejected" }),
+                }),
+            )
+            expect(exit.cause.reasons).toContainEqual(expect.objectContaining({ _tag: "Die" }))
+            expect(String(exit.cause)).not.toContain(privateMarker)
+        }
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(unhandled).toEqual([])
+})
+
+test.each(modes)("%s freezes API error detail independently for each rejection", async (mode) => {
+    stubFetchWithHostedDiscovery(vi.fn(async () => Response.json({ code: "MISSING_ACCESS" }, { status: 403 })))
+    const { webhook } = await setup(mode)
+    const first = (await settle(webhook.send({ content: "x" })).catch((failure) => failure)) as {
+        readonly apiError: { readonly explanation: string } | null
+    }
+    expect(first.apiError).not.toBeNull()
+    expect(Object.isFrozen(first.apiError)).toBe(true)
+    expect(() => Object.assign(first.apiError!, { explanation: "poisoned" })).toThrow()
+    const second = (await settle(webhook.send({ content: "x" })).catch((failure) => failure)) as {
+        readonly apiError: { readonly explanation: string } | null
+    }
+    expect(second.apiError).toMatchObject({ explanation: "The provider denied access to the requested resource" })
+})
+
 test.each(modes)("%s cancellation waits for owned cleanup without stopping the client", async (mode) => {
     let started!: () => void, release!: () => void
     const ready = new Promise<void>((resolve) => {
@@ -512,6 +873,11 @@ test("multipart bytes cross a real HTTP transport with correct framing", async (
         const data = Buffer.concat(chunks)
         const form = await new Response(data, { headers: { "content-type": req.headers["content-type"]! } }).formData()
         expect(new Uint8Array(await (form.get("files[0]") as File).arrayBuffer())).toEqual(new Uint8Array([5, 6]))
+        expect(JSON.parse(String(form.get("payload_json"))).message_reference).toEqual({
+            message_id: "401",
+            channel_id: "300",
+            type: 0,
+        })
         expect(req.headers.authorization).toBeUndefined()
         received = true
         res.setHeader("content-type", "application/json")
@@ -530,6 +896,11 @@ test("multipart bytes cross a real HTTP transport with correct framing", async (
     )
     stubFetchWithHostedDiscovery((_url: string, init: RequestInit) => fetch(`http://127.0.0.1:${address.port}`, init))
     const { webhook } = await setup("default")
-    await settle(webhook.send({ attachments: [{ filename: "a.txt", data: new Uint8Array([5, 6]) }] }))
+    await settle(
+        webhook.send({
+            attachments: [{ filename: "a.txt", data: new Uint8Array([5, 6]) }],
+            messageReference: { type: "reply", target: { id: "401", channelId: "300" } },
+        }),
+    )
     expect(received).toBe(true)
 })

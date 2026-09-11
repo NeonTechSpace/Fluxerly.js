@@ -1,4 +1,4 @@
-import { Effect, Exit, type Scope } from "effect"
+import { Effect, Exit, Stream, type Scope } from "effect"
 import { ConfigurationError, type ConnectError } from "#sdk/errors"
 import { attachIdentifyGate } from "#sdk/internal/client"
 import { ChildBridge, createSupervisor } from "#sdk/internal/supervisor"
@@ -40,6 +40,8 @@ export interface NativeSupervisor {
     start(): Effect.Effect<void, SupervisorError>
     /** Await the terminal local supervisor outcome after every owned child exits. Interrupting this observer does not stop the supervisor */
     waitForClose(): Effect.Effect<void, SupervisorError>
+    /** Observe all children becoming gateway-ready without starting or owning the supervisor. Interruption cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error */
+    waitForReady(): Effect.Effect<void, SupervisorError>
     /** Return one immutable safe local status snapshot without child output, environment, arguments or paths */
     status(): SupervisorStatus
     /** Ask every owned child to stop, force-terminate only an unresponsive owned child after the configured grace period, then await verified exit.
@@ -111,6 +113,9 @@ export function makeNativeSupervisor(
                         if (initial.kind === "stop") return
                         const assigned = initial.assignment
                         const client = yield* createClient(childClientOptions(options, assigned, bridge))
+                        yield* Stream.runForEach(client.observeState(), (state) =>
+                            Effect.sync(() => bridge.state(state)),
+                        ).pipe(Effect.forkScoped)
                         const configured = yield* Effect.exit(
                             Effect.raceFirst(
                                 options
@@ -125,6 +130,7 @@ export function makeNativeSupervisor(
                         }
                         if (configured.value === "stop") return
                         bridge.ready()
+                        bridge.state(client.state)
                         const outcome = yield* Effect.exit(
                             Effect.raceFirst(
                                 client.run().pipe(Effect.as("client" as const)),
@@ -153,6 +159,7 @@ export function makeNativeSupervisor(
                     Object.freeze({
                         start: () => owner.start(),
                         waitForClose: () => owner.waitForClose(),
+                        waitForReady: () => owner.waitForReady(),
                         status: () => owner.status(),
                         shutdown: () => owner.shutdown(),
                     }),

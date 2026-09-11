@@ -9,12 +9,13 @@ import type {
     WebhookEdit,
     WebhookMessageInput,
     WebhookMessageEdit,
+    WebhookTokenEdit,
     WebhookOperation,
     WebhookOperationOptions,
     WebhookClientOptions,
     WebhookCredentials,
 } from "#sdk/webhooks"
-import { record, identifier, decodeMessage, encodeMessage, encodeEdit } from "./message.js"
+import { record, identifier, decodeMessage, encodeForward, encodeMessage, encodeEdit } from "./message.js"
 import type { EncodedBody } from "./attachments.js"
 import { RestOwner } from "./rest.js"
 import { InstanceResolver, type InstanceConfiguration, instanceConfiguration } from "./instance.js"
@@ -34,6 +35,8 @@ const validToken = (value: unknown): value is string =>
     typeof value === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(value)
 const name = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0 && [...value].length <= 80
+const messageTarget = (value: unknown): value is { id: string; channelId: string } =>
+    record(value) && identifier(value.id) && identifier(value.channelId)
 
 function decodeWebhook(value: unknown): Webhook | undefined {
     if (
@@ -177,6 +180,32 @@ export function webhookDelete(id: string, options?: WebhookOperationOptions): We
     return { ...base, ...extra, method: "DELETE", status: 204, decode: () => undefined }
 }
 
+export function webhookTokenFetch(id: string): WebhookRequest<Webhook> | undefined {
+    if (!identifier(id)) return undefined
+    return {
+        majorId: id,
+        tokenAuth: true,
+        method: "GET",
+        path: "",
+        status: 200,
+        decode: (value) => {
+            const webhook = decodeWebhook(value)
+            return webhook?.id === id ? webhook : undefined
+        },
+    }
+}
+
+export function webhookTokenEdit(id: string, input: WebhookTokenEdit): WebhookRequest<Webhook> | undefined {
+    const base = webhookTokenFetch(id),
+        body = settings(input, false, false)
+    return base && body ? { ...base, method: "PATCH", body } : undefined
+}
+
+export function webhookTokenDelete(id: string): WebhookRequest<void> | undefined {
+    const base = webhookTokenFetch(id)
+    return base ? { ...base, method: "DELETE", status: 204, decode: () => undefined } : undefined
+}
+
 function messageRequest(id: string, messageId?: string): WebhookRequest<Message> | undefined {
     if (!identifier(id) || (messageId !== undefined && !identifier(messageId))) return undefined
     return {
@@ -202,7 +231,24 @@ function messageRequest(id: string, messageId?: string): WebhookRequest<Message>
 export function webhookSend(id: string, input: WebhookMessageInput): WebhookRequest<Message> | undefined {
     const base = messageRequest(id)
     if (!base || !record(input)) return undefined
-    const { username, avatarUrl, ...message } = input
+    if (
+        Object.keys(input).some(
+            (key) =>
+                ![
+                    "content",
+                    "embeds",
+                    "attachments",
+                    "stickerIds",
+                    "allowedMentions",
+                    "messageReference",
+                    "flags",
+                    "username",
+                    "avatarUrl",
+                ].includes(key),
+        )
+    )
+        return undefined
+    const { username, avatarUrl, messageReference, ...message } = input
     if (username !== undefined && !name(username)) return undefined
     if (avatarUrl !== undefined) {
         if (typeof avatarUrl !== "string" || avatarUrl.length > 8192) return undefined
@@ -213,8 +259,45 @@ export function webhookSend(id: string, input: WebhookMessageInput): WebhookRequ
             return undefined
         }
     }
-    if ("messageReference" in message) return undefined
-    const body = encodeMessage("0", message, "")
+    let body: EncodedBody | MessageError
+    if (messageReference === undefined) body = encodeMessage("0", message, "")
+    else if (
+        record(messageReference) &&
+        messageReference.type === "reply" &&
+        Object.keys(messageReference).every((key) => ["type", "target"].includes(key)) &&
+        messageTarget(messageReference.target)
+    )
+        body = encodeMessage(
+            messageReference.target.channelId,
+            { ...message, messageReference: messageReference.target },
+            "",
+        )
+    else if (
+        record(messageReference) &&
+        messageReference.type === "forward" &&
+        Object.keys(messageReference).every((key) => ["type", "source"].includes(key)) &&
+        !("content" in message) &&
+        !("embeds" in message) &&
+        !("attachments" in message) &&
+        !("stickerIds" in message)
+    ) {
+        const forward = encodeForward("0", messageReference.source, "")
+        const options = encodeMessage(
+            "0",
+            { content: "_", flags: message.flags, allowedMentions: message.allowedMentions },
+            "",
+        )
+        if (forward instanceof MessageError || options instanceof MessageError) return undefined
+        const payload = JSON.parse(options.json)
+        body = {
+            files: [],
+            json: JSON.stringify({
+                ...(message.flags === undefined ? {} : { flags: payload.flags }),
+                allowed_mentions: payload.allowed_mentions,
+                ...JSON.parse(forward.json),
+            }),
+        }
+    } else return undefined
     if (body instanceof MessageError) return undefined
     const payload = JSON.parse(body.json)
     delete payload.nonce

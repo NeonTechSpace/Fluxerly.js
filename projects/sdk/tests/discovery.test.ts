@@ -46,6 +46,99 @@ const wire = (extra: Record<string, unknown> = {}) => ({
     removal_reason: null,
     ...extra,
 })
+const directoryGuild = (extra: Record<string, unknown> = {}) => ({
+    id: "200",
+    name: "Fixture directory",
+    icon: null,
+    banner: null,
+    description: "A fixture directory result",
+    category_type: 4,
+    primary_language: "en-US",
+    custom_tags: ["typescript"],
+    member_count: 12,
+    online_count: 3,
+    features: ["DISCOVERABLE"],
+    verification_level: 2,
+    ...extra,
+})
+
+test.each(modes)("%s reads one volatile directory page with explicit metadata and GET recovery", async (mode) => {
+    const client = await setup(mode)
+    let attempts = 0
+    const fetch = vi.fn(async (url: string) => {
+        if (++attempts === 1) return new Response(null, { status: 503 })
+        expect(url).toBe(
+            "https://api.fluxer.app/v1/discovery/guilds?limit=2&offset=4&query=fixture&category=4&language=en-US&tag=typescript&sort_by=online_count",
+        )
+        return Response.json({
+            guilds: [
+                directoryGuild({
+                    icon: undefined,
+                    banner: undefined,
+                    description: undefined,
+                    primary_language: undefined,
+                    private_owner: "drop",
+                }),
+            ],
+            total: 7,
+            category_counts: [{ category_type: 4, count: 7 }],
+        })
+    })
+    stubFetchWithHostedDiscovery(fetch)
+    const page = await settle(
+        client.discovery.search({
+            query: "fixture",
+            categoryId: 4,
+            primaryLanguage: "en-US",
+            tag: "typescript",
+            sortBy: "onlineCount",
+            limit: 2,
+            offset: 4,
+        }),
+    )
+    expect(page).toMatchObject({ total: 7, offset: 4, limit: 2, categoryCounts: [{ categoryId: 4, count: 7 }] })
+    expect(page.guilds[0]).toMatchObject({
+        id: "200",
+        onlineCount: 3,
+        icon: null,
+        banner: null,
+        description: null,
+        primaryLanguage: null,
+    })
+    expect(JSON.stringify(page)).not.toContain("private_owner")
+    expect(Object.isFrozen(page) && Object.isFrozen(page.guilds) && Object.isFrozen(page.guilds[0])).toBe(true)
+    expect(attempts).toBe(2)
+})
+
+test.each(modes)("%s rejects invalid directory queries and malformed page entries", async (mode) => {
+    const client = await setup(mode)
+    let response: unknown = { guilds: [directoryGuild({ online_count: -1 })], total: 1, category_counts: [] }
+    const fetch = vi.fn(async () => Response.json(response))
+    stubFetchWithHostedDiscovery(fetch)
+    for (const query of [
+        { limit: 0 },
+        { limit: 49 },
+        { offset: -1 },
+        { categoryId: 9 },
+        { sortBy: "new" },
+        { extra: true },
+    ])
+        await expect(settle(client.discovery.search(query as never))).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    await expect(settle(client.discovery.search())).rejects.toMatchObject({ reason: "response", outcome: "unknown" })
+    response = { guilds: [directoryGuild(), directoryGuild()], total: 2, category_counts: [] }
+    await expect(settle(client.discovery.search({ limit: 2 }))).rejects.toMatchObject({
+        reason: "response",
+        outcome: "unknown",
+    })
+    await expect(settle(client.discovery.search({ limit: 1 }))).rejects.toMatchObject({
+        reason: "response",
+        outcome: "unknown",
+    })
+    expect(fetch).toHaveBeenCalledTimes(3)
+})
 
 test.each(modes)(
     "%s reports remote eligibility and permission rejection without replay or private bodies",

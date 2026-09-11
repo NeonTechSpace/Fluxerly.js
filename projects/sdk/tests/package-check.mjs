@@ -66,6 +66,16 @@ try {
         const installed = join(consumer, "node_modules", manifest.name)
         assert.deepEqual(JSON.parse(readFileSync(join(installed, "package.json"), "utf8")).imports, manifest.imports)
         assert.deepEqual(JSON.parse(readFileSync(join(installed, "package.json"), "utf8")).engines, manifest.engines)
+        const apiErrorExamples = examples(readFileSync(join(sdk, "src", "api-errors.ts"), "utf8")).filter((example) =>
+            /function formatApiErrorDetail/.test(example),
+        )
+        assert.equal(apiErrorExamples.length, 1)
+        writeFileSync(
+            join(consumer, "api-error-detail-example.ts"),
+            kind === "default"
+                ? apiErrorExamples[0]
+                : apiErrorExamples[0].replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"'),
+        )
         run(
             process.execPath,
             [

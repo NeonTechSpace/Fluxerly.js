@@ -216,6 +216,83 @@ test.each(modes)("%s does not expose group creation", async (mode) => {
     expect(Object.hasOwn(client.directMessages, "createGroup")).toBe(false)
 })
 
+test.each(modes)(
+    "%s reads latest explicit private messages without cache admission or ambiguous omissions",
+    async (mode) => {
+        const calls: { method: string; path: string; body: unknown }[] = []
+        rest(async (url, init) => {
+            const path = new URL(url).pathname
+            calls.push({ method: init.method!, path, body: JSON.parse(String(init.body)) })
+            return Response.json({ "10": message("80", "10"), "11": null })
+        })
+        const api = await setup(mode, { directMessages: true })
+        const result = await api.fetchLatestMessages(["10", "11", "12"])
+        expect(calls).toEqual([
+            { method: "POST", path: "/v1/users/@me/channels/messages/preload", body: { channels: ["10", "11", "12"] } },
+        ])
+        expect(result.messages["10"]?.id).toBe("80")
+        expect(result.messages["11"]).toBeNull()
+        expect(result.omittedChannelIds).toEqual(["12"])
+        expect(
+            Object.isFrozen(result) && Object.isFrozen(result.messages) && Object.isFrozen(result.omittedChannelIds),
+        ).toBe(true)
+        expect(await api.getDirectMessage("10")).toBeUndefined()
+    },
+)
+
+test.each(modes)(
+    "%s rejects invalid, extra and malformed latest-message batch responses before leaking private bodies",
+    async (mode) => {
+        let response: unknown = { "99": null }
+        const fetch = vi.fn(async () => Response.json(response))
+        stubFetchWithHostedDiscovery(fetch)
+        const api = await setup(mode)
+        for (const ids of [
+            [],
+            Array(1),
+            ["bad"],
+            ["10", "10"],
+            Array(101)
+                .fill("10")
+                .map((id, index) => `${id}${index}`),
+        ])
+            await expect(api.fetchLatestMessages(ids)).rejects.toMatchObject({
+                reason: "input",
+                outcome: "notDispatched",
+            })
+        await expect(api.fetchLatestMessages(["10"])).rejects.toMatchObject({ reason: "response", outcome: "unknown" })
+        response = { "10": { ...message("80", "11"), private_body: "do not expose" } }
+        let failure: unknown
+        try {
+            await api.fetchLatestMessages(["10"])
+        } catch (error) {
+            failure = error
+        }
+        expect(failure).toMatchObject({ reason: "response", outcome: "unknown" })
+        expect(JSON.stringify(failure)).not.toContain("do not expose")
+    },
+)
+
+test.each(modes)("%s cancels an admitted latest-message batch and releases its private read slot", async (mode) => {
+    let aborted = false
+    rest(
+        (_url, init) =>
+            new Promise((_resolve, reject) => {
+                const abort = () => {
+                    aborted = true
+                    reject(init.signal?.reason)
+                }
+                if (init.signal?.aborted) abort()
+                else init.signal?.addEventListener("abort", abort, { once: true })
+            }),
+    )
+    const api = await setup(mode)
+    await expect(api.fetchLatestMessages(["10"], { timeoutMs: 25 })).rejects.toMatchObject({ reason: "timeout" })
+    expect(aborted).toBe(true)
+    rest(async () => Response.json({ "10": null }))
+    expect(await api.fetchLatestMessages(["10"])).toEqual({ messages: { "10": null }, omittedChannelIds: [] })
+})
+
 test.each(modes)("%s rejects invalid user and conversation operations before dispatch", async (mode) => {
     const fetch = vi.fn()
     stubFetchWithHostedDiscovery(fetch)
@@ -570,6 +647,10 @@ async function setup(mode: (typeof modes)[number], cache: ClientOptions["cache"]
             defaultApi
                 ? unwrap(await defaultApi.directMessages.fetchAll(options))
                 : run(native!.directMessages.fetchAll(options)),
+        fetchLatestMessages: async (ids: readonly string[], options?: DefaultUserOperationOptions) =>
+            defaultApi
+                ? unwrap(await defaultApi.directMessages.fetchLatestMessages(ids, options))
+                : run(native!.directMessages.fetchLatestMessages(ids, options)),
         editGroup: async (id: string, input: Record<string, unknown>, options?: DefaultUserOperationOptions) =>
             defaultApi
                 ? unwrap(await defaultApi.directMessages.editGroup(id, input, options))

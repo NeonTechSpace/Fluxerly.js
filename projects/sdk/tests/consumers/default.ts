@@ -21,6 +21,7 @@ import {
     type GuildChannel,
     type Client,
     type ConnectionState,
+    type ShardRecoveryDiagnostic,
     type ShardState,
     type ShardingOptions,
     type Message,
@@ -56,8 +57,32 @@ import {
     type AttachmentInput,
     type AttachmentStreamSource,
     type SupervisorOptions,
+    type PrefixCommandMetadata,
+    type DiscoverySearchPage,
+    type DirectMessageLatestMessages,
+    type WebhookClient,
+    type WebhookMessageReference,
+    type WebhookTokenEdit,
+    type SupervisorWaitOptions,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+/** Packed declaration coverage for token lifecycle and tagged webhook references */
+export function webhookReferenceTypes(client: WebhookClient) {
+    const reply: WebhookMessageReference = { type: "reply", target: { id: "100", channelId: "200" } }
+    const forward: WebhookMessageReference = {
+        type: "forward",
+        source: { source: { id: "100", channelId: "200" } },
+    }
+    const edit: WebhookTokenEdit = { name: "Packed webhook", avatar: null }
+    return {
+        reply: client.send({ content: "Reply", messageReference: reply }),
+        forward: client.send({ messageReference: forward }),
+        edit: client.edit(edit),
+        fetch: client.fetch(),
+        remove: client.delete(),
+    }
+}
 
 const structuralAttachmentStream: AttachmentStreamSource = {
     getReader(_options?: { readonly mode?: "byob" }) {
@@ -110,6 +135,7 @@ export async function resolveSelectedInstance(client: Client) {
 export function shardingTypes(client: Client) {
     const plan: ShardingOptions = { totalShards: 2, shardIds: [0, 1] }
     const states: readonly ShardState[] = client.shards
+    const recovery: ShardRecoveryDiagnostic | null = states[0]?.recovery ?? null
     // @ts-expect-error Client shard snapshots cannot be replaced
     client.shards = []
     // @ts-expect-error Snapshot arrays cannot be mutated
@@ -118,7 +144,18 @@ export function shardingTypes(client: Client) {
     createClient({ token: "fixture-only", sharding: { totalShards: "2" } })
     client.messages.collect("20", { guildId: "40" })
     client.messages.collectReactions({ id: "10", channelId: "20" }, { guildId: "40" })
-    return createClient({ token: "fixture-only", sharding: plan })
+    return { recovery, created: createClient({ token: "fixture-only", sharding: plan }) }
+}
+
+/** Packed directory and explicitly selected private-message reads preserve volatile-page and omitted-ID types */
+export async function readDiscoveryAndLatestMessages(client: Client, channelId: string) {
+    const directory = await client.discovery.search({ limit: 1 })
+    if (directory.isErr()) return directory
+    const page: DiscoverySearchPage = directory.value
+    const latest = await client.directMessages.fetchLatestMessages([channelId])
+    if (latest.isErr()) return latest
+    const result: DirectMessageLatestMessages = latest.value
+    return { page, result }
 }
 
 /** Packed optional tools preserve default Result handling and reject empty body-builder variadics */
@@ -134,8 +171,21 @@ export function optionalCommandTypes(client: Client) {
     empty.addStickers()
     const created = commands.create({ prefix: "!" })
     if (created.isErr()) return created
-    const extended = created.value.register({ name: "ping", execute: () => undefined })
-    return extended.isErr() ? extended : extended.value.attach(client)
+    const extended = created.value.register({
+        name: "ping",
+        description: "Checks reachability",
+        usage: "[target]",
+        onReject: (_context, rejection) => {
+            const retryAtMs: number | null | undefined =
+                rejection._tag === "CommandGuardRejected" ? undefined : rejection.retryAtMs
+            void retryAtMs
+        },
+        execute: () => undefined,
+    })
+    if (extended.isErr()) return extended
+    const listing: readonly PrefixCommandMetadata[] = extended.value.commands
+    const parsed = commands.parseQuoted({ message: null as never, prefix: "!", source: 'ping "two words"' })
+    return { listing, parsed, attachment: extended.value.attach(client) }
 }
 
 /** Packed default supervisor tools preserve the opt-in parent and child entry types */
@@ -146,6 +196,8 @@ export function supervisorTypes(entry: string) {
         assignments: [{ id: "worker", shardIds: [0] }],
     }
     const created = supervisor.create(plan)
+    const readiness: SupervisorWaitOptions = {}
+    if (created.isOk()) void created.value.waitForReady(readiness)
     if (created.isErr()) return created
     const child = supervisor.child.run({ token: "fixture-only", configure: () => undefined })
     // @ts-expect-error Supervisor entries must be absolute paths or file URLs at runtime, not numeric shard identifiers

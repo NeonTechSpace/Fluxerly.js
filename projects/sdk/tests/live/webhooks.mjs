@@ -184,6 +184,11 @@ try {
     hook = await create(sdk.createWebhookClient(created.credentials))
     report(stage)
     stage = "webhook_read_edit_move"
+    const tokenSnapshot = await value(hook.fetch())
+    assert.equal(tokenSnapshot.id, created.webhook.id)
+    assert.ok(!JSON.stringify(tokenSnapshot).includes(credential) && !inspect(tokenSnapshot).includes(credential))
+    await value(hook.edit({ name: `${journal.marker}-token`, avatar: null }))
+    assert.equal((await api("GET", `/webhooks/${created.webhook.id}`)).data.name, `${journal.marker}-token`)
     assert.equal((await value(bot.webhooks.fetch(created.webhook.id))).id, created.webhook.id)
     assert.ok(
         (await value(bot.webhooks.fetchChannel(journal.channels[0].id))).some((item) => item.id === created.webhook.id),
@@ -255,6 +260,40 @@ try {
     assert.ok(file.ok)
     assert.equal(await file.text(), "webhook fixture bytes")
     assert.equal((await value(hook.fetchMessage(sent.id))).id, sent.id)
+    const source = await value(bot.messages.send(journal.channels[1].id, { content: "SDK webhook reference source" }))
+    const replied = await value(
+        hook.send({
+            content: "SDK webhook reply",
+            attachments: [{ filename: "reply.txt", data: new TextEncoder().encode("reply bytes") }],
+            messageReference: { type: "reply", target: { id: source.id, channelId: source.channelId } },
+        }),
+    )
+    const replyRemote = (await api("GET", `/channels/${replied.channelId}/messages/${replied.id}`)).data
+    assert.deepEqual(replyRemote.message_reference, { message_id: source.id, channel_id: source.channelId, type: 0 })
+    assert.equal(replyRemote.attachments.length, 1)
+    const forwarded = await value(
+        hook.send({
+            messageReference: { type: "forward", source: { source: { id: source.id, channelId: source.channelId } } },
+            username: "SDK webhook forward",
+        }),
+    )
+    const forwardRemote = (await api("GET", `/channels/${forwarded.channelId}/messages/${forwarded.id}`)).data
+    assert.equal(forwardRemote.message_reference?.type, 1)
+    assert.equal(forwardRemote.message_reference?.message_id, source.id)
+    assert.equal(forwardRemote.message_snapshots?.[0]?.content, "SDK webhook reference source")
+    assert.equal(forwarded.author.username, "SDK webhook forward")
+    await assert.rejects(
+        () =>
+            value(
+                hook.send({
+                    messageReference: {
+                        type: "forward",
+                        source: { source: { id: source.id, channelId: journal.channels[0].id } },
+                    },
+                }),
+            ),
+        (error) => error?._tag === "WebhookOperationError" && error.reason === "rejected",
+    )
     await value(hook.editMessage(sent.id, { content: "SDK webhook edited", embeds: [], flags: 4 }))
     await waitObserved(sent.id, "SDK webhook edited")
     assert.equal(
@@ -295,7 +334,7 @@ try {
     stage = "webhook_delete_and_revocation"
     await value(hook.deleteMessage(sent.id))
     assert.equal((await api("GET", `/channels/${sent.channelId}/messages/${sent.id}`)).status, 404)
-    await value(bot.webhooks.delete(created.webhook.id))
+    await value(hook.delete())
     assert.equal(observationOverflow, undefined, observationOverflow)
     assert.equal((await api("GET", `/webhooks/${created.webhook.id}`)).status, 404)
     await assert.rejects(

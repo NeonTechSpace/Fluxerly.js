@@ -1,5 +1,15 @@
 import type { ConnectionState } from "./client.js"
 
+/** Current safe retry bookkeeping for one local shard, without endpoint, session or provider failure details */
+export interface ShardRecoveryDiagnostic {
+    /** Whether this attempt belongs to initial startup or established-session recovery */
+    readonly phase: "startup" | "recovery"
+    /** One-based attempt number within this client lifetime */
+    readonly attempt: number
+    /** Scheduled retry wait in milliseconds, or null while the current attempt is not waiting. This is not a remaining countdown */
+    readonly retryDelayMs: number | null
+}
+
 /**
  * Immutable local gateway-shard assignment supplied when a client is created.
  * Every process serving the same bot must use the same total, while each process can own a distinct subset.
@@ -28,4 +38,6 @@ export interface ShardState {
     readonly state: ConnectionState
     /** Latest current-connection heartbeat round trip in milliseconds, or null when no measurement is current */
     readonly gatewayLatencyMs: number | null
+    /** Current safe connection attempt or retry snapshot, or null when this shard is not attempting or waiting */
+    readonly recovery: ShardRecoveryDiagnostic | null
 }

@@ -215,6 +215,9 @@ function remoteCalculationFailure(error: GuildOperationError): GuildOperationErr
         "permissions.fetch",
         error.reason === "input" ? "response" : error.reason,
         error.outcome,
+        error.status,
+        error.retryAfterMs,
+        error.apiError,
     )
 }
 

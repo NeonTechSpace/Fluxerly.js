@@ -4,6 +4,10 @@ import type {
     DiscoveryApplicationEdit,
     DiscoveryCategory,
     DiscoveryStatus,
+    DiscoveryCategoryCount,
+    DiscoveryGuild,
+    DiscoverySearchPage,
+    DiscoverySearchQuery,
 } from "#sdk/discovery"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
@@ -90,6 +94,116 @@ export function discoveryCategories(): GuildRequest<readonly DiscoveryCategory[]
                 result.push(Object.freeze({ id: entry.id, name: entry.name }))
             }
             return Object.freeze(result)
+        },
+    }
+}
+
+function discoveryGuild(value: unknown): DiscoveryGuild | undefined {
+    if (
+        !record(value) ||
+        !identifier(value.id) ||
+        typeof value.name !== "string" ||
+        (value.icon !== undefined && !nullableText(value.icon)) ||
+        (value.banner !== undefined && !nullableText(value.banner)) ||
+        (value.description !== undefined && !nullableText(value.description)) ||
+        !integer(value.category_type, 8) ||
+        (value.primary_language !== undefined && !nullableText(value.primary_language)) ||
+        !Array.isArray(value.custom_tags) ||
+        !value.custom_tags.every((tag) => typeof tag === "string") ||
+        !integer(value.member_count) ||
+        !integer(value.online_count) ||
+        !Array.isArray(value.features) ||
+        !value.features.every((feature) => typeof feature === "string") ||
+        !integer(value.verification_level)
+    )
+        return undefined
+    return Object.freeze({
+        id: value.id,
+        name: value.name,
+        icon: value.icon ?? null,
+        banner: value.banner ?? null,
+        description: value.description ?? null,
+        categoryId: value.category_type,
+        primaryLanguage: value.primary_language ?? null,
+        tags: Object.freeze([...value.custom_tags] as string[]),
+        memberCount: value.member_count,
+        onlineCount: value.online_count,
+        features: Object.freeze([...value.features] as string[]),
+        verificationLevel: value.verification_level,
+    })
+}
+
+/** Build one volatile directory search page. Offset pagination has no snapshot or traversal guarantee */
+export function discoverySearch(query?: DiscoverySearchQuery): GuildRequest<DiscoverySearchPage> | undefined {
+    if (query !== undefined && !record(query)) return undefined
+    const input = query as DiscoverySearchQuery | undefined
+    if (
+        input !== undefined &&
+        (Object.keys(input).some(
+            (key) => !["query", "categoryId", "primaryLanguage", "tag", "sortBy", "limit", "offset"].includes(key),
+        ) ||
+            (input.query !== undefined && !text(input.query, 0, 100)) ||
+            (input.categoryId !== undefined && !integer(input.categoryId, 8)) ||
+            (input.primaryLanguage !== undefined &&
+                (!text(input.primaryLanguage, 2, 35) ||
+                    !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(input.primaryLanguage))) ||
+            (input.tag !== undefined && !text(input.tag, 0, 30)) ||
+            (input.sortBy !== undefined && !["memberCount", "onlineCount", "relevance"].includes(input.sortBy)) ||
+            (input.limit !== undefined && (!integer(input.limit, 48) || input.limit === 0)) ||
+            (input.offset !== undefined && !integer(input.offset)))
+    )
+        return undefined
+    const limit = input?.limit ?? 24
+    const offset = input?.offset ?? 0
+    const parameters = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (input?.query !== undefined) parameters.set("query", input.query)
+    if (input?.categoryId !== undefined) parameters.set("category", String(input.categoryId))
+    if (input?.primaryLanguage !== undefined) parameters.set("language", input.primaryLanguage)
+    if (input?.tag !== undefined) parameters.set("tag", input.tag)
+    if (input?.sortBy !== undefined)
+        parameters.set(
+            "sort_by",
+            { memberCount: "member_count", onlineCount: "online_count", relevance: "relevance" }[input.sortBy],
+        )
+    return {
+        guildId: "discovery",
+        bucket: "discovery:search",
+        path: `/discovery/guilds?${parameters}`,
+        method: "GET",
+        status: 200,
+        decode: (value) => {
+            if (
+                !record(value) ||
+                !Array.isArray(value.guilds) ||
+                !integer(value.total) ||
+                !Array.isArray(value.category_counts)
+            )
+                return undefined
+            const guilds = value.guilds.map(discoveryGuild)
+            if (guilds.length > limit || guilds.some((guild) => guild === undefined)) return undefined
+            const guildIds = new Set<string>()
+            if (guilds.some((guild) => !guild || guildIds.has(guild.id) || (guildIds.add(guild.id), false)))
+                return undefined
+            const categoryIds = new Set<number>()
+            const categoryCounts: DiscoveryCategoryCount[] = []
+            for (const item of value.category_counts) {
+                if (
+                    !record(item) ||
+                    !integer(item.category_type, 8) ||
+                    !integer(item.count) ||
+                    categoryIds.has(item.category_type)
+                )
+                    return undefined
+                categoryIds.add(item.category_type)
+                categoryCounts.push(Object.freeze({ categoryId: item.category_type, count: item.count }))
+            }
+            return Object.freeze({
+                guilds: Object.freeze(guilds as DiscoveryGuild[]),
+                total: value.total,
+                categoryCounts: Object.freeze(categoryCounts),
+                offset,
+                limit,
+            })
         },
     }
 }

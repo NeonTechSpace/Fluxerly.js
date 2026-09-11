@@ -95,7 +95,7 @@ function settings(target: unknown, options: unknown, defaultApi: boolean): Setti
             ? {}
             : { emoji: typeof emoji === "string" ? emoji : { name: emoji.name, id: emoji.id } }),
         ...(input.filter === undefined ? {} : { filter: input.filter as (message: MessageReaction) => boolean }),
-        ...(signal === undefined ? {} : { signal: signal as NonNullable<OperationOptions["signal"]> }),
+        ...(signal === undefined ? {} : { signal: signal as unknown as NonNullable<OperationOptions["signal"]> }),
     }
 }
 

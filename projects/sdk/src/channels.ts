@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import type { ApiErrorDetail } from "./api-errors.js"
 
 /** Numeric Fluxer channel types this SDK can create, with received guild-channel types remaining numeric for forward compatibility */
 export const ChannelType = Object.freeze({
@@ -210,6 +211,8 @@ export class ChannelOperationError extends Error {
         readonly status: number | null = null,
         /** Usable server-required retry wait in milliseconds, otherwise null */
         readonly retryAfterMs: number | null = null,
+        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
         super(`Channel operation ${operation} failed (${reason}; outcome ${outcome})`)
         this.name = this._tag

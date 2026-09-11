@@ -33,6 +33,12 @@ await Effect.runPromise(
             const webhook = yield* createWebhookClient({ id: "100", token: "fixture_only" })
             const invalid = yield* Effect.result(webhook.send({ content: "x" }, { timeoutMs: 0 }))
             assert.equal(invalid.failure._tag, "WebhookOperationError")
+            assert.equal((yield* Effect.result(webhook.fetch({ timeoutMs: 0 }))).failure._tag, "WebhookOperationError")
+            assert.equal(
+                (yield* Effect.result(webhook.edit({ name: "packed" }, { timeoutMs: 0 }))).failure._tag,
+                "WebhookOperationError",
+            )
+            assert.equal((yield* Effect.result(webhook.delete({ timeoutMs: 0 }))).failure._tag, "WebhookOperationError")
             yield* webhook.shutdown()
             const closed = yield* Effect.result(webhook.fetchMessage("400"))
             assert.equal(closed.failure._tag, "ClientClosedError")
@@ -101,8 +107,8 @@ await Effect.runPromise(
                 sharding: { totalShards: 4, shardIds: [2, 0] },
             })
             assert.deepEqual(sharded.shards, [
-                { shardId: 2, state: "Disconnected", gatewayLatencyMs: null },
-                { shardId: 0, state: "Disconnected", gatewayLatencyMs: null },
+                { shardId: 2, state: "Disconnected", gatewayLatencyMs: null, recovery: null },
+                { shardId: 0, state: "Disconnected", gatewayLatencyMs: null, recovery: null },
             ])
             assert.ok(Object.isFrozen(sharded.shards) && sharded.shards.every(Object.isFrozen))
             assert.ok(new ShardConnectionError(2, new AuthenticationError()).failure instanceof AuthenticationError)

@@ -384,6 +384,8 @@ import type {
     DiscoveryApplicationInput,
     DiscoveryApplicationEdit,
     DiscoveryCategory,
+    DiscoverySearchPage,
+    DiscoverySearchQuery,
     DiscoveryStatus,
 } from "./discovery.js"
 export type {
@@ -391,10 +393,19 @@ export type {
     DiscoveryApplicationInput,
     DiscoveryApplicationEdit,
     DiscoveryCategory,
+    DiscoverySearchPage,
+    DiscoverySearchQuery,
     DiscoveryStatus,
 } from "./discovery.js"
+export type { DiscoveryCategoryCount, DiscoveryGuild } from "./discovery.js"
 export { DiscoveryCategories } from "./discovery.js"
-import { discoveryStatus, discoveryCategories, discoveryWrite, discoveryWithdraw } from "#sdk/internal/guild-discovery"
+import {
+    discoverySearch,
+    discoveryStatus,
+    discoveryCategories,
+    discoveryWrite,
+    discoveryWithdraw,
+} from "#sdk/internal/guild-discovery"
 export type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 import { auditLogPage } from "#sdk/internal/audit-logs"
 export type {
@@ -493,6 +504,7 @@ import type {
     UserProfileQuery,
     DirectMessageChannel,
     DirectMessageGroupEdit,
+    DirectMessageLatestMessages,
     UserOperationFailure,
     UserOperationOptions,
 } from "./users.js"
@@ -504,6 +516,7 @@ export type {
     UserProfileQuery,
     DirectMessageChannel,
     DirectMessageGroupEdit,
+    DirectMessageLatestMessages,
     DirectMessageRecipientChange,
     UserOperation,
     UserOperationFailure,
@@ -516,6 +529,7 @@ import {
     directMessageOpen,
     directMessageFetch,
     directMessageList,
+    directMessageLatestMessages,
     directMessageEdit,
     directMessageClose,
 } from "#sdk/internal/users"
@@ -524,6 +538,7 @@ import {
     type CreatedWebhook,
     type WebhookCreate,
     type WebhookEdit,
+    type WebhookTokenEdit,
     type WebhookMessageInput,
     type WebhookMessageEdit,
     type WebhookClientOptions,
@@ -537,7 +552,11 @@ export type {
     CreatedWebhook,
     WebhookCreate,
     WebhookEdit,
+    WebhookTokenEdit,
     WebhookMessageInput,
+    WebhookMessageReference,
+    WebhookReplyReference,
+    WebhookForwardReference,
     WebhookMessageEdit,
     WebhookClientOptions,
     WebhookOperation,
@@ -552,6 +571,9 @@ import {
     webhookList,
     webhookEdit,
     webhookDelete,
+    webhookTokenFetch,
+    webhookTokenEdit,
+    webhookTokenDelete,
     webhookSend,
     webhookMessage,
     webhookMessageDelete,
@@ -563,9 +585,11 @@ export type {
     CommandCooldownRequest,
     MemoryCooldownOptions,
     PrefixCommandDefinition,
+    PrefixCommandMetadata,
     PrefixCommandParse,
     PrefixCommandParseInput,
     PrefixCommandPrefix,
+    PrefixCommandRejection,
     PrefixCommandsOptions,
 } from "./commands.js"
 export type {
@@ -590,6 +614,7 @@ export type {
     SupervisorRestartOptions,
     SupervisorState,
     SupervisorStatus,
+    SupervisorWaitOptions,
 } from "./supervisor.js"
 export type {
     NativeSupervisor,
@@ -623,7 +648,7 @@ export const commands = nativeCommands
 
 /**
  * Optional local Node process supervision above independently usable clients.
- * create is lazy and starts no child. start starts the configured children once and waits for their assignment and configuration acknowledgements, not gateway READY. waitForClose observes the terminal local lifetime after every owned child exits, can be interrupted without stopping it and status returns a frozen safe snapshot
+ * create is lazy and starts no child. start starts the configured children once and waits for their assignment and configuration acknowledgements, not gateway READY. waitForReady observes a later all-child READY state without starting or owning the supervisor. waitForClose observes the terminal local lifetime after every owned child exits, can be interrupted without stopping it and status returns a frozen safe snapshot, including each child’s last received current-generation gateway state, not atomic cross-process health
  *
  * Each child module must run supervisor.child.run. The helper owns a nested client and IPC scope, preserves the caller environment and Cause, and obtains a parent permit immediately before every fresh gateway Identify. Resumes bypass the permit
  *
@@ -1025,6 +1050,7 @@ import type {
 import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
+export type { ApiErrorDetail } from "./api-errors.js"
 export { MessageCleanupError } from "./message-cleanup.js"
 export { MessageFlags } from "./messages.js"
 export type { EventReadError, RegistrationError, SendError, MessageOperationFailure } from "./message-errors.js"
@@ -1802,6 +1828,7 @@ export type {
     CacheKind,
     ClientDiagnostics,
     ConnectionState,
+    OperationSignal,
 } from "./client.js"
 export {
     AuthenticationError,
@@ -1814,7 +1841,7 @@ export {
     RateLimitError,
 } from "./errors.js"
 export type { ConnectError, ConnectionFailure } from "./errors.js"
-export type { ShardingOptions, ShardState } from "./sharding.js"
+export type { ShardingOptions, ShardRecoveryDiagnostic, ShardState } from "./sharding.js"
 
 /** Remote audit observations requiring ViewAuditLog, without SDK retention or gateway startup.
  * Eligible reads retry transient failures at most twice under the shared guild REST policy.
@@ -2005,6 +2032,14 @@ export interface Stickers {
  * There is no hidden eligibility read, automatic resubmission, review approval or directory-joining operation
  */
 export interface Discovery {
+    /** Lazily search one current public directory page without a cache, gateway readiness, join operation or stable snapshot.
+     * Defaults to limit 24 and offset 0. Each page can change while later offset pages are fetched, so callers must not infer a stable traversal.
+     * The shared REST owner retries eligible GET failures. Input, HTTP and malformed-response failures use GuildOperationError
+     */
+    search(
+        query?: DiscoverySearchQuery,
+        options?: GuildOperationOptions,
+    ): Effect.Effect<DiscoverySearchPage, GuildOperationFailure>
     /** Remote eligibility and application state for a decimal guild ID, requiring ManageGuild.
      * Returns eligible false when discovery is disabled or the member threshold is unmet, not a diagnosis distinguishing them.
      * Eligibility can change before submission. Reviewed/removed applications include available reasons
@@ -2736,8 +2771,18 @@ export interface WebhookClient {
     readonly id: string
     /** Immutable endpoint discovery and pure URL helpers for this webhook client's selected instance */
     readonly instance: Instance
-    /** Send with wait=true and return the created message. Mentions default off. Files use bounded multipart streaming, with 50 MiB maximum per file.
-     * Image/thumbnail attachment URLs match a new upload in this execution. flags accepts only the two non-voice MessageFlags bits.
+    /** Lazily fetch this credential's current remote metadata without bot authentication or retaining creator/private fields */
+    fetch(options?: MessageOperationOptions): Effect.Effect<Webhook, WebhookOperationFailure>
+    /** Lazily update only this webhook's name or avatar through its credential. Channel moves require bot webhooks.edit.
+     * A failed or interrupted write can have applied and does not close this client
+     */
+    edit(input: WebhookTokenEdit, options?: MessageOperationOptions): Effect.Effect<Webhook, WebhookOperationFailure>
+    /** Lazily delete this remote webhook through its credential. HTTP 204 does not close this client or erase its local credential reference.
+     * Later remote operations normally fail notFound after revocation. Use shutdown separately to release local resources
+     */
+    delete(options?: MessageOperationOptions): Effect.Effect<void, WebhookOperationFailure>
+    /** Send with wait=true and return the created message. Mentions default off. Reply references can include files; forwarded references preserve only their source snapshot and reject new content/uploads.
+     * Files use bounded multipart streaming, with 50 MiB maximum per file. Image/thumbnail attachment URLs match a new upload in this execution. flags accepts only the two non-voice MessageFlags bits.
      * Snapshot inputs at execution, including admitted file bytes. Never retry an uncertain send, which may already have posted */
     send(input: WebhookMessageInput, options?: MessageOperationOptions): Effect.Effect<Message, WebhookOperationFailure>
     /** Fetch a decimal message ID authored by this webhook in its current channel, with bounded transient read retries */
@@ -3010,6 +3055,12 @@ export function createWebhookClient(
                         .resolveInfo(options)
                         .pipe(Effect.map((value) => (instance ??= effectInstance(value)))),
             }),
+            fetch: (options?: MessageOperationOptions) =>
+                owner.run("webhooks.fetchToken", () => webhookTokenFetch(owner.id), options),
+            edit: (input: WebhookTokenEdit, options?: MessageOperationOptions) =>
+                owner.run("webhooks.editToken", () => webhookTokenEdit(owner.id, input), options),
+            delete: (options?: MessageOperationOptions) =>
+                owner.run("webhooks.deleteToken", () => webhookTokenDelete(owner.id), options),
             send: (input: WebhookMessageInput, options?: MessageOperationOptions) =>
                 owner.run("webhooks.send", () => webhookSend(owner.id, input), options),
             fetchMessage: (id: string, options?: MessageOperationOptions) =>
@@ -3160,6 +3211,14 @@ export interface DirectMessages {
     fetch(id: string, options?: UserOperationOptions): Effect.Effect<DirectMessageChannel, UserOperationFailure>
     /** Read open one-to-one and group conversations remotely, excluding personal notes. This is not an atomic snapshot or a complete message history */
     fetchAll(options?: UserOperationOptions): Effect.Effect<readonly DirectMessageChannel[], UserOperationFailure>
+    /** Lazily fetch the latest message for 1–100 explicitly selected distinct DM/group-DM IDs through Fluxer's batch endpoint.
+     * POST is read-shaped but is not retried after a dispatched uncertain failure. It does not enumerate conversations or hydrate any cache.
+     * Returned null is ambiguous. omittedChannelIds preserves requested IDs Fluxer omitted, rather than treating omission as null, an empty channel or access denial
+     */
+    fetchLatestMessages(
+        channelIds: readonly string[],
+        options?: UserOperationOptions,
+    ): Effect.Effect<DirectMessageLatestMessages, UserOperationFailure>
     /** Edit explicit group settings. Fluxer enforces member/owner permissions; failure does not guarantee rollback */
     editGroup(
         id: string,
@@ -3260,6 +3319,8 @@ export function createClient<E = never, R = never>(
                     owner.user("directMessages.fetch", () => directMessageFetch(id), options),
                 fetchAll: (options?: UserOperationOptions) =>
                     owner.user("directMessages.fetchAll", () => directMessageList(), options),
+                fetchLatestMessages: (ids: readonly string[], options?: UserOperationOptions) =>
+                    owner.user("directMessages.fetchLatestMessages", () => directMessageLatestMessages(ids), options),
                 editGroup: (id: string, input: DirectMessageGroupEdit, options?: UserOperationOptions) =>
                     owner.user("directMessages.editGroup", () => directMessageEdit(id, input), options),
                 close: (id: string, options?: UserOperationOptions) =>
@@ -3334,6 +3395,8 @@ export function createClient<E = never, R = never>(
                     owner.guild("invites.delete", () => inviteDelete(code, options), options),
             }),
             discovery: Object.freeze({
+                search: (query?: DiscoverySearchQuery, options?: GuildOperationOptions) =>
+                    owner.guild("discovery.search", () => discoverySearch(query), options),
                 fetchStatus: (id: string, options?: GuildOperationOptions) =>
                     owner.guild("discovery.fetchStatus", () => discoveryStatus(id), options),
                 fetchCategories: (options?: GuildOperationOptions) =>

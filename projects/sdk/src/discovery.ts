@@ -101,3 +101,71 @@ export interface DiscoveryStatus {
     /** Provider's current minimum member count, not a local configuration setting */
     readonly minMemberCount: number
 }
+
+/** One volatile public directory result, not a full guild observation or a join invitation */
+export interface DiscoveryGuild {
+    /** Decimal guild ID */
+    readonly id: string
+    /** Directory-visible guild name */
+    readonly name: string
+    /** Icon hash, or null when the directory has none */
+    readonly icon: string | null
+    /** Banner hash, or null when the directory has none */
+    readonly banner: string | null
+    /** Directory description, or null when absent */
+    readonly description: string | null
+    /** Provider directory category ID */
+    readonly categoryId: number
+    /** Provider primary language, or null when absent */
+    readonly primaryLanguage: string | null
+    /** Frozen provider directory tags */
+    readonly tags: readonly string[]
+    /** Approximate directory member count */
+    readonly memberCount: number
+    /** Approximate directory online-member count */
+    readonly onlineCount: number
+    /** Provider feature names */
+    readonly features: readonly string[]
+    /** Provider verification level */
+    readonly verificationLevel: number
+}
+
+/** Filters and explicit offset page controls for one public directory read */
+export interface DiscoverySearchQuery {
+    /** Free-text query of at most 100 UTF-16 code units */
+    readonly query?: string
+    /** Provider category ID from 0 through 8 */
+    readonly categoryId?: number
+    /** Case-sensitive BCP-47 primary-language filter */
+    readonly primaryLanguage?: string
+    /** Directory tag of at most 30 UTF-16 code units */
+    readonly tag?: string
+    /** Provider ordering. Omission uses Fluxer's default ordering */
+    readonly sortBy?: "memberCount" | "onlineCount" | "relevance"
+    /** Results per page from 1 through 48, defaulting to 24 */
+    readonly limit?: number
+    /** Zero-based result offset, defaulting to 0 */
+    readonly offset?: number
+}
+
+/** Frozen category match count for the current directory filters, ignoring the selected category */
+export interface DiscoveryCategoryCount {
+    /** Provider category ID */
+    readonly categoryId: number
+    /** Current matching guild count */
+    readonly count: number
+}
+
+/** One explicit, non-snapshot-stable directory page with the effective offset and limit */
+export interface DiscoverySearchPage {
+    /** Frozen directory results in provider order */
+    readonly guilds: readonly DiscoveryGuild[]
+    /** Provider-reported matching guild count, which can change immediately */
+    readonly total: number
+    /** Frozen current-filter category counts, ignoring DiscoverySearchQuery.categoryId */
+    readonly categoryCounts: readonly DiscoveryCategoryCount[]
+    /** Effective zero-based request offset */
+    readonly offset: number
+    /** Effective request page limit */
+    readonly limit: number
+}

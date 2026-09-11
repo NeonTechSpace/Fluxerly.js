@@ -220,9 +220,12 @@ export interface OperationOptions {
      * Controls startup for connect, the full accepted lifetime for run, and only the observation for waitForClose.
      * No signal is accepted by shutdown, and completion is never undone by a later abort
      */
-    readonly signal?: {
-        readonly aborted: boolean
-        addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void
-        removeEventListener(type: "abort", listener: () => void): void
-    }
+    readonly signal?: OperationSignal
+}
+
+/** Dependency-free structural cancellation signal accepted by default operations */
+export interface OperationSignal {
+    readonly aborted: boolean
+    addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void
+    removeEventListener(type: "abort", listener: () => void): void
 }

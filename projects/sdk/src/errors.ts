@@ -102,6 +102,7 @@ export type Operation =
     | "supervisor.create"
     | "supervisor.start"
     | "supervisor.waitForClose"
+    | "supervisor.waitForReady"
     | "supervisor.shutdown"
     | "supervisor.child.run"
     | "commands"

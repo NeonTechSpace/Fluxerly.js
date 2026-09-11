@@ -1,4 +1,5 @@
 import type { ClientClosedError, ConfigurationError } from "./errors.js"
+import type { ApiErrorDetail } from "./api-errors.js"
 
 /** A subscription exceeded a pending queue budget and permanently stopped delivery. It does not recover missed events */
 export class EventOverflowError extends Error {
@@ -37,6 +38,8 @@ export class MessageError extends Error {
         readonly status: number | null = null,
         /** Server-required wait in milliseconds when usable. Null otherwise */
         readonly retryAfterMs: number | null = null,
+        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
         super(`Message send failed (${reason}; delivery ${delivery})`)
         this.name = this._tag
@@ -83,6 +86,8 @@ export class MessageOperationError extends Error {
         readonly status: number | null = null,
         /** Server-required wait in milliseconds when usable, otherwise null */
         readonly retryAfterMs: number | null = null,
+        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
         super(`Message ${operation} failed (${reason}; outcome ${outcome})`)
         this.name = this._tag

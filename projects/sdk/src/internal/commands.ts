@@ -3,8 +3,10 @@ import type {
     CommandCooldownRequest,
     MemoryCooldownOptions,
     PrefixCommandDefinition,
+    PrefixCommandMetadata,
     PrefixCommandParse,
     PrefixCommandParseInput,
+    PrefixCommandRejection,
     PrefixCommandsOptions,
 } from "#sdk/commands"
 import { ConfigurationError } from "#sdk/errors"
@@ -13,6 +15,7 @@ import { Effect } from "effect"
 
 const commandName = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 const maxDurationMs = 2_147_483_647
+const emptyCommandMetadata: readonly PrefixCommandMetadata[] = Object.freeze([])
 
 export interface PrefixCommandMatch<D extends PrefixCommandDefinition> {
     readonly definition: D
@@ -23,11 +26,22 @@ export interface PrefixCommandMatch<D extends PrefixCommandDefinition> {
 /** Shared immutable command lookup state. Entry-point adapters own callback and error boundaries */
 export class PrefixCommandRegistry<D extends PrefixCommandDefinition> {
     readonly #definitions: ReadonlyMap<string, D>
+    readonly #commands: readonly PrefixCommandMetadata[]
     readonly #options: Readonly<PrefixCommandsOptions>
 
-    constructor(options: PrefixCommandsOptions, definitions: ReadonlyMap<string, D> = new Map()) {
+    constructor(
+        options: PrefixCommandsOptions,
+        definitions: ReadonlyMap<string, D> = new Map(),
+        commands: readonly PrefixCommandMetadata[] = emptyCommandMetadata,
+    ) {
         this.#options = copyOptions(options)
         this.#definitions = definitions
+        this.#commands = commands
+    }
+
+    /** Immutable registration-order help metadata with no callbacks or local storage references */
+    get commands(): readonly PrefixCommandMetadata[] {
+        return this.#commands
     }
 
     /** Return a separate registry snapshot. Existing routers and subscriptions keep their previous definitions */
@@ -42,7 +56,11 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition> {
                 throw new ConfigurationError("aliases", "A command name or alias is already registered")
         const definitions = new Map(this.#definitions)
         for (const key of keys) definitions.set(key, stored)
-        return new PrefixCommandRegistry(this.#options, definitions)
+        return new PrefixCommandRegistry(
+            this.#options,
+            definitions,
+            Object.freeze([...this.#commands, snapshotCommandIdentity(stored)]),
+        )
     }
 
     resolve(message: Message): PrefixCommandMatch<D> | undefined {
@@ -130,10 +148,15 @@ export function validateCommandCooldown(value: unknown): void {
 }
 
 /** Validate and copy the command identity portion retained by an adapter snapshot */
-export function snapshotCommandIdentity(value: PrefixCommandDefinition): PrefixCommandDefinition {
+export function snapshotCommandIdentity(value: PrefixCommandDefinition): PrefixCommandMetadata {
     validateDefinition(value)
     const aliases = value.aliases === undefined ? undefined : copyCommandNames(value.aliases, "aliases")
-    return Object.freeze({ name: value.name, ...(aliases === undefined ? {} : { aliases }) })
+    return Object.freeze({
+        name: value.name,
+        ...(aliases === undefined ? {} : { aliases }),
+        ...(value.description === undefined ? {} : { description: value.description }),
+        ...(value.usage === undefined ? {} : { usage: value.usage }),
+    })
 }
 
 /** Validate a finite adapter command object before reading its selected public fields */
@@ -180,6 +203,8 @@ export interface CommandDispatchAdapter<D extends PrefixCommandDefinition, C, E 
     readonly context: (match: PrefixCommandMatch<D>) => C
     readonly guard: (definition: D, context: C) => Effect.Effect<unknown, E, R>
     readonly cooldown?: (definition: D, context: C) => Effect.Effect<CommandCooldownClaim, E, R>
+    /** Optional contextual rejection feedback. It runs through the existing subscription error boundary and never sends a response itself */
+    readonly reject?: (definition: D, context: C, rejection: PrefixCommandRejection) => Effect.Effect<unknown, E, R>
     readonly execute: (definition: D, context: C) => Effect.Effect<unknown, E, R>
     /** Return false after default cancellation so a later callback never starts */
     readonly active?: () => boolean
@@ -204,12 +229,28 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, E, R>(
         const permitted = yield* adapter.guard(matched.definition, context)
         if (typeof permitted !== "boolean")
             return yield* Effect.fail(new ConfigurationError("command", "A command guard must return a boolean"))
-        if (!permitted) return
+        if (!permitted) {
+            yield* active()
+            if (adapter.reject !== undefined)
+                yield* adapter.reject(matched.definition, context, Object.freeze({ _tag: "CommandGuardRejected" }))
+            return
+        }
         if (adapter.cooldown !== undefined) {
             yield* active()
             const claim = yield* adapter.cooldown(matched.definition, context)
             yield* configurationEffect(() => validateCooldownClaim(claim))
-            if (claim._tag !== "CooldownAcquired") return
+            if (claim._tag !== "CooldownAcquired") {
+                yield* active()
+                if (adapter.reject !== undefined)
+                    yield* adapter.reject(
+                        matched.definition,
+                        context,
+                        claim._tag === "CooldownActive"
+                            ? Object.freeze({ _tag: "CommandCooldownActive", retryAtMs: claim.retryAtMs })
+                            : Object.freeze({ _tag: "CommandCooldownCapacity", retryAtMs: claim.retryAtMs }),
+                    )
+                return
+            }
         }
         yield* active()
         yield* adapter.execute(matched.definition, context)
@@ -246,6 +287,10 @@ function validateDefinition(value: PrefixCommandDefinition): void {
             "Command names must use ASCII letters, numbers, `_` or `-` and begin alphanumerically",
         )
     if (value.aliases !== undefined) copyCommandNames(value.aliases, "aliases")
+    if (value.description !== undefined && typeof value.description !== "string")
+        throw new ConfigurationError("command", "Command description must be a string when supplied")
+    if (value.usage !== undefined && typeof value.usage !== "string")
+        throw new ConfigurationError("command", "Command usage must be a string when supplied")
 }
 
 function copyDefinition<D extends PrefixCommandDefinition>(value: D): D {
@@ -254,6 +299,8 @@ function copyDefinition<D extends PrefixCommandDefinition>(value: D): D {
         ...value,
         name: value.name,
         ...(aliases === undefined ? {} : { aliases }),
+        ...(value.description === undefined ? {} : { description: value.description }),
+        ...(value.usage === undefined ? {} : { usage: value.usage }),
     }) as D
 }
 

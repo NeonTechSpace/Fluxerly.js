@@ -54,6 +54,7 @@ function remoteFailure(error: GuildOperationFailure): GuildOperationFailure {
             error.outcome,
             error.status,
             error.retryAfterMs,
+            error.apiError,
         )
     return error
 }

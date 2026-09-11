@@ -1,7 +1,7 @@
 import { once } from "node:events"
 import { createServer } from "node:http"
 import { fileURLToPath } from "node:url"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { expect, onTestFinished, test, vi } from "vitest"
 import WebSocket, { WebSocketServer } from "ws"
 import { supervisor as defaultSupervisor } from "../src/index.js"
@@ -16,6 +16,8 @@ type Proof = { readonly at: number; readonly mode: string; readonly state: strin
 type Managed = {
     start(): Promise<void>
     waitForClose(): Promise<void>
+    waitForReady(signal?: AbortSignal): Promise<void>
+    cancelReadiness(): Promise<boolean>
     shutdown(): Promise<void>
     status(): SupervisorStatus
 }
@@ -254,6 +256,17 @@ async function managed(mode: Mode, options: SupervisorOptions): Promise<Managed>
                 const result = await value.waitForClose()
                 if (result.isErr()) throw result.error
             },
+            waitForReady: async (signal) => {
+                const result = await value.waitForReady(signal ? { signal } : undefined)
+                if (result.isErr()) throw result.error
+            },
+            cancelReadiness: async () => {
+                const controller = new AbortController()
+                const waiting = value.waitForReady({ signal: controller.signal })
+                controller.abort()
+                const result = await waiting
+                return result.isErr() && result.error._tag === "CancelledError"
+            },
             shutdown: async () => {
                 const result = await value.shutdown()
                 if (result.isErr()) throw result.error
@@ -265,10 +278,166 @@ async function managed(mode: Mode, options: SupervisorOptions): Promise<Managed>
     return {
         start: () => Effect.runPromise(value.start()),
         waitForClose: () => Effect.runPromise(value.waitForClose()),
+        waitForReady: () => Effect.runPromise(value.waitForReady()),
+        cancelReadiness: async () => {
+            const fiber = Effect.runFork(value.waitForReady())
+            await Effect.runPromise(Fiber.interrupt(fiber))
+            return true
+        },
         shutdown: () => Effect.runPromise(value.shutdown()),
         status: () => value.status(),
     }
 }
+
+test.each(["default", "native"] as const)(
+    "%s public supervisor exposes configured-but-not-ready child state and nonowning readiness",
+    async (mode) => {
+        const fixture = await loopbackGateway({ totalShards: 1 })
+        const owner = await managed(mode, options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000))
+        onTestFinished(async () => {
+            await owner.shutdown()
+            await fixture.close()
+        })
+        await owner.start()
+        expect(owner.status().state).toBe("running")
+        expect(owner.status().children[0]!.connectionState).not.toBe("Connected")
+        const waiting = owner.waitForReady()
+        fixture.releaseReady()
+        await waiting
+        expect(owner.status()).toMatchObject({ children: [{ id: "only", connectionState: "Connected" }] })
+        await owner.shutdown()
+        await owner.waitForClose()
+    },
+    12_000,
+)
+
+test("default readiness gives an already-aborted observer cancellation precedence after the supervisor is ready", async () => {
+    const fixture = await loopbackGateway({ totalShards: 1 })
+    const created = defaultSupervisor.create(
+        options("default", fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000),
+    )
+    if (created.isErr()) throw created.error
+    const owner = created.value
+    onTestFinished(async () => {
+        await owner.shutdown()
+        await fixture.close()
+    })
+    await owner.start().then((result) => result._unsafeUnwrap())
+    const controller = new AbortController()
+    const ready = owner.waitForReady({ signal: controller.signal })
+    fixture.releaseReady()
+    expect((await ready).isOk()).toBe(true)
+    controller.abort()
+
+    const alreadyAborted = new AbortController()
+    alreadyAborted.abort()
+    const cancelled = await owner.waitForReady({ signal: alreadyAborted.signal })
+    expect(cancelled.isErr() && cancelled.error._tag).toBe("CancelledError")
+    expect(owner.status()).toMatchObject({ state: "running", children: [{ connectionState: "Connected" }] })
+}, 12_000)
+
+test("default parent stop aborts held configure work without a late managed run", async () => {
+    const mode = "default" as const
+    const fixture = await loopbackGateway({ totalShards: 1, holdConfigureForShard: 0 })
+    const owner = await managed(
+        mode,
+        options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000, {
+            childEnvironment: { FLUXERLY_SUPERVISOR_HOLD_CONFIGURE_FOR_SHARD: "0" },
+        }),
+    )
+    onTestFinished(async () => {
+        await owner.shutdown()
+        await fixture.close()
+    })
+    const starting = owner.start().catch(() => undefined)
+    await vi.waitFor(() => expect(fixture.configureRequests).toEqual([0]))
+    await owner.shutdown()
+    fixture.releaseConfigureBarrier()
+    await starting
+    await owner.waitForClose()
+    await vi.waitFor(() =>
+        expect(fixture.proofs).toEqual(
+            expect.arrayContaining([expect.objectContaining({ mode, state: "signal-aborted" })]),
+        ),
+    )
+    expect(fixture.identifies).toEqual([])
+}, 12_000)
+
+test.each(["default", "native"] as const)(
+    "%s ignores pre-configuration and stale-generation Connected state before current readiness",
+    async (mode) => {
+        const entryPath = new URL("./supervisor-stale-state-worker.mjs", import.meta.url)
+        if (mode === "default") {
+            const created = defaultSupervisor.create({
+                entry: fileURLToPath(entryPath),
+                totalShards: 1,
+                assignments: [{ id: "only", shardIds: [0] }],
+            })
+            if (created.isErr()) throw created.error
+            const owner = created.value
+            await owner.start().then((result) => result._unsafeUnwrap())
+            expect(owner.status().children[0]!.connectionState).toBeNull()
+            await owner.waitForReady().then((result) => result._unsafeUnwrap())
+            expect(owner.status().children[0]!.connectionState).toBe("Connected")
+            await owner.shutdown().then((result) => result._unsafeUnwrap())
+            return
+        }
+        const owner = await Effect.runPromise(
+            nativeSupervisor.create({
+                entry: entryPath,
+                totalShards: 1,
+                assignments: [{ id: "only", shardIds: [0] }],
+            }),
+        )
+        await Effect.runPromise(owner.start())
+        expect(owner.status().children[0]!.connectionState).toBeNull()
+        await Effect.runPromise(owner.waitForReady())
+        expect(owner.status().children[0]!.connectionState).toBe("Connected")
+        await Effect.runPromise(owner.shutdown())
+    },
+    12_000,
+)
+
+test("default clears a current-generation connection observation as soon as owned child IPC disconnects", async () => {
+    const entry = new URL("./supervisor-stale-state-worker.mjs", import.meta.url)
+    const created = defaultSupervisor.create({
+        entry: fileURLToPath(entry),
+        totalShards: 1,
+        assignments: [{ id: "only", shardIds: [0] }],
+        childEnvironment: { FLUXERLY_SUPERVISOR_DISCONNECT_AFTER_READY: "1" },
+    })
+    if (created.isErr()) throw created.error
+    const owner = created.value
+    onTestFinished(async () => {
+        await owner.shutdown()
+    })
+    await owner.start().then((result) => result._unsafeUnwrap())
+    await owner.waitForReady().then((result) => result._unsafeUnwrap())
+    await vi.waitFor(
+        () => expect(owner.status().children[0]).toMatchObject({ pid: expect.any(Number), connectionState: null }),
+        { interval: 5, timeout: 2_000 },
+    )
+}, 12_000)
+
+test.each(["default", "native"] as const)(
+    "%s readiness observer cancellation leaves the configured supervisor running",
+    async (mode) => {
+        const fixture = await loopbackGateway({ totalShards: 1 })
+        const owner = await managed(mode, options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000))
+        onTestFinished(async () => {
+            await owner.shutdown()
+            await fixture.close()
+        })
+        await owner.start()
+        expect(await owner.cancelReadiness()).toBe(true)
+        expect(owner.status()).toMatchObject({ state: "running", children: [{ id: "only", pid: expect.any(Number) }] })
+        fixture.releaseReady()
+        await owner.waitForReady()
+        await owner.shutdown()
+        await owner.waitForClose()
+    },
+    12_000,
+)
 
 function options(
     mode: Mode,
@@ -347,7 +516,7 @@ test.each(["default", "native"] as const)(
             expect(sends[1]!.at - sends[0]!.at).toBeGreaterThanOrEqual(minimumSpacingMs)
             await owner.shutdown()
             await owner.waitForClose()
-            await vi.waitFor(() => expect(fixture.proofs).toHaveLength(2))
+            await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(2))
             expect(fixture.proofs).toEqual(
                 expect.arrayContaining([
                     expect.objectContaining({ mode, state: "Closed" }),
@@ -406,8 +575,8 @@ test.each(["default", "native"] as const)(
             expect(sends[1]!.at - sends[0]!.at).toBeGreaterThanOrEqual(minimumSpacingMs)
             await owner.shutdown()
             await owner.waitForClose()
-            await vi.waitFor(() => expect(fixture.proofs).toHaveLength(1))
-            expect(fixture.proofs[0]).toMatchObject({ mode, state: "Closed" })
+            await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(1))
+            expect(fixture.proofs.find((proof) => proof.state === "Closed")).toMatchObject({ mode, state: "Closed" })
             expect(owner.status()).toMatchObject({
                 state: "closed",
                 children: [{ id: "only", pid: null, state: "closed", generation: 1 }],
@@ -499,7 +668,7 @@ test.each(["default", "native"] as const)(
             expect(healthyIdentify.at - unacknowledgedClosed.at).toBeGreaterThanOrEqual(minimumSpacingMs + 250)
             await owner.shutdown()
             await owner.waitForClose()
-            await vi.waitFor(() => expect(fixture.proofs).toHaveLength(2))
+            await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(2))
             expect(owner.status()).toMatchObject({
                 state: "closed",
                 children: [

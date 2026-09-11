@@ -13,6 +13,7 @@ import {
     type SupervisorState,
     type SupervisorStatus,
 } from "#sdk/supervisor"
+import type { ConnectionState, OperationSignal } from "#sdk/client"
 
 const maximumTimerMs = 2_147_483_647
 const maximumAttempts = 100
@@ -55,10 +56,17 @@ interface ChildSlot {
     child: ChildProcess | undefined
     hello: boolean
     ready: boolean
+    connectionState: ConnectionState | null
     state: SupervisorChildState
     restartTimer: ReturnType<typeof setTimeout> | undefined
     startupTimer: ReturnType<typeof setTimeout> | undefined
     stopTimer: ReturnType<typeof setTimeout> | undefined
+}
+
+const connectionStates = ["Disconnected", "Connecting", "Connected", "Recovering", "Closing", "Closed"] as const
+
+function connectionState(value: unknown): value is ConnectionState {
+    return typeof value === "string" && connectionStates.includes(value as ConnectionState)
 }
 
 interface IdentifyRequest {
@@ -341,6 +349,8 @@ export class SupervisorOwner {
     readonly #startup = Deferred.makeUnsafe<void, SupervisorError>()
     readonly #terminal = Deferred.makeUnsafe<void, SupervisorError>()
     readonly #stopped = Deferred.makeUnsafe<void>()
+    #readiness = Deferred.makeUnsafe<void, SupervisorError>()
+    #readyObserved = false
     #configuration: SupervisorConfiguration | undefined
     #state: SupervisorState = "idle"
     #stopping = false
@@ -360,6 +370,7 @@ export class SupervisorOwner {
             child: undefined,
             hello: false,
             ready: false,
+            connectionState: null,
             state: "idle",
             restartTimer: undefined,
             startupTimer: undefined,
@@ -383,6 +394,16 @@ export class SupervisorOwner {
         return Deferred.await(this.#terminal)
     }
 
+    waitForReady(): Effect.Effect<void, SupervisorError> {
+        return Effect.suspend(() => {
+            if (this.#state === "idle" || this.#state === "closed" || this.#state === "stopping")
+                return Effect.fail(new SupervisorError(null, "closed"))
+            if (this.#state === "failed") return Effect.fail(this.#failure ?? new SupervisorError(null, "closed"))
+            if (this.#slots.every((slot) => slot.connectionState === "Connected")) return Effect.void
+            return Deferred.await(this.#readiness)
+        })
+    }
+
     status(): SupervisorStatus {
         return Object.freeze({
             state: this.#state,
@@ -395,6 +416,7 @@ export class SupervisorOwner {
                         pid: typeof slot.child?.pid === "number" ? slot.child.pid : null,
                         restarts: slot.restarts,
                         state: slot.state,
+                        connectionState: slot.connectionState,
                     }),
                 ),
             ),
@@ -422,6 +444,7 @@ export class SupervisorOwner {
         slot.generation += 1
         slot.hello = false
         slot.ready = false
+        slot.connectionState = null
         slot.state = "starting"
         let child: ChildProcess
         try {
@@ -443,6 +466,7 @@ export class SupervisorOwner {
                 this.#fail(new SupervisorError(slot.configuration.id, "startupTimeout"))
         }, this.#configuration!.startupTimeoutMs)
         child.on("message", (message: unknown) => this.#message(slot, child, generation, message))
+        child.once("disconnect", () => this.#disconnect(slot, child, generation))
         child.once("error", () => this.#childError(slot, child, generation))
         child.once("exit", () => this.#exit(slot, child, generation))
     }
@@ -461,6 +485,12 @@ export class SupervisorOwner {
         this.#requestStop(slot)
     }
 
+    #disconnect(slot: ChildSlot, child: ChildProcess, generation: number) {
+        if (slot.child !== child || slot.generation !== generation) return
+        slot.connectionState = null
+        this.#refreshReadiness()
+    }
+
     #message(slot: ChildSlot, child: ChildProcess, generation: number, message: unknown) {
         if (this.#stopping || this.#failed || slot.child !== child || slot.generation !== generation) return
         if (!record(message) || typeof message.type !== "string")
@@ -473,6 +503,14 @@ export class SupervisorOwner {
             this.#send(slot, { type: "assignment", generation, assignment: slot.configuration.assignment })
             return
         }
+        if (
+            message.type === "state" &&
+            hasExactKeys(message, ["type", "generation", "state"]) &&
+            slot.hello &&
+            !slot.ready &&
+            connectionState(message.state)
+        )
+            return
         if (message.type === "ready" && hasExactKeys(message, ["type", "generation"]) && slot.hello && !slot.ready) {
             slot.ready = true
             slot.state = "running"
@@ -482,6 +520,17 @@ export class SupervisorOwner {
                 this.#state = "running"
                 Deferred.doneUnsafe(this.#startup, Effect.void)
             }
+            return
+        }
+        if (
+            message.type === "state" &&
+            hasExactKeys(message, ["type", "generation", "state"]) &&
+            slot.hello &&
+            slot.ready &&
+            connectionState(message.state)
+        ) {
+            slot.connectionState = message.state
+            this.#refreshReadiness()
             return
         }
         if (
@@ -579,6 +628,17 @@ export class SupervisorOwner {
         }, Math.ceil(delay))
     }
 
+    #refreshReadiness() {
+        const ready = this.#slots.every((slot) => slot.connectionState === "Connected")
+        if (ready && !this.#readyObserved) {
+            this.#readyObserved = true
+            Deferred.doneUnsafe(this.#readiness, Effect.void)
+        } else if (!ready && this.#readyObserved) {
+            this.#readyObserved = false
+            this.#readiness = Deferred.makeUnsafe<void, SupervisorError>()
+        }
+    }
+
     #grant() {
         if (this.#stopping || this.#failed || this.#outstanding) return
         while (this.#pending.length) {
@@ -633,6 +693,8 @@ export class SupervisorOwner {
     #exit(slot: ChildSlot, child: ChildProcess, generation: number) {
         if (slot.child !== child || slot.generation !== generation) return
         slot.child = undefined
+        slot.connectionState = null
+        this.#refreshReadiness()
         if (slot.startupTimer) clearTimeout(slot.startupTimer)
         slot.startupTimer = undefined
         if (slot.stopTimer) clearTimeout(slot.stopTimer)
@@ -708,7 +770,10 @@ export class SupervisorOwner {
             if (slot.startupTimer) clearTimeout(slot.startupTimer)
             slot.startupTimer = undefined
             if (slot.child) this.#requestStop(slot)
-            else slot.state = this.#failed ? "failed" : "closed"
+            else {
+                slot.state = this.#failed ? "failed" : "closed"
+                slot.connectionState = null
+            }
         }
         this.#checkStopped()
     }
@@ -718,10 +783,12 @@ export class SupervisorOwner {
         if (this.#failed) {
             Deferred.doneUnsafe(this.#startup, Effect.fail(this.#failure!))
             Deferred.doneUnsafe(this.#terminal, Effect.fail(this.#failure!))
+            Deferred.doneUnsafe(this.#readiness, Effect.fail(this.#failure!))
         } else {
             this.#state = "closed"
             Deferred.doneUnsafe(this.#startup, Effect.fail(new SupervisorError(null, "closed")))
             Deferred.doneUnsafe(this.#terminal, Effect.void)
+            Deferred.doneUnsafe(this.#readiness, Effect.fail(new SupervisorError(null, "closed")))
         }
         this.#configuration = undefined
         Deferred.doneUnsafe(this.#stopped, Effect.void)
@@ -744,6 +811,9 @@ export class ChildBridge {
     #stopping = false
     #ended = false
     #cleaned = false
+    readonly #abort = new AbortController()
+
+    readonly signal: OperationSignal = this.#abort.signal
 
     readonly identifyGate: IdentifyGate = {
         permit: (shardId, send) => this.#permit(shardId, send),
@@ -778,6 +848,11 @@ export class ChildBridge {
         if (!this.#ended && this.#generation !== undefined) this.#send({ type: "ready", generation: this.#generation })
     }
 
+    state(state: ConnectionState) {
+        if (!this.#ended && this.#generation !== undefined)
+            this.#send({ type: "state", generation: this.#generation, state })
+    }
+
     failed(reason: "client" | "configure") {
         if (!this.#ended && this.#generation !== undefined)
             this.#send({ type: "failed", generation: this.#generation, reason })
@@ -786,6 +861,7 @@ export class ChildBridge {
     close() {
         if (!this.#ended) {
             this.#ended = true
+            this.#abort.abort()
             if (this.#generation !== undefined) this.#send({ type: "closed", generation: this.#generation })
         }
         Deferred.doneUnsafe(this.#stop, Effect.void)
@@ -890,6 +966,7 @@ export class ChildBridge {
             message.generation === this.#generation
         ) {
             this.#stopping = true
+            this.#abort.abort()
             Deferred.doneUnsafe(this.#stop, Effect.void)
             return
         }
@@ -900,6 +977,7 @@ export class ChildBridge {
         if (this.#ended) return this.#cleanup(false)
         this.#ended = true
         this.#stopping = true
+        this.#abort.abort()
         Deferred.doneUnsafe(this.#assignment, Effect.fail(new SupervisorChildError("disconnected")))
         Deferred.doneUnsafe(this.#stop, Effect.fail(new SupervisorChildError("disconnected")))
         this.#cleanup(false)

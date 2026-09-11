@@ -1,4 +1,4 @@
-import type { ClientOptions } from "./client.js"
+import type { ClientOptions, ConnectionState, OperationSignal } from "./client.js"
 
 /** One immutable local shard assignment sent from a parent supervisor to its owned child */
 export interface SupervisorAssignment {
@@ -91,6 +91,12 @@ export interface SupervisorChildOptions {
     readonly clientOptions?: Omit<ClientOptions, "token" | "sharding">
 }
 
+/** Cancellation for one default supervisor readiness observer. It does not own or stop the supervisor */
+export interface SupervisorWaitOptions {
+    /** Cancels only this wait. An already-aborted signal cancels without starting, stopping or restarting any child */
+    readonly signal?: OperationSignal
+}
+
 /** Current local lifetime state for one optional supervisor */
 export type SupervisorState = "idle" | "starting" | "running" | "stopping" | "closed" | "failed"
 
@@ -111,6 +117,8 @@ export interface SupervisorChildStatus {
     readonly restarts: number
     /** Current local lifecycle state */
     readonly state: SupervisorChildState
+    /** Last current-generation aggregate gateway state received from this child, or null before its first observation or after IPC becomes unavailable. It is not a cross-process atomic health report */
+    readonly connectionState: ConnectionState | null
 }
 
 /** Immutable safe local snapshot without child paths, arguments, environment or stdio */

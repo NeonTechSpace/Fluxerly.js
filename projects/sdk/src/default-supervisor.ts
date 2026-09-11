@@ -3,7 +3,7 @@ import { err, ok, ResultAsync, type Result } from "neverthrow"
 import type { ClientOptions } from "#sdk/client"
 import { CancelledError, ConfigurationError, SdkDefect, type ConnectError, type DefectReason } from "#sdk/errors"
 import { attachIdentifyGate } from "#sdk/internal/client"
-import { ChildBridge, createSupervisor } from "#sdk/internal/supervisor"
+import { ChildBridge, createSupervisor, type SupervisorOwner } from "#sdk/internal/supervisor"
 import {
     SupervisorChildError,
     type SupervisorAssignment,
@@ -11,6 +11,7 @@ import {
     SupervisorError,
     type SupervisorOptions,
     type SupervisorStatus,
+    type SupervisorWaitOptions,
 } from "#sdk/supervisor"
 import type { Client } from "./index.js"
 
@@ -20,6 +21,8 @@ export interface DefaultSupervisorChildContext {
     readonly client: Client
     /** Fixed assignment for this child process. It cannot be changed during this run */
     readonly assignment: SupervisorAssignment
+    /** Aborted when the parent requests stop or IPC disconnects. Configure work must cooperate; ignored promises cannot be forcibly preempted */
+    readonly signal: import("#sdk/client").OperationSignal
 }
 
 /** Default child settings. The callback registers application work but never starts or stops the client */
@@ -36,6 +39,8 @@ export interface DefaultSupervisor {
     start(): ResultAsync<void, SupervisorError>
     /** Await the terminal local supervisor outcome after every owned child exits */
     waitForClose(): ResultAsync<void, SupervisorError>
+    /** Observe all children becoming gateway-ready without starting or owning the supervisor. A signal cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error */
+    waitForReady(options?: SupervisorWaitOptions): ResultAsync<void, SupervisorError | CancelledError>
     /** Return one immutable safe local status snapshot without child output, environment, arguments or paths */
     status(): SupervisorStatus
     /** Ask every owned child to stop, force-terminate only an unresponsive owned child after the configured grace period, then await verified exit */
@@ -63,6 +68,7 @@ function resultFromExit<A, E>(
         | "supervisor.create"
         | "supervisor.start"
         | "supervisor.waitForClose"
+        | "supervisor.waitForReady"
         | "supervisor.shutdown"
         | "supervisor.child.run",
 ): Result<A, E> {
@@ -90,6 +96,23 @@ function defectReasons(error: unknown): DefectReason[] {
 
 function bridgeResult<A>(effect: Effect.Effect<A, SupervisorChildError>): Promise<Result<A, SupervisorChildError>> {
     return Effect.runPromiseExit(effect).then((exit) => resultFromExit(exit, "supervisor.child.run"))
+}
+
+function readyResult(owner: SupervisorOwner, options?: SupervisorWaitOptions) {
+    const signal = options?.signal
+    const readiness = Effect.suspend(() => {
+        if (signal?.aborted) return Effect.fail(new CancelledError())
+        if (!signal) return owner.waitForReady()
+        const cancelled = Effect.callback<never, CancelledError>((resume) => {
+            const abort = () => resume(Effect.fail(new CancelledError()))
+            signal.addEventListener("abort", abort, { once: true })
+            return Effect.sync(() => signal.removeEventListener("abort", abort))
+        })
+        return Effect.raceFirst(owner.waitForReady(), cancelled)
+    })
+    return new ResultAsync<void, SupervisorError | CancelledError>(
+        Effect.runPromiseExit(readiness).then((exit) => resultFromExit(exit, "supervisor.waitForReady")),
+    )
 }
 
 function rejectChildOverrides(options: DefaultSupervisorChildOptions): ConfigurationError | undefined {
@@ -129,6 +152,7 @@ export function makeDefaultSupervisor(
                 (async () => {
                     let bridge: ChildBridge | undefined
                     let client: Client | undefined
+                    let unsubscribeState: (() => void) | undefined
                     let shutdownAttempted = false
                     let outcome: Result<
                         void,
@@ -186,9 +210,16 @@ export function makeDefaultSupervisor(
                             }
                             const createdClient = created.value
                             client = createdClient
+                            unsubscribeState = createdClient.observeState((state) => bridge!.state(state))
                             const configured = Promise.resolve()
                                 .then(() =>
-                                    options.configure(Object.freeze({ client: createdClient, assignment: assigned })),
+                                    options.configure(
+                                        Object.freeze({
+                                            client: createdClient,
+                                            assignment: assigned,
+                                            signal: bridge!.signal,
+                                        }),
+                                    ),
                                 )
                                 .then(
                                     () => ({ kind: "configured" as const }),
@@ -208,6 +239,7 @@ export function makeDefaultSupervisor(
                                 break main
                             }
                             bridge.ready()
+                            bridge.state(createdClient.state)
                             running = Promise.resolve(client.run()).then(
                                 (result) => ({ kind: "client" as const, result }),
                                 (error: unknown) => ({ kind: "defect" as const, reasons: defectReasons(error) }),
@@ -239,9 +271,13 @@ export function makeDefaultSupervisor(
                                 }
                             } finally {
                                 try {
-                                    bridge?.close()
-                                } catch (error) {
-                                    defects.push(...defectReasons(error))
+                                    unsubscribeState?.()
+                                } finally {
+                                    try {
+                                        bridge?.close()
+                                    } catch (error) {
+                                        defects.push(...defectReasons(error))
+                                    }
                                 }
                             }
                         }
@@ -273,6 +309,7 @@ export function makeDefaultSupervisor(
                                 resultFromExit(exit, "supervisor.waitForClose"),
                             ),
                         ),
+                    waitForReady: (options?: SupervisorWaitOptions) => readyResult(owner, options),
                     status: () => owner.status(),
                     shutdown: () =>
                         new ResultAsync<void, never>(

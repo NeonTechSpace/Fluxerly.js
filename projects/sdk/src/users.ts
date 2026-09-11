@@ -1,5 +1,7 @@
 import type { ClientClosedError } from "./errors.js"
+import type { ApiErrorDetail } from "./api-errors.js"
 import type { MessageOperationOptions } from "./messages.js"
+import type { Message } from "./messages.js"
 import type { OperationOptions } from "./client.js"
 
 /** Frozen public account identity, excluding private fields even when fetched through /users/@me */
@@ -96,6 +98,14 @@ export interface DirectMessageRecipientChange {
     readonly userId: string
 }
 
+/** Frozen latest-message batch result for explicitly selected private channels */
+export interface DirectMessageLatestMessages {
+    /** Returned entries keyed by requested channel ID. Null is ambiguous and does not prove an empty channel or access denial */
+    readonly messages: Readonly<Record<string, Message | null>>
+    /** Requested IDs omitted by Fluxer, in input order. Omission is distinct from a returned null */
+    readonly omittedChannelIds: readonly string[]
+}
+
 /** Request deadlines include queueing, rate waits and transport cleanup */
 export interface UserOperationOptions extends MessageOperationOptions {}
 
@@ -111,6 +121,7 @@ export type UserOperation =
     | "directMessages.open"
     | "directMessages.fetch"
     | "directMessages.fetchAll"
+    | "directMessages.fetchLatestMessages"
     | "directMessages.get"
     | "directMessages.editGroup"
     | "directMessages.close"
@@ -131,6 +142,8 @@ export class UserOperationError extends Error {
         readonly status: number | null = null,
         /** Provider retry delay in milliseconds when available */
         readonly retryAfterMs: number | null = null,
+        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
         super(`User operation ${operation} failed (${reason}, outcome ${outcome})`)
         this.name = this._tag

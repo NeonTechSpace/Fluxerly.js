@@ -63,9 +63,22 @@ if (originalProcessSend) {
 }
 
 let client
-async function configure({ client: configured, assignment }) {
+async function configure({ client: configured, assignment, signal }) {
     assignedShard = assignment.shardIds[0]
     client = configured
+    signal?.addEventListener("abort", () =>
+        reports.push(
+            fetch(
+                `${origin.origin}/supervisor-proof?mode=${encodeURIComponent(mode)}&state=signal-aborted&at=${Date.now()}`,
+                {
+                    method: "GET",
+                    redirect: "error",
+                },
+            ).then((response) => {
+                if (!response.ok) throw new Error("Supervisor child signal proof failed")
+            }),
+        ),
+    )
     if (assignedShard !== holdConfigureForShard) return
     const barrier = await fetch(`${origin.origin}/supervisor-configure-barrier?shard=${assignedShard}`, {
         method: "GET",

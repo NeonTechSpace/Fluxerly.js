@@ -1,12 +1,14 @@
 import type {
     DirectMessageChannel,
     DirectMessageGroupEdit,
+    DirectMessageLatestMessages,
     User,
     UserProfile,
     UserProfileFields,
     UserProfileQuery,
 } from "#sdk/users"
-import { identifier, record } from "./message.js"
+import type { Message } from "#sdk/messages"
+import { decodeMessage, identifier, record } from "./message.js"
 
 /** Validated requests executed by the client's shared REST scheduler */
 export interface UserRequest<A> {
@@ -244,6 +246,49 @@ export function directMessageList(): UserRequest<readonly DirectMessageChannel[]
                 result.push(channel)
             }
             return Object.freeze(result)
+        },
+    }
+}
+
+/** Request latest messages only for explicit private-channel IDs, without cache admission or conversation enumeration */
+export function directMessageLatestMessages(
+    ids: readonly string[],
+): UserRequest<DirectMessageLatestMessages> | undefined {
+    if (
+        !Array.isArray(ids) ||
+        ids.length === 0 ||
+        ids.length > 100 ||
+        Array.from(ids).some((id) => !identifier(id)) ||
+        new Set(ids).size !== ids.length
+    )
+        return undefined
+    const channelIds = [...ids]
+    const json = JSON.stringify({ channels: channelIds })
+    return {
+        majorId: "@me",
+        path: "/users/@me/channels/messages/preload",
+        method: "POST",
+        status: 200,
+        resource: "directMessages",
+        json,
+        noCache: true,
+        decode: (value) => {
+            if (!record(value) || Object.keys(value).some((id) => !channelIds.includes(id))) return undefined
+            const messages: Record<string, Message | null> = {}
+            for (const [id, item] of Object.entries(value)) {
+                if (item === null) {
+                    messages[id] = null
+                    continue
+                }
+                const message = decodeMessage(item)
+                if (!message || message.channelId !== id) return undefined
+                messages[id] = message
+            }
+            const omittedChannelIds = channelIds.filter((id) => !(id in messages))
+            return Object.freeze({
+                messages: Object.freeze(messages),
+                omittedChannelIds: Object.freeze(omittedChannelIds),
+            })
         },
     }
 }

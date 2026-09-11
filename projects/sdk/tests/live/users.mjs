@@ -273,6 +273,19 @@ try {
     await value(bot.messages.edit(sent, { content: `${journal.marker}:edited` }))
     assert.equal((await api("GET", `/channels/${dm.id}/messages/${sent.id}`)).data.content, `${journal.marker}:edited`)
     report(stage)
+    stage = "explicit_dm_latest_message_batch"
+    const batchMessage = await value(bot.messages.send(dm.id, { content: `${journal.marker}:batch` }))
+    const latest = await value(bot.directMessages.fetchLatestMessages([dm.id]))
+    assert.deepEqual(latest.omittedChannelIds, [])
+    assert.equal(
+        latest.messages[dm.id]?.id,
+        batchMessage.id,
+        "Concurrent DM activity prevented latest-message verification",
+    )
+    const latestReadback = await api("POST", "/users/@me/channels/messages/preload", { channels: [dm.id] })
+    assert.equal(latestReadback.status, 200)
+    assert.equal(latestReadback.data[dm.id]?.id, batchMessage.id)
+    report(stage)
     stage = "unknown_dm_send_not_retried"
     let sends = 0
     globalThis.fetch = async (url, init) => {

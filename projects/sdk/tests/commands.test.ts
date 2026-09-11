@@ -1,6 +1,6 @@
 import { once } from "node:events"
 import { createServer } from "node:http"
-import { Effect, Exit, Scope } from "effect"
+import { Context, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { commands, createClient, SdkDefect, type Client, type DefaultPrefixCommand } from "../src/index.js"
 import { commands as nativeCommands, createClient as createNative } from "../src/effect.js"
@@ -62,12 +62,13 @@ async function fixture() {
         await new Promise<void>((resolve) => server.close(() => resolve()))
     })
     return {
-        deliver(content: string, isBot = false) {
+        deliver(content: string, isBot = false, guildId?: string) {
             const wire = {
                 id: `${sequence + 100}`,
                 channel_id: "20",
                 content,
                 author: { id: "30", username: "fixture", bot: isBot },
+                ...(guildId === undefined ? {} : { guild_id: guildId }),
             }
             transport.socket!.emit(
                 "message",
@@ -164,11 +165,274 @@ test("default command router uses the existing subscription for longest prefix, 
     expect(cooldowns.size).toBe(0)
 })
 
+test("default command feedback receives frozen context and cooldown retry information without executing", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const feedback: { content: string; tag: string; retryAtMs?: number | null }[] = []
+    const executed: string[] = []
+    const store = value(commands.memoryCooldowns({ maxEntries: 1 }))
+    let router = value(commands.create({ prefix: "!" }))
+    router = value(
+        router.register({
+            name: "blocked",
+            guard: () => false,
+            onReject: ({ message }, rejection) => {
+                feedback.push({ content: message.content, tag: rejection._tag })
+            },
+            execute: () => {
+                executed.push("blocked")
+            },
+        }),
+    )
+    router = value(
+        router.register({
+            name: "active",
+            cooldown: { store, durationMs: 60_000 },
+            onReject: ({ message }, rejection) => {
+                const retryAtMs = rejection._tag === "CommandGuardRejected" ? undefined : rejection.retryAtMs
+                feedback.push({
+                    content: message.content,
+                    tag: rejection._tag,
+                    ...(retryAtMs === undefined ? {} : { retryAtMs }),
+                })
+            },
+            execute: () => {
+                executed.push("active")
+            },
+        }),
+    )
+    router = value(
+        router.register({
+            name: "capacity",
+            cooldown: { store, durationMs: 60_000 },
+            onReject: ({ message }, rejection) => {
+                const retryAtMs = rejection._tag === "CommandGuardRejected" ? undefined : rejection.retryAtMs
+                feedback.push({
+                    content: message.content,
+                    tag: rejection._tag,
+                    ...(retryAtMs === undefined ? {} : { retryAtMs }),
+                })
+            },
+            execute: () => {
+                executed.push("capacity")
+            },
+        }),
+    )
+    value(router.attach(client))
+
+    remote.deliver("!blocked")
+    remote.deliver("!active")
+    remote.deliver("!active")
+    remote.deliver("!capacity")
+
+    await vi.waitFor(() => expect(feedback).toHaveLength(3))
+    expect(executed).toEqual(["active"])
+    expect(feedback).toEqual([
+        { content: "!blocked", tag: "CommandGuardRejected" },
+        expect.objectContaining({ content: "!active", tag: "CommandCooldownActive", retryAtMs: expect.any(Number) }),
+        expect.objectContaining({
+            content: "!capacity",
+            tag: "CommandCooldownCapacity",
+            retryAtMs: expect.any(Number),
+        }),
+    ])
+})
+
+test("native command feedback preserves caller context and does not execute rejected handlers", async () => {
+    const remote = await fixture()
+    const { client, registration } = await nativeClient()
+    const feedback: { content: string; tag: string; retryAtMs?: number | null }[] = []
+    const executed: string[] = []
+    const FeedbackService = Context.Service<{ readonly value: "native-context" }>("command-feedback")
+    const store = await Effect.runPromise(nativeCommands.memoryCooldowns({ maxEntries: 1 }))
+    let router = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+    router = await Effect.runPromise(
+        router.register({
+            name: "blocked",
+            guard: () => Effect.succeed(false),
+            onReject: ({ message }, rejection) =>
+                Effect.service(FeedbackService).pipe(
+                    Effect.tap(({ value }) =>
+                        Effect.sync(() =>
+                            feedback.push({ content: `${value}:${message.content}`, tag: rejection._tag }),
+                        ),
+                    ),
+                ),
+            execute: () => Effect.sync(() => executed.push("blocked")),
+        }),
+    )
+    router = await Effect.runPromise(
+        router.register({
+            name: "active",
+            cooldown: { store, durationMs: 60_000 },
+            onReject: ({ message }, rejection) =>
+                Effect.sync(() => {
+                    const retryAtMs = rejection._tag === "CommandGuardRejected" ? undefined : rejection.retryAtMs
+                    feedback.push({
+                        content: message.content,
+                        tag: rejection._tag,
+                        ...(retryAtMs === undefined ? {} : { retryAtMs }),
+                    })
+                }),
+            execute: () => Effect.sync(() => executed.push("active")),
+        }),
+    )
+    router = await Effect.runPromise(
+        router.register({
+            name: "capacity",
+            cooldown: { store, durationMs: 60_000 },
+            onReject: ({ message }, rejection) =>
+                Effect.sync(() => {
+                    const retryAtMs = rejection._tag === "CommandGuardRejected" ? undefined : rejection.retryAtMs
+                    feedback.push({
+                        content: message.content,
+                        tag: rejection._tag,
+                        ...(retryAtMs === undefined ? {} : { retryAtMs }),
+                    })
+                }),
+            execute: () => Effect.sync(() => executed.push("capacity")),
+        }),
+    )
+    await Effect.runPromise(
+        router
+            .attach(client)
+            .pipe(Effect.provideService(FeedbackService, { value: "native-context" }), Scope.provide(registration)),
+    )
+    remote.deliver("!blocked")
+    remote.deliver("!active")
+    remote.deliver("!active")
+    remote.deliver("!capacity")
+    await vi.waitFor(() => expect(feedback).toHaveLength(3))
+    expect(executed).toEqual(["active"])
+    expect(feedback).toEqual([
+        { content: "native-context:!blocked", tag: "CommandGuardRejected" },
+        expect.objectContaining({ content: "!active", tag: "CommandCooldownActive", retryAtMs: expect.any(Number) }),
+        expect.objectContaining({
+            content: "!capacity",
+            tag: "CommandCooldownCapacity",
+            retryAtMs: expect.any(Number),
+        }),
+    ])
+})
+
+test("quoted parsing, metadata snapshots and application-owned prefix lookups remain independent", async () => {
+    const parsed = commands.parseQuoted({
+        message: {} as never,
+        prefix: "!",
+        source: 'run one "two words" \'three words\' four\\ five ""',
+    })
+    expect(parsed).toEqual({
+        name: "run",
+        rawArgs: 'one "two words" \'three words\' four\\ five ""',
+        args: ["one", "two words", "three words", "four five", ""],
+    })
+    expect(commands.parseQuoted({ message: {} as never, prefix: "!", source: 'run "unterminated' })).toBeUndefined()
+    expect(commands.parseQuoted({ message: {} as never, prefix: "!", source: "run trailing\\" })).toBeUndefined()
+
+    const aliases = ["p"]
+    const router = value(commands.create({ prefix: "!" }))
+    const registered = value(
+        router.register({
+            name: "ping",
+            aliases,
+            description: "Checks reachability",
+            usage: "[target]",
+            execute: () => undefined,
+        }),
+    )
+    aliases.push("later")
+    expect(registered.commands).toEqual([
+        { name: "ping", aliases: ["p"], description: "Checks reachability", usage: "[target]" },
+    ])
+    expect(Object.isFrozen(registered.commands)).toBe(true)
+    expect(Object.isFrozen(registered.commands[0]!)).toBe(true)
+
+    const remote = await fixture()
+    const client = await defaultClient()
+    const prefixes = new Map([["40", "!"]])
+    const received: string[] = []
+    const dynamic = value(commands.create({ prefix: (message) => prefixes.get(message.guildId ?? "") }))
+    const attached = value(
+        dynamic.register({
+            name: "ping",
+            execute: ({ prefix }) => {
+                received.push(prefix)
+            },
+        }),
+    )
+    value(attached.attach(client))
+    remote.deliver("!ping", false, "40")
+    await vi.waitFor(() => expect(received).toEqual(["!"]))
+    prefixes.set("40", "?")
+    remote.deliver("?ping", false, "40")
+    await vi.waitFor(() => expect(received).toEqual(["!", "?"]))
+})
+
+test("default rejection callback defects use subscription reporting without handler execution", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const errors: unknown[] = []
+    const executed: string[] = []
+    let router = value(commands.create({ prefix: "!" }))
+    router = value(
+        router.register({
+            name: "broken-feedback",
+            guard: () => false,
+            onReject: () => Promise.reject(new Error("private feedback failure")),
+            execute: () => {
+                executed.push("handler")
+            },
+        }),
+    )
+    value(
+        router.attach(client, {
+            onError: (report) => {
+                errors.push(report)
+            },
+        }),
+    )
+    remote.deliver("!broken-feedback")
+    await vi.waitFor(() => expect(errors).toEqual([{ event: "messageCreate", kind: "handler" }]))
+    expect(executed).toEqual([])
+})
+
+test("native rejection callback defects use subscription reporting without handler execution", async () => {
+    const remote = await fixture()
+    const { client, registration } = await nativeClient()
+    const errors: string[] = []
+    const executed: string[] = []
+    let router = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+    router = await Effect.runPromise(
+        router.register({
+            name: "broken-feedback",
+            guard: () => Effect.succeed(false),
+            onReject: () => Effect.die("private feedback failure"),
+            execute: () => Effect.sync(() => executed.push("handler")),
+        }),
+    )
+    await Effect.runPromise(
+        router
+            .attach(client, {
+                onError: () =>
+                    Effect.sync(() => {
+                        errors.push("handler")
+                    }),
+            })
+            .pipe(Scope.provide(registration)),
+    )
+    remote.deliver("!broken-feedback")
+    await vi.waitFor(() => expect(errors).toEqual(["handler"]))
+    expect(executed).toEqual([])
+})
+
 test("native command router preserves the registration scope and executes handler Effects without a detached runtime", async () => {
     const remote = await fixture()
     const { client, registration } = await nativeClient()
     const received: string[] = []
-    let router = await Effect.runPromise(nativeCommands.create({ prefix: "!", ignoreBots: false }))
+    const prefixes = new Map([["40", "!"]])
+    let router = await Effect.runPromise(
+        nativeCommands.create({ prefix: (message) => prefixes.get(message.guildId ?? ""), ignoreBots: false }),
+    )
     router = await Effect.runPromise(
         router.register({
             name: "ping",
@@ -177,12 +441,15 @@ test("native command router preserves the registration scope and executes handle
     )
     await Effect.runPromise(router.attach(client).pipe(Scope.provide(registration)))
 
-    remote.deliver("!PING first second")
+    remote.deliver("!PING first second", false, "40")
     await vi.waitFor(() => expect(received).toEqual(["ping:first second"]))
+    prefixes.set("40", "?")
+    remote.deliver("?ping second", false, "40")
+    await vi.waitFor(() => expect(received).toEqual(["ping:first second", "ping:second"]))
     await Effect.runPromise(Scope.close(registration, Exit.void))
-    remote.deliver("!ping after-close")
+    remote.deliver("?ping after-close", false, "40")
     await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(received).toEqual(["ping:first second"])
+    expect(received).toEqual(["ping:first second", "ping:second"])
 })
 
 test("command configuration and local cooldown limits fail without retaining arbitrary prefix or message data", async () => {
@@ -393,6 +660,40 @@ test("default cancellation during a guard prevents execution after the guard set
     release!(true)
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(executed).toEqual([])
+})
+
+test("default cancellation during a guard prevents late rejection feedback", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const feedback: string[] = []
+    let entered = false
+    let release: ((allowed: boolean) => void) | undefined
+    const gate = new Promise<boolean>((resolve) => {
+        release = resolve
+    })
+    let router = value(commands.create({ prefix: "!" }))
+    router = value(
+        router.register({
+            name: "blocked",
+            guard: () => {
+                entered = true
+                return gate
+            },
+            onReject: () => {
+                feedback.push("feedback")
+            },
+            execute: () => {
+                throw new Error("blocked handler executed")
+            },
+        }),
+    )
+    const subscription = value(router.attach(client))
+    remote.deliver("!blocked")
+    await vi.waitFor(() => expect(entered).toBe(true))
+    subscription.unsubscribe()
+    release!(false)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(feedback).toEqual([])
 })
 
 test("default cancellation during cooldown admission prevents execution after the claim settles", async () => {

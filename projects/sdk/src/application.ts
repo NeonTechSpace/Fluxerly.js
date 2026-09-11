@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import type { ApiErrorDetail } from "./api-errors.js"
 import type { MessageOperationOptions } from "./messages.js"
 
 /**
@@ -46,6 +47,8 @@ export class BotApplicationOperationError extends Error {
         readonly status: number | null = null,
         /** Provider retry delay in milliseconds when available */
         readonly retryAfterMs: number | null = null,
+        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
         super(`Bot application operation ${operation} failed (${reason}, outcome ${outcome})`)
         this.name = this._tag

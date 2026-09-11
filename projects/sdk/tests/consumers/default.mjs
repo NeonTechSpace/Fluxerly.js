@@ -60,6 +60,9 @@ function installHostedFetch(handler) {
 const webhookClient = createWebhookClient({ id: "100", token: "fixture_only" })
 assert.ok(webhookClient.isOk())
 assert.equal((await webhookClient.value.send({ content: "x" }, { timeoutMs: 0 })).error._tag, "WebhookOperationError")
+assert.equal((await webhookClient.value.fetch({ timeoutMs: 0 })).error._tag, "WebhookOperationError")
+assert.equal((await webhookClient.value.edit({ name: "packed" }, { timeoutMs: 0 })).error._tag, "WebhookOperationError")
+assert.equal((await webhookClient.value.delete({ timeoutMs: 0 })).error._tag, "WebhookOperationError")
 await webhookClient.value.shutdown()
 assert.equal((await webhookClient.value.fetchMessage("400")).error._tag, "ClientClosedError")
 
@@ -76,8 +79,8 @@ const { createClient, ConfigurationError, MessageOperationError, CollectorError,
     await import("@neontechspace/fluxerly")
 const sharded = createClient({ token: "fixture-only", sharding: { totalShards: 4, shardIds: [2, 0] } })._unsafeUnwrap()
 assert.deepEqual(sharded.shards, [
-    { shardId: 2, state: "Disconnected", gatewayLatencyMs: null },
-    { shardId: 0, state: "Disconnected", gatewayLatencyMs: null },
+    { shardId: 2, state: "Disconnected", gatewayLatencyMs: null, recovery: null },
+    { shardId: 0, state: "Disconnected", gatewayLatencyMs: null, recovery: null },
 ])
 assert.ok(Object.isFrozen(sharded.shards) && sharded.shards.every(Object.isFrozen))
 assert.ok(new ShardConnectionError(2, new AuthenticationError()).failure instanceof AuthenticationError)

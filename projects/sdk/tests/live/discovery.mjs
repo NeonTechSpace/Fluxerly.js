@@ -112,14 +112,34 @@ try {
     )
     const before = await status(),
         observed = await value(client.discovery.fetchStatus(guildId))
+    let attempts = 0
     assert.equal(observed.eligible, before.eligible)
     assert.equal(observed.minMemberCount, before.min_member_count)
     assert.equal(observed.application?.guildId ?? null, before.application?.guild_id ?? null)
     assert.equal(observed.application?.status ?? null, before.application?.status ?? null)
     assert.ok(Object.isFrozen(observed) && Object.isFrozen(categories))
     report(stage)
+    stage = "directory_search_and_transient_read_recovery"
+    const directory = await value(client.discovery.search({ limit: 1, offset: 0 }))
+    const directoryReadback = await api("GET", "/discovery/guilds?limit=1&offset=0")
+    assert.equal(directory.total, directoryReadback.total)
+    assert.deepEqual(
+        directory.guilds.map((guild) => guild.id),
+        directoryReadback.guilds.map((guild) => guild.id),
+    )
+    assert.ok(Object.isFrozen(directory) && Object.isFrozen(directory.guilds))
+    attempts = 0
+    globalThis.fetch = async (url, options) => {
+        if (String(url).includes("/discovery/guilds?") && options?.method === "GET" && ++attempts === 1)
+            return new Response(null, { status: 503 })
+        return rawFetch(url, options)
+    }
+    await value(client.discovery.search({ limit: 1 }))
+    assert.equal(attempts, 2)
+    globalThis.fetch = rawFetch
+    report(stage)
     stage = "transient_status_read_recovery"
-    let attempts = 0
+    attempts = 0
     globalThis.fetch = async (url, options) => {
         if (String(url).endsWith(`/guilds/${guildId}/discovery`) && options?.method === "GET" && ++attempts === 1)
             return new Response(null, { status: 503 })

@@ -426,7 +426,7 @@ test.each(modes)("%s waits for both sharded READY frames and exposes immutable a
 })
 
 test.each(modes)("%s resumes only a failed shard while its healthy sibling remains usable", async (mode) => {
-    vi.spyOn(Math, "random").mockReturnValue(0)
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
     const { fixture, driver } = await setup(mode, { totalShards: 2 })
     expect(await connect(driver)).toEqual({ kind: "success", value: undefined })
     await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 4_000 })
@@ -436,8 +436,13 @@ test.each(modes)("%s resumes only a failed shard while its healthy sibling remai
     await vi.waitFor(() => expect(driver.client.state).toBe("Recovering"), { interval: 5, timeout: 2_000 })
     expect(driver.client.gatewayLatencyMs).toBe(null)
     expect(driver.client.shards).toEqual([
-        { shardId: 0, state: "Recovering", gatewayLatencyMs: null },
-        expect.objectContaining({ shardId: 1, state: "Connected" }),
+        {
+            shardId: 0,
+            state: "Recovering",
+            gatewayLatencyMs: null,
+            recovery: { phase: "recovery", attempt: 1, retryDelayMs: 500 },
+        },
+        expect.objectContaining({ shardId: 1, state: "Connected", recovery: null }),
     ])
 
     const pending = fetchCounts(driver, ["4194304"])
@@ -455,6 +460,10 @@ test.each(modes)("%s resumes only a failed shard while its healthy sibling remai
     expect(fixture.resumes[0]!.connection.shardId).toBe(0)
     fixture.resumed(fixture.resumes[0]!)
     await vi.waitFor(() => expect(driver.client.state).toBe("Connected"), { interval: 5, timeout: 2_000 })
+    expect(driver.client.shards).toEqual([
+        expect.objectContaining({ shardId: 0, state: "Connected", recovery: null }),
+        expect.objectContaining({ shardId: 1, state: "Connected", recovery: null }),
+    ])
 })
 
 test.each(modes)("%s keeps a guild-scoped collector alive across another shard's gateway gap", async (mode) => {

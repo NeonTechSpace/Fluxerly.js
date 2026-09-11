@@ -121,6 +121,7 @@ interface ShardRuntime {
     readonly shardId: number
     state: ConnectionState
     latency: number | null
+    recovery: { phase: "startup" | "recovery"; attempt: number; retryDelayMs: number | null } | null
     session: Session
 }
 
@@ -210,6 +211,7 @@ export class ClientOwner {
                 shardId,
                 state: "Disconnected",
                 latency: null,
+                recovery: null,
                 session: { id: undefined, sequence: null },
             })
         const route = (guildId: string) => this.shardIdForGuild(guildId)
@@ -254,6 +256,14 @@ export class ClientOwner {
                     shardId: shard.shardId,
                     state: shard.state,
                     gatewayLatencyMs: shard.latency,
+                    recovery:
+                        shard.recovery === null
+                            ? null
+                            : Object.freeze({
+                                  phase: shard.recovery.phase,
+                                  attempt: shard.recovery.attempt,
+                                  retryDelayMs: shard.recovery.retryDelayMs,
+                              }),
                 }),
             ),
         )
@@ -404,6 +414,7 @@ export class ClientOwner {
                 shard.state = state
                 shard.latency = null
                 if (state !== "Closing") shard.session = { id: undefined, sequence: null }
+                shard.recovery = null
                 for (const listener of this.#shardListeners.get(shard.shardId) ?? []) listener(state)
             }
         }
@@ -965,6 +976,7 @@ export class ClientOwner {
                 attempts += 1
                 const phase = established ? "recovery" : "startup"
                 const mode = shard.session.id !== undefined && shard.session.sequence !== null ? "resume" : "identify"
+                shard.recovery = { phase, attempt: attempts, retryDelayMs: null }
                 emit({ event: "attempt", phase, attempt: attempts, mode })
                 const budget = established ? 30_000 : Math.max(0, deadline - now())
                 const attempt = Effect.gen(function* () {
@@ -997,6 +1009,7 @@ export class ClientOwner {
                             established = true
                             connectedAt = now()
                             disconnectedAt = undefined
+                            shard.recovery = null
                             owner.#setShardState(shard, "Connected")
                             emit({ event: "connected", phase, attempt: attempts, mode: readyMode })
                             if (owner.#state === "Connected") Deferred.doneUnsafe(startup, Effect.void)
@@ -1131,6 +1144,7 @@ export class ClientOwner {
                 const classification =
                     failure.failure instanceof ConnectionError ? failure.failure.reason : failure.failure._tag
                 if (!failure.retry || (!established && attempts >= configuration.maxStartupAttempts)) {
+                    shard.recovery = null
                     emit({
                         event: "connectionEnded",
                         phase: established ? "recovery" : "startup",
@@ -1166,6 +1180,7 @@ export class ClientOwner {
                     delayMs: delay,
                     failure: classification,
                 })
+                shard.recovery = { phase: established ? "recovery" : "startup", attempt: attempts, retryDelayMs: delay }
                 yield* Effect.sleep(delay)
             }
         })
@@ -1185,7 +1200,10 @@ export class ClientOwner {
                 let becameReady = false
                 owner.#workerExit = undefined
                 owner.#groupReady = false
-                for (const shard of owner.#shards.values()) shard.state = "Connecting"
+                for (const shard of owner.#shards.values()) {
+                    shard.state = "Connecting"
+                    shard.recovery = null
+                }
                 owner.#setState("Connecting")
                 const trackReady = owner.subscribe((state) => {
                     if (state === "Connected") becameReady = true

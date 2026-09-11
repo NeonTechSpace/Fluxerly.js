@@ -21,6 +21,7 @@ import {
     type UserProfile,
     type GuildChannel,
     type Client,
+    type ShardRecoveryDiagnostic,
     type ShardState,
     type ShardingOptions,
     type ConfigurationError,
@@ -53,8 +54,32 @@ import {
     type AttachmentInput,
     type AttachmentStreamSource,
     type SupervisorOptions,
+    type PrefixCommandMetadata,
+    type DiscoverySearchPage,
+    type DirectMessageLatestMessages,
+    type WebhookClient,
+    type WebhookMessageReference,
+    type WebhookTokenEdit,
+    type SupervisorWaitOptions,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+/** Packed declaration coverage for token lifecycle and tagged webhook references */
+export const webhookReferenceTypes = (client: WebhookClient) => {
+    const reply: WebhookMessageReference = { type: "reply", target: { id: "100", channelId: "200" } }
+    const forward: WebhookMessageReference = {
+        type: "forward",
+        source: { source: { id: "100", channelId: "200" } },
+    }
+    const edit: WebhookTokenEdit = { name: "Packed webhook", avatar: null }
+    return {
+        reply: client.send({ content: "Reply", messageReference: reply }),
+        forward: client.send({ messageReference: forward }),
+        edit: client.edit(edit),
+        fetch: client.fetch(),
+        remove: client.delete(),
+    }
+}
 const CommandService = Context.Service<{ readonly enabled: true }>("command-service")
 
 const structuralAttachmentStream: AttachmentStreamSource = {
@@ -110,6 +135,7 @@ export const resolveSelectedInstance = (client: Client) =>
 export function shardingTypes(client: Client) {
     const plan: ShardingOptions = { totalShards: 2, shardIds: [0, 1] }
     const states: readonly ShardState[] = client.shards
+    const recovery: ShardRecoveryDiagnostic | null = states[0]?.recovery ?? null
     // @ts-expect-error Client shard snapshots cannot be replaced
     client.shards = []
     // @ts-expect-error Snapshot arrays cannot be mutated
@@ -118,7 +144,16 @@ export function shardingTypes(client: Client) {
     createClient({ token: "fixture-only", sharding: { totalShards: "2" } })
     client.messages.collect("20", { guildId: "40" })
     client.messages.collectReactions({ id: "10", channelId: "20" }, { guildId: "40" })
-    return createClient({ token: "fixture-only", sharding: plan })
+    return { recovery, created: createClient({ token: "fixture-only", sharding: plan }) }
+}
+
+/** Packed native directory and explicitly selected private-message reads preserve public result types */
+export function readDiscoveryAndLatestMessages(client: Client, channelId: string) {
+    return Effect.gen(function* () {
+        const page: DiscoverySearchPage = yield* client.discovery.search({ limit: 1 })
+        const result: DirectMessageLatestMessages = yield* client.directMessages.fetchLatestMessages([channelId])
+        return { page, result }
+    })
 }
 
 /** Packed native command routers keep registered service requirements while earlier snapshots remain service-free */
@@ -136,14 +171,24 @@ export function optionalCommandTypes(client: Client) {
         const original = yield* commands.create({ prefix: "!" })
         const extended = yield* original.register({
             name: "service",
+            description: "Uses the command service",
+            usage: "[target]",
+            onReject: (_context, rejection) =>
+                Effect.sync(() => {
+                    const retryAtMs: number | null | undefined =
+                        rejection._tag === "CommandGuardRejected" ? undefined : rejection.retryAtMs
+                    void retryAtMs
+                }),
             execute: () => Effect.service(CommandService),
         })
+        const listing: readonly PrefixCommandMetadata[] = extended.commands
+        const parsed = commands.parseQuoted({ message: null as never, prefix: "!", source: 'service "two words"' })
         const originalAttachment: Effect.Effect<unknown, unknown> = Effect.scoped(original.attach(client))
         void originalAttachment
         const needsService = Effect.scoped(extended.attach(client))
         // @ts-expect-error Registered command services remain required until the caller provides CommandService
         Effect.runPromise(needsService)
-        return Effect.provideService(needsService, CommandService, { enabled: true })
+        return { listing, parsed, attachment: Effect.provideService(needsService, CommandService, { enabled: true }) }
     })
 }
 
@@ -154,6 +199,7 @@ export function supervisorTypes(entry: string) {
         totalShards: 1,
         assignments: [{ id: "worker", shardIds: [0] }],
     }
+    const readiness: SupervisorWaitOptions = {}
     const child = supervisor.child.run({
         token: "fixture-only",
         configure: () => Effect.service(CommandService).pipe(Effect.asVoid),
@@ -167,6 +213,8 @@ export function supervisorTypes(entry: string) {
     Effect.runPromise(scopedChild)
     return Effect.gen(function* () {
         const managed = yield* supervisor.create(plan)
+        void readiness
+        yield* managed.waitForReady()
         return yield* Effect.provideService(
             child.pipe(Effect.as([managed.status(), managed.start()])),
             CommandService,

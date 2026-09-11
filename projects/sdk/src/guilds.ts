@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import type { ApiErrorDetail } from "./api-errors.js"
 
 /** Frozen guild identity and configuration observation, not a complete wire object or an object that updates in place */
 export interface Guild {
@@ -519,7 +520,7 @@ export type GuildOperation =
     | "permissions.fetch"
     | `hierarchy.${"compare" | "isAbove" | "canManage"}`
     | "members.search"
-    | `discovery.${"fetchStatus" | "fetchCategories" | "apply" | "edit" | "withdraw"}`
+    | `discovery.${"search" | "fetchStatus" | "fetchCategories" | "apply" | "edit" | "withdraw"}`
     | `invites.${"fetch" | "create" | "fetchChannel" | "fetchGuild" | "delete"}`
     | `${"emojis" | "stickers"}.${"get" | "fetchAll" | "fetchMetadata" | "create" | "createMany" | "clone" | "edit" | "delete"}`
     | "guilds.get"
@@ -572,6 +573,8 @@ export class GuildOperationError extends Error {
         readonly status: number | null = null,
         /** Usable server-required retry wait in milliseconds, otherwise null */
         readonly retryAfterMs: number | null = null,
+        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
         super(`Guild operation ${operation} failed (${reason}; outcome ${outcome})`)
         this.name = this._tag

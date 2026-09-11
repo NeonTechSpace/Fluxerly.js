@@ -82,7 +82,7 @@ function settings(channelId: unknown, options: unknown, defaultApi: boolean): Se
         ...result,
         ...(input.guildId === undefined ? {} : { guildId: input.guildId }),
         ...(input.filter === undefined ? {} : { filter: input.filter as (message: Message) => boolean }),
-        ...(signal === undefined ? {} : { signal: signal as NonNullable<OperationOptions["signal"]> }),
+        ...(signal === undefined ? {} : { signal: signal as unknown as NonNullable<OperationOptions["signal"]> }),
     }
 }
 

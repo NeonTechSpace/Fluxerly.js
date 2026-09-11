@@ -3,6 +3,7 @@ import { Cause, Deferred, Effect, Exit, Random, Redacted } from "effect"
 import { mapFailureCause, withDeadline } from "./effect-failures.js"
 import { ClientClosedError, ConnectionError, RateLimitError } from "#sdk/errors"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
+import { apiErrorDetail, type ApiErrorDetail } from "#sdk/api-errors"
 import type {
     EditMessageInput,
     ForwardMessageInput,
@@ -130,6 +131,7 @@ class RestFailure extends Error {
         readonly status: number | null = null,
         readonly retryAfterMs: number | null = null,
         readonly retryableRead = false,
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
         super("REST operation failed")
     }
@@ -148,6 +150,81 @@ function retryAfter(response: Response): number | null {
     if (!value) return null
     const delay = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now()
     return Number.isFinite(delay) ? Math.max(0, Math.ceil(delay)) : null
+}
+
+const errorBodyMaxBytes = 8_192
+const errorBodyReadTimeoutMs = 100
+
+type ApiErrorRead = {
+    readonly detail: ApiErrorDetail | null
+    readonly cleanupDefect: unknown | null
+}
+
+class ApiErrorBodyCleanupError extends Error {
+    constructor() {
+        super("Failed to release an API error response body")
+        this.name = "ApiErrorBodyCleanupError"
+    }
+}
+
+async function readApiError(response: Response, signal: AbortSignal): Promise<ApiErrorRead> {
+    const body = response.body
+    if (!body || !/^application\/json(?:;|$)/i.test(response.headers.get("content-type") ?? ""))
+        return { detail: null, cleanupDefect: null }
+    const declared = response.headers.get("content-length")
+    if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > errorBodyMaxBytes))
+        return { detail: null, cleanupDefect: null }
+    const reader = body.getReader()
+    const chunks: Uint8Array[] = []
+    let size = 0
+    let cancel: (() => void) | undefined
+    const cancelled = new Promise<"cancelled">((resolve) => {
+        cancel = () => resolve("cancelled")
+        signal.addEventListener("abort", cancel, { once: true })
+    })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timedOut = new Promise<"timedOut">((resolve) => {
+        timer = setTimeout(() => resolve("timedOut"), errorBodyReadTimeoutMs)
+    })
+    let cancelBody = signal.aborted
+    let result: ApiErrorDetail | null = null
+    try {
+        while (!cancelBody) {
+            const next = await Promise.race([reader.read(), cancelled, timedOut])
+            if (next === "cancelled" || next === "timedOut") {
+                cancelBody = true
+                break
+            }
+            if (next.done) break
+            size += next.value.byteLength
+            if (size > errorBodyMaxBytes) {
+                cancelBody = true
+                break
+            }
+            chunks.push(next.value)
+        }
+        if (!cancelBody) {
+            const data: unknown = JSON.parse(
+                new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)))),
+            )
+            result = record(data) ? apiErrorDetail(data.code) : null
+        }
+    } catch {
+        result = null
+    } finally {
+        if (timer !== undefined) clearTimeout(timer)
+        if (cancel !== undefined) signal.removeEventListener("abort", cancel)
+        reader.releaseLock()
+    }
+    let cleanupDefect: unknown | null = null
+    if (cancelBody) {
+        try {
+            await body.cancel()
+        } catch {
+            cleanupDefect = new ApiErrorBodyCleanupError()
+        }
+    }
+    return { detail: result, cleanupDefect }
 }
 
 function attachmentDownloadUrl(value: unknown, instance: InstanceEndpointContext): string | undefined {
@@ -503,12 +580,18 @@ export class RestOwner {
                                         if (rejected && !request.preparation) progress.outcome = "rejected"
                                         const retryableRead =
                                             request.method === "GET" && [500, 502, 503, 504].includes(response.status)
+                                        const apiRead = retryableRead
+                                            ? { detail: null, cleanupDefect: null }
+                                            : await readApiError(response, state.controller.signal)
+                                        if (apiRead.cleanupDefect !== null)
+                                            state.cleanupDefects.push(apiRead.cleanupDefect)
                                         throw new RestFailure(
                                             response.status === 404 && !request.preparation ? "notFound" : "rejected",
                                             progress.outcome,
                                             response.status,
                                             retryableRead ? retryAfter(response) : null,
                                             retryableRead,
+                                            apiRead.detail,
                                         )
                                     }
                                     if (request.status !== undefined && response.status !== request.status)
@@ -851,6 +934,7 @@ export class RestOwner {
                               error.outcome === "unknown" ? "unknown" : "notSent",
                               error.status,
                               error.retryAfterMs,
+                              error.apiError,
                           )
                         : error,
                 ),
@@ -894,7 +978,14 @@ export class RestOwner {
         }).pipe(
             mapFailureCause((error) =>
                 error instanceof RestFailure
-                    ? new MessageOperationError("typing", error.reason, error.outcome, error.status, error.retryAfterMs)
+                    ? new MessageOperationError(
+                          "typing",
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                          error.apiError,
+                      )
                     : error,
             ),
         )
@@ -932,6 +1023,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -969,7 +1061,14 @@ export class RestOwner {
         }).pipe(
             mapFailureCause((error) =>
                 error instanceof RestFailure
-                    ? new MessageOperationError("search", error.reason, error.outcome, error.status, error.retryAfterMs)
+                    ? new MessageOperationError(
+                          "search",
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                          error.apiError,
+                      )
                     : error,
             ),
         )
@@ -1023,6 +1122,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -1073,6 +1173,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -1118,6 +1219,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -1160,6 +1262,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -1198,6 +1301,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -1249,6 +1353,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -1292,6 +1397,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -1574,7 +1680,14 @@ export class RestOwner {
         }).pipe(
             mapFailureCause((error) =>
                 error instanceof RestFailure
-                    ? new GuildOperationError(operation, error.reason, error.outcome, error.status, error.retryAfterMs)
+                    ? new GuildOperationError(
+                          operation,
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                          error.apiError,
+                      )
                     : error,
             ),
         )
@@ -1624,6 +1737,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -1667,7 +1781,14 @@ export class RestOwner {
         }).pipe(
             mapFailureCause((error) =>
                 error instanceof RestFailure
-                    ? new UserOperationError(operation, error.reason, error.outcome, error.status, error.retryAfterMs)
+                    ? new UserOperationError(
+                          operation,
+                          error.reason,
+                          error.outcome,
+                          error.status,
+                          error.retryAfterMs,
+                          error.apiError,
+                      )
                     : error,
             ),
         )
@@ -1714,6 +1835,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
@@ -1771,6 +1893,7 @@ export class RestOwner {
                           error.outcome,
                           error.status,
                           error.retryAfterMs,
+                          error.apiError,
                       )
                     : error,
             ),
