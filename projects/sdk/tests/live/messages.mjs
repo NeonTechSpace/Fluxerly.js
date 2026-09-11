@@ -207,7 +207,8 @@ async function waitForCondition(matches, deadlineMessage) {
 async function verifyOptionalTools(ops, channelId, botId) {
     const marker = `optional-tools-${randomUUID().replaceAll("-", "")}`
     const commandName = `verify-${marker}`
-    const invocation = `!${commandName}`
+    let prefix = "!"
+    let invocation = `${prefix}${commandName}`
     const responseContent = `${marker} response`
     const embedTitle = `${marker} builder`
     const response = ops.builders
@@ -218,24 +219,33 @@ async function verifyOptionalTools(ops, channelId, botId) {
     const claims = []
     const executions = []
     const replies = []
+    const rejections = []
+    const feedbackReplies = []
     const cooldown = await ops.cooldowns(claims)
 
     stage = "optional_tools_router_attachment"
     await ops.assertConnected()
-    const initial = await ops.create({ prefix: "!", ignoreBots: false })
+    const initial = await ops.create({ prefix: () => prefix, ignoreBots: false })
     const router = await ops.register(initial, {
         name: commandName,
+        description: "Live command feedback check",
         guard: ops.guard(
             (message) =>
                 message.channelId === channelId && message.author.id === botId && message.content === invocation,
         ),
         cooldown: { store: cooldown.store, durationMs: 60_000 },
+        onReject: ops.reject(async (message, rejection) => {
+            if (rejection._tag === "CommandCooldownActive")
+                feedbackReplies.push(await ops.reply(message, { content: `${marker} cooldown`, allowedMentions: {} }))
+            rejections.push(rejection)
+        }),
         execute: ops.execute(async (message) => {
             executions.push(message.id)
             replies.push(await ops.reply(message, response))
         }),
     })
     assert.notEqual(router, initial)
+    assert.equal(router.commands[0].description, "Live command feedback check")
     let subscription = await ops.attach(router)
     try {
         stage = "optional_tools_command_dispatch"
@@ -258,8 +268,19 @@ async function verifyOptionalTools(ops, channelId, botId) {
         report(stage, true)
 
         stage = "optional_tools_local_cooldown"
+        prefix = "?"
+        invocation = `${prefix}${commandName}`
         const second = await ops.send({ content: invocation })
-        await waitForCondition(() => claims.length === 2, "Optional command cooldown deadline")
+        await waitForCondition(() => rejections.length === 1, "Optional command feedback deadline")
+        assert.equal(rejections[0]._tag, "CommandCooldownActive")
+        assert.ok(rejections[0].retryAtMs > Date.now())
+        const feedbackHistory = await api("GET", `/channels/${channelId}/messages?limit=100`)
+        assert.ok(
+            feedbackHistory.data.some(
+                (message) =>
+                    message.content === `${marker} cooldown` && message.message_reference?.message_id === second.id,
+            ),
+        )
         assert.deepEqual(
             claims.map((claim) => claim._tag),
             ["CooldownAcquired", "CooldownActive"],
@@ -293,8 +314,9 @@ async function verifyOptionalTools(ops, channelId, botId) {
                     .filter((message) =>
                         [first.id, second.id, afterUnsubscribe.id].includes(message?.message_reference?.message_id),
                     )
-                    .map((message) => message.id),
-                [reply.id],
+                    .map((message) => message.id)
+                    .sort(),
+                [reply.id, feedbackReplies[0].id].sort(),
             )
         } finally {
             await observer.close()
@@ -3069,6 +3091,10 @@ try {
                         execute: (runCommand) => {
                             return async ({ message }) => runCommand(message)
                         },
+                        reject:
+                            (onReject) =>
+                            ({ message }, rejection) =>
+                                onReject(message, rejection),
                         close: async (subscription) => {
                             subscription.unsubscribe()
                             await run(subscription.waitForClose())
@@ -3813,6 +3839,10 @@ try {
                                     execute: (runCommand) => {
                                         return ({ message }) => Effect.promise(() => runCommand(message))
                                     },
+                                    reject:
+                                        (onReject) =>
+                                        ({ message }, rejection) =>
+                                            Effect.promise(() => onReject(message, rejection)),
                                     close: (subscription) =>
                                         run(
                                             Effect.gen(function* () {

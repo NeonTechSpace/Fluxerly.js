@@ -579,6 +579,116 @@ import {
     webhookMessageDelete,
 } from "#sdk/internal/webhooks"
 import { Deferred, Effect, Scope, type Stream } from "effect"
+import {
+    createPkce,
+    type OAuthAuthorizationInput,
+    type OAuthCodeExchangeInput,
+    type OAuthConfig,
+    type OAuthIdentity,
+    type OAuthOperationFailure,
+    type OAuthTokens,
+    type OAuthOperationOptions,
+} from "./oauth.js"
+import { makeOAuthOwner } from "#sdk/internal/oauth"
+export { createPkce, OAuthOperationError, OAuthScopes } from "./oauth.js"
+export type {
+    OAuthAuthorizationInput,
+    OAuthCodeExchangeInput,
+    OAuthConfig,
+    OAuthIdentity,
+    OAuthOperation,
+    OAuthOperationFailure,
+    OAuthOperationOptions,
+    OAuthPkce,
+    OAuthScope,
+    OAuthTokens,
+} from "./oauth.js"
+
+/**
+ * Standalone delegated OAuth client whose creating scope owns shutdown, not browser sessions, callbacks, token stores, or refresh coordination.
+ * It copies the client secret until shutdown, admits at most eight concurrent operations with no queue, caps response bodies at 1 MiB, and never retries requests automatically.
+ * Expected failures remain in the typed channel; interruption and sanitized cleanup defects remain in the Effect cause
+ */
+export interface OAuthClient {
+    /** Lazily resolve discovery and build an S256 authorization URL. State and PKCE values remain caller-owned */
+    authorizationUrl(
+        input: OAuthAuthorizationInput,
+        options?: OAuthOperationOptions,
+    ): Effect.Effect<string, OAuthOperationFailure>
+    /** Exchange one callback code. Interruption after dispatch cannot establish whether Fluxer consumed the code, so do not retry it */
+    exchangeCode(
+        input: OAuthCodeExchangeInput,
+        options?: OAuthOperationOptions,
+    ): Effect.Effect<OAuthTokens, OAuthOperationFailure>
+    /** Exchange one rotated refresh token. The caller atomically replaces its stored pair only after success and never retries an unknown outcome */
+    refresh(refreshToken: string, options?: OAuthOperationOptions): Effect.Effect<OAuthTokens, OAuthOperationFailure>
+    /** Revoke one access or refresh token. A lost response can still mean the token was revoked */
+    revoke(
+        input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
+        options?: OAuthOperationOptions,
+    ): Effect.Effect<void, OAuthOperationFailure>
+    /** Read the identify-scoped identity with a bearer token, without retaining that token */
+    fetchIdentity(
+        accessToken: string,
+        options?: OAuthOperationOptions,
+    ): Effect.Effect<OAuthIdentity, OAuthOperationFailure>
+    /** Read one bounded guild-membership page with a bearer token that has Fluxer's guilds scope, never bot authentication */
+    fetchGuilds(
+        accessToken: string,
+        query?: GuildListQuery,
+        options?: OAuthOperationOptions,
+    ): Effect.Effect<readonly GuildListSummary[], OAuthOperationFailure>
+    /** Clear copied confidential credentials, reject new work, abort active requests, and await their fetch and response-reader cleanup. Native callers retain any cleanup defect or interruption in the Effect cause */
+    shutdown(): Effect.Effect<void>
+}
+
+/**
+ * Opt-in delegated OAuth construction. The creating scope owns shutdown, while state validation, callback correlation, storage, and refresh coordination remain application-owned
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { oauth, OAuthScopes } from "@neontechspace/fluxerly/effect"
+ *
+ * export const oauthEffectExample = Effect.scoped(
+ *     Effect.gen(function* () {
+ *         const client = yield* oauth.create({ clientId: "123", clientSecret: "server-held-secret" })
+ *         const pkce = oauth.createPkce()
+ *         return yield* client.authorizationUrl({
+ *             redirectUri: "https://app.example.test/oauth/callback",
+ *             scopes: [OAuthScopes.Identify],
+ *             state: "caller-correlated-state",
+ *             codeChallenge: pkce.challenge,
+ *         })
+ *     }),
+ * )
+ * ```
+ */
+export const oauth = Object.freeze({
+    create: (config: OAuthConfig): Effect.Effect<OAuthClient, ConfigurationError, Scope.Scope> =>
+        Effect.gen(function* () {
+            const owner = yield* makeOAuthOwner(config, Scope.makeUnsafe())
+            yield* Effect.addFinalizer(() => owner.shutdown())
+            return Object.freeze({
+                authorizationUrl: (input: OAuthAuthorizationInput, options?: OAuthOperationOptions) =>
+                    owner.authorizationUrl(input, options),
+                exchangeCode: (input: OAuthCodeExchangeInput, options?: OAuthOperationOptions) =>
+                    owner.exchangeCode(input, options),
+                refresh: (refreshToken: string, options?: OAuthOperationOptions) =>
+                    owner.refresh(refreshToken, options),
+                revoke: (
+                    input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
+                    options?: OAuthOperationOptions,
+                ) => owner.revoke(input, options),
+                fetchIdentity: (accessToken: string, options?: OAuthOperationOptions) =>
+                    owner.fetchIdentity(accessToken, options),
+                fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: OAuthOperationOptions) =>
+                    owner.fetchGuilds(accessToken, query, options),
+                shutdown: () => owner.shutdown(),
+            })
+        }),
+    createPkce,
+})
 export { builders, EmbedBuilder, MessageBuilder } from "./builders.js"
 export type {
     CommandCooldownClaim,

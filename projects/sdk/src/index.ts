@@ -71,6 +71,12 @@ export type { RoleHierarchyInput } from "./role-hierarchy.js"
 import { calculatePermissions, fetchPermissions } from "#sdk/internal/permissions"
 import { fetchHierarchyCheck } from "#sdk/internal/role-hierarchy-workflow"
 
+function oauthOwnerOptions(options: DefaultOAuthOperationOptions | undefined) {
+    if (typeof options !== "object" || options === null || !("signal" in options)) return options
+    const { signal: _signal, ...ownerOptions } = options
+    return ownerOptions
+}
+
 /**
  * Pure Fluxer markup helpers with no client, network, cache, or notification-state ownership.
  * Fallible helpers return `Result`; `escapeMarkdown` returns text directly. Mention markup does not enable notifications
@@ -437,6 +443,31 @@ export type {
     MessageReactionEmojiRemoval,
 } from "./reactions.js"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
+import {
+    createPkce,
+    type OAuthAuthorizationInput,
+    type OAuthCodeExchangeInput,
+    type OAuthConfig,
+    type OAuthIdentity,
+    type OAuthOperationFailure,
+    type OAuthTokens,
+    type DefaultOAuthOperationOptions,
+} from "./oauth.js"
+import { makeOAuthOwner } from "#sdk/internal/oauth"
+export { createPkce, OAuthOperationError, OAuthScopes } from "./oauth.js"
+export type {
+    OAuthAuthorizationInput,
+    OAuthCodeExchangeInput,
+    OAuthConfig,
+    OAuthIdentity,
+    OAuthOperation,
+    OAuthOperationFailure,
+    OAuthOperationOptions,
+    OAuthPkce,
+    OAuthScope,
+    OAuthTokens,
+    DefaultOAuthOperationOptions,
+} from "./oauth.js"
 export { builders, EmbedBuilder, MessageBuilder } from "./builders.js"
 export type {
     CommandCooldownClaim,
@@ -2882,7 +2913,8 @@ const executeOperation = <
         | MemberChunkError
         | PresenceError
         | PaginationError
-        | AttachmentDownloadFailure,
+        | AttachmentDownloadFailure
+        | OAuthOperationFailure,
 >(
     effect: Effect.Effect<A, E>,
     operation: Operation,
@@ -3025,7 +3057,8 @@ function fromExit<
         | MemberChunkError
         | PresenceError
         | PaginationError
-        | AttachmentDownloadFailure,
+        | AttachmentDownloadFailure
+        | OAuthOperationFailure,
 >(exit: Exit.Exit<A, E>, operation: Operation): Result<A, E | CancelledError> {
     if (Exit.isSuccess(exit)) return ok(exit.value)
     if (Cause.hasDies(exit.cause)) {
@@ -3351,7 +3384,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             | MemberChunkError
             | PresenceError
             | PaginationError
-            | AttachmentDownloadFailure,
+            | AttachmentDownloadFailure
+            | OAuthOperationFailure,
     >(
         effect: Effect.Effect<A, E>,
         operation: Operation,
@@ -4382,3 +4416,121 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         }),
     )
 }
+
+/**
+ * Standalone delegated OAuth client with no browser, callback, token-store, or bot-transport ownership.
+ * It copies the client secret until shutdown, admits at most eight concurrent operations with no queue, caps response bodies at 1 MiB, and never retries requests automatically.
+ * Expected failures are Result errors; unexpected cleanup defects reject with SdkDefect without upstream text
+ */
+export interface OAuthClient {
+    /** Build an S256 authorization URL from the selected instance's discovered web application base. State and PKCE values remain caller-owned */
+    authorizationUrl(
+        input: OAuthAuthorizationInput,
+        options?: DefaultOAuthOperationOptions,
+    ): ResultAsync<string, OAuthOperationFailure | CancelledError>
+    /** Exchange one callback code. Cancellation after dispatch cannot establish whether Fluxer consumed the code, so do not retry it */
+    exchangeCode(
+        input: OAuthCodeExchangeInput,
+        options?: DefaultOAuthOperationOptions,
+    ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError>
+    /** Exchange one refresh token. Fluxer rotates refresh tokens, so the caller must atomically replace its stored pair only after success and never retry an unknown outcome */
+    refresh(
+        refreshToken: string,
+        options?: DefaultOAuthOperationOptions,
+    ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError>
+    /** Revoke one access or refresh token. A lost response can still mean the token was revoked */
+    revoke(
+        input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
+        options?: DefaultOAuthOperationOptions,
+    ): ResultAsync<void, OAuthOperationFailure | CancelledError>
+    /** Read the identify-scoped identity with a bearer token, without retaining that token */
+    fetchIdentity(
+        accessToken: string,
+        options?: DefaultOAuthOperationOptions,
+    ): ResultAsync<OAuthIdentity, OAuthOperationFailure | CancelledError>
+    /** Read one bounded guild-membership page with a bearer token that has Fluxer's guilds scope. This never uses bot authentication */
+    fetchGuilds(
+        accessToken: string,
+        query?: GuildListQuery,
+        options?: DefaultOAuthOperationOptions,
+    ): ResultAsync<readonly GuildListSummary[], OAuthOperationFailure | CancelledError>
+    /** Permanently reject new OAuth work, clear the copied client secret, abort active requests, and wait for their fetch and response-reader cleanup. Unexpected cleanup defects reject with SdkDefect */
+    shutdown(): ResultAsync<void, never>
+}
+
+/**
+ * Opt-in OAuth helpers and standalone confidential-client construction. Browser navigation, callback handling, state correlation, token storage, and refresh coordination remain application-owned
+ *
+ * @example
+ * ```ts
+ * import { oauth, OAuthScopes } from "@neontechspace/fluxerly"
+ *
+ * export async function oauthExample() {
+ *     const created = oauth.create({ clientId: "123", clientSecret: "server-held-secret" })
+ *     if (created.isErr()) return created.error
+ *     const client = created.value
+ *     try {
+ *         const pkce = oauth.createPkce()
+ *         return await client.authorizationUrl({
+ *             redirectUri: "https://app.example.test/oauth/callback",
+ *             scopes: [OAuthScopes.Identify],
+ *             state: "caller-correlated-state",
+ *             codeChallenge: pkce.challenge,
+ *         })
+ *     } finally {
+ *         await client.shutdown()
+ *     }
+ * }
+ * ```
+ */
+export const oauth = Object.freeze({
+    create(config: OAuthConfig): Result<OAuthClient, ConfigurationError> {
+        const scope = Scope.makeUnsafe()
+        const created = fromExit(Effect.runSyncExit(makeOAuthOwner(config, scope)), "oauth.authorizationUrl")
+        if (created.isErr()) return err(created.error as ConfigurationError)
+        const owner = created.value
+        return ok(
+            Object.freeze({
+                authorizationUrl: (input: OAuthAuthorizationInput, options?: DefaultOAuthOperationOptions) =>
+                    executeOperation(
+                        owner.authorizationUrl(input, oauthOwnerOptions(options)),
+                        "oauth.authorizationUrl",
+                        options,
+                    ),
+                exchangeCode: (input: OAuthCodeExchangeInput, options?: DefaultOAuthOperationOptions) =>
+                    executeOperation(
+                        owner.exchangeCode(input, oauthOwnerOptions(options)),
+                        "oauth.exchangeCode",
+                        options,
+                    ),
+                refresh: (refreshToken: string, options?: DefaultOAuthOperationOptions) =>
+                    executeOperation(owner.refresh(refreshToken, oauthOwnerOptions(options)), "oauth.refresh", options),
+                revoke: (
+                    input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
+                    options?: DefaultOAuthOperationOptions,
+                ) => executeOperation(owner.revoke(input, oauthOwnerOptions(options)), "oauth.revoke", options),
+                fetchIdentity: (accessToken: string, options?: DefaultOAuthOperationOptions) =>
+                    executeOperation(
+                        owner.fetchIdentity(accessToken, oauthOwnerOptions(options)),
+                        "oauth.fetchIdentity",
+                        options,
+                    ),
+                fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: DefaultOAuthOperationOptions) =>
+                    executeOperation(
+                        owner.fetchGuilds(accessToken, query, oauthOwnerOptions(options)),
+                        "oauth.fetchGuilds",
+                        options,
+                    ),
+                shutdown: () =>
+                    new ResultAsync(
+                        Effect.runPromiseExit(owner.shutdown()).then((exit) => {
+                            const result = fromExit(exit, "shutdown")
+                            if (result.isErr()) throw new SdkDefect("shutdown")
+                            return ok(undefined)
+                        }),
+                    ),
+            }),
+        )
+    },
+    createPkce,
+})

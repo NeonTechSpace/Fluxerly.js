@@ -90,6 +90,7 @@ export type Operation =
     | "cache.entries"
     | "directMessages.send"
     | import("./application.js").BotApplicationOperation
+    | import("./oauth.js").OAuthOperation
     | import("./counts.js").CountOperation
     | "members.iterateChunks"
     | import("./users.js").UserOperation
@@ -259,6 +260,7 @@ export type DefectReason =
               | import("./webhooks.js").WebhookOperationError
               | import("./users.js").UserOperationError
               | import("./application.js").BotApplicationOperationError
+              | import("./oauth.js").OAuthOperationError
               | import("./counts.js").CountOperationError
               | import("./member-chunks.js").MemberChunkError
               | import("./presence.js").PresenceError

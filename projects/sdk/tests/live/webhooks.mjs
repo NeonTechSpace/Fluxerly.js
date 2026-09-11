@@ -260,6 +260,7 @@ try {
     assert.ok(file.ok)
     assert.equal(await file.text(), "webhook fixture bytes")
     assert.equal((await value(hook.fetchMessage(sent.id))).id, sent.id)
+    stage = "webhook_reply_with_upload"
     const source = await value(bot.messages.send(journal.channels[1].id, { content: "SDK webhook reference source" }))
     const replied = await value(
         hook.send({
@@ -269,8 +270,12 @@ try {
         }),
     )
     const replyRemote = (await api("GET", `/channels/${replied.channelId}/messages/${replied.id}`)).data
-    assert.deepEqual(replyRemote.message_reference, { message_id: source.id, channel_id: source.channelId, type: 0 })
+    assert.equal(replyRemote.message_reference?.message_id, source.id)
+    assert.equal(replyRemote.message_reference?.channel_id, source.channelId)
+    assert.equal(replyRemote.message_reference?.guild_id, guildId)
+    assert.equal(replyRemote.message_reference?.type, 0)
     assert.equal(replyRemote.attachments.length, 1)
+    stage = "webhook_forward_snapshot"
     const forwarded = await value(
         hook.send({
             messageReference: { type: "forward", source: { source: { id: source.id, channelId: source.channelId } } },
@@ -292,8 +297,23 @@ try {
                     },
                 }),
             ),
-        (error) => error?._tag === "WebhookOperationError" && error.reason === "rejected",
+        (error) => error?._tag === "WebhookOperationError" && error.reason === "notFound" && error.status === 404,
     )
+    stage = "webhook_permission_error_classification"
+    await assert.rejects(
+        () => value(hook.editMessage(source.id, { content: "Must not replace bot message" })),
+        (error) =>
+            error?._tag === "WebhookOperationError" &&
+            error.outcome === "rejected" &&
+            error.status === 403 &&
+            error.apiError?.code === "missingPermissions",
+    )
+    assert.equal(
+        (await api("GET", `/channels/${source.channelId}/messages/${source.id}`)).data.content,
+        "SDK webhook reference source",
+    )
+    report(stage)
+    stage = "webhook_message_edit"
     await value(hook.editMessage(sent.id, { content: "SDK webhook edited", embeds: [], flags: 4 }))
     await waitObserved(sent.id, "SDK webhook edited")
     assert.equal(

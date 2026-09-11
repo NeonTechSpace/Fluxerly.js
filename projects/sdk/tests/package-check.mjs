@@ -92,6 +92,8 @@ try {
             "cache",
             "client",
             "errors",
+            "api-errors",
+            "oauth",
             "messages",
             "events",
             "message-errors",
@@ -144,9 +146,14 @@ try {
             const emitted = [...readFileSync(join(installed, declaration), "utf8").matchAll(/\/\*\*[\s\S]*?\*\//g)].map(
                 ([comment]) => normalizeComment(comment),
             )
-            // Public source comments precede implementation helpers in the two entry points
-            const publicSource =
+            // The default standalone OAuth facade follows the main client implementation
+            let publicSource =
                 entry === "index" || entry === "effect" ? source.split("export function createClient")[0] : source
+            if (entry === "index") {
+                const oauthInterface = source.indexOf("export interface OAuthClient")
+                assert.ok(oauthInterface > 0)
+                publicSource += source.slice(source.lastIndexOf("/**", oauthInterface))
+            }
             for (const [comment] of publicSource.matchAll(/\/\*\*[\s\S]*?\*\//g)) {
                 assert.ok(
                     emitted.includes(normalizeComment(comment)),
@@ -312,6 +319,11 @@ try {
             .filter((example) => /(?:function|const) applicationExample/.test(example))
         assert.equal(applicationExamples.length, 1)
         writeFileSync(join(consumer, "application-example.ts"), applicationExamples[0])
+        const oauthExamples = publicExamples.filter((example) =>
+            kind === "default" ? /function oauthExample/.test(example) : /const oauthEffectExample/.test(example),
+        )
+        assert.equal(oauthExamples.length, 1)
+        writeFileSync(join(consumer, "oauth-example.ts"), oauthExamples[0])
         const guildExamples = [...publicSource.matchAll(/\* ```ts\r?\n([\s\S]*?)\* ```/g)]
             .map((match) =>
                 match[1]

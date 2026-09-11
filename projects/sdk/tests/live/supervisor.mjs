@@ -202,6 +202,7 @@ function assertClosedStatus() {
         assert.deepEqual(child.assignment, expectedAssignment(shardId))
         assert.equal(child.state, "closed")
         assert.equal(child.pid, null)
+        assert.equal(child.connectionState, null)
     }
 }
 
@@ -358,6 +359,8 @@ try {
     })
 
     stage = "child_connections"
+    await callSupervisor(() => supervisor.waitForReady(), nativeEffect)
+    assert.ok(supervisor.status().children.every((child) => child.connectionState === "Connected"))
     await waitForConnected(botId)
     report(stage, { passed: true, clients: totalShards, freshSelfReads: totalShards })
 
