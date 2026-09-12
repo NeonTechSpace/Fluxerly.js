@@ -148,6 +148,17 @@ export async function oauthCompletion(client: OAuthClient) {
     return { authorization, connections, introspection }
 }
 
+export function oauthInstanceTypes() {
+    const credentials = { clientId: "100", clientSecret: "fixture-only" }
+    oauth.create(credentials)
+    oauth.create({ ...credentials, instance: { url: "https://fluxer.example.test" } })
+    oauth.create({ ...credentials, instance: { url: "http://localhost:8080", allowInsecure: true } })
+    // @ts-expect-error A supplied instance requires its URL, unlike omitting the whole option
+    oauth.create({ ...credentials, instance: {} })
+    // @ts-expect-error Plaintext permission does not select an instance
+    oauth.create({ ...credentials, instance: { allowInsecure: true } })
+}
+
 /** Packed declaration coverage for token lifecycle and tagged webhook references */
 export function webhookReferenceTypes(client: WebhookClient) {
     const reply: WebhookMessageReference = { type: "reply", target: { id: "100", channelId: "200" } }

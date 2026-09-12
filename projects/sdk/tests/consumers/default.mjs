@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { withHostedDiscovery } from "../hosted-discovery.mjs"
 import {
     createWebhookClient,
+    oauth,
     builders,
     commands,
     colors,
@@ -55,6 +56,17 @@ globalThis.WebSocket = class {
 
 const { createClient, ConfigurationError, MessageOperationError, CollectorError, MessageFlags } =
     await import("@neontechspace/fluxerly")
+const oauthCredentials = { clientId: "100", clientSecret: "fixture-only" }
+for (const instance of [{}, { allowInsecure: true }]) {
+    const invalid = oauth.create({ ...oauthCredentials, instance })
+    assert.ok(invalid.isErr())
+    assert.equal(invalid.error._tag, "ConfigurationError")
+    assert.equal(invalid.error.field, "instance")
+}
+for (const config of [oauthCredentials, { ...oauthCredentials, instance: { url: "https://fluxer.example.test" } }]) {
+    const client = oauth.create(config)._unsafeUnwrap()
+    assert.ok((await client.shutdown()).isOk())
+}
 const sharded = createClient({ token: "fixture-only", sharding: { totalShards: 4, shardIds: [2, 0] } })._unsafeUnwrap()
 assert.deepEqual(sharded.shards, [
     { shardId: 2, state: "Disconnected", gatewayLatencyMs: null, recovery: null },

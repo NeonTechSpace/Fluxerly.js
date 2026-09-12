@@ -1,6 +1,14 @@
 import assert from "node:assert/strict"
 import { withHostedDiscovery } from "../hosted-discovery.mjs"
-import { createWebhookClient, colors, text, permissionBits, builders, commands } from "@neontechspace/fluxerly/effect"
+import {
+    createWebhookClient,
+    oauth,
+    colors,
+    text,
+    permissionBits,
+    builders,
+    commands,
+} from "@neontechspace/fluxerly/effect"
 
 assert.equal(await Effect.runPromise(colors.parse("#ff8800")), 0xff8800)
 assert.equal(await Effect.runPromise(colors.toHex(1)), "#000001")
@@ -78,6 +86,23 @@ globalThis.WebSocket = class {
 }
 
 const messages = []
+await Effect.runPromise(
+    Effect.scoped(
+        Effect.gen(function* () {
+            const credentials = { clientId: "100", clientSecret: "fixture-only" }
+            for (const instance of [{}, { allowInsecure: true }]) {
+                const invalid = yield* Effect.result(oauth.create({ ...credentials, instance }))
+                assert.equal(invalid._tag, "Failure")
+                assert.equal(invalid.failure._tag, "ConfigurationError")
+                assert.equal(invalid.failure.field, "instance")
+            }
+            for (const config of [credentials, { ...credentials, instance: { url: "https://fluxer.example.test" } }]) {
+                const client = yield* oauth.create(config)
+                yield* client.shutdown()
+            }
+        }),
+    ),
+)
 await Effect.runPromise(
     Effect.scoped(
         Effect.gen(function* () {

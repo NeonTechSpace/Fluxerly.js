@@ -13,7 +13,9 @@ import type { links } from "./helpers.js"
  * redirects on credentialed service requests
  */
 export interface InstanceOptions {
-    /** Absolute root URL that publishes `/.well-known/fluxer`. Defaults to `https://fluxer.app` */
+    /** Absolute root URL that publishes `/.well-known/fluxer`. Required when selecting an instance.
+     * Omit the whole instance option, not this field, to use hosted Fluxer
+     */
     readonly url: string
     /** Permit HTTP and WS endpoints only for an explicitly selected local or self-hosted instance. Defaults to false */
     readonly allowInsecure?: boolean

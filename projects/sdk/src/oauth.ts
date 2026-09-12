@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto"
 import type { OperationOptions } from "./client.js"
+import type { InstanceOptions } from "./instance.js"
 import type { ClientClosedError } from "./errors.js"
 import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
@@ -21,8 +22,8 @@ export interface OAuthConfig {
     readonly clientId: string
     /** Application client secret, copied into the OAuth client and cleared during shutdown */
     readonly clientSecret: string
-    /** Hosted Fluxer by default, or one explicitly selected discovered instance */
-    readonly instance?: { readonly url?: string; readonly allowInsecure?: boolean }
+    /** Omit for hosted Fluxer. A supplied instance requires its root URL and trusts its discovered service origins */
+    readonly instance?: InstanceOptions
 }
 
 /** Caller-owned authorization request. The SDK neither stores state nor receives the redirect */
