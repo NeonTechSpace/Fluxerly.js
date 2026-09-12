@@ -10,6 +10,7 @@ async function fixture(
     mode:
         | "normal"
         | "rejected"
+        | "fluxerRejected"
         | "serverError"
         | "malformed"
         | "invalidJson"
@@ -74,6 +75,10 @@ async function fixture(
         if (request.url === "/oauth2/token" && mode === "rejected") {
             response.statusCode = 400
             return response.end(JSON.stringify({ error: "invalid_grant", error_description: "secret must not escape" }))
+        }
+        if (request.url === "/oauth2/token" && mode === "fluxerRejected") {
+            response.statusCode = 403
+            return response.end(JSON.stringify({ code: "MISSING_PERMISSIONS", message: "secret must not escape" }))
         }
         if (request.url === "/oauth2/token" && mode === "serverError") {
             response.statusCode = 503
@@ -684,6 +689,29 @@ describe("oauth", () => {
             await made.value.shutdown()
         },
     )
+
+    test("maps a normal Fluxer error envelope without replacing RFC OAuth errors", async () => {
+        const { base } = await fixture("fluxerRejected")
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        if (made.isErr()) throw made.error
+        const result = await made.value.exchangeCode({
+            code: "code",
+            redirectUri: "http://localhost/callback",
+            codeVerifier: "a".repeat(43),
+        })
+        expect(result).toMatchObject({
+            error: {
+                apiError: { providerCode: "MISSING_PERMISSIONS" },
+                oauthError: null,
+                message: expect.stringContaining("The provider reports that the bot lacks a required permission"),
+            },
+        })
+        await made.value.shutdown()
+    })
 
     test("maps invalid JSON from a dispatched 2xx mutation to an unknown response outcome", async () => {
         const { base } = await fixture("invalidJson")

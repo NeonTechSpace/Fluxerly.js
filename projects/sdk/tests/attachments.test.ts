@@ -871,12 +871,18 @@ test.each(modes)("%s uses one deadline across upload stages and does not dispatc
         const fetch = transport({
             put: async (init) => {
                 await readBytes(init)
-                return new Response("Private fixture body", { status })
+                return Response.json(
+                    { code: "MISSING_PERMISSIONS", message: "Private fixture body", retry_after: 0.5 },
+                    { status },
+                )
             },
         })
         const error = await api.send(input).catch((error) => error)
         expect(error.delivery).toBe("notSent")
         expect(error.status).toBe(status)
+        expect(error.apiError).toBeNull()
+        expect(error.message).not.toContain("MISSING_PERMISSIONS")
+        expect(error.message).not.toContain("bot lacks a required permission")
         expect(String(error)).not.toContain("Private fixture")
         expect(fetch).toHaveBeenCalledTimes(2)
     }
@@ -1624,10 +1630,10 @@ test.each(modes)("%s recreates copied inline bytes when a 429 arrives before mul
     expect(observed).toEqual([new Uint8Array([1, 2, 3])])
 })
 
-test.each(modes)("%s does not fall back for other preupload rejections", async (mode) => {
+test.each(modes)("%s retains reviewed detail for a non-fallback preupload rejection", async (mode) => {
     let messages = 0
     transport({
-        plan: () => Response.json({ code: "OTHER" }, { status: 403 }),
+        plan: () => Response.json({ code: "MISSING_PERMISSIONS", message: "private provider detail" }, { status: 403 }),
         message: async () => {
             messages++
             return Response.json(wire())
@@ -1636,7 +1642,10 @@ test.each(modes)("%s does not fall back for other preupload rejections", async (
     const api = await driver(mode)
     await expect(
         api.send({ attachments: [{ data: new Uint8Array([1]), filename: "rejected.bin" }] }),
-    ).rejects.toBeDefined()
+    ).rejects.toMatchObject({
+        apiError: { providerCode: "MISSING_PERMISSIONS" },
+        message: expect.stringContaining("The provider reports that the bot lacks a required permission"),
+    })
     expect(messages).toBe(0)
 })
 

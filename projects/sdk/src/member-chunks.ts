@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import { operationErrorMessage } from "./api-errors.js"
 import type { PresenceUpdate } from "./events.js"
 import type { GuildMember } from "./guilds.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
@@ -87,7 +88,18 @@ export class MemberChunkError extends Error {
         /** Safe local input detail. It never retains rejected values, caller keys, credentials, or provider data */
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(`Member chunks failed (${reason})`)
+        super(
+            operationErrorMessage(
+                "Member chunks",
+                "iterate",
+                reason,
+                "unknown",
+                null,
+                null,
+                inputValidation?.explanation ?? null,
+                retryAfterMs,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

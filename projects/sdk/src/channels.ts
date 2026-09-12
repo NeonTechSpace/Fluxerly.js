@@ -1,6 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
-import type { ApiErrorDetail } from "./api-errors.js"
+import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** Numeric Fluxer channel types this SDK can create, with received guild-channel types remaining numeric for forward compatibility */
@@ -218,7 +218,18 @@ export class ChannelOperationError extends Error {
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(`Channel operation ${operation} failed (${reason}; outcome ${outcome})`)
+        super(
+            operationErrorMessage(
+                "Channel",
+                operation,
+                reason,
+                outcome,
+                status,
+                apiError,
+                inputValidation?.explanation ?? null,
+                retryAfterMs,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

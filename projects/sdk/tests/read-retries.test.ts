@@ -135,6 +135,34 @@ test.each(modes)(
             expect(JSON.stringify(error)).not.toContain("private body")
             expect(calls).toBe([500, 502, 503, 504].includes(status) ? 3 : 1)
         }
+        let serviceCalls = 0
+        stubFetchWithHostedDiscovery(async () => {
+            serviceCalls++
+            return Response.json({ code: "SERVICE_UNAVAILABLE", message: "private provider detail" }, { status: 503 })
+        })
+        const serviceError = await api.read().catch((error) => error)
+        expect(serviceError).toMatchObject({
+            _tag: "MessageOperationError",
+            apiError: { providerCode: "SERVICE_UNAVAILABLE" },
+            message: expect.stringContaining("SERVICE_UNAVAILABLE: The provider service is temporarily unavailable"),
+        })
+        expect(serviceCalls).toBe(3)
+        let rateLimitCalls = 0
+        stubFetchWithHostedDiscovery(async () => {
+            rateLimitCalls++
+            return Response.json(
+                { code: "RATE_LIMITED", message: "private provider detail", retry_after: 0 },
+                { status: 429 },
+            )
+        })
+        const rateLimitError = await api.read("fetch").catch((error) => error)
+        expect(rateLimitError).toMatchObject({
+            _tag: "MessageOperationError",
+            reason: "rateLimit",
+            apiError: { providerCode: "RATE_LIMITED" },
+            message: expect.stringContaining("RATE_LIMITED: The provider rate-limited this request"),
+        })
+        expect(rateLimitCalls).toBe(1)
         let calls = 0
         const cleanup = new Error("private cleanup detail")
         stubFetchWithHostedDiscovery(async () => {
@@ -178,6 +206,32 @@ test.each(modes)(
         expect(calls).toBe(1)
     },
 )
+
+test.each(modes)("%s rejects non-429 responses once while retaining only usable retry hints", async (mode) => {
+    const api = await setup(mode)
+    for (const [seconds, expectedMs] of [
+        [2, 3_000],
+        [4, 4_000],
+        [1e308, 3_000],
+    ] as const) {
+        let calls = 0
+        stubFetchWithHostedDiscovery(async () => {
+            calls++
+            return Response.json(
+                { code: "RATE_LIMITED", retry_after: seconds },
+                { status: 400, headers: { "retry-after": "3" } },
+            )
+        })
+        await expect(api.read()).rejects.toMatchObject({
+            reason: "rejected",
+            status: 400,
+            retryAfterMs: expectedMs,
+            apiError: { providerCode: "RATE_LIMITED" },
+            message: expect.stringContaining(`retry after ${expectedMs} ms`),
+        })
+        expect(calls).toBe(1)
+    }
+})
 
 test.each(modes)("%s preserves confirmed 429 handling separately from transient retries", async (mode) => {
     let calls = 0

@@ -306,7 +306,10 @@ try {
             error?._tag === "WebhookOperationError" &&
             error.outcome === "rejected" &&
             error.status === 403 &&
-            error.apiError?.code === "missingPermissions",
+            error.apiError?.code === "missingPermissions" &&
+            error.apiError.providerCode === "MISSING_PERMISSIONS" &&
+            error.message.includes(error.apiError.explanation) &&
+            error.message.includes("403"),
     )
     assert.equal(
         (await api("GET", `/channels/${source.channelId}/messages/${source.id}`)).data.content,

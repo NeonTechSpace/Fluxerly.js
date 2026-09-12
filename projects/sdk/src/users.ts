@@ -1,5 +1,5 @@
 import type { ClientClosedError } from "./errors.js"
-import type { ApiErrorDetail } from "./api-errors.js"
+import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type { MessageOperationOptions } from "./messages.js"
 import type { Message } from "./messages.js"
@@ -149,7 +149,18 @@ export class UserOperationError extends Error {
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(`User operation ${operation} failed (${reason}, outcome ${outcome})`)
+        super(
+            operationErrorMessage(
+                "User",
+                operation,
+                reason,
+                outcome,
+                status,
+                apiError,
+                inputValidation?.explanation ?? null,
+                retryAfterMs,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

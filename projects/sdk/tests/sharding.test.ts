@@ -555,6 +555,7 @@ test.each(modes)(
             error: {
                 _tag: "ShardConnectionError",
                 shardId: 1,
+                message: expect.stringContaining("requires additional shards"),
                 failure: { _tag: "ConnectionError", reason: "protocol", status: 4011 },
             },
         })

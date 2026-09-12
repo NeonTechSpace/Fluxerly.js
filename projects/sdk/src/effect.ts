@@ -1228,7 +1228,7 @@ import type {
 import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
-export type { ApiErrorDetail } from "./api-errors.js"
+export type { ApiErrorDetail, ApiValidationErrorDetail } from "./api-errors.js"
 export type { InputValidationConstraint, InputValidationDetail } from "./input-validation.js"
 import { inputValidationFailure } from "./input-validation.js"
 export { MessageCleanupError } from "./message-cleanup.js"
@@ -1298,7 +1298,9 @@ export interface Subscription {
 
 /** Native reporting runs in the registration caller's context, not an SDK-owned runtime */
 export interface EventHandlerOptions<E = never, R = never> extends HandlerOptions {
-    /** Safe handler/overflow reporting. Failure invokes one safe fallback log without retrying the handler */
+    /** Safe handler/overflow reporting. Failure invokes one safe fallback log without retrying the handler.
+     * Receives event/kind only, not the original Cause. Inspect application failures inside the handler, as shown on Client.on
+     */
     readonly onError?: (report: HandlerErrorReport) => Effect.Effect<unknown, E, R>
 }
 
@@ -3145,11 +3147,31 @@ export interface Client extends ClientState {
      * A bulk payload counts once, including its full bytes. Ordering is per subscription, not across event types.
      * Explicit concurrency permits out-of-order completion. No history or exactly-once delivery is promised
      *
-     * Handler failures are isolated and reported without retrying the invocation
+     * Handler failures are isolated and reported without retrying the invocation.
+     * Inspect the original application Cause inside the handler with Effect.tapCause before SDK isolation.
+     * onError and SDK logs receive only safe event/kind metadata, not original failures, defects or stacks.
+     * Keep credentials, payloads and arbitrary Cause text out of logs. An application inspector must not fail or throw
      *
      * Overflow stops only this subscription and remains observable through the returned handle.
      * Client or registration-scope closure interrupts handlers and awaits native cleanup.
      * Observe subscription failure alongside client.run/waitForClose. No detached native runtime is created
+     * @example
+     * ```ts
+     * import { Cause, Effect } from "effect"
+     * import type { Client, Message } from "@neontechspace/fluxerly/effect"
+     * export function debugHandlerExample<E, R>(
+     *     client: Client,
+     *     handle: (message: Message) => Effect.Effect<void, E, R>,
+     *     inspectFailure: (cause: Cause.Cause<E>) => void,
+     * ) {
+     *     return client.on("messageCreate", (message) =>
+     *         Effect.suspend(() => handle(message)).pipe(
+     *             // Inspect locally without raw logging, preserving the failure for SDK isolation
+     *             Effect.tapCause((cause) => Effect.sync(() => inspectFailure(cause))),
+     *         ),
+     *     )
+     * }
+     * ```
      */
     on<E, R, E2 = never, R2 = never, K extends EventName = "messageCreate">(
         event: K,

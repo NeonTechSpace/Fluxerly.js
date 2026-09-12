@@ -773,7 +773,7 @@ import type {
 import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
-export type { ApiErrorDetail } from "./api-errors.js"
+export type { ApiErrorDetail, ApiValidationErrorDetail } from "./api-errors.js"
 export type { InputValidationConstraint, InputValidationDetail } from "./input-validation.js"
 import { InputValidationFailure, inputValidationFailure } from "./input-validation.js"
 export { MessageCleanupError } from "./message-cleanup.js"
@@ -858,7 +858,9 @@ export interface EventHandlerOptions extends HandlerOptions {
     /**
      * Report failures without payloads. Reporter failure produces one safe fallback log, never a retry.
      * At most one custom report is outstanding per registration. Further reports use the default logger while it is busy.
-     * Reporter promises remain application-owned and do not delay subscription closure
+     * Reporter promises remain application-owned and do not delay subscription closure.
+     * This hook receives event/kind only, not the original exception or its stack.
+     * Inspect application exceptions inside the callback before rethrowing them, as shown on Client.on
      */
     readonly onError?: (report: HandlerErrorReport) => void | Promise<void>
 }
@@ -2873,9 +2875,35 @@ export interface Client extends ClientState {
      * Overflow stops only this subscription. Handler failure is reported without retrying the invocation.
      * Return/await callback work and inspect send Err values. Unawaited application work is not owned by the SDK
      *
+     * For the original application exception and stack, catch inside your callback and inspect it locally before rethrowing.
+     * onError receives only safe event/kind metadata. Neither that hook nor SDK logs retain the original exception.
+     * Keep credentials, payloads and arbitrary exception text out of logs. Select reviewed fields in your own diagnostic sink
+     *
      * The second argument requests cooperative cancellation on unsubscribe or shutdown.
      * Observe the returned subscription's terminal outcome as well as the client's run/waitForClose outcome.
      * Local registration failures use Result. Unexpected synchronous defects throw SdkDefect
+     * @example
+     * ```ts
+     * import type { Client, Message } from "@neontechspace/fluxerly"
+     * export function debugHandlerExample(
+     *     client: Client,
+     *     handle: (message: Message) => Promise<void>,
+     *     inspectFailure: (error: unknown) => void,
+     * ) {
+     *     return client.on("messageCreate", async (message) => {
+     *         try {
+     *             await handle(message)
+     *         } catch (error) {
+     *             // Application-owned inspection, for example a local debugger breakpoint, not raw logging
+     *             try {
+     *                 inspectFailure(error)
+     *             } finally {
+     *                 throw error // Preserve normal SDK isolation and safe onError reporting
+     *             }
+     *         }
+     *     })
+     * }
+     * ```
      */
     on<K extends EventName>(
         event: K,

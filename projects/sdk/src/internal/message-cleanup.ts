@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import { ClientClosedError } from "#sdk/errors"
+import type { ApiErrorDetail } from "#sdk/api-errors"
 import { InputValidationFailure, inputValidationFailure, type InputValidationDetail } from "#sdk/input-validation"
 import {
     MessageCleanupError,
@@ -63,6 +64,7 @@ function error(
     status: number | null = null,
     retryAfterMs: number | null = null,
     inputValidation: InputValidationDetail | null = null,
+    apiError: ApiErrorDetail | null = null,
 ): MessageCleanupError {
     return new MessageCleanupError(
         phase,
@@ -75,6 +77,7 @@ function error(
         freezeBatches(submitted),
         terminal === null ? null : freezeIds(terminal),
         inputValidation,
+        apiError,
     )
 }
 
@@ -98,6 +101,7 @@ function wrappedFailure(
             source.status,
             source.retryAfterMs,
             source.inputValidation,
+            source.apiError,
         )
     return error(phase, "closed", "unknown", scannedCount, ids, submitted, terminal)
 }
@@ -223,6 +227,7 @@ function failureMetadata(value: MessageCleanupError): MessageCleanupFailureMetad
         outcome: value.outcome,
         status: value.status,
         retryAfterMs: value.retryAfterMs,
+        apiError: value.apiError,
     })
 }
 

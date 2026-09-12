@@ -512,6 +512,30 @@ test.each(modes)("%s prevents an overlapping stale user read from replacing a ga
     expect((await api.getUser())?.username).toBe("gateway observation")
 })
 
+test.each(modes)("%s keeps the DM-opening explanation when send cannot reach message creation", async (mode) => {
+    const calls: string[] = []
+    rest(async (url) => {
+        calls.push(new URL(url).pathname)
+        return Response.json(
+            { code: "CAPTCHA_REQUIRED", message: "private provider explanation", unreviewed: "private extra data" },
+            { status: 400 },
+        )
+    })
+    const api = await setup(mode)
+    const error = await api.send("30", { content: "private submitted message" }).catch((failure) => failure)
+    expect(error).toMatchObject({
+        _tag: "MessageError",
+        reason: "rejected",
+        delivery: "notSent",
+        status: 400,
+        apiError: { code: "captchaRequired", providerCode: "CAPTCHA_REQUIRED" },
+    })
+    expect(error.message).toContain(error.apiError.explanation)
+    expect(error.message).toContain("400")
+    expect(JSON.stringify(error) + error.message).not.toContain("private")
+    expect(calls).toEqual(["/v1/users/@me/channels"])
+})
+
 test.each(modes)("%s retries reads but never repeats uncertain conversation writes or sends", async (mode) => {
     const api = await setup(mode)
     let calls = 0

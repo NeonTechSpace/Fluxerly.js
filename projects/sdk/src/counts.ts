@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import { operationErrorMessage } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** One fresh gateway count request. A logical request can fan out to local shard commands but holds one client-wide admission slot and no count cache */
@@ -77,7 +78,17 @@ export class CountOperationError extends Error {
         /** Safe local input detail. It never retains rejected values, caller keys, credentials, or provider data */
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(`Count operation ${operation} failed (${reason})`)
+        super(
+            operationErrorMessage(
+                "Count",
+                operation,
+                reason,
+                "unknown",
+                null,
+                null,
+                inputValidation?.explanation ?? null,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

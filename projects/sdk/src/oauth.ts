@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** Delegated identity and bot-installation scopes accepted by authorizationUrl */
@@ -140,11 +141,24 @@ export class OAuthOperationError extends Error {
         readonly status: number | null = null,
         /** Numeric Retry-After duration in milliseconds for a 429 response, or null when unavailable */
         readonly retryAfterMs: number | null = null,
-        /** Recognized invalid_grant, invalid_client, invalid_request, invalid_scope, unauthorized_client, or unsupported_grant_type code, otherwise null */
+        /** Recognized RFC OAuth error code, otherwise null */
         readonly oauthError: string | null = null,
         inputValidation: InputValidationDetail | null = null,
+        /** Reviewed Fluxer HTTP error detail when the response uses the normal Fluxer envelope, otherwise null */
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
-        super(`OAuth operation ${operation} failed (${reason}; outcome ${outcome})`)
+        super(
+            operationErrorMessage(
+                "OAuth",
+                operation,
+                reason,
+                outcome,
+                status,
+                apiError,
+                oauthError === null ? (inputValidation?.explanation ?? null) : `OAuth protocol error ${oauthError}`,
+                retryAfterMs,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

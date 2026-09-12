@@ -12,6 +12,7 @@ import type {
     OAuthTokens,
 } from "#sdk/oauth"
 import { OAuthOperationError as OAuthError } from "#sdk/oauth"
+import { apiErrorDetail } from "#sdk/api-errors"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import { withDeadline } from "#sdk/internal/effect-failures"
 import { InstanceResolver, instanceConfiguration } from "#sdk/internal/instance"
@@ -199,6 +200,7 @@ function operationError(
     cause: "notDispatched" | "unknown",
     body?: unknown,
 ): OAuthOperationError {
+    const apiError = apiErrorDetail(body)
     const oauthError =
         record(body) &&
         typeof body.error === "string" &&
@@ -214,7 +216,16 @@ function operationError(
             : null
     if (!response) return new OAuthError(operation, "network", cause)
     if (response.status === 429)
-        return new OAuthError(operation, "rateLimit", "rejected", response.status, retryAfter(response), oauthError)
+        return new OAuthError(
+            operation,
+            "rateLimit",
+            "rejected",
+            response.status,
+            retryAfter(response),
+            oauthError,
+            null,
+            apiError,
+        )
     const mutation = operation === "oauth.exchangeCode" || operation === "oauth.refresh" || operation === "oauth.revoke"
     return new OAuthError(
         operation,
@@ -223,6 +234,8 @@ function operationError(
         response.status,
         null,
         oauthError,
+        null,
+        apiError,
     )
 }
 

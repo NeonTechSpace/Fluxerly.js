@@ -330,6 +330,9 @@ try {
         } catch (error) {
             assert.equal(error?._tag, "OAuthOperationError")
             assert.equal(error?.reason, "rejected")
+            assert.ok(error.status >= 400)
+            assert.ok(error.message.includes(`HTTP ${error.status}`))
+            if (error.apiError !== null) assert.ok(error.message.includes(error.apiError.explanation))
             rejected = true
         }
         assert.equal(rejected, true)

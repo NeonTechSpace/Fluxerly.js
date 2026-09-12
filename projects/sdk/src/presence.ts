@@ -1,3 +1,4 @@
+import { operationErrorMessage } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** A bot's visible session status. `offline` is intentionally excluded because Fluxer normalizes it to invisible while connected */
@@ -49,7 +50,18 @@ export class PresenceError extends Error {
         /** Safe local input detail. It never retains rejected values, caller keys, credentials, or provider data */
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(reason === "limit" ? "Presence member selection exceeds a local limit" : "Presence input is invalid")
+        super(
+            operationErrorMessage(
+                "Presence",
+                "configure",
+                reason,
+                "notDispatched",
+                null,
+                null,
+                inputValidation?.explanation ??
+                    (reason === "limit" ? "Presence member selection exceeds a local limit" : null),
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

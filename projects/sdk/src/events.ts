@@ -287,7 +287,10 @@ export interface HandlerOptions extends EventBufferOptions {
     readonly concurrency?: number
 }
 
-/** Safe diagnostic metadata. Intentionally excludes message bodies, credentials and original handler errors */
+/** Safe diagnostic metadata. Intentionally excludes message bodies, credentials and original handler errors.
+ * Inspect the original error inside a default callback's try/catch or a native handler's Effect.tapCause
+ * before SDK isolation. SDK hooks do not provide a raw-exception logging bypass
+ */
 export interface HandlerErrorReport {
     /** Event whose subscription reported this failure */
     readonly event: EventName

@@ -158,6 +158,8 @@ test("default callback receive-and-reply runs sequentially and reports handler f
     const client = defaultApi()
     const started: string[] = []
     const reports: string[] = []
+    const applicationFailure = new Error("private fixture body must not be logged")
+    const inspected: unknown[] = []
     let release!: () => void
     const gate = new Promise<void>((resolve) => {
         release = resolve
@@ -168,11 +170,17 @@ test("default callback receive-and-reply runs sequentially and reports handler f
             async (message, signal) => {
                 started.push(message.id)
                 if (message.id === "10") await gate
-                if (message.id === "11") throw new Error("private fixture body must not be logged")
+                try {
+                    if (message.id === "11") throw applicationFailure
+                } catch (error) {
+                    inspected.push(error)
+                    throw error
+                }
                 value(await client.messages.reply(message, { content: "Pong!" }, { signal }))
             },
             {
                 onError: (report) => {
+                    expect(report).toEqual({ event: "messageCreate", kind: "handler" })
                     reports.push(report.kind)
                 },
             },
@@ -189,6 +197,8 @@ test("default callback receive-and-reply runs sequentially and reports handler f
     await vi.waitFor(() => expect(started).toEqual(["10", "11", "12"]))
     await vi.waitFor(() => expect(server.requests).toHaveLength(2))
     expect(reports).toEqual(["handler"])
+    expect(inspected).toEqual([applicationFailure])
+    expect(inspected[0]).toBe(applicationFailure)
     sub.unsubscribe()
     value(await sub.waitForClose())
     expect(client.state).toBe("Connected")
@@ -634,21 +644,40 @@ test("native overflow is a typed stream failure and error reporters get safe met
     const server = await fixture()
     const logs: unknown[] = []
     const reports: unknown[] = []
+    const applicationFailure = new Error("private handler failure")
+    const inspected: Cause.Cause<Error>[] = []
     await Effect.runPromise(
         Effect.scoped(
             Effect.gen(function* () {
                 const client = yield* createNative({ token: "fixture-only-not-a-credential" })
-                const sub = yield* client.on("messageCreate", () => Effect.fail("private handler failure"), {
-                    onError: (report) =>
-                        Effect.sync(() => {
-                            reports.push(report)
-                            throw new Error("private reporter failure")
-                        }),
-                })
+                const sub = yield* client.on(
+                    "messageCreate",
+                    () =>
+                        Effect.fail(applicationFailure).pipe(
+                            Effect.tapCause((cause) =>
+                                Effect.sync(() => {
+                                    inspected.push(cause)
+                                }),
+                            ),
+                        ),
+                    {
+                        onError: (report) =>
+                            Effect.sync(() => {
+                                reports.push(report)
+                                throw new Error("private reporter failure")
+                            }),
+                    },
+                )
                 yield* client.connect()
                 server.dispatch()
                 yield* Effect.promise(() => vi.waitFor(() => expect(reports).toHaveLength(1)))
                 expect(reports).toEqual([{ event: "messageCreate", kind: "handler" }])
+                expect(inspected).toHaveLength(1)
+                expect(
+                    inspected[0]!.reasons.some(
+                        (reason) => reason._tag === "Fail" && reason.error === applicationFailure,
+                    ),
+                ).toBe(true)
                 expect(JSON.stringify(logs)).not.toContain("private")
                 expect(logs).toHaveLength(1)
                 yield* sub.unsubscribe()

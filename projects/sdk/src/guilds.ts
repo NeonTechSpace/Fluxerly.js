@@ -1,6 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
-import type { ApiErrorDetail } from "./api-errors.js"
+import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** Frozen guild identity and configuration observation, not a complete wire object or an object that updates in place */
@@ -599,7 +599,18 @@ export class GuildOperationError extends Error {
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(`Guild operation ${operation} failed (${reason}; outcome ${outcome})`)
+        super(
+            operationErrorMessage(
+                "Guild",
+                operation,
+                reason,
+                outcome,
+                status,
+                apiError,
+                inputValidation?.explanation ?? null,
+                retryAfterMs,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

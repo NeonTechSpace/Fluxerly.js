@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import { operationErrorMessage } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** One complete result read from an attachment stream.
@@ -223,7 +224,17 @@ export class AttachmentDownloadError extends Error {
         readonly status: number | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(`Attachment download failed (${reason})`)
+        super(
+            operationErrorMessage(
+                "Attachment download",
+                "fetch",
+                reason,
+                "unknown",
+                status,
+                null,
+                inputValidation?.explanation ?? null,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

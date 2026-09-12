@@ -1,5 +1,5 @@
 import type { ClientClosedError, ConfigurationError } from "./errors.js"
-import type { ApiErrorDetail } from "./api-errors.js"
+import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** A subscription exceeded a pending queue budget and permanently stopped delivery. It does not recover missed events */
@@ -45,7 +45,18 @@ export class MessageError extends Error {
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(`Message send failed (${reason}; delivery ${delivery})`)
+        super(
+            operationErrorMessage(
+                "Message",
+                "send",
+                reason,
+                delivery,
+                status,
+                apiError,
+                inputValidation?.explanation ?? null,
+                retryAfterMs,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
@@ -97,7 +108,18 @@ export class MessageOperationError extends Error {
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(`Message ${operation} failed (${reason}; outcome ${outcome})`)
+        super(
+            operationErrorMessage(
+                "Message",
+                operation,
+                reason,
+                outcome,
+                status,
+                apiError,
+                inputValidation?.explanation ?? null,
+                retryAfterMs,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

@@ -154,7 +154,42 @@ export class AuthenticationError extends Error {
     }
 }
 
-/** Connection failure with safe phase and status metadata, without an upstream body or close-reason string */
+// Reviewed against Fluxer's GatewayConstants and gateway handler call sites, not Discord close-code semantics
+function gatewayExplanation(status: number | null): string {
+    switch (status) {
+        case 4000:
+            return "The gateway reported an unspecified error"
+        case 4001:
+            return "The gateway rejected an unsupported command or missing command data"
+        case 4002:
+            return "The gateway rejected invalid payload encoding, size, compression or command fields"
+        case 4003:
+            return "The gateway received a command before authentication established a session"
+        case 4004:
+            return "The gateway rejected the bot credential"
+        case 4005:
+            return "The gateway rejected Identify or Resume because a session was already attached or command data was missing"
+        case 4007:
+            return "The gateway rejected the heartbeat or resume sequence"
+        case 4008:
+            return "The gateway rejected work because a connection, payload or session budget was exceeded"
+        case 4009:
+            return "The gateway closed after a heartbeat acknowledgement timeout"
+        case 4010:
+            return "The gateway rejected the shard assignment"
+        case 4011:
+            return "The gateway requires additional shards for this bot"
+        case 4012:
+            return "The gateway rejected an absent or unsupported API version"
+        default:
+            return "No reviewed provider explanation is available"
+    }
+}
+
+/** Connection failure with safe phase and status metadata, without an upstream body or close-reason string.
+ * message includes the observed status and a reviewed Fluxer close-code explanation when available.
+ * Explanations do not change retry policy or establish whether a gateway session can resume
+ */
 export class ConnectionError extends Error {
     readonly _tag = "ConnectionError"
     constructor(
@@ -165,7 +200,17 @@ export class ConnectionError extends Error {
         /** HTTP status during discovery or WebSocket close code at the gateway, or null when unavailable */
         readonly status: number | null = null,
     ) {
-        super(`Fluxer ${phase} connection failed (${reason})`)
+        super(
+            `Fluxer ${phase} connection failed (${reason}${status === null ? "" : `; status ${status}`}): ${
+                phase === "gateway" && status !== null
+                    ? gatewayExplanation(status)
+                    : reason === "network"
+                      ? "The connection request could not complete"
+                      : reason === "protocol"
+                        ? "The connection returned invalid or disallowed protocol data"
+                        : "The gateway connection closed"
+            }`,
+        )
         this.name = this._tag
     }
 }
@@ -177,7 +222,7 @@ export class ConnectionTimeoutError extends Error {
         /** Connection or discovery budget in milliseconds, not a guarantee of completion before cleanup finishes */
         readonly timeoutMs: number,
     ) {
-        super("Fluxer connection did not become ready within its time budget")
+        super(`Fluxer connection did not become ready within its ${timeoutMs} ms time budget`)
         this.name = this._tag
     }
 }
@@ -191,7 +236,9 @@ export class RateLimitError extends Error {
         /** Server-required wait in milliseconds, or null when no usable duration was supplied */
         readonly retryAfterMs: number | null,
     ) {
-        super("Fluxer rate limited the connection")
+        super(
+            `Fluxer rate limited the ${source} connection: ${retryAfterMs === null ? "No usable retry delay was supplied" : `Wait at least ${retryAfterMs} ms before retrying`}`,
+        )
         this.name = this._tag
     }
 }
@@ -207,7 +254,7 @@ export class ShardConnectionError extends Error {
         /** Original SDK-owned expected failure, without private upstream payloads */
         readonly failure: AuthenticationError | ConnectionError | ConnectionTimeoutError | RateLimitError,
     ) {
-        super(`Fluxer shard ${shardId} connection failed (${failure._tag})`)
+        super(`Fluxer shard ${shardId} connection failed (${failure._tag}): ${failure.message}`)
         this.name = this._tag
     }
 }

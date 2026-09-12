@@ -1,6 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
-import type { ApiErrorDetail } from "./api-errors.js"
+import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type { MessageOperationOptions } from "./messages.js"
 
@@ -54,7 +54,18 @@ export class BotApplicationOperationError extends Error {
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
-        super(`Bot application operation ${operation} failed (${reason}, outcome ${outcome})`)
+        super(
+            operationErrorMessage(
+                "Bot application",
+                operation,
+                reason,
+                outcome,
+                status,
+                apiError,
+                inputValidation?.explanation ?? null,
+                retryAfterMs,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }

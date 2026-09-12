@@ -402,11 +402,19 @@ test("one cancelled lifetime waiter leaves other and late observers intact", asy
     expect((await client.waitForClose()).isOk()).toBe(true)
 })
 
-test.each([4004, 4002, 4010, 4011, 4012])("permanent rejection %s is not retried", async (code) => {
+test.each([
+    [4004, "bot credential"],
+    [4002, "invalid payload"],
+    [4010, "shard assignment"],
+    [4011, "additional shards"],
+    [4012, "API version"],
+] as const)("permanent rejection %s is explained and not retried", async (code, explanation) => {
     const server = await fixture({ reject: code })
     const client = defaultApi()
     const result = await client.connect()
     expect(result._unsafeUnwrapErr()._tag).toBe(code === 4004 ? "AuthenticationError" : "ConnectionError")
+    expect(result._unsafeUnwrapErr().message).toContain(explanation)
+    if (code !== 4004) expect(result._unsafeUnwrapErr().message).toContain(String(code))
     expect(client.state).toBe("Disconnected")
     expect(server.sockets).toHaveLength(1)
     expect(inspect(result)).not.toContain("fixture-only-not-a-credential")
@@ -425,7 +433,10 @@ test("a server wait exceeding the startup budget is returned rather than retried
     const client = defaultApi({ startupTimeoutMs: 200 })
     const error = (await client.connect())._unsafeUnwrapErr()
     expect(error._tag).toBe("RateLimitError")
-    if (error._tag === "RateLimitError") expect(error.retryAfterMs).toBe(750)
+    if (error._tag === "RateLimitError") {
+        expect(error.retryAfterMs).toBe(750)
+        expect(error.message).toContain("750 ms")
+    }
     expect(server.discoveryRequests()).toBe(1)
     expect(server.sockets).toHaveLength(0)
 })

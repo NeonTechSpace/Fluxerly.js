@@ -373,6 +373,11 @@ try {
                 matches: (example) => /function nicknameExample/.test(example),
                 file: () => "nickname-example.ts",
             },
+            {
+                name: "debugHandlerExample",
+                matches: (example) => /function debugHandlerExample(?:<[^>]+>)?\(/.test(example),
+                file: () => "debug-handler-example.ts",
+            },
             ...[
                 "forwardExample",
                 "profileExample",

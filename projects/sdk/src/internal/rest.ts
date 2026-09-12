@@ -417,6 +417,8 @@ const errorBodyReadTimeoutMs = 100
 
 type ApiErrorRead = {
     readonly detail: ApiErrorDetail | null
+    readonly retryAfterMs: number | null
+    readonly global: boolean
     readonly cleanupDefect: unknown | null
 }
 
@@ -427,13 +429,21 @@ class ApiErrorBodyCleanupError extends Error {
     }
 }
 
-async function readApiError(response: Response, signal: AbortSignal): Promise<ApiErrorRead> {
+async function readApiError(
+    response: Response,
+    signal: AbortSignal,
+    source: "fluxer" | "upload" = "fluxer",
+    requireJsonContentType = true,
+): Promise<ApiErrorRead> {
     const body = response.body
-    if (!body || !/^application\/json(?:;|$)/i.test(response.headers.get("content-type") ?? ""))
-        return { detail: null, cleanupDefect: null }
+    if (
+        !body ||
+        (requireJsonContentType && !/^application\/json(?:;|$)/i.test(response.headers.get("content-type") ?? ""))
+    )
+        return { detail: null, retryAfterMs: null, global: false, cleanupDefect: null }
     const declared = response.headers.get("content-length")
     if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > errorBodyMaxBytes))
-        return { detail: null, cleanupDefect: null }
+        return { detail: null, retryAfterMs: null, global: false, cleanupDefect: null }
     const reader = body.getReader()
     const chunks: Uint8Array[] = []
     let size = 0
@@ -448,6 +458,8 @@ async function readApiError(response: Response, signal: AbortSignal): Promise<Ap
     })
     let cancelBody = signal.aborted
     let result: ApiErrorDetail | null = null
+    let retryAfterMs: number | null = null
+    let global = false
     try {
         while (!cancelBody) {
             const next = await Promise.race([reader.read(), cancelled, timedOut])
@@ -467,7 +479,15 @@ async function readApiError(response: Response, signal: AbortSignal): Promise<Ap
             const data: unknown = JSON.parse(
                 new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)))),
             )
-            result = record(data) ? apiErrorDetail(data.code) : null
+            // Signed upload destinations can be external storage, not a Fluxer API error source
+            result = source === "fluxer" ? apiErrorDetail(data) : null
+            if (record(data)) {
+                if (typeof data.retry_after === "number" && data.retry_after >= 0) {
+                    const milliseconds = data.retry_after * 1000
+                    if (Number.isFinite(milliseconds)) retryAfterMs = milliseconds
+                }
+                global = data.global === true
+            }
         }
     } catch {
         result = null
@@ -484,7 +504,7 @@ async function readApiError(response: Response, signal: AbortSignal): Promise<Ap
             cleanupDefect = new ApiErrorBodyCleanupError()
         }
     }
-    return { detail: result, cleanupDefect }
+    return { detail: result, retryAfterMs, global, cleanupDefect }
 }
 
 function attachmentDownloadUrl(value: unknown, instance: InstanceEndpointContext): string | undefined {
@@ -670,7 +690,8 @@ export class RestOwner {
         progress: { outcome: Outcome },
         generation: number,
     ): Effect.Effect<
-        { kind: "success"; value: A } | { kind: "retry"; retry: number; global: boolean },
+        | { kind: "success"; value: A }
+        | { kind: "retry"; retry: number; global: boolean; apiError: ApiErrorDetail | null },
         RestFailure | ClientClosedError
     > {
         const owner = this
@@ -801,37 +822,63 @@ export class RestOwner {
                             try: () => {
                                 const work = (async () => {
                                     if (response.status === 429) {
-                                        if (request.put) throw new RestFailure("rateLimit", progress.outcome, 429)
+                                        if (request.put) {
+                                            const apiRead = await readApiError(
+                                                response,
+                                                state.controller.signal,
+                                                "upload",
+                                                false,
+                                            )
+                                            if (apiRead.cleanupDefect !== null)
+                                                state.cleanupDefects.push(apiRead.cleanupDefect)
+                                            throw new RestFailure(
+                                                "rateLimit",
+                                                progress.outcome,
+                                                429,
+                                                apiRead.retryAfterMs,
+                                                false,
+                                                apiRead.detail,
+                                            )
+                                        }
                                         const header = response.headers.get("retry-after")
                                         let delay = header === null ? NaN : Number(header) * 1000
                                         if (header !== null && !Number.isFinite(delay))
                                             delay = Date.parse(header) - Date.now()
-                                        const data: unknown = await response.json().catch(() => null)
-                                        if (
-                                            record(data) &&
-                                            typeof data.retry_after === "number" &&
-                                            Number.isFinite(data.retry_after) &&
-                                            data.retry_after >= 0
+                                        const apiRead = await readApiError(
+                                            response,
+                                            state.controller.signal,
+                                            "fluxer",
+                                            false,
                                         )
-                                            delay = Math.max(
-                                                Number.isFinite(delay) ? delay : 0,
-                                                data.retry_after * 1000,
-                                            )
+                                        if (apiRead.cleanupDefect !== null)
+                                            state.cleanupDefects.push(apiRead.cleanupDefect)
+                                        if (apiRead.retryAfterMs !== null)
+                                            delay = Math.max(Number.isFinite(delay) ? delay : 0, apiRead.retryAfterMs)
                                         // Mutation resends require a received rate-limit rejection
                                         if (!request.preparation) progress.outcome = "rejected"
                                         if (!Number.isFinite(delay) || delay <= 0)
-                                            throw new RestFailure("rateLimit", progress.outcome, 429)
+                                            throw new RestFailure(
+                                                "rateLimit",
+                                                progress.outcome,
+                                                429,
+                                                null,
+                                                false,
+                                                apiRead.detail,
+                                            )
                                         const retry = Math.ceil(delay)
-                                        const global = record(data) && data.global === true
+                                        const global = apiRead.global
                                         const until = performance.now() + retry
                                         if (global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
                                         else owner.#buckets.set(route, { remaining: 0, until })
-                                        return { kind: "retry" as const, retry, global }
+                                        return { kind: "retry" as const, retry, global, apiError: apiRead.detail }
                                     }
                                     if (!response.ok) {
+                                        let apiRead: ApiErrorRead | undefined
                                         if (response.status === 403 && request.featureDisabled) {
-                                            const data = await readUploadJson(response)
-                                            if (record(data) && data.code === "FEATURE_TEMPORARILY_DISABLED")
+                                            apiRead = await readApiError(response, state.controller.signal)
+                                            if (apiRead.cleanupDefect !== null)
+                                                state.cleanupDefects.push(apiRead.cleanupDefect)
+                                            if (apiRead.detail?.providerCode === "FEATURE_TEMPORARILY_DISABLED")
                                                 return { kind: "success" as const, value: request.featureDisabled() }
                                         }
                                         if (
@@ -846,16 +893,28 @@ export class RestOwner {
                                         if (rejected && !request.preparation) progress.outcome = "rejected"
                                         const retryableRead =
                                             request.method === "GET" && [500, 502, 503, 504].includes(response.status)
-                                        const apiRead = retryableRead
-                                            ? { detail: null, cleanupDefect: null }
-                                            : await readApiError(response, state.controller.signal)
-                                        if (apiRead.cleanupDefect !== null)
+                                        apiRead ??= await readApiError(
+                                            response,
+                                            state.controller.signal,
+                                            request.put ? "upload" : "fluxer",
+                                        )
+                                        if (
+                                            apiRead.cleanupDefect !== null &&
+                                            !state.cleanupDefects.includes(apiRead.cleanupDefect)
+                                        )
                                             state.cleanupDefects.push(apiRead.cleanupDefect)
+                                        const headerRetryAfterMs = retryAfter(response)
+                                        const retryAfterMs =
+                                            headerRetryAfterMs === null
+                                                ? apiRead.retryAfterMs
+                                                : apiRead.retryAfterMs === null
+                                                  ? headerRetryAfterMs
+                                                  : Math.max(headerRetryAfterMs, apiRead.retryAfterMs)
                                         throw new RestFailure(
                                             response.status === 404 && !request.preparation ? "notFound" : "rejected",
                                             progress.outcome,
                                             response.status,
-                                            retryableRead ? retryAfter(response) : null,
+                                            retryAfterMs,
                                             retryableRead,
                                             apiRead.detail,
                                         )
@@ -1842,6 +1901,9 @@ export class RestOwner {
                                                   progress.outcome,
                                                   error.status,
                                                   error.retryAfterMs,
+                                                  error.retryableRead,
+                                                  error.apiError,
+                                                  error.inputValidation,
                                               )
                                             : error,
                                     ),
@@ -1884,12 +1946,16 @@ export class RestOwner {
                     (request.inlineAttachments || request.webhookId) &&
                     request.sources?.some((source) => !source.replayable)
                 )
-                    return yield* Effect.fail(new RestFailure("rateLimit", progress.outcome, 429, response.retry))
+                    return yield* Effect.fail(
+                        new RestFailure("rateLimit", progress.outcome, 429, response.retry, false, response.apiError),
+                    )
                 until = performance.now() + response.retry
                 if (response.global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
                 else owner.#buckets.set(route, { remaining: 0, until })
                 if (until >= deadline)
-                    return yield* Effect.fail(new RestFailure("rateLimit", progress.outcome, 429, response.retry))
+                    return yield* Effect.fail(
+                        new RestFailure("rateLimit", progress.outcome, 429, response.retry, false, response.apiError),
+                    )
             }
         })
     }
@@ -2380,7 +2446,15 @@ export class RestOwner {
                         .pipe(
                             mapFailureCause((error) =>
                                 error instanceof RestFailure
-                                    ? new RestFailure(error.reason, "notDispatched", error.status, error.retryAfterMs)
+                                    ? new RestFailure(
+                                          error.reason,
+                                          "notDispatched",
+                                          error.status,
+                                          error.retryAfterMs,
+                                          error.retryableRead,
+                                          error.apiError,
+                                          error.inputValidation,
+                                      )
                                     : error,
                             ),
                         )

@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { MessageCleanupError, SdkDefect, createClient } from "../src/index.js"
+import { apiErrorDetail } from "../src/api-errors.js"
 import { createClient as createNative } from "../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
@@ -117,6 +118,23 @@ test("cleanup validation keeps legacy constructors and clones only public detail
     expect(
         new MessageCleanupError("cleanup", "network", "unknown", null, null, 0, [], [], null).inputValidation,
     ).toBeNull()
+    const apiError = apiErrorDetail({ code: "MISSING_PERMISSIONS", message: "private provider text" })
+    if (!apiError) throw new Error("Expected API detail")
+    const withApiError = new MessageCleanupError(
+        "cleanup",
+        "rejected",
+        "rejected",
+        403,
+        null,
+        0,
+        [],
+        [],
+        null,
+        null,
+        apiError,
+    )
+    expect(withApiError).toMatchObject({ apiError: { providerCode: "MISSING_PERMISSIONS" } })
+    expect(withApiError.message).toContain(apiError.explanation)
 })
 
 test.each(modes)(

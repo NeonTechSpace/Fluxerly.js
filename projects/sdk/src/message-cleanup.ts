@@ -1,5 +1,6 @@
 import type { OperationOptions } from "./client.js"
 import type { MessageOperationError } from "./message-errors.js"
+import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type { Message, MessageOperationOptions } from "./messages.js"
 
@@ -92,6 +93,8 @@ export interface MessageCleanupFailureMetadata {
     readonly status: number | null
     /** Usable provider retry delay in milliseconds when known, otherwise null */
     readonly retryAfterMs: number | null
+    /** Reviewed provider rejection detail when known, otherwise null. It excludes provider response text and field paths */
+    readonly apiError: ApiErrorDetail | null
 }
 
 /** Per-call cleanup settings. One deadline covers all preview reads or all cleanup batch submissions */
@@ -138,8 +141,21 @@ export class MessageCleanupError extends Error {
         /** Failed or uncertain batch IDs when a cleanup request was reached, otherwise null */
         readonly terminalBatchIds: readonly string[] | null,
         inputValidation: InputValidationDetail | null = null,
+        /** Reviewed terminal Fluxer rejection detail, or null when no safe classification is available */
+        readonly apiError: ApiErrorDetail | null = null,
     ) {
-        super(`Message cleanup ${phase} failed (${reason}, outcome ${outcome})`)
+        super(
+            operationErrorMessage(
+                "Message cleanup",
+                phase,
+                reason,
+                outcome,
+                status,
+                apiError,
+                inputValidation?.explanation ?? null,
+                retryAfterMs,
+            ),
+        )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
