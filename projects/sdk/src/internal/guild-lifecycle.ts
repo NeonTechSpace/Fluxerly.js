@@ -92,3 +92,17 @@ export function guildLeave(guildId: string): GuildRequest<void> | InputValidatio
         decode: () => undefined,
     }
 }
+
+/** Builds the authenticated member's whole-guild message deletion request without changing membership or roles */
+export function guildDeleteMine(guildId: string): GuildRequest<void> | InputValidationFailure {
+    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    return {
+        guildId,
+        bucket: "user:guilds:bulk-delete-mine",
+        path: `/users/@me/guilds/${guildId}/messages/bulk-delete-mine`,
+        method: "POST",
+        status: 202,
+        invalidateMessages: true,
+        decode: () => undefined,
+    }
+}

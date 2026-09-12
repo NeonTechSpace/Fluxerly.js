@@ -476,6 +476,11 @@ try {
         )
         assert.equal(cleanupExamples.length, 1)
         writeFileSync(join(consumer, "cleanup-example.ts"), cleanupExamples[0])
+        const deleteMineExamples = examples(publicSource).filter((example) =>
+            /(?:function|const) deleteMineExample/.test(example),
+        )
+        assert.equal(deleteMineExamples.length, 1)
+        writeFileSync(join(consumer, "delete-mine-example.ts"), deleteMineExamples[0])
         const typingExamples = examples(publicSource).filter((example) =>
             /(?:function|const) typingExample/.test(example),
         )

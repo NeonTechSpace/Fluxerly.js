@@ -89,6 +89,7 @@ export class MessageOperationError extends Error {
             | "delete"
             | "deleteAttachment"
             | "deleteMany"
+            | "deleteMine"
             | "addReaction"
             | "removeReaction"
             | "removeUserReaction"

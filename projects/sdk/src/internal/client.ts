@@ -65,7 +65,7 @@ import {
     type RoleReference,
 } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
-import { guildLeave } from "./guild-lifecycle.js"
+import { guildDeleteMine, guildLeave } from "./guild-lifecycle.js"
 import { RestOwner } from "./rest.js"
 import type { BotApplicationOperation, BotApplicationOperationOptions } from "#sdk/application"
 import type { BotApplicationRequest } from "./application.js"
@@ -650,6 +650,10 @@ export class ClientOwner {
         )
     }
 
+    deleteGuildMessages(guildId: string, options?: GuildOperationOptions) {
+        return this.guild("guilds.deleteMine", () => guildDeleteMine(guildId), options)
+    }
+
     channel<A>(
         operation: ChannelOperation,
         build: () => ChannelRequest<A> | InputValidationFailure,
@@ -986,6 +990,14 @@ export class ClientOwner {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.deleteMany(this.#configuration.token, channelId, ids, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    deleteMine(channelId: string, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.deleteMine(this.#configuration.token, channelId, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }

@@ -60,6 +60,7 @@
         "test:live:management": "pnpm run build && node tests/live/messages.mjs default --manage && node tests/live/messages.mjs effect --manage",
         "test:live:batch-delete": "pnpm run build && node tests/live/messages.mjs default --batch-delete && node tests/live/messages.mjs effect --batch-delete",
         "test:live:cleanup": "pnpm run build && node tests/live/messages.mjs default --cleanup && node tests/live/messages.mjs effect --cleanup",
+        "test:live:own-history": "pnpm run build && node tests/live/own-history.mjs default && node tests/live/own-history.mjs effect",
         "test:live:moderation:default": "pnpm run build && node tests/live/messages.mjs default --moderation",
         "test:live:moderation:effect": "pnpm run build && node tests/live/messages.mjs effect --moderation",
         "test:live:webhooks": "pnpm run build && node tests/live/webhooks.mjs default && node tests/live/webhooks.mjs effect",

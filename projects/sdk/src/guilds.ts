@@ -549,6 +549,7 @@ export type GuildOperation =
     | "guilds.fetch"
     | "guilds.fetchPage"
     | "guilds.leave"
+    | "guilds.deleteMine"
     | "guilds.ban"
     | "guilds.unban"
     | "guilds.fetchBans"

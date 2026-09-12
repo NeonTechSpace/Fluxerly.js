@@ -30,7 +30,7 @@ export interface GuildRequest<A> {
     readonly bucket: string
     readonly path: string
     readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"
-    readonly status: 200 | 204
+    readonly status: 200 | 202 | 204
     readonly json?: string
     readonly moderation?: true
     readonly auditReason?: string

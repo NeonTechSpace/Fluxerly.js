@@ -760,7 +760,10 @@ export class RestOwner {
                 Effect.tryPromise({
                     try: () => {
                         if (owner.#closed) throw new ClientClosedError()
-                        if (!request.preparation) progress.outcome = "unknown"
+                        if (!request.preparation) {
+                            progress.outcome = "unknown"
+                            if (request.invalidateMessages) owner.cache?.gap()
+                        }
                         const work = fetch(
                             request.put?.url ??
                                 `${request.instance!.apiPublic}/v1${request.webhookId ? `/webhooks/${request.webhookId}/${encodeURIComponent(Redacted.value(token))}` : ""}${request.path}`,
@@ -1688,6 +1691,43 @@ export class RestOwner {
         }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "deleteMany")))
     }
 
+    deleteMine(
+        token: Redacted.Redacted<string>,
+        channelId: string,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            if (!identifier(channelId))
+                return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
+            if (options !== undefined && !record(options))
+                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
+            if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
+                return Effect.fail(
+                    localInputFailure(
+                        "options",
+                        "allowedFields",
+                        "Operation options may contain only timeoutMs and signal",
+                    ),
+                )
+            return this.#execute(
+                token,
+                {
+                    method: "POST",
+                    channel: channelId,
+                    bucket: "bulk-delete-mine",
+                    cache: false,
+                    invalidateMessages: true,
+                    path: `/channels/${channelId}/messages/bulk-delete-mine`,
+                    body: undefined,
+                    status: 202,
+                    decode: async () => {},
+                },
+                options,
+            )
+        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "deleteMine")))
+    }
+
     fetchReactionUsers(
         token: Redacted.Redacted<string>,
         target: MessageReference,
@@ -2150,7 +2190,7 @@ export class RestOwner {
                     status: input.status,
                     body: input.json === undefined ? undefined : { json: input.json, files: [] },
                     decode: async (response, instance) => {
-                        if (input.status === 204) return undefined as A
+                        if (input.status === 202 || input.status === 204) return undefined as A
                         const value = input.decode(await response.json().catch(() => null), instance)
                         if (value === undefined) throw new RestFailure("response", "unknown", response.status)
                         return value
@@ -2498,7 +2538,7 @@ export class RestOwner {
                                     )
                                 if (request.deleteAuthorId && progress.outcome !== "notDispatched")
                                     owner.cache?.deleteAuthor(request.deleteAuthorId)
-                                // Message observations need not carry guild IDs, so leaving conservatively clears this cache
+                                // A read begun after deletion dispatch can still observe pre-deletion data, so clear again at completion
                                 if (request.invalidateMessages && progress.outcome !== "notDispatched")
                                     owner.cache?.gap()
                                 // A rejected multi-entry reorder can have applied earlier entries before its failure

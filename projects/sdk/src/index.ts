@@ -1622,6 +1622,21 @@ export interface Messages {
         messageIds: readonly string[],
         options?: DefaultMessageOperationOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    /** Irreversibly delete this bot's whole authored history in one decimal channel ID, without selecting IDs or requiring a gateway connection.
+     * Starts immediately and completes only after Fluxer returns empty HTTP 202, not a job, count, gateway event or proof that the channel is empty.
+     * Other authors' messages are preserved. Fluxer can leave new or concurrent messages. Deletion is not atomic, may be partial, and has no recovery token or automatic reconciliation
+     *
+     * Bot credentials satisfy Fluxer's sudo checks, with no caller-supplied sudo fields. Fluxer controls attachment removal, without a physical provider-storage or CDN-erasure guarantee.
+     * The 30,000 ms default total deadline includes admission and rate-limit waits. Only confirmed 429 rejection retries. 5xx, transport loss and other uncertain writes never replay
+     *
+     * After dispatch, the optional whole message cache is cleared and older pending reads cannot restore it. The SDK creates no synthetic gateway events.
+     * Cancellation or closure awaits owned cleanup but cannot undo a dispatched deletion. Input/admission/HTTP failures use MessageOperationError operation deleteMine.
+     * Unexpected defects reject with SdkDefect. This does not leave a guild or alter roles
+     */
+    deleteMine(
+        channelId: string,
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, MessageOperationFailure | CancelledError>
 }
 
 /** One default collection, independent of observers and the client's connection lifetime */
@@ -2031,6 +2046,31 @@ export interface Guilds {
      * Existing caller-held snapshots remain unchanged. This operation never deletes the guild or shuts down the client
      */
     leave(
+        guildId: string,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    /** Irreversibly delete this bot's whole authored history across one decimal guild ID, without leaving the guild or changing roles.
+     * Starts immediately and completes only after Fluxer returns empty HTTP 202, not a job, count, gateway event or proof that the guild is empty.
+     * Other authors' messages are preserved. Fluxer can leave new or concurrent messages. Deletion is not atomic, may be partial, and has no recovery token or automatic reconciliation
+     *
+     * Bot credentials satisfy Fluxer's sudo checks, with no caller-supplied sudo fields or audit reason. Fluxer controls attachment removal, without a physical provider-storage or CDN-erasure guarantee.
+     * The 30,000 ms default total deadline includes admission and rate-limit waits. Only confirmed 429 rejection retries. 5xx, transport loss and other uncertain writes never replay
+     *
+     * After dispatch, the optional whole message cache is cleared and older pending reads cannot restore it. The SDK creates no synthetic gateway events.
+     * Cancellation or closure awaits owned cleanup but cannot undo a dispatched deletion. Input/admission/HTTP failures use GuildOperationError operation guilds.deleteMine.
+     * Unexpected defects reject with SdkDefect. This operation never removes guild membership or changes roles
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export function deleteMineExample(client: Client, channelId: string) {
+     *     return client.messages.deleteMine(channelId)
+     * }
+     * export function deleteMineGuildExample(client: Client, guildId: string) {
+     *     return client.guilds.deleteMine(guildId)
+     * }
+     * ```
+     */
+    deleteMine(
         guildId: string,
         options?: DefaultGuildOperationOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError>
@@ -4120,6 +4160,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     iterate((request) => guildPagination(owner, query, request), "guilds.iterate", options),
                 leave: (id: string, options?: DefaultGuildOperationOptions) =>
                     execute(owner.leaveGuild(id, options), "guilds.leave", options),
+                deleteMine: (id: string, options?: DefaultGuildOperationOptions) =>
+                    execute(owner.deleteGuildMessages(id, options), "guilds.deleteMine", options),
                 fetchVanityUrl: (id: string, options?: DefaultGuildOperationOptions) =>
                     execute(
                         owner.guild("guilds.fetchVanityUrl", () => vanityUrlFetch(id), options),
@@ -4616,6 +4658,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 ) => execute(owner.deleteAttachment(target, attachmentId, options), "deleteAttachment", options),
                 deleteMany: (channelId: string, ids: readonly string[], options?: DefaultMessageOperationOptions) =>
                     execute(owner.deleteMany(channelId, ids, options), "deleteMany", options),
+                deleteMine: (channelId: string, options?: DefaultMessageOperationOptions) =>
+                    execute(owner.deleteMine(channelId, options), "deleteMine", options),
             }),
             on: <K extends EventName>(
                 event: K,

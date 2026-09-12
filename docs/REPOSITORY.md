@@ -248,6 +248,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:channels` | Guild channel management, permission overwrites, inheritance, events/cache and recovery | Temporary channels/categories, overwrites targeting only the bot and test guild's everyone role, test-socket termination and test-owned response loss |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
 | `test:live:cleanup` | REST guild summaries, bot-self hierarchy and bounded message cleanup through both APIs | Temporary channel and test-bot messages, with one lost batch response. Uses the existing channel recovery journal and verifies test-owned cleanup |
+| `test:live:own-history` | Channel-wide own-history deletion, lost-response and cancellation reconciliation through both APIs | Two journaled temporary channels and bot messages, with verified channel removal. Guild-wide deletion requires a separate authorized invocation |
 | `test:live:search` | Bounded contextual indexed-message search, explicit indexing and cache exclusion | Temporary channel/messages; may report a hosted indexing timeout |
 | `test:live:pagination` | History/member/reactor/pin traversal, early exit, read recovery and cancellation cleanup | Temporary channel/messages, reactions and pins, plus test-owned transient read failure and delayed response delivery |
 | `test:live:cache` | Cache intake, expiry and recovery invalidation | Temporary channel/messages and test-socket termination |
@@ -271,6 +272,19 @@ Open personal settings, then Account → Security → Account access → Authori
 Tokens cannot be recovered from a journal, and successful token revocation does not remove the provider's saved consent record
 
 These checks are excluded from `pnpm check`, CI, schedules and unattended runs
+
+Whole-own-history guild checks require current authorization to erase all messages authored by the designated bot in the sandbox server.
+This deletion is irreversible and cannot be limited to messages created by the test
+
+After building, run `node tests/live/own-history.mjs default --guild` and then the `effect` mode from the SDK directory.
+Supply process-only `FLUXER_TEST_DELETE_MINE_GUILD_ID` matching the configured sandbox, never another server
+
+The harness verifies bot/application/server identity and membership, uses the shared lock and journals test-owned channels in `.env.test.own-history.local`.
+An existing journal triggers recovery only, without repeating whole-history deletion
+
+After a crash, reconcile that journal and the shared lock before a separately authorized fresh run.
+Cleanup removes only the journaled channels and cannot restore deleted history.
+Other-author readback covers only a reported sample, not a complete inventory
 
 Voice-control checks require process-only `FLUXER_TEST_VOICE_USER_ID` for a currently consenting sandbox member connected to one voice session.
 The bot needs ManageChannels, Connect, MoveMembers, MuteMembers and DeafenMembers, plus a successful hierarchy check for that participant
