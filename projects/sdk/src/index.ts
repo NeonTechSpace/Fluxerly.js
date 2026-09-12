@@ -484,6 +484,28 @@ export type {
 } from "./oauth.js"
 export { builders, EmbedBuilder, MessageBuilder } from "./builders.js"
 export type {
+    CommandArgumentSchema,
+    CommandArgumentMetadata,
+    CommandArgumentType,
+    CommandArgumentDescriptor,
+    CommandArgumentUser,
+    CommandArgumentChannel,
+    CommandArgumentRole,
+    CommandArgumentText,
+    CommandArgumentInteger,
+    CommandArgumentNumber,
+    CommandArgumentBoolean,
+    CommandArgumentId,
+    CommandArgumentChoice,
+    CommandArgumentUserSelection,
+    CommandArgumentChannelSelection,
+    CommandArgumentRoleSelection,
+    CommandArgumentValues,
+    CommandArgumentValue,
+    CommandArgumentRejectionReason,
+} from "./command-arguments.js"
+export type { CommandHelpOptions } from "./command-help.js"
+export type {
     CommandCooldownClaim,
     CommandCooldownRequest,
     MemoryCooldownOptions,
@@ -501,6 +523,7 @@ export type {
     MemoryCooldownStore,
     DefaultPrefixCommand,
     DefaultPrefixCommandContext,
+    DefaultPrefixCommandExecutionContext,
     DefaultPrefixCommandCooldown,
     DefaultPrefixCommandUnmatchedContext,
     DefaultPrefixCommandsOptions,
@@ -559,6 +582,55 @@ import { makeDefaultSupervisor } from "./default-supervisor.js"
  *         },
  *     })
  *     return registered.isErr() ? registered : registered.value.attach(client)
+ * }
+ * ```
+ * Argument schemas are opt-in. Guards see raw input first, conversion failures call onReject without consuming a cooldown, and execute receives inferred frozen values alongside unchanged args
+ *
+ * @example
+ * ```ts
+ * import { commands, type Client } from "@neontechspace/fluxerly"
+ *
+ * export function typedCommandExample(client: Client) {
+ *     const created = commands.create({ prefix: "!", parse: commands.parseQuoted })
+ *     if (created.isErr()) return created
+ *     const registered = created.value.register({
+ *         name: "repeat",
+ *         arguments: {
+ *             count: { type: "integer" },
+ *             mode: { type: "choice", choices: ["fast", "slow"] },
+ *             note: { type: "text", optional: true, rest: true },
+ *         },
+ *         onReject: async ({ client, message }, rejection) => {
+ *             if (rejection._tag !== "CommandArgumentRejected") return
+ *             const sent = await client.messages.reply(message, {
+ *                 content: `Argument ${rejection.argument}: ${rejection.reason}`, allowedMentions: {},
+ *             })
+ *             if (sent.isErr()) throw sent.error
+ *         },
+ *         execute: async ({ client, message, values }) => {
+ *             const sent = await client.messages.reply(message, {
+ *                 content: `${values.count} / ${values.mode} / ${values.note ?? "No note"}`, allowedMentions: {},
+ *             })
+ *             if (sent.isErr()) throw sent.error
+ *         },
+ *     })
+ *     return registered.isErr() ? registered : registered.value.attach(client)
+ * }
+ * ```
+ *
+ * @example
+ * ```ts
+ * import { type Client, type DefaultPrefixCommandRouter } from "@neontechspace/fluxerly"
+ *
+ * export async function commandHelpExample(client: Client, router: DefaultPrefixCommandRouter, channelId: string) {
+ *     const pages = router.help({ prefix: "!", maxLength: 1_000, include: (command) => command.name !== "admin" })
+ *     if (pages.isErr()) return pages
+ *     // Visibility is not authorization. Each command still needs its own policy
+ *     for (const content of pages.value) {
+ *         const sent = await client.messages.send(channelId, { content, allowedMentions: {} })
+ *         if (sent.isErr()) return sent
+ *     }
+ *     // Earlier pages remain sent if a later send fails. This example never retries
  * }
  * ```
  */
@@ -741,6 +813,7 @@ export type {
 } from "./collectors.js"
 import { replyInput } from "#sdk/internal/message"
 import type { EventSource } from "#sdk/internal/events"
+import { waitForEvent } from "#sdk/internal/events"
 import {
     MessageError,
     MessageOperationError,
@@ -770,9 +843,20 @@ import type {
     DefaultMessageOperationOptions,
     DefaultSendOptions,
 } from "./messages.js"
-import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
+import type {
+    EventBufferOptions,
+    EventWaitOptions,
+    HandlerOptions,
+    HandlerErrorReport,
+    EventMap,
+    EventName,
+} from "./events.js"
+import type { EventWaitFailure } from "./message-errors.js"
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
+export { EventWaitError } from "./message-errors.js"
+export type { EventWaitFailure } from "./message-errors.js"
+export type { EventWaitOptions } from "./events.js"
 export type { ApiErrorDetail, ApiValidationErrorDetail } from "./api-errors.js"
 export type { InputValidationConstraint, InputValidationDetail } from "./input-validation.js"
 import { InputValidationFailure, inputValidationFailure } from "./input-validation.js"
@@ -2957,6 +3041,33 @@ export interface Client extends ClientState {
      */
     events<K extends EventName>(event: K, options?: EventBufferOptions): Result<EventSubscription<K>, RegistrationError>
     /**
+     * Start observing one event type immediately and return the first future payload accepted by a synchronous filter.
+     * No connection, history lookup, cache read or remote request is initiated
+     *
+     * Pending intake uses the same count/byte budgets as events. Reconnection can miss events and does not reset the deadline.
+     * The default deadline is 30,000 ms from registration. Timeout or an invalid/throwing filter returns EventWaitError without raw input or exception text.
+     * Inspect application-owned filter exceptions inside the filter before rethrowing, as with on callbacks
+     *
+     * Overflow, invalid configuration and client closure remain distinct failures. Abort returns CancelledError after subscription cleanup.
+     * Completion releases queued payloads, the filter, timer and subscription. Unexpected SDK or cleanup defects reject with SdkDefect
+     *
+     * This returns an event result, not a registration handle. Use events or a collector when registration must be confirmed before triggering an action
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export function eventWaitExample(client: Client, channelId: string, userId: string) {
+     *     return client.waitFor("typingStart", {
+     *         filter: event => event.channelId === channelId && event.userId === userId,
+     *         timeoutMs: 10_000,
+     *     })
+     * }
+     * ```
+     */
+    waitFor<K extends EventName>(
+        event: K,
+        options?: DefaultEventWaitOptions<K>,
+    ): ResultAsync<EventMap[K], EventWaitFailure | CancelledError>
+    /**
      * Read an immutable point-in-time local occupancy snapshot without network work, telemetry, persistence, tokens, remote routes, resource IDs or payloads.
      * Counts cover this client's owned shards and admitted local work only. Accounted bytes are cache/queue budgets, not heap, process memory or remote storage.
      * Configured cache bounds remain visible after closure, while retained counts report actual owner release progress. This does not establish remote completeness or readiness.
@@ -3081,12 +3192,16 @@ export interface Instance {
 /** Default selected-instance resolution settings. Abort cancels only this caller's wait */
 export interface DefaultInstanceResolveOptions extends InstanceResolveOptions, OperationOptions {}
 
+/** One eager default event wait. The optional signal cancels only this wait and never shuts down its client */
+export interface DefaultEventWaitOptions<K extends EventName> extends EventWaitOptions<K>, OperationOptions {}
+
 const executeOperation = <
     A,
     E extends
         | ConnectError
         | InstanceResolveError
         | EventReadError
+        | EventWaitFailure
         | MessageError
         | MessageOperationError
         | MessageCleanupError
@@ -3231,6 +3346,7 @@ function fromExit<
         | ConnectError
         | ConfigurationError
         | EventReadError
+        | EventWaitFailure
         | MessageError
         | MessageOperationError
         | MessageCleanupError
@@ -3558,6 +3674,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
             | ConnectError
             | InstanceResolveError
             | EventReadError
+            | EventWaitFailure
             | MessageError
             | MessageOperationError
             | MessageCleanupError
@@ -4726,6 +4843,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     ),
                     "events",
                 ),
+            waitFor: <K extends EventName>(event: K, options?: DefaultEventWaitOptions<K>) =>
+                execute(waitForEvent(owner.events, event, options, true), "waitFor", options),
             diagnostics: () => owner.diagnostics(),
             get state() {
                 return owner.state

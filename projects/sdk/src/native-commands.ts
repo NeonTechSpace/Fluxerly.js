@@ -10,6 +10,9 @@ import type {
     PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "#sdk/commands"
+import type { CommandArgumentSchema, CommandArgumentValues } from "#sdk/command-arguments"
+import type { CommandHelpOptions } from "#sdk/command-help"
+import { commandHelp } from "#sdk/internal/command-help"
 import { parseQuotedPrefixCommand } from "#sdk/commands"
 import { ConfigurationError } from "#sdk/errors"
 import {
@@ -23,6 +26,7 @@ import {
     validateCommandCooldown,
     validateCommandShape,
 } from "#sdk/internal/commands"
+import { convertCommandArguments, snapshotCommandArguments } from "#sdk/internal/command-arguments"
 import type { RegistrationError } from "#sdk/message-errors"
 import type { Message } from "#sdk/messages"
 import { Effect, type Scope } from "effect"
@@ -42,6 +46,14 @@ export interface NativePrefixCommandContext {
     readonly args: readonly string[]
     /** Parser-defined argument remainder */
     readonly rawArgs: string
+}
+
+/** Context passed to execute and cooldown key callbacks after successful local argument conversion */
+export interface NativePrefixCommandExecutionContext<
+    S extends CommandArgumentSchema = {},
+> extends NativePrefixCommandContext {
+    /** Frozen values converted from this command's own schema. Guards receive raw context before conversion and rejection callbacks never receive partially converted values */
+    readonly values: CommandArgumentValues<S>
 }
 
 /** Context retained only while one native unmatched-command callback Effect runs in the caller’s scope */
@@ -70,28 +82,34 @@ export interface NativeCooldownStore<E = never, R = never> {
 }
 
 /** Optional native command cooldown. A successful claim is retained even when a later handler failure occurs */
-export interface NativePrefixCommandCooldown<E = never, R = never> {
+export interface NativePrefixCommandCooldown<E = never, R = never, S extends CommandArgumentSchema = {}> {
     /** Caller-owned store. The built-in memory store is bounded and process-local only */
     readonly store: NativeCooldownStore<E, R>
     /** Positive duration in milliseconds, capped at 2,147,483,647 */
     readonly durationMs: number
     /** Per-command key suffix. Defaults to the invoking author ID. The router namespaces it by canonical command name */
-    readonly key?: (context: NativePrefixCommandContext) => string
+    readonly key?: (context: NativePrefixCommandExecutionContext<S>) => string
 }
 
 /** One native prefix command. The router snapshots metadata and retains only its guard, onReject, execute, cooldown key and store references. Its guard and handler execute through the attached client subscription in the caller’s context */
-export interface NativePrefixCommand<E = never, R = never> extends PrefixCommandDefinition {
+export interface NativePrefixCommand<
+    E = never,
+    R = never,
+    S extends CommandArgumentSchema = {},
+> extends PrefixCommandDefinition {
+    /** Optional registration-ordered local conversion schema */
+    readonly arguments?: S
     /** Optional authorization or policy Effect. False skips cooldown and execution without an automatic response, while onReject can provide application-owned feedback */
     readonly guard?: (context: NativePrefixCommandContext) => Effect.Effect<boolean, E, R>
-    /** Optional feedback Effect after a false guard or rejected cooldown. It runs in the attached subscription context and any failure uses that subscription’s safe error reporting without retry */
+    /** Optional feedback Effect after a false guard, argument conversion rejection or rejected cooldown. It receives raw context without partial values and failures use the attached subscription’s safe error reporting without retry */
     readonly onReject?: (
         context: NativePrefixCommandContext,
         rejection: PrefixCommandRejection,
     ) => Effect.Effect<unknown, E, R>
-    /** Optional admission limit acquired after a successful guard and before execution */
-    readonly cooldown?: NativePrefixCommandCooldown<E, R>
+    /** Optional admission limit acquired after a successful guard and argument conversion, before execution */
+    readonly cooldown?: NativePrefixCommandCooldown<E, R, S>
     /** Application Effect for a matched, allowed command. Failure is reported by the attached subscription without retry */
-    readonly execute: (context: NativePrefixCommandContext) => Effect.Effect<unknown, E, R>
+    readonly execute: (context: NativePrefixCommandExecutionContext<S>) => Effect.Effect<unknown, E, R>
 }
 
 /** Bounded process-local cooldown storage for the native entry point */
@@ -110,11 +128,24 @@ export interface MemoryCooldownStore {
 
 /** Registered native commands. Register returns a new immutable router snapshot with the widened environment */
 export interface NativePrefixCommandRouter<R = never> {
-    /** Frozen registration-order help metadata. Entries contain only copied name, aliases, description and usage values */
+    /** Frozen registration-order metadata containing identity, help text and safe argument signatures, without resource candidates or callbacks */
     readonly commands: readonly PrefixCommandMetadata[]
+    /**
+     * Lazily generate frozen text pages from this router snapshot, without attaching, sending or running guards, cooldowns or handlers.
+     * Uses the explicit display prefix and registration order, then aliases and description. Explicit usage overrides generated schema syntax, including an empty usage string.
+     * Schema syntax is `<required>`, `[optional]` and a trailing `...` inside the brackets for rest arguments. No schema means no inferred arguments
+     *
+     * Empty selection returns []. Page lengths use UTF-16 code units and never split a surrogate pair, but may split graphemes or Markdown.
+     * Page-edge whitespace is trimmed and empty pages are omitted for message delivery. Pages are not a lossless serialization of metadata.
+     * The caller owns page selection, sending and mention intent
+     *
+     * Malformed options, ill-formed text, an insufficient page ceiling or an invalid include callback fail with ConfigurationError without private input.
+     * Unexpected option getter defects remain in the Effect cause. This local synchronous operation needs no scope or client environment
+     */
+    help(options: CommandHelpOptions): Effect.Effect<readonly string[], ConfigurationError>
     /** Lazily validate and add one command to a separate router snapshot. Existing routers and attachments stay unchanged */
-    register<E, R2>(
-        command: NativePrefixCommand<E, R2>,
+    register<E, R2, const S extends CommandArgumentSchema = {}>(
+        command: NativePrefixCommand<E, R2, S>,
     ): Effect.Effect<NativePrefixCommandRouter<R | R2>, ConfigurationError>
     /**
      * Lazily register one existing bounded messageCreate subscription in the caller’s scope without connecting or creating a detached runtime.
@@ -160,8 +191,10 @@ interface StoredNativeCommand extends PrefixCommandDefinition {
         context: NativePrefixCommandContext,
         rejection: PrefixCommandRejection,
     ) => Effect.Effect<unknown, unknown, unknown>
-    readonly cooldown?: NativePrefixCommandCooldown<unknown, unknown>
-    readonly execute: (context: NativePrefixCommandContext) => Effect.Effect<unknown, unknown, unknown>
+    readonly cooldown?: NativePrefixCommandCooldown<unknown, unknown, CommandArgumentSchema>
+    readonly execute: (
+        context: NativePrefixCommandExecutionContext<CommandArgumentSchema>,
+    ) => Effect.Effect<unknown, unknown, unknown>
 }
 
 class NativePrefixCommandRouterOwner<R = never> implements NativePrefixCommandRouter<R> {
@@ -177,8 +210,12 @@ class NativePrefixCommandRouterOwner<R = never> implements NativePrefixCommandRo
         return this.#registry.commands
     }
 
-    register<E, R2>(
-        command: NativePrefixCommand<E, R2>,
+    help(options: CommandHelpOptions): Effect.Effect<readonly string[], ConfigurationError> {
+        return configurationEffect(() => commandHelp(this.commands, options))
+    }
+
+    register<E, R2, const S extends CommandArgumentSchema = {}>(
+        command: NativePrefixCommand<E, R2, S>,
     ): Effect.Effect<NativePrefixCommandRouter<R | R2>, ConfigurationError> {
         return configurationEffect(() =>
             freezeRouter(
@@ -211,6 +248,12 @@ class NativePrefixCommandRouterOwner<R = never> implements NativePrefixCommandRo
                     name: match.definition.name,
                     args: Object.freeze([...match.parse.args]),
                     rawArgs: match.parse.rawArgs,
+                }),
+            convert: (definition, context) => convertCommandArguments(definition.arguments, context.args),
+            executionContext: (context, values) =>
+                Object.freeze({
+                    ...context,
+                    values: values as CommandArgumentValues<CommandArgumentSchema>,
                 }),
             unmatched: (match) =>
                 this.#onUnmatched === undefined
@@ -260,12 +303,15 @@ function snapshotNativeOnUnmatched<E, R>(
     return value as StoredNativeOnUnmatched | undefined
 }
 
-function snapshotNativeCommand<E, R>(command: NativePrefixCommand<E, R>): StoredNativeCommand {
+function snapshotNativeCommand<E, R, S extends CommandArgumentSchema>(
+    command: NativePrefixCommand<E, R, S>,
+): StoredNativeCommand {
     validateCommandShape(command, [
         "name",
         "aliases",
         "description",
         "usage",
+        "arguments",
         "guard",
         "onReject",
         "cooldown",
@@ -278,10 +324,13 @@ function snapshotNativeCommand<E, R>(command: NativePrefixCommand<E, R>): Stored
         throw new ConfigurationError("command", "onReject must be a function when supplied")
     validateCommandCooldown(command.cooldown)
     const identity = snapshotCommandIdentity(command)
+    const argumentsSchema = snapshotCommandArguments(command.arguments)
     const cooldown = command.cooldown
+    const { arguments: _argumentsMetadata, ...definition } = identity
     return Object.freeze({
-        ...identity,
+        ...definition,
         execute: command.execute as StoredNativeCommand["execute"],
+        ...(argumentsSchema === undefined ? {} : { arguments: argumentsSchema }),
         ...(command.guard === undefined ? {} : { guard: command.guard as StoredNativeCommand["guard"] }),
         ...(command.onReject === undefined ? {} : { onReject: command.onReject as StoredNativeCommand["onReject"] }),
         ...(cooldown === undefined
@@ -290,7 +339,9 @@ function snapshotNativeCommand<E, R>(command: NativePrefixCommand<E, R>): Stored
                   cooldown: Object.freeze({
                       store: cooldown.store as NativeCooldownStore<unknown, unknown>,
                       durationMs: cooldown.durationMs,
-                      ...(cooldown.key === undefined ? {} : { key: cooldown.key }),
+                      ...(cooldown.key === undefined
+                          ? {}
+                          : { key: cooldown.key as NonNullable<StoredNativeCommand["cooldown"]>["key"] }),
                   }),
               }),
     }) as StoredNativeCommand
@@ -298,7 +349,7 @@ function snapshotNativeCommand<E, R>(command: NativePrefixCommand<E, R>): Stored
 
 function nativeCooldown(
     definition: StoredNativeCommand,
-    context: NativePrefixCommandContext,
+    context: NativePrefixCommandExecutionContext<CommandArgumentSchema>,
 ): Effect.Effect<CommandCooldownClaim, unknown, unknown> {
     const cooldown = definition.cooldown
     if (cooldown === undefined) return Effect.succeed({ _tag: "CooldownAcquired", retryAtMs: Number.MAX_SAFE_INTEGER })

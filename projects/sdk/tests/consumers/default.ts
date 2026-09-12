@@ -65,6 +65,7 @@ import {
     type AttachmentStreamSource,
     type SupervisorOptions,
     type PrefixCommandMetadata,
+    type CommandHelpOptions,
     type DiscoverySearchPage,
     type DirectMessageLatestMessages,
     type WebhookClient,
@@ -76,6 +77,51 @@ import {
     type OAuthIntrospection,
 } from "@neontechspace/fluxerly"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+/** Packed schemas infer literal choices and reject unsafe converted-value access */
+export function typedCommandTypes() {
+    const created = commands.create({ prefix: "!" })
+    if (created.isErr()) return created
+    const helpOptions: CommandHelpOptions = {
+        prefix: "!",
+        maxLength: 100,
+        include: (metadata) => metadata.name !== "hidden",
+    }
+    const pages = created.value.help(helpOptions)
+    if (pages.isOk()) {
+        const typed: readonly string[] = pages.value
+        void typed
+    }
+    // @ts-expect-error A page ceiling must be explicit
+    created.value.help({ prefix: "!" })
+    // @ts-expect-error Help visibility is synchronous
+    created.value.help({ prefix: "!", maxLength: 100, include: async () => true })
+    return created.value.register({
+        name: "typed",
+        arguments: {
+            count: { type: "integer" },
+            mode: { type: "choice", choices: ["fast", "slow"] },
+            target: { type: "user", candidates: [{ id: "1", username: "sample", privateField: true }] },
+            note: { type: "text", optional: true },
+        },
+        execute: ({ values, args }) => {
+            const count: number = values.count
+            const mode: "fast" | "slow" = values.mode
+            const note: string | undefined = values.note
+            const raw: readonly string[] = args
+            const target: string = values.target.id
+            // @ts-expect-error Integer conversion yields a number
+            const wrong: string = values.count
+            // @ts-expect-error An omitted trailing argument may be undefined
+            const required: string = values.note
+            // @ts-expect-error Undeclared arguments are not exposed
+            values.missing
+            // @ts-expect-error Resource projections omit caller-private fields
+            values.target.privateField
+            void [count, mode, note, raw, target, wrong, required]
+        },
+    })
+}
 
 /** Packed declaration coverage for combined code-grant URLs, connections reads, and confidential introspection */
 export async function oauthCompletion(client: OAuthClient) {
@@ -221,6 +267,24 @@ export function optionalCommandTypes(client: Client) {
     const listing: readonly PrefixCommandMetadata[] = extended.value.commands
     const parsed = commands.parseQuoted({ message: null as never, prefix: "!", source: 'ping "two words"' })
     return { listing, parsed, attachment: extended.value.attach(client) }
+}
+
+/** Packed event waits infer their payload and keep cancellation in the default error union */
+export async function eventWaitTypes(client: Client) {
+    const result = await client.waitFor("typingStart", {
+        filter: (event) => event.channelId === "20" && event.userId === "30",
+        timeoutMs: 10,
+    })
+    if (result.isOk()) {
+        const event: import("@neontechspace/fluxerly").TypingStart = result.value
+        // @ts-expect-error Typing events are not message bodies
+        event.content
+        return event
+    }
+    const failure:
+        import("@neontechspace/fluxerly").EventWaitFailure | import("@neontechspace/fluxerly").CancelledError =
+        result.error
+    return failure
 }
 
 /** Packed default supervisor tools preserve the opt-in parent and child entry types */

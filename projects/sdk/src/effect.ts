@@ -709,6 +709,28 @@ export const oauth = Object.freeze({
 })
 export { builders, EmbedBuilder, MessageBuilder } from "./builders.js"
 export type {
+    CommandArgumentSchema,
+    CommandArgumentMetadata,
+    CommandArgumentType,
+    CommandArgumentDescriptor,
+    CommandArgumentUser,
+    CommandArgumentChannel,
+    CommandArgumentRole,
+    CommandArgumentText,
+    CommandArgumentInteger,
+    CommandArgumentNumber,
+    CommandArgumentBoolean,
+    CommandArgumentId,
+    CommandArgumentChoice,
+    CommandArgumentUserSelection,
+    CommandArgumentChannelSelection,
+    CommandArgumentRoleSelection,
+    CommandArgumentValues,
+    CommandArgumentValue,
+    CommandArgumentRejectionReason,
+} from "./command-arguments.js"
+export type { CommandHelpOptions } from "./command-help.js"
+export type {
     CommandCooldownClaim,
     CommandCooldownRequest,
     MemoryCooldownOptions,
@@ -726,6 +748,7 @@ export type {
     MemoryCooldownStore,
     NativePrefixCommand,
     NativePrefixCommandContext,
+    NativePrefixCommandExecutionContext,
     NativePrefixCommandCooldown,
     NativePrefixCommandUnmatchedContext,
     NativePrefixCommandsOptions,
@@ -780,6 +803,54 @@ import { makeNativeSupervisor } from "./native-supervisor.js"
  *     })
  *     return yield* registered.attach(client)
  * })
+ * ```
+ * Argument schemas are opt-in. Guards see raw input first, conversion failures call onReject without consuming a cooldown, and execute receives inferred frozen values alongside unchanged args
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { commands, type Client } from "@neontechspace/fluxerly/effect"
+ *
+ * export function typedCommandExample(client: Client) {
+ *     return Effect.gen(function* () {
+ *         const router = yield* commands.create({ prefix: "!", parse: commands.parseQuoted })
+ *         const registered = yield* router.register({
+ *             name: "repeat",
+ *             arguments: {
+ *                 count: { type: "integer" },
+ *                 mode: { type: "choice", choices: ["fast", "slow"] },
+ *                 note: { type: "text", optional: true, rest: true },
+ *             },
+ *             onReject: ({ client, message }, rejection) =>
+ *                 rejection._tag === "CommandArgumentRejected"
+ *                     ? client.messages.reply(message, {
+ *                         content: `Argument ${rejection.argument}: ${rejection.reason}`, allowedMentions: {},
+ *                     }).pipe(Effect.asVoid)
+ *                     : Effect.void,
+ *             execute: ({ client, message, values }) => client.messages.reply(message, {
+ *                 content: `${values.count} / ${values.mode} / ${values.note ?? "No note"}`, allowedMentions: {},
+ *             }).pipe(Effect.asVoid),
+ *         })
+ *         return yield* registered.attach(client)
+ *     })
+ * }
+ * ```
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { type Client, type NativePrefixCommandRouter } from "@neontechspace/fluxerly/effect"
+ *
+ * export function commandHelpExample(client: Client, router: NativePrefixCommandRouter, channelId: string) {
+ *     return Effect.gen(function* () {
+ *         const pages = yield* router.help({ prefix: "!", maxLength: 1_000, include: (command) => command.name !== "admin" })
+ *         // Visibility is not authorization. Each command still needs its own policy
+ *         for (const content of pages) {
+ *             yield* client.messages.send(channelId, { content, allowedMentions: {} })
+ *         }
+ *         // Earlier pages remain sent if a later send fails or is interrupted. No retries occur
+ *     })
+ * }
  * ```
  */
 export const commands = nativeCommands
@@ -1199,6 +1270,7 @@ export interface CollectorOptions<E = never, R = never> extends SharedCollectorO
 }
 import { replyInput } from "#sdk/internal/message"
 import type { EventSource } from "#sdk/internal/events"
+import { waitForEvent } from "#sdk/internal/events"
 import {
     MessageError,
     type MessageOperationFailure,
@@ -1225,9 +1297,20 @@ import type {
     ReplyInput,
     SendOptions,
 } from "./messages.js"
-import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "./events.js"
+import type {
+    EventBufferOptions,
+    EventWaitOptions,
+    HandlerOptions,
+    HandlerErrorReport,
+    EventMap,
+    EventName,
+} from "./events.js"
+import type { EventWaitFailure } from "./message-errors.js"
 
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
+export { EventWaitError } from "./message-errors.js"
+export type { EventWaitFailure } from "./message-errors.js"
+export type { EventWaitOptions } from "./events.js"
 export type { ApiErrorDetail, ApiValidationErrorDetail } from "./api-errors.js"
 export type { InputValidationConstraint, InputValidationDetail } from "./input-validation.js"
 import { inputValidationFailure } from "./input-validation.js"
@@ -3221,6 +3304,29 @@ export interface Client extends ClientState {
         options?: EventBufferOptions,
     ): Stream.Stream<EventMap[K], RegistrationError | EventOverflowError>
     /**
+     * Lazily observe one event type and return the first future payload accepted by a synchronous filter.
+     * Each execution owns a separate bounded subscription in its executing fiber, with no detached runtime, connection or remote request.
+     * No history or cache lookup occurs. Recovery can miss events, and reconnecting does not restart the deadline
+     *
+     * The default deadline is 30,000 ms from registration. Timeout or an invalid/throwing filter fails with EventWaitError without raw input or exception text.
+     * Inspect application-owned filter exceptions locally before rethrowing. Overflow, invalid configuration and client closure remain distinct failures
+     *
+     * Interruption releases the subscription, timer, queued payloads and filter without shutting down the client. SDK/cleanup defects remain in Cause
+     *
+     * Creating or forking this Effect is not a registration barrier. Use a scoped on subscription or collector when registration must finish before an action
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export function eventWaitExample(client: Client, channelId: string, userId: string) {
+     *     return client.waitFor("typingStart", {
+     *         filter: event => event.channelId === channelId && event.userId === userId,
+     *         timeoutMs: 10_000,
+     *     })
+     * }
+     * ```
+     */
+    waitFor<K extends EventName>(event: K, options?: EventWaitOptions<K>): Effect.Effect<EventMap[K], EventWaitFailure>
+    /**
      * Read an immutable point-in-time local occupancy snapshot without network work, telemetry, persistence, tokens, remote routes, resource IDs or payloads.
      * Counts cover this client's owned shards and admitted local work only. Accounted bytes are cache/queue budgets, not heap, process memory or remote storage.
      * Configured cache bounds remain visible after closure, while retained counts report actual owner release progress. This does not establish remote completeness or readiness.
@@ -4018,6 +4124,8 @@ export function createClient<E = never, R = never>(
                 }),
             events: <K extends EventName>(event: K, options?: EventBufferOptions) =>
                 owner.events.stream(event, options),
+            waitFor: <K extends EventName>(event: K, options?: EventWaitOptions<K>) =>
+                waitForEvent(owner.events, event, options),
             diagnostics: () => owner.diagnostics(),
             get state() {
                 return owner.state

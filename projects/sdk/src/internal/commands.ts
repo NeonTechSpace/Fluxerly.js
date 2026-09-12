@@ -10,6 +10,11 @@ import type {
     PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "#sdk/commands"
+import {
+    commandArgumentMetadata,
+    type CommandArgumentConversion,
+    snapshotCommandArguments,
+} from "#sdk/internal/command-arguments"
 import { ConfigurationError } from "#sdk/errors"
 import type { Message } from "#sdk/messages"
 import { Effect } from "effect"
@@ -167,11 +172,14 @@ export function validateCommandCooldown(value: unknown): void {
 export function snapshotCommandIdentity(value: PrefixCommandDefinition): PrefixCommandMetadata {
     validateDefinition(value)
     const aliases = value.aliases === undefined ? undefined : copyCommandNames(value.aliases, "aliases")
+    const argumentsSchema = snapshotCommandArguments(value.arguments)
+    const argumentsMetadata = commandArgumentMetadata(argumentsSchema)
     return Object.freeze({
         name: value.name,
         ...(aliases === undefined ? {} : { aliases }),
         ...(value.description === undefined ? {} : { description: value.description }),
         ...(value.usage === undefined ? {} : { usage: value.usage }),
+        ...(argumentsMetadata === undefined ? {} : { arguments: argumentsMetadata }),
     })
 }
 
@@ -215,24 +223,27 @@ export function configurationEffect<A>(thunk: () => A): Effect.Effect<A, Configu
 }
 
 /** Adapter callbacks for one shared Effect dispatcher */
-export interface CommandDispatchAdapter<D extends PrefixCommandDefinition, C, E = never, R = never> {
+export interface CommandDispatchAdapter<D extends PrefixCommandDefinition, C, X = C, E = never, R = never> {
     readonly context: (match: PrefixCommandMatch<D>) => C
     readonly guard: (definition: D, context: C) => Effect.Effect<unknown, E, R>
-    readonly cooldown?: (definition: D, context: C) => Effect.Effect<CommandCooldownClaim, E, R>
+    /** Local synchronous conversion after a successful guard and before a cooldown claim */
+    readonly convert?: (definition: D, context: C) => CommandArgumentConversion
+    readonly executionContext?: (context: C, values: Readonly<Record<string, unknown>>) => X
+    readonly cooldown?: (definition: D, context: X) => Effect.Effect<CommandCooldownClaim, E, R>
     /** Optional contextual rejection feedback. It runs through the existing subscription error boundary and never sends a response itself */
     readonly reject?: (definition: D, context: C, rejection: PrefixCommandRejection) => Effect.Effect<unknown, E, R>
     /** Optional application-owned feedback for a parser decline or unregistered parsed name */
     readonly unmatched?: (match: PrefixCommandUnmatchedMatch) => Effect.Effect<unknown, E, R>
-    readonly execute: (definition: D, context: C) => Effect.Effect<unknown, E, R>
+    readonly execute: (definition: D, context: X) => Effect.Effect<unknown, E, R>
     /** Return false after default cancellation so a later callback never starts */
     readonly active?: () => boolean
 }
 
 /** Dispatch one resolved command through the caller's Effect runtime without a queue, send or retry */
-export function dispatchCommand<D extends PrefixCommandDefinition, C, E, R>(
+export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R>(
     registry: PrefixCommandRegistry<D>,
     message: Message,
-    adapter: CommandDispatchAdapter<D, C, E, R>,
+    adapter: CommandDispatchAdapter<D, C, X, E, R>,
 ): Effect.Effect<void, ConfigurationError | E, R> {
     const active = (): Effect.Effect<void> =>
         adapter.active === undefined
@@ -259,9 +270,28 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, E, R>(
                 yield* adapter.reject(matched.definition, context, Object.freeze({ _tag: "CommandGuardRejected" }))
             return
         }
+        const conversion = adapter.convert === undefined ? undefined : adapter.convert(matched.definition, context)
+        if (conversion !== undefined && conversion._tag === "Rejected") {
+            yield* active()
+            if (adapter.reject !== undefined)
+                yield* adapter.reject(
+                    matched.definition,
+                    context,
+                    Object.freeze({
+                        _tag: "CommandArgumentRejected",
+                        argument: conversion.argument,
+                        reason: conversion.reason,
+                    }),
+                )
+            return
+        }
+        const executionContext =
+            conversion === undefined || adapter.executionContext === undefined
+                ? (context as unknown as X)
+                : adapter.executionContext(context, conversion.values)
         if (adapter.cooldown !== undefined) {
             yield* active()
-            const claim = yield* adapter.cooldown(matched.definition, context)
+            const claim = yield* adapter.cooldown(matched.definition, executionContext)
             yield* configurationEffect(() => validateCooldownClaim(claim))
             if (claim._tag !== "CooldownAcquired") {
                 yield* active()
@@ -277,7 +307,7 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, E, R>(
             }
         }
         yield* active()
-        yield* adapter.execute(matched.definition, context)
+        yield* adapter.execute(matched.definition, executionContext)
     }) as Effect.Effect<void, ConfigurationError | E, R>
 }
 
@@ -320,16 +350,19 @@ function validateDefinition(value: PrefixCommandDefinition): void {
         throw new ConfigurationError("command", "Command description must be a string when supplied")
     if (value.usage !== undefined && typeof value.usage !== "string")
         throw new ConfigurationError("command", "Command usage must be a string when supplied")
+    snapshotCommandArguments(value.arguments)
 }
 
 function copyDefinition<D extends PrefixCommandDefinition>(value: D): D {
     const aliases = value.aliases === undefined ? undefined : copyCommandNames(value.aliases, "aliases")
+    const argumentsSchema = snapshotCommandArguments(value.arguments)
     return Object.freeze({
         ...value,
         name: value.name,
         ...(aliases === undefined ? {} : { aliases }),
         ...(value.description === undefined ? {} : { description: value.description }),
         ...(value.usage === undefined ? {} : { usage: value.usage }),
+        ...(argumentsSchema === undefined ? {} : { arguments: argumentsSchema }),
     }) as D
 }
 

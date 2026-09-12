@@ -270,7 +270,7 @@ export interface EventMap extends GuildLifecycleEvents {
     readonly messageReactionRemoveEmoji: MessageReactionEmojiRemoval
 }
 
-/** Names accepted by on/events in both API styles */
+/** Names accepted by on, events and waitFor in both API styles */
 export type EventName = keyof EventMap
 
 /** Pending queue budgets for one live event subscription, message collector or reaction collector, not process memory limits */
@@ -279,6 +279,14 @@ export interface EventBufferOptions {
     readonly maxPendingMessages?: number
     /** Maximum queued source-JSON bytes, including the full bulk payload. Positive safe integer, default 4,194,304 */
     readonly maxPendingBytes?: number
+}
+
+/** Settings for one future event observation. Waiting creates no event history, cache read or gateway connection. Queue budgets apply only to values queued before this wait can take them */
+export interface EventWaitOptions<K extends EventName> extends EventBufferOptions {
+    /** Synchronously accept a projected event, potentially during gateway intake. Keep it short because cancellation and the deadline cannot preempt it. Throws, non-boolean results and thenables fail this wait without exposing the original value */
+    readonly filter?: (event: EventMap[K]) => boolean
+    /** Total listening lifetime in milliseconds from registration. Integer 1 through 2,147,483,647, default 30,000 */
+    readonly timeoutMs?: number
 }
 
 /** Callback scheduling shared by default and native consumption */

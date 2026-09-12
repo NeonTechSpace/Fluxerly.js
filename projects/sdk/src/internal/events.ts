@@ -1,19 +1,75 @@
-import { Cause, Deferred, Effect, Exit, Scope, Stream } from "effect"
-import type { EventBufferOptions, HandlerOptions, HandlerErrorReport, EventMap, EventName } from "#sdk/events"
+import { Cause, Clock, Deferred, Effect, Exit, Scope, Stream } from "effect"
+import type {
+    EventBufferOptions,
+    EventWaitOptions,
+    HandlerOptions,
+    HandlerErrorReport,
+    EventMap,
+    EventName,
+} from "#sdk/events"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import {
     EventOverflowError,
     EventReadBusyError,
+    EventWaitError,
     type EventReadError,
     type RegistrationError,
 } from "#sdk/message-errors"
 import type { Message } from "#sdk/messages"
 import type { MessageReference } from "#sdk/messages"
 import type { MessageReaction, MessageReactionBatch } from "#sdk/reactions"
+import { withDeadline } from "./effect-failures.js"
 import { record } from "./message.js"
 
 type Resume<A> = (value: Effect.Effect<A | null, EventOverflowError>) => void
 type Limits = Required<HandlerOptions>
+type EventWaitSettings<K extends EventName> = {
+    readonly buffer: EventBufferOptions
+    readonly filter: ((event: EventMap[K]) => boolean) | undefined
+    readonly timeoutMs: number
+}
+
+const maximumTimerMs = 2_147_483_647
+
+function eventWaitSettings<K extends EventName>(
+    options: EventWaitOptions<K> | undefined,
+    allowSignal: boolean,
+): EventWaitSettings<K> | ConfigurationError {
+    const input = options === undefined ? {} : options
+    if (!record(input)) return new ConfigurationError("eventOptions", "Event wait options must be an object")
+    if (
+        Object.keys(input).some(
+            (key) =>
+                key !== "filter" &&
+                key !== "timeoutMs" &&
+                key !== "maxPendingMessages" &&
+                key !== "maxPendingBytes" &&
+                !(allowSignal && key === "signal"),
+        )
+    )
+        return new ConfigurationError("eventOptions", "Unsupported event wait option")
+    const timeoutMs = input.timeoutMs === undefined ? 30_000 : input.timeoutMs
+    if (
+        typeof timeoutMs !== "number" ||
+        !Number.isSafeInteger(timeoutMs) ||
+        timeoutMs <= 0 ||
+        timeoutMs > maximumTimerMs
+    )
+        return new ConfigurationError(
+            "timeoutMs",
+            "Event wait timeout must be a positive safe integer within the timer range",
+        )
+    if (input.filter !== undefined && typeof input.filter !== "function")
+        return new ConfigurationError("filter", "Event wait filter must be a function")
+    return {
+        buffer: {
+            ...(input.maxPendingMessages === undefined ? {} : { maxPendingMessages: input.maxPendingMessages }),
+            ...(input.maxPendingBytes === undefined ? {} : { maxPendingBytes: input.maxPendingBytes }),
+        } as EventBufferOptions,
+        filter: input.filter as ((event: EventMap[K]) => boolean) | undefined,
+        timeoutMs,
+    }
+}
 
 function limits(event: unknown, options: unknown): Limits | ConfigurationError {
     if (
@@ -79,7 +135,7 @@ function limits(event: unknown, options: unknown): Limits | ConfigurationError {
     return defaults
 }
 
-/** One bounded subscription; gateway callbacks only offer values and never wait for a consumer */
+/** One bounded subscription. Gateway callbacks never await asynchronous consumer work, though a waiting synchronous filter can continue immediately after admission */
 export class EventSource<A = Message> {
     readonly closed = Deferred.makeUnsafe<void, EventOverflowError>()
     readonly limits: Limits
@@ -194,6 +250,88 @@ export class EventSource<A = Message> {
                         this.#reading = false
                     }),
                 ),
+            )
+        })
+    }
+}
+
+/** One internal single-consumption event wait */
+interface EventWaitSource<K extends EventName> {
+    stop(): void
+    wait(): Effect.Effect<EventMap[K], EventWaitError | EventOverflowError | ClientClosedError>
+}
+
+class EventWait<K extends EventName> implements EventWaitSource<K> {
+    #stopped = false
+    #filter: ((event: EventMap[K]) => boolean) | undefined
+
+    constructor(
+        private readonly source: EventSource<EventMap[K]>,
+        filter: ((event: EventMap[K]) => boolean) | undefined,
+        private readonly deadline: number,
+        private readonly clock: Clock.Clock,
+    ) {
+        this.#filter = filter
+    }
+
+    stop() {
+        if (this.#stopped) return
+        this.#stopped = true
+        this.#filter = undefined
+        this.source.stop()
+    }
+
+    #now() {
+        return Number(this.clock.monotonicTimeNanosUnsafe()) / 1_000_000
+    }
+
+    #expired() {
+        return this.#now() >= this.deadline
+    }
+
+    #accept(event: EventMap[K]): boolean | EventWaitError {
+        if (!this.#filter) return true
+        let accepted: unknown
+        try {
+            accepted = this.#filter(event)
+        } catch {
+            return new EventWaitError("filter")
+        }
+        try {
+            if (
+                accepted !== null &&
+                (typeof accepted === "object" || typeof accepted === "function") &&
+                typeof (accepted as { readonly then?: unknown }).then === "function"
+            )
+                void Promise.resolve(accepted).catch(() => undefined)
+        } catch {
+            return new EventWaitError("filter")
+        }
+        return typeof accepted === "boolean" ? accepted : new EventWaitError("filter")
+    }
+
+    wait(): Effect.Effect<EventMap[K], EventWaitError | EventOverflowError | ClientClosedError> {
+        return Effect.suspend(() => {
+            const remaining = this.deadline - this.#now()
+            if (remaining <= 0) {
+                this.stop()
+                return Effect.fail(new EventWaitError("timeout"))
+            }
+            const waiter = this
+            const wait = Effect.gen(function* () {
+                while (true) {
+                    const event = yield* waiter.source.take()
+                    if (event === null) return yield* Effect.fail(new ClientClosedError())
+                    if (waiter.#expired()) return yield* Effect.fail(new EventWaitError("timeout"))
+                    const accepted = waiter.#accept(event)
+                    if (accepted instanceof EventWaitError) return yield* Effect.fail(accepted)
+                    if (waiter.#expired()) return yield* Effect.fail(new EventWaitError("timeout"))
+                    if (accepted) return event
+                }
+            })
+            return wait.pipe(
+                withDeadline(Math.max(1, Math.ceil(remaining)), () => new EventWaitError("timeout")),
+                Effect.ensuring(Effect.sync(() => this.stop())),
             )
         })
     }
@@ -448,4 +586,35 @@ export class EventBus {
             }),
         )
     }
+}
+
+function openEventWait<K extends EventName>(
+    bus: EventBus,
+    event: K,
+    options?: EventWaitOptions<K>,
+    allowSignal = false,
+): Effect.Effect<EventWaitSource<K>, RegistrationError> {
+    return Clock.clockWith((clock) =>
+        Effect.gen(function* () {
+            const settings = eventWaitSettings(options, allowSignal)
+            if (settings instanceof ConfigurationError) return yield* Effect.fail(settings)
+            const source = yield* bus.open(event, settings.buffer)
+            const now = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000
+            return new EventWait(source, settings.filter, now + settings.timeoutMs, clock)
+        }),
+    )
+}
+
+/** One lazy wait. Its internal scope releases intake on completion, timeout, interruption or client shutdown */
+export function waitForEvent<K extends EventName>(
+    bus: EventBus,
+    event: K,
+    options?: EventWaitOptions<K>,
+    allowSignal = false,
+): Effect.Effect<EventMap[K], RegistrationError | EventWaitError | EventOverflowError> {
+    return Effect.scoped(
+        Effect.acquireRelease(openEventWait(bus, event, options, allowSignal), (source) =>
+            Effect.sync(() => source.stop()),
+        ).pipe(Effect.flatMap((source) => source.wait())),
+    )
 }

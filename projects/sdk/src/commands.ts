@@ -1,4 +1,9 @@
 import type { Message } from "./messages.js"
+import type {
+    CommandArgumentMetadata,
+    CommandArgumentRejectionReason,
+    CommandArgumentSchema,
+} from "./command-arguments.js"
 
 /** Static command identity used to register one prefix-command handler */
 export interface PrefixCommandDefinition {
@@ -6,14 +11,19 @@ export interface PrefixCommandDefinition {
     readonly name: string
     /** Additional names for the same command. Aliases share the command’s case-sensitivity setting and cannot collide with another command */
     readonly aliases?: readonly string[]
-    /** Optional concise text for application-defined help. The router copies it without interpreting or displaying it */
+    /** Optional concise text for help generation. The router copies it without interpreting markup or sending it */
     readonly description?: string
-    /** Optional invocation syntax for application-defined help. The router copies it without parsing or displaying it */
+    /** Optional invocation syntax after the command name in generated help. Overrides the schema-derived signature, including when explicitly empty */
     readonly usage?: string
+    /** Optional registration-ordered local argument schema. It converts parsed positional arguments only after a guard allows this command */
+    readonly arguments?: CommandArgumentSchema
 }
 
 /** Immutable command identity and help text exposed by a router without handlers, guards, cooldown stores or parser state */
-export interface PrefixCommandMetadata extends PrefixCommandDefinition {}
+export interface PrefixCommandMetadata extends Omit<PrefixCommandDefinition, "arguments"> {
+    /** Frozen safe argument signature metadata. Resource candidates are intentionally omitted */
+    readonly arguments?: readonly CommandArgumentMetadata[]
+}
 
 /** Why a matched command did not reach its handler. Rejection callbacks receive a frozen value and never trigger an automatic response */
 export type PrefixCommandRejection =
@@ -27,6 +37,16 @@ export type PrefixCommandRejection =
           readonly _tag: "CommandCooldownCapacity"
           /** Earliest known Unix epoch milliseconds that may release capacity, or null when the store cannot provide one */
           readonly retryAtMs: number | null
+      }
+    | {
+          /** Parsed arguments did not satisfy this command's local schema. Raw tokens and converter defects are never exposed */
+          readonly _tag: "CommandArgumentRejected"
+          /** Schema entry that rejected, or arguments when parsed arguments remained after conversion */
+          readonly argument: string
+          /** Safe conversion classification without rejected private input */
+          readonly reason: CommandArgumentRejectionReason
+          /** Always absent for argument conversion rejection, retained only so existing cooldown-rejection handling can read one common optional field */
+          readonly retryAtMs?: never
       }
 
 /** A prefix matched but no command handler will run. Unmatched callbacks receive a frozen value and never trigger an automatic response */

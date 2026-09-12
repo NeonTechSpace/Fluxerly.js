@@ -54,6 +54,7 @@ export class ConfigurationError extends Error {
             | "message"
             | "timeoutMs"
             | "commands"
+            | "help"
             | "prefix"
             | "parser"
             | "command"
@@ -110,6 +111,7 @@ export type Operation =
     | "connect"
     | "run"
     | "waitForClose"
+    | "waitFor"
     | "shutdown"
     | "on"
     | "events"
@@ -300,6 +302,7 @@ export type DefectReason =
               | ConnectError
               | ConfigurationError
               | import("./message-errors.js").EventReadError
+              | import("./message-errors.js").EventWaitError
               | import("./message-errors.js").MessageError
               | import("./message-errors.js").MessageOperationError
               | import("./message-cleanup.js").MessageCleanupError

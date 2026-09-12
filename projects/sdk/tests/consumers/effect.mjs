@@ -24,6 +24,10 @@ await Effect.runPromise(
         const router = yield* commands.create({ prefix: "!" })
         const registered = yield* router.register({ name: "ping", execute: () => Effect.void })
         assert.notEqual(registered, router)
+        assert.deepEqual(yield* registered.help({ prefix: "?", maxLength: 100 }), ["?ping"])
+        const invalidHelp = yield* Effect.result(registered.help({ prefix: "!", maxLength: 0 }))
+        assert.equal(invalidHelp._tag, "Failure")
+        assert.equal(invalidHelp.failure.field, "help")
         assert.ok(Object.isFrozen(registered))
     }),
 )

@@ -270,6 +270,7 @@ async function defaultWorkflow(remote) {
         await waitFor(() => remote.replies.length === 2 && eventsSeen.length === 2, "Default event workflow stalled")
         assert.deepEqual(eventsSeen, ["!ping", "!unknown"])
         await verifyReplies(remote, incoming, async (target) => (await client.messages.fetch(target))._unsafeUnwrap())
+        await successfulWait(client, remote, async (operation) => (await operation)._unsafeUnwrap())
         await advancedDefault(client, remote)
         ;(await client.shutdown())._unsafeUnwrap()
         ;(await running)._unsafeUnwrap()
@@ -278,6 +279,38 @@ async function defaultWorkflow(remote) {
         if (client.state !== "Closed") (await client.shutdown())._unsafeUnwrap()
         if (running) await running
     }
+}
+
+async function successfulWait(client, remote, run) {
+    let observedControl = false
+    const requests = remote.requests.length
+    const waiting = run(
+        client.waitFor("messageCreate", {
+            timeoutMs: 5_000,
+            filter: (event) => {
+                if (event.content === "wait-control") observedControl = true
+                return event.content === "wait-answer"
+            },
+        }),
+    )
+    // Observe rejection immediately, including when the registration check fails first
+    const outcome = waiting.then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+    )
+    const deadline = Date.now() + 4_000
+    while (!observedControl && Date.now() < deadline) {
+        remote.deliver("wait-control")
+        await sleep(10)
+    }
+    assert.ok(observedControl, "Wait filter must observe a control event before answer dispatch")
+    const sent = remote.deliver("wait-answer")
+    const result = await outcome
+    if ("error" in result) throw result.error
+    assert.equal(result.value.id, sent.id)
+    assert.equal(result.value.channelId, sent.channel_id)
+    assert.equal(result.value.content, sent.content)
+    assert.equal(remote.requests.length, requests)
 }
 
 async function advancedDefault(client, remote) {
@@ -339,6 +372,7 @@ async function effectWorkflow(remote) {
         await waitFor(() => remote.replies.length === 2 && eventsSeen.length === 2, "Effect event workflow stalled")
         assert.deepEqual(eventsSeen, ["!ping", "!unknown"])
         await verifyReplies(remote, incoming, (target) => Effect.runPromise(client.messages.fetch(target)))
+        await successfulWait(client, remote, (operation) => Effect.runPromise(operation))
         await advancedEffect(client, remote, { Cause, Effect, Exit, Fiber, Stream })
         await Effect.runPromise(client.shutdown())
         await Effect.runPromise(Fiber.join(running))

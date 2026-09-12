@@ -10,6 +10,9 @@ import type {
     PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "#sdk/commands"
+import type { CommandArgumentSchema, CommandArgumentValues } from "#sdk/command-arguments"
+import type { CommandHelpOptions } from "#sdk/command-help"
+import { commandHelp } from "#sdk/internal/command-help"
 import { parseQuotedPrefixCommand } from "#sdk/commands"
 import type { OperationOptions } from "#sdk/client"
 import { ConfigurationError, SdkDefect } from "#sdk/errors"
@@ -24,6 +27,7 @@ import {
     validateCommandCooldown,
     validateCommandShape,
 } from "#sdk/internal/commands"
+import { convertCommandArguments, snapshotCommandArguments } from "#sdk/internal/command-arguments"
 import type { RegistrationError } from "#sdk/message-errors"
 import type { Message } from "#sdk/messages"
 import { Effect } from "effect"
@@ -46,6 +50,14 @@ export interface DefaultPrefixCommandContext {
     readonly rawArgs: string
     /** Cooperative subscription signal. It cannot forcibly stop application promises */
     readonly signal: NonNullable<OperationOptions["signal"]>
+}
+
+/** Context passed to execute and cooldown key callbacks after successful local argument conversion */
+export interface DefaultPrefixCommandExecutionContext<
+    S extends CommandArgumentSchema = {},
+> extends DefaultPrefixCommandContext {
+    /** Frozen values converted from this command's own schema. Guards receive raw context before conversion and rejection callbacks never receive partially converted values */
+    readonly values: CommandArgumentValues<S>
 }
 
 /** Context retained only for one default unmatched-command callback invocation */
@@ -81,28 +93,30 @@ export interface DefaultCooldownStore {
 }
 
 /** Optional command cooldown. A successful claim is retained even when a later handler failure occurs */
-export interface DefaultPrefixCommandCooldown {
+export interface DefaultPrefixCommandCooldown<S extends CommandArgumentSchema = {}> {
     /** Caller-owned store. The built-in memory store is bounded and process-local only */
     readonly store: DefaultCooldownStore
     /** Positive duration in milliseconds, capped at 2,147,483,647 */
     readonly durationMs: number
     /** Per-command key suffix. Defaults to the invoking author ID. The router namespaces it by canonical command name */
-    readonly key?: (context: DefaultPrefixCommandContext) => string
+    readonly key?: (context: DefaultPrefixCommandExecutionContext<S>) => string
 }
 
 /** One default prefix command. The router snapshots metadata and retains only its guard, onReject, execute, cooldown key and store references. It neither interprets handler return values nor sends automatic responses */
-export interface DefaultPrefixCommand extends PrefixCommandDefinition {
+export interface DefaultPrefixCommand<S extends CommandArgumentSchema = {}> extends PrefixCommandDefinition {
+    /** Optional registration-ordered local conversion schema */
+    readonly arguments?: S
     /** Optional authorization or policy decision. False skips cooldown and execution without an automatic response, while onReject can provide application-owned feedback */
     readonly guard?: (context: DefaultPrefixCommandContext) => boolean | Promise<boolean>
-    /** Optional feedback after a false guard or rejected cooldown. It receives no automatic response helper and any failure uses the attached subscription’s safe error reporting without retry */
+    /** Optional feedback after a false guard, argument conversion rejection or rejected cooldown. It receives raw context without partial values and failures use the attached subscription’s safe error reporting without retry */
     readonly onReject?: (
         context: DefaultPrefixCommandContext,
         rejection: PrefixCommandRejection,
     ) => void | Promise<void>
-    /** Optional admission limit acquired after a successful guard and before execution */
-    readonly cooldown?: DefaultPrefixCommandCooldown
+    /** Optional admission limit acquired after a successful guard and argument conversion, before execution */
+    readonly cooldown?: DefaultPrefixCommandCooldown<S>
     /** Application work for a matched, allowed command. Rejection is reported by the attached subscription without retry */
-    readonly execute: (context: DefaultPrefixCommandContext) => void | Promise<void>
+    readonly execute: (context: DefaultPrefixCommandExecutionContext<S>) => void | Promise<void>
 }
 
 /** Bounded process-local cooldown storage for the default entry point */
@@ -121,10 +135,25 @@ export interface MemoryCooldownStore {
 
 /** Registered default commands. Register returns a new immutable router snapshot */
 export interface DefaultPrefixCommandRouter {
-    /** Frozen registration-order help metadata. Entries contain only copied name, aliases, description and usage values */
+    /** Frozen registration-order metadata containing identity, help text and safe argument signatures, without resource candidates or callbacks */
     readonly commands: readonly PrefixCommandMetadata[]
+    /**
+     * Generate frozen text pages from this router snapshot, without attaching, sending or running guards, cooldowns or handlers.
+     * Uses the explicit display prefix and registration order, then aliases and description. Explicit usage overrides generated schema syntax, including an empty usage string.
+     * Schema syntax is `<required>`, `[optional]` and a trailing `...` inside the brackets for rest arguments. No schema means no inferred arguments
+     *
+     * Empty selection returns []. Page lengths use UTF-16 code units and never split a surrogate pair, but may split graphemes or Markdown.
+     * Page-edge whitespace is trimmed and empty pages are omitted for message delivery. Pages are not a lossless serialization of metadata.
+     * The caller owns page selection, sending and mention intent
+     *
+     * Malformed options, ill-formed text, an insufficient page ceiling or an invalid include callback fail with ConfigurationError without private input.
+     * Unexpected option getter defects throw safe SdkDefect commands
+     */
+    help(options: CommandHelpOptions): Result<readonly string[], ConfigurationError>
     /** Validate and add one command to a separate router snapshot. Existing routers and attachments stay unchanged */
-    register(command: DefaultPrefixCommand): Result<DefaultPrefixCommandRouter, ConfigurationError>
+    register<const S extends CommandArgumentSchema = {}>(
+        command: DefaultPrefixCommand<S>,
+    ): Result<DefaultPrefixCommandRouter, ConfigurationError>
     /**
      * Register one existing bounded messageCreate subscription without connecting or starting a background queue.
      * Every attachment dispatches its router snapshot independently. Closing it releases the SDK subscription reference and signals callbacks, but cannot preempt a caller promise
@@ -164,8 +193,8 @@ interface StoredDefaultCommand extends PrefixCommandDefinition {
         context: DefaultPrefixCommandContext,
         rejection: PrefixCommandRejection,
     ) => void | Promise<void>
-    readonly cooldown?: DefaultPrefixCommandCooldown
-    readonly execute: (context: DefaultPrefixCommandContext) => void | Promise<void>
+    readonly cooldown?: DefaultPrefixCommandCooldown<CommandArgumentSchema>
+    readonly execute: (context: DefaultPrefixCommandExecutionContext<CommandArgumentSchema>) => void | Promise<void>
 }
 
 class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
@@ -184,7 +213,13 @@ class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
         return this.#registry.commands
     }
 
-    register(command: DefaultPrefixCommand): Result<DefaultPrefixCommandRouter, ConfigurationError> {
+    help(options: CommandHelpOptions): Result<readonly string[], ConfigurationError> {
+        return attempt(() => commandHelp(this.commands, options))
+    }
+
+    register<const S extends CommandArgumentSchema = {}>(
+        command: DefaultPrefixCommand<S>,
+    ): Result<DefaultPrefixCommandRouter, ConfigurationError> {
         return attempt(() =>
             freezeRouter(
                 new DefaultPrefixCommandRouterOwner(
@@ -210,6 +245,12 @@ class DefaultPrefixCommandRouterOwner implements DefaultPrefixCommandRouter {
                     args: Object.freeze([...match.parse.args]),
                     rawArgs: match.parse.rawArgs,
                     signal,
+                }),
+            convert: (definition, context) => convertCommandArguments(definition.arguments, context.args),
+            executionContext: (context, values) =>
+                Object.freeze({
+                    ...context,
+                    values: values as CommandArgumentValues<CommandArgumentSchema>,
                 }),
             unmatched: (match) =>
                 this.#onUnmatched === undefined
@@ -256,12 +297,15 @@ function snapshotDefaultOnUnmatched(
     return value
 }
 
-function snapshotDefaultCommand(command: DefaultPrefixCommand): StoredDefaultCommand {
+function snapshotDefaultCommand<S extends CommandArgumentSchema>(
+    command: DefaultPrefixCommand<S>,
+): StoredDefaultCommand {
     validateCommandShape(command, [
         "name",
         "aliases",
         "description",
         "usage",
+        "arguments",
         "guard",
         "onReject",
         "cooldown",
@@ -274,10 +318,13 @@ function snapshotDefaultCommand(command: DefaultPrefixCommand): StoredDefaultCom
         throw new ConfigurationError("command", "onReject must be a function when supplied")
     validateCommandCooldown(command.cooldown)
     const identity = snapshotCommandIdentity(command)
+    const argumentsSchema = snapshotCommandArguments(command.arguments)
     const cooldown = command.cooldown
+    const { arguments: _argumentsMetadata, ...definition } = identity
     return Object.freeze({
-        ...identity,
-        execute: command.execute,
+        ...definition,
+        execute: command.execute as StoredDefaultCommand["execute"],
+        ...(argumentsSchema === undefined ? {} : { arguments: argumentsSchema }),
         ...(command.guard === undefined ? {} : { guard: command.guard }),
         ...(command.onReject === undefined ? {} : { onReject: command.onReject }),
         ...(cooldown === undefined
@@ -286,15 +333,17 @@ function snapshotDefaultCommand(command: DefaultPrefixCommand): StoredDefaultCom
                   cooldown: Object.freeze({
                       store: cooldown.store,
                       durationMs: cooldown.durationMs,
-                      ...(cooldown.key === undefined ? {} : { key: cooldown.key }),
+                      ...(cooldown.key === undefined
+                          ? {}
+                          : { key: cooldown.key as NonNullable<StoredDefaultCommand["cooldown"]>["key"] }),
                   }),
               }),
-    })
+    }) as unknown as StoredDefaultCommand
 }
 
 function defaultCooldown(
     definition: StoredDefaultCommand,
-    context: DefaultPrefixCommandContext,
+    context: DefaultPrefixCommandExecutionContext<CommandArgumentSchema>,
 ): Effect.Effect<CommandCooldownClaim, ConfigurationError> {
     const cooldown = definition.cooldown
     if (cooldown === undefined) return Effect.succeed({ _tag: "CooldownAcquired", retryAtMs: Number.MAX_SAFE_INTEGER })

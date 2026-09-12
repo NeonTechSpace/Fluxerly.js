@@ -981,3 +981,340 @@ test("default configuration hides unexpected getter defects behind SdkDefect com
         expect((error as Error).message).not.toContain("private fixture defect")
     }
 })
+
+test("default typed arguments convert after one guard and before cooldown without changing raw arguments", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const received: unknown[] = []
+    const rejected: unknown[] = []
+    let guardCalls = 0
+    let cooldownCalls = 0
+    const cooldown = {
+        claim: () => {
+            cooldownCalls += 1
+            return { _tag: "CooldownAcquired" as const, retryAtMs: Date.now() + 1_000 }
+        },
+    }
+    let router = value(commands.create({ prefix: "!" }))
+    router = value(
+        router.register({
+            name: "typed",
+            arguments: {
+                word: { type: "text" },
+                count: { type: "integer" },
+                ratio: { type: "number" },
+                enabled: { type: "boolean" },
+                id: { type: "id" },
+                mode: { type: "choice", choices: ["fast", "safe"] },
+                note: { type: "text", optional: true },
+                tail: { type: "text", rest: true, optional: true },
+            } as const,
+            guard: ({ args }) => {
+                guardCalls += 1
+                return args[1] === "-2"
+            },
+            cooldown: { store: cooldown, durationMs: 1_000 },
+            onReject: (context, rejection) => {
+                rejected.push({ context, rejection })
+            },
+            execute: ({ args, rawArgs, values }) => {
+                const count: number = values.count
+                const mode: "fast" | "safe" = values.mode
+                received.push({ args, rawArgs, values: { ...values, count, mode }, frozen: Object.isFrozen(values) })
+            },
+        }),
+    )
+    value(router.attach(client))
+
+    remote.deliver("!typed hello -2 1.25 true 900719925474099312345 fast note this is the tail")
+    await vi.waitFor(() => expect(received).toHaveLength(1))
+    expect(received).toEqual([
+        {
+            args: ["hello", "-2", "1.25", "true", "900719925474099312345", "fast", "note", "this", "is", "the", "tail"],
+            rawArgs: "hello -2 1.25 true 900719925474099312345 fast note this is the tail",
+            values: {
+                word: "hello",
+                count: -2,
+                ratio: 1.25,
+                enabled: true,
+                id: "900719925474099312345",
+                mode: "fast",
+                note: "note",
+                tail: "this is the tail",
+            },
+            frozen: true,
+        },
+    ])
+    expect(guardCalls).toBe(1)
+    expect(cooldownCalls).toBe(1)
+    expect(rejected).toEqual([])
+})
+
+test("default typed argument rejection has safe details and never consumes a cooldown", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const rejects: unknown[] = []
+    let guards = 0
+    let cooldowns = 0
+    let executed = 0
+    let router = value(commands.create({ prefix: "!" }))
+    router = value(
+        router.register({
+            name: "amount",
+            arguments: { amount: { type: "integer" } } as const,
+            guard: () => {
+                guards += 1
+                return true
+            },
+            cooldown: {
+                store: {
+                    claim: () => {
+                        cooldowns += 1
+                        return { _tag: "CooldownAcquired" as const, retryAtMs: Date.now() + 1_000 }
+                    },
+                },
+                durationMs: 1_000,
+            },
+            onReject: (context, rejection) => {
+                rejects.push({ args: context.args, hasValues: "values" in context, rejection })
+            },
+            execute: () => {
+                executed += 1
+            },
+        }),
+    )
+    value(router.attach(client))
+
+    remote.deliver("!amount private-not-a-number")
+    await vi.waitFor(() => expect(rejects).toHaveLength(1))
+    expect(rejects).toEqual([
+        {
+            args: ["private-not-a-number"],
+            hasValues: false,
+            rejection: { _tag: "CommandArgumentRejected", argument: "amount", reason: "Invalid" },
+        },
+    ])
+    expect(guards).toBe(1)
+    expect(cooldowns).toBe(0)
+    expect(executed).toBe(0)
+})
+
+test("typed resource arguments use only explicit candidates, reject ambiguity and snapshot command metadata", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const candidates = [
+        { id: "1", username: "same" },
+        { id: "2", username: "same" },
+        { id: "3", username: "unique", privateLabel: "not retained" },
+    ]
+    const selected: string[] = []
+    const rejected: unknown[] = []
+    let router = value(commands.create({ prefix: "!" }))
+    router = value(
+        router.register({
+            name: "user",
+            arguments: { target: { type: "user", candidates } },
+            onReject: (_context, rejection) => {
+                rejected.push(rejection)
+            },
+            execute: ({ values }) => {
+                // @ts-expect-error Explicit candidates are projected to stable public fields
+                void values.target.privateLabel
+                selected.push(values.target.id)
+            },
+        }),
+    )
+    candidates[2]!.username = "changed"
+    value(router.attach(client))
+
+    remote.deliver("!user same")
+    remote.deliver("!user <@3>")
+    remote.deliver("!user 3")
+    remote.deliver("!user changed")
+    await vi.waitFor(() => expect(rejected).toHaveLength(2))
+    expect(selected).toEqual(["3", "3"])
+    expect(rejected).toEqual([
+        { _tag: "CommandArgumentRejected", argument: "target", reason: "Ambiguous" },
+        { _tag: "CommandArgumentRejected", argument: "target", reason: "Invalid" },
+    ])
+    expect(router.commands).toEqual([
+        {
+            name: "user",
+            arguments: [{ name: "target", type: "user", optional: false, rest: false }],
+        },
+    ])
+})
+
+test("typed channel and role arguments accept anchored mentions and reject unmatched names", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const selected: string[] = []
+    const rejected: unknown[] = []
+    let router = value(commands.create({ prefix: "!" }))
+    router = value(
+        router.register({
+            name: "move",
+            arguments: {
+                channel: { type: "channel", candidates: [{ id: "10", name: "general" }] },
+                role: { type: "role", candidates: [{ id: "20", name: "moderator" }] },
+            } as const,
+            onReject: (_context, rejection) => {
+                rejected.push(rejection)
+            },
+            execute: ({ values }) => {
+                selected.push(`${values.channel.id}:${values.role.id}`)
+            },
+        }),
+    )
+    value(router.attach(client))
+
+    remote.deliver("!move <#10> <@&20>")
+    remote.deliver("!move 10 20")
+    remote.deliver("!move missing moderator")
+    await vi.waitFor(() => expect(rejected).toHaveLength(1))
+    expect(selected).toEqual(["10:20", "10:20"])
+    expect(rejected).toEqual([{ _tag: "CommandArgumentRejected", argument: "channel", reason: "Invalid" }])
+})
+
+test("typed arguments distinguish an omitted optional token from a supplied empty token", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const values: unknown[] = []
+    const rejected: unknown[] = []
+    let router = value(
+        commands.create({
+            prefix: "!",
+            parse: ({ source }) => {
+                const command = source.trim()
+                return command === "empty"
+                    ? { name: command, args: [""], rawArgs: '""' }
+                    : command === "omitted"
+                      ? { name: "empty", args: [], rawArgs: "" }
+                      : { name: command, args: [], rawArgs: "" }
+            },
+        }),
+    )
+    router = value(
+        router.register({
+            name: "empty",
+            arguments: { value: { type: "text", optional: true } } as const,
+            onReject: (_context, rejection) => {
+                rejected.push(rejection)
+            },
+            execute: ({ values: converted }) => {
+                values.push(converted.value)
+            },
+        }),
+    )
+    value(router.attach(client))
+
+    remote.deliver("!empty")
+    remote.deliver("!omitted")
+    await vi.waitFor(() => expect(rejected).toHaveLength(1))
+    expect(values).toEqual([undefined])
+    expect(rejected).toEqual([{ _tag: "CommandArgumentRejected", argument: "value", reason: "Invalid" }])
+})
+
+test("default registration rejects hidden schema keys and empty or oversized choice lists", () => {
+    const router = value(commands.create({ prefix: "!" }))
+    const hidden = Object.defineProperty({ choice: { type: "text" as const } }, "hidden", {
+        enumerable: false,
+        value: { type: "text" },
+    })
+    const hiddenResult = router.register({ name: "hidden", arguments: hidden, execute: () => undefined })
+    const emptyResult = router.register({
+        name: "empty",
+        arguments: { choice: { type: "choice", choices: [] } },
+        execute: () => undefined,
+    })
+    const oversizedResult = router.register({
+        name: "oversized",
+        arguments: { choice: { type: "choice", choices: Array.from({ length: 101 }, (_, index) => `${index}`) } },
+        execute: () => undefined,
+    })
+    expect(hiddenResult.isErr() && hiddenResult.error.field).toBe("command")
+    expect(emptyResult.isErr() && emptyResult.error.field).toBe("command")
+    expect(oversizedResult.isErr() && oversizedResult.error.field).toBe("command")
+})
+
+test("native typed arguments reject supplied empty text but execute an omitted optional value", async () => {
+    const remote = await fixture()
+    const { client, registration } = await nativeClient()
+    const values: unknown[] = []
+    const rejected: unknown[] = []
+    let router = await Effect.runPromise(
+        nativeCommands.create({
+            prefix: "!",
+            parse: ({ source }) => {
+                const command = source.trim()
+                return command === "empty"
+                    ? { name: command, args: [""], rawArgs: '""' }
+                    : command === "omitted"
+                      ? { name: "empty", args: [], rawArgs: "" }
+                      : undefined
+            },
+        }),
+    )
+    router = await Effect.runPromise(
+        router.register({
+            name: "empty",
+            arguments: { value: { type: "text", optional: true } } as const,
+            onReject: (_context, rejection) =>
+                Effect.sync(() => {
+                    rejected.push(rejection)
+                }),
+            execute: ({ values: converted }) =>
+                Effect.sync(() => {
+                    values.push(converted.value)
+                }),
+        }),
+    )
+    await Effect.runPromise(router.attach(client).pipe(Scope.provide(registration)))
+
+    remote.deliver("!empty")
+    remote.deliver("!omitted")
+    await vi.waitFor(() => expect(rejected).toHaveLength(1))
+    expect(values).toEqual([undefined])
+    expect(rejected).toEqual([{ _tag: "CommandArgumentRejected", argument: "value", reason: "Invalid" }])
+})
+
+test("native typed arguments preserve native execution and reject malformed input before cooldown", async () => {
+    const remote = await fixture()
+    const { client, registration } = await nativeClient()
+    const values: number[] = []
+    const rejected: unknown[] = []
+    let cooldowns = 0
+    let router = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+    router = await Effect.runPromise(
+        router.register({
+            name: "native-typed",
+            arguments: { count: { type: "integer" }, rest: { type: "text", rest: true, optional: true } } as const,
+            cooldown: {
+                store: {
+                    claim: () =>
+                        Effect.sync(() => {
+                            cooldowns += 1
+                            return { _tag: "CooldownAcquired" as const, retryAtMs: Date.now() + 1_000 }
+                        }),
+                },
+                durationMs: 1_000,
+            },
+            onReject: (_context, rejection) =>
+                Effect.sync(() => {
+                    rejected.push(rejection)
+                }),
+            execute: ({ values: converted }) =>
+                Effect.sync(() => {
+                    const count: number = converted.count
+                    values.push(count)
+                }),
+        }),
+    )
+    await Effect.runPromise(router.attach(client).pipe(Scope.provide(registration)))
+
+    remote.deliver("!native-typed no")
+    remote.deliver("!native-typed 4 trailing words")
+    await vi.waitFor(() => expect(values).toEqual([4]))
+    expect(rejected).toEqual([{ _tag: "CommandArgumentRejected", argument: "count", reason: "Invalid" }])
+    expect(cooldowns).toBe(1)
+})

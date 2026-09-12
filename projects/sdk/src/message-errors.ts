@@ -25,6 +25,23 @@ export class EventReadBusyError extends Error {
     }
 }
 
+/** One filtered event wait ended without a matching projected event or rejected its local filter */
+export class EventWaitError extends Error {
+    /** Stable discriminator for a local timeout or synchronous filter failure */
+    readonly _tag = "EventWaitError"
+    constructor(
+        /** Timeout means no matching event was observed before the local deadline. Filter does not expose a thrown value or rejected thenable */
+        readonly reason: "timeout" | "filter",
+    ) {
+        super(
+            reason === "timeout"
+                ? "No matching event was observed before the local deadline"
+                : "Event wait filter threw or did not synchronously return a boolean. Inspect inside the callback before SDK isolation",
+        )
+        this.name = this._tag
+    }
+}
+
 /** Expected send failure with safe metadata, never an upstream response body */
 export class MessageError extends Error {
     readonly _tag = "MessageError"
@@ -130,6 +147,8 @@ export class MessageOperationError extends Error {
 export type RegistrationError = ConfigurationError | ClientClosedError
 /** Expected lower-level event-read failures. Default cancellation is added at the entry boundary */
 export type EventReadError = EventOverflowError | EventReadBusyError
+/** Expected event-wait failures. Default cancellation is added at the entry boundary */
+export type EventWaitFailure = ConfigurationError | ClientClosedError | EventOverflowError | EventWaitError
 /** Send failures use the same definitions in both entry points */
 export type SendError = MessageError | ClientClosedError
 /** Message lookup, management and reaction failures shared by both entry points. Native interruption remains outside this union */

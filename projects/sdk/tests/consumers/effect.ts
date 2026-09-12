@@ -62,6 +62,7 @@ import {
     type AttachmentStreamSource,
     type SupervisorOptions,
     type PrefixCommandMetadata,
+    type CommandHelpOptions,
     type DiscoverySearchPage,
     type DirectMessageLatestMessages,
     type WebhookClient,
@@ -73,6 +74,50 @@ import {
     type OAuthIntrospection,
 } from "@neontechspace/fluxerly/effect"
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
+
+/** Packed typed commands retain their handler service requirement */
+export function typedCommandTypes(client: Client) {
+    return Effect.gen(function* () {
+        const created = yield* commands.create({ prefix: "!" })
+        const registered = yield* created.register({
+            name: "typed",
+            arguments: {
+                count: { type: "integer" },
+                mode: { type: "choice", choices: ["fast", "slow"] },
+                target: { type: "user", candidates: [{ id: "1", username: "sample", privateField: true }] },
+                note: { type: "text", optional: true },
+            },
+            execute: ({ values, args }) => {
+                const count: number = values.count
+                const mode: "fast" | "slow" = values.mode
+                const note: string | undefined = values.note
+                const raw: readonly string[] = args
+                const target: string = values.target.id
+                // @ts-expect-error Integer conversion yields a number
+                const wrong: string = values.count
+                // @ts-expect-error An omitted trailing argument may be undefined
+                const required: string = values.note
+                // @ts-expect-error Undeclared arguments are not exposed
+                values.missing
+                // @ts-expect-error Resource projections omit caller-private fields
+                values.target.privateField
+                void [count, mode, note, raw, target, wrong, required]
+                return Effect.service(CommandService)
+            },
+        })
+        const attached = Effect.scoped(registered.attach(client))
+        const helpOptions: CommandHelpOptions = { prefix: "!", maxLength: 100 }
+        const help: Effect.Effect<readonly string[], unknown> = registered.help(helpOptions)
+        void help
+        // @ts-expect-error A page ceiling must be explicit
+        registered.help({ prefix: "!" })
+        // @ts-expect-error Help visibility is synchronous
+        registered.help({ prefix: "!", maxLength: 100, include: async () => true })
+        // @ts-expect-error Typed handlers still require their declared service
+        Effect.runPromise(attached)
+        return Effect.provideService(attached, CommandService, { enabled: true })
+    })
+}
 
 /** Packed declaration coverage for combined code-grant URLs, connections reads, and confidential introspection */
 export function oauthCompletion(client: OAuthClient) {
@@ -221,6 +266,22 @@ export function optionalCommandTypes(client: Client) {
         Effect.runPromise(needsService)
         return { listing, parsed, attachment: Effect.provideService(needsService, CommandService, { enabled: true }) }
     })
+}
+
+/** Packed native waits infer their payload without a default cancellation error or detached environment */
+export function eventWaitTypes(client: Client) {
+    const waiting: Effect.Effect<
+        import("@neontechspace/fluxerly/effect").TypingStart,
+        import("@neontechspace/fluxerly/effect").EventWaitFailure
+    > = client.waitFor("typingStart", {
+        filter: (event) => {
+            // @ts-expect-error Typing events are not message bodies
+            event.content
+            return event.channelId === "20"
+        },
+        timeoutMs: 10,
+    })
+    return waiting
 }
 
 /** Packed native supervisor tools retain callback services while child.run owns its nested Scope */

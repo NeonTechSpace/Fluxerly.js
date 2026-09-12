@@ -19,6 +19,8 @@ The documentation website remains a scaffold
 | [helpers.ts](/projects/sdk/src/helpers.ts), [colors.ts](/projects/sdk/src/colors.ts) and [text.ts](/projects/sdk/src/text.ts) | Pure markup, raw permission sets, color conversion and lossless text splitting without client or network ownership |
 | [builders.ts](/projects/sdk/src/builders.ts) | Optional fluent construction of plain embed and message inputs, with request validation left to message operations |
 | [commands.ts](/projects/sdk/src/internal/commands.ts) | Optional prefix parsing, immutable command registration and bounded local cooldowns, dispatched through existing client subscriptions |
+| [command-arguments.ts](/projects/sdk/src/command-arguments.ts) and [conversion](/projects/sdk/src/internal/command-arguments.ts) | Typed positional schemas, bounded explicit resource selection and safe conversion rejection |
+| [command-help.ts](/projects/sdk/src/internal/command-help.ts) | Local metadata rendering and bounded help pages without command execution or message delivery |
 | [client.ts](/projects/sdk/src/internal/client.ts) | Client lifetime, per-shard recovery supervision and shared Identify pacing |
 | [sharding.ts](/projects/sdk/src/internal/sharding.ts) | Immutable local shard-plan validation and guild ownership calculation |
 | [supervisor.ts](/projects/sdk/src/internal/supervisor.ts) | Optional local child-process lifecycle, fixed assignments and acknowledged cross-process Identify permits; default/native supervisor facades own their child client lifetime |
@@ -29,14 +31,14 @@ The documentation website remains a scaffold
 | [instance.ts](/projects/sdk/src/internal/instance.ts) | Shared lifetime endpoint discovery, selected-instance trust and unauthenticated bootstrap cleanup |
 | [effect-failures.ts](/projects/sdk/src/internal/effect-failures.ts) | REST/discovery cause-preserving error translation and deadlines, including cleanup defects during interruption |
 | [gateway.ts](/projects/sdk/src/internal/gateway.ts) | Gateway transport and protocol |
-| [events.ts](/projects/sdk/src/internal/events.ts) | Subscription scheduling and bounded event intake |
+| [events.ts](/projects/sdk/src/internal/events.ts) | Subscription scheduling, bounded event intake and filtered single-event waits |
 | [rest.ts](/projects/sdk/src/internal/rest.ts) | REST admission, deadlines and rate state |
 | [message.ts](/projects/sdk/src/internal/message.ts) | Wire-message validation and projection |
 | [reactions.ts](/projects/sdk/src/internal/reactions.ts) | Reaction emoji/query encoding and user-page/gateway projection; REST owns request scheduling |
 | [pins.ts](/projects/sdk/src/internal/pins.ts) | Pin-page query validation and page/event projection, with REST owning mutation and request scheduling |
 | [guilds.ts](/projects/sdk/src/internal/guilds.ts) | Guild/member/role request validation and response/event projection; shared REST owns admission and client-global rate state |
 | [guild-lifecycle.ts](/projects/sdk/src/internal/guild-lifecycle.ts) | Bot membership pages and explicit leave requests; shared REST and cache owners handle admission and observation invalidation |
-| [moderation.ts](/projects/sdk/src/internal/moderation.ts) | Timeout, kick and ban request validation and ban-list projection, using shared REST scheduling and resource invalidation |
+| [moderation.ts](/projects/sdk/src/internal/moderation.ts) | Timeout, kick, ban and voice move/disconnect/mute/deafen request validation and ban-list projection, using shared REST scheduling and resource invalidation |
 | [webhooks.ts](/projects/sdk/src/internal/webhooks.ts) | Webhook request/projection validation and token-only client lifetime, with shared REST admission and no webhook cache |
 | [users.ts](/projects/sdk/src/internal/users.ts) | Public account and private-conversation projection/request validation, with shared REST scheduling |
 | [expressions.ts](/projects/sdk/src/internal/expressions.ts) | Emoji/sticker lifecycle validation and projection, using shared REST admission and guild-resource cache guards |
@@ -216,6 +218,9 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:messages` | SDK receive/reply with independent readback | Temporary channel and messages |
 | `test:live:nonce` | Caller nonce suppression, generated defaults and lost-response reconciliation through both built APIs | Journaled temporary channel/messages and one test-owned response loss per API; cleanup verifies channel deletion |
 | `test:live:optional-tools` | Builder-composed command reply, application-owned prefix change, cooldown and unmatched feedback, and router unsubscription through both built APIs | Temporary channel and test-bot command/reply messages; no human or member actions |
+| `test:live:event-waits` | Filtered single-event success, timeout, filter failure and cancellation through both built APIs | One journaled temporary channel and bot messages, with raw readback and verified channel removal |
+| `test:live:command-arguments` | Typed command execution and invalid-input recovery through both built APIs | One journaled temporary channel and bot messages, with raw reply readback and verified channel removal |
+| `test:live:command-help` | Generated help visibility, pagination and explicit page delivery through both built APIs | One journaled temporary channel and bot messages, with raw page readback and verified channel removal |
 | `test:live:consumer-features` | Forward snapshots, attachment-backed embeds, retained file metadata, non-voice flags, bot profile reads and lost-response reconciliation through both APIs | Journaled temporary channel/messages and uploads, test-owned response loss; profile GET may trigger provider expired-premium cleanup |
 | `test:live:typing` | One-shot typing, scoped refresh and completion/cancellation cleanup through both APIs | Temporary channel/messages and ephemeral typing notices; does not prove inbound typing delivery |
 | `test:live:typing:interactive` | Human-visible outgoing typing and selected-member inbound events through both APIs | Temporary channel and typing notices, with awaited refresh shutdown and verified channel removal |
@@ -301,6 +306,10 @@ Use `--no-move` instead to include disconnect and participant rejoin without cre
 Run `node tests/live/voice-controls.mjs --self-test` from the SDK directory for the local journal-state check; this is not live recovery proof
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools
+
+The command-convenience harness uses `.env.test.command-conveniences.local` to journal its test-owned channel before creation.
+An existing journal triggers cleanup-only recovery.
+Run the check again only after verified recovery to start fresh tests
 
 For the scoped latest-private-message batch check, run `node tests/live/users.mjs default --latest-only` and then the `effect` mode from the built SDK directory.
 Set process-only `FLUXER_TEST_DM_USER_ID` to a currently authorized sandbox member.

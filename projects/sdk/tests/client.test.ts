@@ -100,6 +100,7 @@ describe("client creation through both public entry points", () => {
                 "messages",
                 "on",
                 "events",
+                "waitFor",
                 "diagnostics",
                 "state",
                 "gatewayLatencyMs",
