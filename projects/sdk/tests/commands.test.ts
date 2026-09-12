@@ -874,11 +874,18 @@ test("default cancellation during a guard prevents execution after the guard set
     const gate = new Promise<boolean>((resolve) => {
         release = resolve
     })
+    let enter!: () => void
+    const entered = new Promise<void>((resolve) => {
+        enter = resolve
+    })
     let router = value(commands.create({ prefix: "!" }))
     router = value(
         router.register({
             name: "ping",
-            guard: () => gate,
+            guard: () => {
+                enter()
+                return gate
+            },
             execute: () => {
                 executed.push("execute")
             },
@@ -886,7 +893,7 @@ test("default cancellation during a guard prevents execution after the guard set
     )
     const subscription = value(router.attach(client))
     remote.deliver("!ping")
-    await vi.waitFor(() => expect(release).toBeTypeOf("function"))
+    await entered
     subscription.unsubscribe()
     release!(true)
     await new Promise((resolve) => setTimeout(resolve, 30))
@@ -935,7 +942,16 @@ test("default cancellation during cooldown admission prevents execution after th
     const claim = new Promise<{ _tag: "CooldownAcquired"; retryAtMs: number }>((resolve) => {
         release = resolve
     })
-    const store = { claim: () => claim }
+    let enter!: () => void
+    const entered = new Promise<void>((resolve) => {
+        enter = resolve
+    })
+    const store = {
+        claim: () => {
+            enter()
+            return claim
+        },
+    }
     let router = value(commands.create({ prefix: "!" }))
     router = value(
         router.register({
@@ -948,7 +964,7 @@ test("default cancellation during cooldown admission prevents execution after th
     )
     const subscription = value(router.attach(client))
     remote.deliver("!ping")
-    await vi.waitFor(() => expect(release).toBeTypeOf("function"))
+    await entered
     subscription.unsubscribe()
     release!({ _tag: "CooldownAcquired", retryAtMs: Date.now() + 1_000 })
     await new Promise((resolve) => setTimeout(resolve, 30))

@@ -97,7 +97,7 @@ function requestTarget(input, init) {
     }
 }
 
-function matchingPlan(input, init, url, filename, size) {
+function matchingPlan(input, init, url, filename, size, id = 0) {
     const target = requestTarget(input, init)
     if (target.url.href !== url || target.method !== "POST" || typeof init?.body !== "string") return false
     try {
@@ -113,7 +113,7 @@ function matchingPlan(input, init, url, filename, size) {
             typeof attachment === "object" &&
             attachment !== null &&
             Object.keys(attachment).length === 4 &&
-            attachment.id === 0 &&
+            attachment.id === id &&
             attachment.filename === filename &&
             attachment.file_size === size &&
             attachment.content_type === "application/octet-stream"
@@ -290,10 +290,12 @@ async function verifyInlineFallback(ops, rawFetch, getFetch, setFetch, channelId
     const planUrl = `https://api.fluxer.app/v1/channels/${channelId}/attachments`
     const previous = getFetch()
     let injected = 0
+    let selectedFilename = filename
+    let selectedId = 0
     setFetch(async (input, init) => {
-        if (!matchingPlan(input, init, planUrl, filename, bytes)) return previous(input, init)
+        if (!matchingPlan(input, init, planUrl, selectedFilename, bytes, selectedId)) return previous(input, init)
         injected += 1
-        assert.equal(injected, 1)
+        assert.ok(injected <= 2)
         return Response.json({ code: "FEATURE_TEMPORARILY_DISABLED" }, { status: 403 })
     })
     try {
@@ -320,6 +322,34 @@ async function verifyInlineFallback(ops, rawFetch, getFetch, setFetch, channelId
         assert.equal(source.chunks(), bytes / chunkBytes)
         await verifyDownload(ops, rawFetch, attachment, bytes, digest)
         report("attachment_sources_exact_feature_disabled_plan_fallback", true)
+
+        setStage("attachment_sources_mixed_inline_edit_readback")
+        selectedFilename = `mixed-${filename}`
+        selectedId = 1
+        const added = streamSource(bytes, 47)
+        const edited = await ops.edit(sent, {
+            attachments: [
+                { id: attachment.id, title: "Retained fixture", description: "Retained metadata" },
+                {
+                    stream: added.stream,
+                    size: bytes,
+                    filename: selectedFilename,
+                    contentType: "application/octet-stream",
+                },
+            ],
+        })
+        assert.equal(injected, 2)
+        assert.equal(edited.attachments.length, 2)
+        const readback = await ops.fetch(edited)
+        const retained = readback.attachments.find((value) => value.id === attachment.id)
+        const uploaded = readback.attachments.find((value) => value.filename === selectedFilename)
+        assert.equal(retained?.title, "Retained fixture")
+        assert.equal(retained?.description, "Retained metadata")
+        assert.ok(uploaded)
+        assert.equal(added.emitted(), bytes)
+        await verifyDownload(ops, rawFetch, uploaded, bytes, generatedDigest(bytes, 47))
+        await verifyDownload(ops, rawFetch, retained, bytes, digest)
+        report("attachment_sources_mixed_inline_edit_readback", true)
     } finally {
         setFetch(previous)
     }

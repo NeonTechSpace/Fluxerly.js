@@ -199,7 +199,8 @@ export interface Attachment {
 
 /** Required limits for one attachment download.
  * maxBytes is a positive safe integer no greater than 52,428,800. It bounds returned bytes, not Fluxer's media size, total JavaScript heap or source-side buffering while the SDK packs the result.
- * timeoutMs covers endpoint discovery, URL validation and the full GET, defaults to 30,000, and cleanup is awaited afterward. The GET shares the client-local four-request limit but does not wait for bot API rate limits
+ * timeoutMs covers endpoint discovery, URL validation and the full GET, defaults to 30,000, and cleanup is awaited afterward.
+ * Media discovery and GETs use four client-local slots separate from the four REST/upload slots, for at most eight active HTTP requests. Both pools share the pending-request budget; media does not wait for bot API rate limits
  */
 export interface AttachmentDownloadOptions {
     readonly maxBytes: number

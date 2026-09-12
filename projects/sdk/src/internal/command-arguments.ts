@@ -2,6 +2,7 @@ import type {
     CommandArgumentChannel,
     CommandArgumentDescriptor,
     CommandArgumentMetadata,
+    CommandArgumentMention,
     CommandArgumentRejectionReason,
     CommandArgumentRole,
     CommandArgumentSchema,
@@ -56,6 +57,7 @@ export function commandArgumentMetadata(
             type: descriptor.type,
             optional: descriptor.optional === true,
             rest: hasRest(descriptor) && descriptor.rest === true,
+            ...(descriptor.type === "id" && descriptor.mention !== undefined ? { mention: descriptor.mention } : {}),
             ...(descriptor.type === "choice" ? { choices: Object.freeze([...descriptor.choices]) } : {}),
         })
     })
@@ -106,9 +108,11 @@ function snapshotDescriptor(value: unknown): CommandArgumentDescriptor {
         case "integer":
         case "number":
         case "boolean":
-        case "id":
             validateShape(value, ["type", "optional"])
             return Object.freeze({ type, ...optional(value) })
+        case "id":
+            validateShape(value, ["type", "mention", "optional"])
+            return Object.freeze({ type, ...mention(value), ...optional(value) })
         case "choice": {
             validateShape(value, ["type", "choices", "optional"])
             const choices = copyStrings(value.choices, "Choice arguments require one to 100 unique nonempty choices")
@@ -146,6 +150,13 @@ function optional(value: Record<string, unknown>): { readonly optional?: true } 
     if (value.optional === undefined) return {}
     if (value.optional !== true) throw new ConfigurationError("command", "optional must be true when supplied")
     return { optional: true }
+}
+
+function mention(value: Record<string, unknown>): { readonly mention?: CommandArgumentMention } {
+    if (value.mention === undefined) return {}
+    if (value.mention !== "user" && value.mention !== "channel" && value.mention !== "role")
+        throw new ConfigurationError("command", "mention must select user, channel or role when supplied")
+    return { mention: value.mention }
 }
 
 function rest(value: Record<string, unknown>): { readonly rest?: true } {
@@ -217,7 +228,7 @@ function convertDescriptor(
         case "boolean":
             return raw === "true" ? converted(true) : raw === "false" ? converted(false) : invalid()
         case "id":
-            return decimalId.test(raw) ? converted(raw) : invalid()
+            return decimalId.test(raw) ? converted(raw) : selectIdMention(raw, descriptor.mention)
         case "choice":
             return descriptor.choices.includes(raw) ? converted(raw) : invalid()
         case "user":
@@ -227,6 +238,21 @@ function convertDescriptor(
         case "role":
             return selectResource(descriptor.candidates, raw, "name", /^<@&([1-9]\d*)>$/)
     }
+}
+
+function selectIdMention(
+    raw: string,
+    kind: CommandArgumentMention | undefined,
+): { readonly _tag: "Converted"; readonly value: string } | { readonly _tag: "Rejected"; readonly reason: "Invalid" } {
+    const match =
+        kind === "user"
+            ? /^<@!?([1-9]\d*)>$/.exec(raw)
+            : kind === "channel"
+              ? /^<#([1-9]\d*)>$/.exec(raw)
+              : kind === "role"
+                ? /^<@&([1-9]\d*)>$/.exec(raw)
+                : undefined
+    return match === null || match === undefined ? invalid() : converted(match[1]!)
 }
 
 function selectResource<N extends "username" | "name", T extends { readonly id: string } & Record<N, string>>(
@@ -248,7 +274,7 @@ function selectResource<N extends "username" | "name", T extends { readonly id: 
           : invalid()
 }
 
-function converted(value: unknown): { readonly _tag: "Converted"; readonly value: unknown } {
+function converted<T>(value: T): { readonly _tag: "Converted"; readonly value: T } {
     return Object.freeze({ _tag: "Converted", value })
 }
 

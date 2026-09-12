@@ -81,8 +81,8 @@ export interface DirectMessageChannel {
 
 /** Explicit group updates. Omitted fields remain unchanged; Fluxer enforces membership and ownership */
 export interface DirectMessageGroupEdit {
-    /** Group name, 1–100 code points */
-    readonly name?: string
+    /** Group name, 1–100 code points, or null to clear it */
+    readonly name?: string | null
     /** Image data URI, or null to clear. Fluxer validates the image */
     readonly icon?: string | null
     /** Transfer ownership to an existing non-bot recipient. Requires current ownership */

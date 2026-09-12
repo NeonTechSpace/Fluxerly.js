@@ -1,6 +1,7 @@
 import { once } from "node:events"
 import { Session } from "node:inspector"
 import { setImmediate as turn } from "node:timers/promises"
+import { runInNewContext } from "node:vm"
 import { Clock, Context, Effect, Exit, Scope, Stream } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
@@ -439,6 +440,67 @@ test.each(modes)(
         }
     },
 )
+
+test.each(modes)("%s reaction filters contain rejected promises from every realm", async (mode) => {
+    await gateway()
+    mockRest(async () => new Response(null, { status: 204 }))
+    const api = await setup(mode)
+    await api.connect()
+    const rejections: [unknown, Promise<unknown>][] = []
+    const observe = (reason: unknown, promise: Promise<unknown>) => rejections.push([reason, promise])
+    process.on("unhandledRejection", observe)
+    onTestFinished(() => {
+        process.off("unhandledRejection", observe)
+    })
+
+    const localReason = new Error("local rejected filter")
+    const local = await api.collect({ filter: () => Promise.reject(localReason) as never })
+    deliverReaction(addition()).deliver()
+    await expect(local.wait()).rejects.toMatchObject({ _tag: "CollectorError", reason: "filter" })
+    await turn()
+    expect(rejections).toEqual([])
+
+    const foreignReason = new Error("foreign rejected filter")
+    const remote = await api.collect({
+        filter: (() => runInNewContext("Promise.reject(reason)", { reason: foreignReason }) as Promise<never>) as never,
+    })
+    deliverReaction(addition()).deliver()
+    await expect(remote.wait()).rejects.toMatchObject({ _tag: "CollectorError", reason: "filter" })
+    await turn()
+    expect(rejections).toEqual([])
+})
+
+test.each(modes)("%s reaction filters contain hostile rejected promise access", async (mode) => {
+    await gateway()
+    mockRest(async () => new Response(null, { status: 204 }))
+    const api = await setup(mode)
+    await api.connect()
+    const privateDetail = "private rejected promise getter"
+    const rejections: [unknown, Promise<unknown>][] = []
+    const observe = (reason: unknown, promise: Promise<unknown>) => rejections.push([reason, promise])
+    process.on("unhandledRejection", observe)
+    onTestFinished(() => {
+        process.off("unhandledRejection", observe)
+    })
+    const collector = await api.collect({
+        filter: () => {
+            const rejected = Promise.reject(new Error(privateDetail))
+            for (const key of ["then", "catch"])
+                Object.defineProperty(rejected, key, {
+                    get() {
+                        throw new Error(privateDetail)
+                    },
+                })
+            return rejected as never
+        },
+    })
+    deliverReaction(addition()).deliver()
+    const error = await collector.wait().catch((cause) => cause)
+    expect(error).toMatchObject({ _tag: "CollectorError", reason: "filter" })
+    expect(JSON.stringify(error)).not.toContain(privateDetail)
+    await turn()
+    expect(rejections).toEqual([])
+})
 
 test.each(modes)(
     "%s reaction collector waiter cancellation leaves other observers and collection running",

@@ -80,7 +80,16 @@ export function searchMessagePagination(
             )
         const validated = encodeMessageSearch(context, { ...filters, limit: pageSize, page: 1 })
         if (validated instanceof InputValidationFailure) return invalid(validated)
-        const copiedContext = JSON.parse(JSON.stringify(context)) as MessageSearchContext
+        const encoded = JSON.parse(validated.json) as {
+            readonly context_guild_id?: string
+            readonly context_channel_id?: string
+        }
+        const copiedContext: MessageSearchContext =
+            encoded.context_guild_id !== undefined
+                ? encoded.context_channel_id === undefined
+                    ? { guildId: encoded.context_guild_id }
+                    : { guildId: encoded.context_guild_id, channelId: encoded.context_channel_id }
+                : { channelId: encoded.context_channel_id! }
         const copiedFilters = JSON.parse(JSON.stringify(filters)) as Omit<
             MessageSearchQuery,
             "limit" | "page" | "cursor"

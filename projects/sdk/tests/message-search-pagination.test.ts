@@ -52,6 +52,16 @@ async function setup(mode: (typeof modes)[number]) {
             defaultApi
                 ? defaultApi.messages.iterateSearch({ channelId: "20" }, filters, limits)
                 : native!.messages.iterateSearch({ channelId: "20" }, filters, limits),
+        iterateIn: (
+            context: Parameters<NonNullable<typeof defaultApi>["messages"]["iterateSearch"]>[0],
+            filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+            limits: MessageSearchIterationLimits,
+        ) =>
+            defaultApi
+                ? defaultApi.messages.iterateSearch(context, filters, limits)
+                : native!.messages.iterateSearch(context, filters, limits),
+        search: (context: Parameters<NonNullable<typeof defaultApi>["messages"]["search"]>[0]) =>
+            defaultApi ? defaultApi.messages.search(context) : native!.messages.search(context),
         get: () =>
             defaultApi
                 ? defaultApi.messages.get({ id: "10", channelId: "20" })
@@ -129,4 +139,46 @@ test.each(modes)("%s rejects invalid traversal settings before dispatch", async 
         reason: "input",
     })
     expect(fetch).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s rejects invalid traversal context before dispatch", async (mode) => {
+    const api = await setup(mode)
+    const fetch = vi.fn()
+    stubFetchWithHostedDiscovery(fetch)
+
+    await expect(collect(api.iterateIn({ guildId: "not-an-id" }, {}, { maxItems: 1 }))).rejects.toMatchObject({
+        reason: "input",
+        inputValidation: { path: "context.guildId", constraint: "format" },
+    })
+    expect(fetch).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s search and traversal retain validated getter context and input snapshots", async (mode) => {
+    const api = await setup(mode)
+    const sent: Record<string, unknown>[] = []
+    const filters = { content: "original" }
+    let requests = 0
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body))
+        sent.push(body)
+        requests += 1
+        if (requests === 2) filters.content = "mutated"
+        return body.cursor === undefined ? page([String(requests)], ["next"]) : page([String(requests)])
+    })
+    const context = new (class {
+        get guildId() {
+            return "10"
+        }
+    })()
+
+    const searched = api.search(context)
+    await read(Effect.isEffect(searched) ? searched : await searched)
+    expect(
+        (await collect(api.iterateIn(context, filters, { maxItems: 2, pageSize: 1 }))).map((message) => message.id),
+    ).toEqual(["2", "3"])
+    expect(sent).toEqual([
+        { scope: "current", context_guild_id: "10", hits_per_page: 25, page: 1 },
+        { scope: "current", context_guild_id: "10", hits_per_page: 1, page: 1, content: "original" },
+        { scope: "current", context_guild_id: "10", hits_per_page: 1, cursor: ["next"], content: "original" },
+    ])
 })

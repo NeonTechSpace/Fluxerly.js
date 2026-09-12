@@ -493,36 +493,43 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
+    let quiescent = true
     try {
         if (client) await value(client.shutdown())
     } catch {
+        quiescent = false
         console.error(JSON.stringify({ mode, scope: reportsScope, stage: "client_cleanup", passed: false }))
         process.exitCode = 1
     }
     try {
         if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
     } catch {
+        quiescent = false
         console.error(JSON.stringify({ mode, scope: reportsScope, stage: "scope_cleanup", passed: false }))
         process.exitCode = 1
     }
-    try {
-        await cleanup()
-    } catch {
-        console.error(
-            JSON.stringify({
-                mode,
-                scope: reportsScope,
-                stage: "resource_cleanup",
-                passed: false,
-                journalRetained: true,
-            }),
-        )
-        process.exitCode = 1
+    if (quiescent) {
+        try {
+            await cleanup()
+        } catch {
+            console.error(
+                JSON.stringify({
+                    mode,
+                    scope: reportsScope,
+                    stage: "resource_cleanup",
+                    passed: false,
+                    journalRetained: true,
+                }),
+            )
+            process.exitCode = 1
+        }
     }
-    clearTimeout(deadlineTimer)
-    clearTimeout(watchdog)
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (quiescent) {
+        clearTimeout(deadlineTimer)
+        clearTimeout(watchdog)
+        if (lock !== undefined) {
+            closeSync(lock)
+            unlinkSync(lockPath)
+        }
     }
 }

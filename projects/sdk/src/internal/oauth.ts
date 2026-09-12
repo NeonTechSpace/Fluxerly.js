@@ -323,23 +323,23 @@ export class OAuthOwner {
             progress: { knownResponseFailure: OAuthOperationError | undefined },
         ) => Effect.Effect<A, OAuthOperationError>,
     ): Effect.Effect<A, OAuthOperationError | ClientClosedError> {
-        const limit = timeout(options?.timeoutMs)
-        if (
-            options !== undefined &&
-            (typeof options !== "object" ||
-                options === null ||
-                Object.keys(options).some((key) => key !== "timeoutMs") ||
-                (options.timeoutMs !== undefined && limit === undefined))
-        )
-            return Effect.fail(
-                inputError(
-                    operation,
-                    "options",
-                    "format",
-                    "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
-                ),
-            )
         return Effect.suspend<A, OAuthOperationError | ClientClosedError, never>(() => {
+            const limit = timeout(options?.timeoutMs)
+            if (
+                options !== undefined &&
+                (typeof options !== "object" ||
+                    options === null ||
+                    Object.keys(options).some((key) => key !== "timeoutMs") ||
+                    (options.timeoutMs !== undefined && limit === undefined))
+            )
+                return Effect.fail(
+                    inputError(
+                        operation,
+                        "options",
+                        "format",
+                        "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
+                    ),
+                )
             if (this.#closed || !this.#secret) return Effect.fail(new ClientClosedError())
             if (this.#active >= maximumConcurrentRequests)
                 return Effect.fail(new OAuthError(operation, "busy", "notDispatched"))
@@ -386,135 +386,142 @@ export class OAuthOwner {
         input: OAuthAuthorizationInput,
         options?: OAuthOperationOptions,
     ): Effect.Effect<string, OAuthOperationError | ClientClosedError> {
-        if (!record(input))
-            return Effect.fail(
-                inputError("oauth.authorizationUrl", "input", "type", "OAuth authorization input must be an object"),
+        return Effect.suspend(() => {
+            if (!record(input))
+                return Effect.fail(
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "input",
+                        "type",
+                        "OAuth authorization input must be an object",
+                    ),
+                )
+            if (!redirectUri(input.redirectUri))
+                return Effect.fail(
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "redirectUri",
+                        "format",
+                        "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
+                    ),
+                )
+            if (!text(input.state))
+                return Effect.fail(
+                    inputError("oauth.authorizationUrl", "state", "required", "OAuth state must be a non-empty string"),
+                )
+            if (typeof input.codeChallenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(input.codeChallenge))
+                return Effect.fail(
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "codeChallenge",
+                        "format",
+                        "PKCE code challenge must contain exactly 43 base64url characters",
+                    ),
+                )
+            if (!Array.isArray(input.scopes) || input.scopes.length === 0)
+                return Effect.fail(
+                    inputError("oauth.authorizationUrl", "scopes", "length", "OAuth scopes must be a non-empty array"),
+                )
+            if (
+                Array.from(input.scopes).some(
+                    (scope) => !["identify", "email", "guilds", "connections", "bot"].includes(scope),
+                )
             )
-        if (!redirectUri(input.redirectUri))
-            return Effect.fail(
-                inputError(
-                    "oauth.authorizationUrl",
-                    "redirectUri",
-                    "format",
-                    "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
-                ),
+                return Effect.fail(
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "scopes[]",
+                        "allowedValue",
+                        "OAuth scopes must be identify, email, guilds, connections, or bot",
+                    ),
+                )
+            const botScope = input.scopes.includes("bot")
+            const installationInput =
+                input.guildId !== undefined ||
+                input.channelId !== undefined ||
+                input.permissions !== undefined ||
+                input.disableGuildSelect !== undefined
+            if (installationInput && !botScope)
+                return Effect.fail(
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "botInstallation",
+                        "required",
+                        "Bot installation options require the bot scope",
+                    ),
+                )
+            if (input.guildId !== undefined && !identifier(input.guildId))
+                return Effect.fail(
+                    inputError("oauth.authorizationUrl", "guildId", "format", "Guild target must be a decimal ID"),
+                )
+            if (input.channelId !== undefined && !identifier(input.channelId))
+                return Effect.fail(
+                    inputError("oauth.authorizationUrl", "channelId", "format", "Channel target must be a decimal ID"),
+                )
+            if (input.guildId !== undefined && input.channelId !== undefined)
+                return Effect.fail(
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "channelId",
+                        "relationship",
+                        "Channel target cannot be used with guild target",
+                    ),
+                )
+            if (
+                input.permissions !== undefined &&
+                (typeof input.permissions !== "bigint" ||
+                    input.permissions < 0n ||
+                    input.permissions > maximumPermissionBits)
             )
-        if (!text(input.state))
-            return Effect.fail(
-                inputError("oauth.authorizationUrl", "state", "required", "OAuth state must be a non-empty string"),
+                return Effect.fail(
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "permissions",
+                        "range",
+                        "Bot permissions must be an unsigned 64-bit bitfield",
+                    ),
+                )
+            if (input.disableGuildSelect !== undefined && typeof input.disableGuildSelect !== "boolean")
+                return Effect.fail(
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "disableGuildSelect",
+                        "type",
+                        "disableGuildSelect must be a boolean",
+                    ),
+                )
+            const request = {
+                redirectUri: input.redirectUri,
+                scopes: Object.freeze([...input.scopes]),
+                state: input.state,
+                codeChallenge: input.codeChallenge,
+                guildId: input.guildId,
+                channelId: input.channelId,
+                permissions: input.permissions,
+                disableGuildSelect: input.disableGuildSelect,
+            }
+            return this.#run("oauth.authorizationUrl", options, (_api, webapp) =>
+                Effect.sync(() => {
+                    const url = new URL("oauth2/authorize", `${webapp}/`)
+                    const query = new URLSearchParams({
+                        client_id: this.clientId,
+                        response_type: "code",
+                        redirect_uri: request.redirectUri,
+                        scope: request.scopes.join(" "),
+                        state: request.state,
+                        code_challenge: request.codeChallenge,
+                        code_challenge_method: "S256",
+                    })
+                    if (request.guildId !== undefined) query.set("guild_id", request.guildId)
+                    if (request.channelId !== undefined) query.set("channel_id", request.channelId)
+                    if (request.permissions !== undefined) query.set("permissions", request.permissions.toString())
+                    if (request.disableGuildSelect !== undefined)
+                        query.set("disable_guild_select", String(request.disableGuildSelect))
+                    url.search = query.toString()
+                    return url.toString()
+                }),
             )
-        if (typeof input.codeChallenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(input.codeChallenge))
-            return Effect.fail(
-                inputError(
-                    "oauth.authorizationUrl",
-                    "codeChallenge",
-                    "format",
-                    "PKCE code challenge must contain exactly 43 base64url characters",
-                ),
-            )
-        if (!Array.isArray(input.scopes) || input.scopes.length === 0)
-            return Effect.fail(
-                inputError("oauth.authorizationUrl", "scopes", "length", "OAuth scopes must be a non-empty array"),
-            )
-        if (
-            Array.from(input.scopes).some(
-                (scope) => !["identify", "email", "guilds", "connections", "bot"].includes(scope),
-            )
-        )
-            return Effect.fail(
-                inputError(
-                    "oauth.authorizationUrl",
-                    "scopes[]",
-                    "allowedValue",
-                    "OAuth scopes must be identify, email, guilds, connections, or bot",
-                ),
-            )
-        const botScope = input.scopes.includes("bot")
-        const installationInput =
-            input.guildId !== undefined ||
-            input.channelId !== undefined ||
-            input.permissions !== undefined ||
-            input.disableGuildSelect !== undefined
-        if (installationInput && !botScope)
-            return Effect.fail(
-                inputError(
-                    "oauth.authorizationUrl",
-                    "botInstallation",
-                    "required",
-                    "Bot installation options require the bot scope",
-                ),
-            )
-        if (input.guildId !== undefined && !identifier(input.guildId))
-            return Effect.fail(
-                inputError("oauth.authorizationUrl", "guildId", "format", "Guild target must be a decimal ID"),
-            )
-        if (input.channelId !== undefined && !identifier(input.channelId))
-            return Effect.fail(
-                inputError("oauth.authorizationUrl", "channelId", "format", "Channel target must be a decimal ID"),
-            )
-        if (input.guildId !== undefined && input.channelId !== undefined)
-            return Effect.fail(
-                inputError(
-                    "oauth.authorizationUrl",
-                    "channelId",
-                    "relationship",
-                    "Channel target cannot be used with guild target",
-                ),
-            )
-        if (
-            input.permissions !== undefined &&
-            (typeof input.permissions !== "bigint" ||
-                input.permissions < 0n ||
-                input.permissions > maximumPermissionBits)
-        )
-            return Effect.fail(
-                inputError(
-                    "oauth.authorizationUrl",
-                    "permissions",
-                    "range",
-                    "Bot permissions must be an unsigned 64-bit bitfield",
-                ),
-            )
-        if (input.disableGuildSelect !== undefined && typeof input.disableGuildSelect !== "boolean")
-            return Effect.fail(
-                inputError(
-                    "oauth.authorizationUrl",
-                    "disableGuildSelect",
-                    "type",
-                    "disableGuildSelect must be a boolean",
-                ),
-            )
-        const request = {
-            redirectUri: input.redirectUri,
-            scopes: Object.freeze([...input.scopes]),
-            state: input.state,
-            codeChallenge: input.codeChallenge,
-            guildId: input.guildId,
-            channelId: input.channelId,
-            permissions: input.permissions,
-            disableGuildSelect: input.disableGuildSelect,
-        }
-        return this.#run("oauth.authorizationUrl", options, (_api, webapp) =>
-            Effect.sync(() => {
-                const url = new URL("oauth2/authorize", `${webapp}/`)
-                const query = new URLSearchParams({
-                    client_id: this.clientId,
-                    response_type: "code",
-                    redirect_uri: request.redirectUri,
-                    scope: request.scopes.join(" "),
-                    state: request.state,
-                    code_challenge: request.codeChallenge,
-                    code_challenge_method: "S256",
-                })
-                if (request.guildId !== undefined) query.set("guild_id", request.guildId)
-                if (request.channelId !== undefined) query.set("channel_id", request.channelId)
-                if (request.permissions !== undefined) query.set("permissions", request.permissions.toString())
-                if (request.disableGuildSelect !== undefined)
-                    query.set("disable_guild_select", String(request.disableGuildSelect))
-                url.search = query.toString()
-                return url.toString()
-            }),
-        )
+        })
     }
 
     #request<A>(
@@ -661,55 +668,62 @@ export class OAuthOwner {
         input: OAuthCodeExchangeInput,
         options?: OAuthOperationOptions,
     ): Effect.Effect<OAuthTokens, OAuthOperationError | ClientClosedError> {
-        if (!record(input))
-            return Effect.fail(
-                inputError("oauth.exchangeCode", "input", "type", "OAuth code exchange input must be an object"),
-            )
-        if (!text(input.code))
-            return Effect.fail(
-                inputError("oauth.exchangeCode", "code", "required", "Authorization code must be a non-empty string"),
-            )
-        if (!redirectUri(input.redirectUri))
-            return Effect.fail(
-                inputError(
+        return Effect.suspend(() => {
+            if (!record(input))
+                return Effect.fail(
+                    inputError("oauth.exchangeCode", "input", "type", "OAuth code exchange input must be an object"),
+                )
+            if (!text(input.code))
+                return Effect.fail(
+                    inputError(
+                        "oauth.exchangeCode",
+                        "code",
+                        "required",
+                        "Authorization code must be a non-empty string",
+                    ),
+                )
+            if (!redirectUri(input.redirectUri))
+                return Effect.fail(
+                    inputError(
+                        "oauth.exchangeCode",
+                        "redirectUri",
+                        "format",
+                        "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
+                    ),
+                )
+            if (typeof input.codeVerifier !== "string" || !/^[A-Za-z0-9._~-]{43,128}$/.test(input.codeVerifier))
+                return Effect.fail(
+                    inputError(
+                        "oauth.exchangeCode",
+                        "codeVerifier",
+                        "format",
+                        "PKCE code verifier must contain 43 through 128 unreserved characters",
+                    ),
+                )
+            const request = { code: input.code, redirectUri: input.redirectUri, codeVerifier: input.codeVerifier }
+            return this.#run("oauth.exchangeCode", options, (api, _webapp, secret, progress) =>
+                this.#request(
                     "oauth.exchangeCode",
-                    "redirectUri",
-                    "format",
-                    "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
-                ),
-            )
-        if (typeof input.codeVerifier !== "string" || !/^[A-Za-z0-9._~-]{43,128}$/.test(input.codeVerifier))
-            return Effect.fail(
-                inputError(
-                    "oauth.exchangeCode",
-                    "codeVerifier",
-                    "format",
-                    "PKCE code verifier must contain 43 through 128 unreserved characters",
-                ),
-            )
-        const request = { code: input.code, redirectUri: input.redirectUri, codeVerifier: input.codeVerifier }
-        return this.#run("oauth.exchangeCode", options, (api, _webapp, secret, progress) =>
-            this.#request(
-                "oauth.exchangeCode",
-                api,
-                "/oauth2/token",
-                {
-                    method: "POST",
-                    headers: {
-                        authorization: `Basic ${Buffer.from(`${this.clientId}:${secret}`).toString("base64")}`,
-                        "content-type": "application/x-www-form-urlencoded",
+                    api,
+                    "/oauth2/token",
+                    {
+                        method: "POST",
+                        headers: {
+                            authorization: `Basic ${Buffer.from(`${this.clientId}:${secret}`).toString("base64")}`,
+                            "content-type": "application/x-www-form-urlencoded",
+                        },
+                        body: new URLSearchParams({
+                            grant_type: "authorization_code",
+                            code: request.code,
+                            redirect_uri: request.redirectUri,
+                            code_verifier: request.codeVerifier,
+                        }).toString(),
                     },
-                    body: new URLSearchParams({
-                        grant_type: "authorization_code",
-                        code: request.code,
-                        redirect_uri: request.redirectUri,
-                        code_verifier: request.codeVerifier,
-                    }).toString(),
-                },
-                token,
-                progress,
-            ),
-        )
+                    token,
+                    progress,
+                ),
+            )
+        })
     }
 
     refresh(
@@ -746,47 +760,49 @@ export class OAuthOwner {
         value: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
         options?: OAuthOperationOptions,
     ): Effect.Effect<void, OAuthOperationError | ClientClosedError> {
-        if (!record(value))
-            return Effect.fail(inputError("oauth.revoke", "input", "type", "OAuth revoke input must be an object"))
-        if (!text(value.token))
-            return Effect.fail(
-                inputError("oauth.revoke", "token", "required", "Revoked token must be a non-empty string"),
+        return Effect.suspend(() => {
+            if (!record(value))
+                return Effect.fail(inputError("oauth.revoke", "input", "type", "OAuth revoke input must be an object"))
+            if (!text(value.token))
+                return Effect.fail(
+                    inputError("oauth.revoke", "token", "required", "Revoked token must be a non-empty string"),
+                )
+            if (
+                value.tokenTypeHint !== undefined &&
+                value.tokenTypeHint !== "access_token" &&
+                value.tokenTypeHint !== "refresh_token"
             )
-        if (
-            value.tokenTypeHint !== undefined &&
-            value.tokenTypeHint !== "access_token" &&
-            value.tokenTypeHint !== "refresh_token"
-        )
-            return Effect.fail(
-                inputError(
+                return Effect.fail(
+                    inputError(
+                        "oauth.revoke",
+                        "tokenTypeHint",
+                        "allowedValue",
+                        "Token type hint must be access_token or refresh_token",
+                    ),
+                )
+            const request = { token: value.token, tokenTypeHint: value.tokenTypeHint }
+            return this.#run("oauth.revoke", options, (api, _webapp, secret, progress) =>
+                this.#request(
                     "oauth.revoke",
-                    "tokenTypeHint",
-                    "allowedValue",
-                    "Token type hint must be access_token or refresh_token",
-                ),
-            )
-        const request = { token: value.token, tokenTypeHint: value.tokenTypeHint }
-        return this.#run("oauth.revoke", options, (api, _webapp, secret, progress) =>
-            this.#request(
-                "oauth.revoke",
-                api,
-                "/oauth2/token/revoke",
-                {
-                    method: "POST",
-                    headers: {
-                        authorization: `Basic ${Buffer.from(`${this.clientId}:${secret}`).toString("base64")}`,
-                        "content-type": "application/x-www-form-urlencoded",
+                    api,
+                    "/oauth2/token/revoke",
+                    {
+                        method: "POST",
+                        headers: {
+                            authorization: `Basic ${Buffer.from(`${this.clientId}:${secret}`).toString("base64")}`,
+                            "content-type": "application/x-www-form-urlencoded",
+                        },
+                        body: new URLSearchParams({
+                            token: request.token,
+                            ...(request.tokenTypeHint === undefined ? {} : { token_type_hint: request.tokenTypeHint }),
+                        }).toString(),
                     },
-                    body: new URLSearchParams({
-                        token: request.token,
-                        ...(request.tokenTypeHint === undefined ? {} : { token_type_hint: request.tokenTypeHint }),
-                    }).toString(),
-                },
-                () => true,
-                progress,
-                true,
-            ).pipe(Effect.asVoid),
-        )
+                    () => true,
+                    progress,
+                    true,
+                ).pipe(Effect.asVoid),
+            )
+        })
     }
 
     fetchIdentity(
@@ -814,25 +830,32 @@ export class OAuthOwner {
         query: GuildListQuery = {},
         options?: OAuthOperationOptions,
     ): Effect.Effect<readonly GuildListSummary[], OAuthOperationError | ClientClosedError> {
-        const request = guildList(query)
-        if (!text(accessToken))
-            return Effect.fail(
-                inputError("oauth.fetchGuilds", "accessToken", "required", "Access token must be a non-empty string"),
+        return Effect.suspend(() => {
+            const request = guildList(query)
+            if (!text(accessToken))
+                return Effect.fail(
+                    inputError(
+                        "oauth.fetchGuilds",
+                        "accessToken",
+                        "required",
+                        "Access token must be a non-empty string",
+                    ),
+                )
+            if (request instanceof InputValidationFailure)
+                return Effect.fail(
+                    new OAuthError("oauth.fetchGuilds", "input", "notDispatched", null, null, null, request.detail),
+                )
+            return this.#run("oauth.fetchGuilds", options, (api, _webapp, _secret, progress) =>
+                this.#request(
+                    "oauth.fetchGuilds",
+                    api,
+                    request.path,
+                    { method: "GET", headers: { authorization: `Bearer ${accessToken}` } },
+                    request.decode,
+                    progress,
+                ),
             )
-        if (request instanceof InputValidationFailure)
-            return Effect.fail(
-                new OAuthError("oauth.fetchGuilds", "input", "notDispatched", null, null, null, request.detail),
-            )
-        return this.#run("oauth.fetchGuilds", options, (api, _webapp, _secret, progress) =>
-            this.#request(
-                "oauth.fetchGuilds",
-                api,
-                request.path,
-                { method: "GET", headers: { authorization: `Bearer ${accessToken}` } },
-                request.decode,
-                progress,
-            ),
-        )
+        })
     }
 
     fetchConnections(

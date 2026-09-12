@@ -378,6 +378,10 @@ export function cleanup(
                     return yield* Effect.fail(
                         error("cleanup", "timeout", "notDispatched", plan.scannedCount, ids, submitted),
                     )
+                if (owner.state === "Closing" || owner.state === "Closed")
+                    return yield* Effect.fail(
+                        error("cleanup", "closed", "notDispatched", plan.scannedCount, ids, submitted),
+                    )
                 yield* Effect.sync(() => notify?.(Object.freeze({ state: "submitting", batch: current })))
                 const options = remaining(deadline, requestOptions.signal)
                 if (!options)

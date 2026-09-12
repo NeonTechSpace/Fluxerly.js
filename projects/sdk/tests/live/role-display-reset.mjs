@@ -166,29 +166,36 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
+    let quiescent = true
     try {
-        try {
-            if (client) {
-                await value(client.shutdown())
-                assert.equal(client.state, "Closed")
-            }
-        } finally {
-            if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
+        if (client) {
+            await value(client.shutdown())
+            assert.equal(client.state, "Closed")
         }
-        if (client) report("client_closed")
     } catch {
+        quiescent = false
         console.error(JSON.stringify({ mode, check: "client_cleanup", passed: false }))
         process.exitCode = 1
     }
     try {
-        await cleanup()
+        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
     } catch {
-        console.error(JSON.stringify({ mode, check: "role_cleanup", passed: false, journalRetained: true }))
+        quiescent = false
+        console.error(JSON.stringify({ mode, check: "scope_cleanup", passed: false }))
         process.exitCode = 1
     }
-    clearTimeout(watchdog)
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (quiescent) {
+        if (client) report("client_closed")
+        try {
+            await cleanup()
+        } catch {
+            console.error(JSON.stringify({ mode, check: "role_cleanup", passed: false, journalRetained: true }))
+            process.exitCode = 1
+        }
+        clearTimeout(watchdog)
+        if (lock !== undefined) {
+            closeSync(lock)
+            unlinkSync(lockPath)
+        }
     }
 }

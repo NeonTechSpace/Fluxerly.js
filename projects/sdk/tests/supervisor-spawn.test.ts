@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { Effect } from "effect"
 import { expect, test, vi } from "vitest"
 
@@ -63,6 +64,73 @@ function childWithoutPid(): ChildProcess {
     }
     return child as ChildProcess
 }
+
+function acknowledgedChild(): ChildProcess {
+    const child = Object.assign(new EventEmitter(), {
+        pid: 101,
+        connected: true,
+        exitCode: null as number | null,
+        signalCode: null as NodeJS.Signals | null,
+        send(message: unknown) {
+            if (typeof message === "object" && message !== null && "type" in message && message.type === "assignment")
+                queueMicrotask(() => child.emit("message", { type: "ready", generation: 1 }))
+            if (typeof message === "object" && message !== null && "type" in message && message.type === "shutdown") {
+                child.connected = false
+                child.exitCode = 0
+                queueMicrotask(() => {
+                    child.emit("disconnect")
+                    child.emit("exit", 0, null)
+                })
+            }
+            return true
+        },
+        kill() {
+            child.connected = false
+            child.exitCode = 0
+            queueMicrotask(() => {
+                child.emit("disconnect")
+                child.emit("exit", 0, null)
+            })
+            return true
+        },
+    })
+    queueMicrotask(() => child.emit("message", { type: "hello" }))
+    return child as ChildProcess
+}
+
+test("the owned child removes every spelling of the development source condition", async () => {
+    const child = acknowledgedChild()
+    fork.mockReturnValueOnce(child)
+    const created = supervisor.create({
+        entry: process.execPath,
+        totalShards: 1,
+        assignments: [{ id: "condition-filter", shardIds: [0] }],
+        execArgv: [
+            "--conditions",
+            "fluxerly-source",
+            "-C",
+            "fluxerly-source",
+            "--conditions=fluxerly-source",
+            "--no-warnings",
+            "-C",
+            "unrelated-condition",
+            "--conditions",
+            "another-condition",
+        ],
+    })
+    if (created.isErr()) throw created.error
+    await created.value.start()
+    expect(fork).toHaveBeenCalledWith(
+        process.execPath,
+        [],
+        expect.objectContaining({
+            execArgv: ["--no-warnings", "-C", "unrelated-condition", "--conditions", "another-condition"],
+        }),
+    )
+    await created.value.shutdown()
+    await created.value.waitForClose()
+    fork.mockReset()
+})
 
 test("an unspawned child releases its startup and shutdown timers before terminal failure", async () => {
     vi.useFakeTimers()

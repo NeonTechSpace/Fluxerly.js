@@ -34,6 +34,8 @@ export interface GuildRequest<A> {
     readonly json?: string
     readonly moderation?: true
     readonly auditReason?: string
+    /** Permits timeoutReason only on timeout and clear-timeout operation options */
+    readonly timeoutReason?: true
     readonly deleteAuthorId?: string
     readonly invalidateMessages?: true
     /** Private client capabilities required for one explicit provider-gated replacement */

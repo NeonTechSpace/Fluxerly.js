@@ -16,6 +16,7 @@ let verified = false
 let confirmedMode
 let confirmationSource
 let stopped = false
+let quiescent = true
 const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...details }))
 
 async function api(method, path, body) {
@@ -162,10 +163,18 @@ async function runMode(channel) {
                 await value(client.shutdown())
                 assert.equal(client.state, "Closed")
             }
+        } catch (error) {
+            quiescent = false
+            throw error
         } finally {
-            if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
+            try {
+                if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
+            } catch (error) {
+                quiescent = false
+                throw error
+            }
         }
-        report("client_closed")
+        if (quiescent) report("client_closed")
     }
 }
 
@@ -238,15 +247,17 @@ try {
 } finally {
     terminal?.close()
     globalThis.fetch = rawFetch
-    try {
-        await cleanup()
-    } catch {
-        console.error(JSON.stringify({ mode, check: "channel_cleanup", passed: false, journalRetained: true }))
-        process.exitCode = 1
-    }
-    clearTimeout(watchdog)
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (quiescent) {
+        try {
+            await cleanup()
+        } catch {
+            console.error(JSON.stringify({ mode, check: "channel_cleanup", passed: false, journalRetained: true }))
+            process.exitCode = 1
+        }
+        clearTimeout(watchdog)
+        if (lock !== undefined) {
+            closeSync(lock)
+            unlinkSync(lockPath)
+        }
     }
 }

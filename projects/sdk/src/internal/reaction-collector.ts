@@ -28,6 +28,20 @@ function guildId(value: unknown): value is string {
     )
 }
 
+function consumeThenable(value: unknown) {
+    if (value === null || (typeof value !== "object" && typeof value !== "function")) return true
+    try {
+        if (value instanceof Promise) void Promise.prototype.then.call(value, undefined, () => undefined)
+        else
+            void Promise.resolve()
+                .then(() => value)
+                .catch(() => undefined)
+    } catch {
+        return false
+    }
+    return true
+}
+
 function settings(target: unknown, options: unknown, defaultApi: boolean): Settings | ConfigurationError {
     if (!reference(target))
         return new ConfigurationError("message", "Message reference must contain decimal id and channelId")
@@ -324,7 +338,7 @@ export class ReactionCollector {
                 } catch {
                     return this.fail(new CollectorError("filter"))
                 }
-                if (accepted instanceof Promise) void accepted.catch(() => undefined)
+                if (!consumeThenable(accepted)) return this.fail(new CollectorError("filter"))
                 if (!this.#active) return
                 if (this.#expired()) return
                 if (typeof accepted !== "boolean") return this.fail(new CollectorError("filter"))

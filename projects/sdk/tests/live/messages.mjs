@@ -57,6 +57,7 @@ let lock
 let token
 let guildId
 let verified = false
+let quiescent = true
 let journal
 let gatewayProbe
 const reportFailure = (error) => console.log(JSON.stringify({ mode, check: stage, ...safeFailure(error) }))
@@ -1677,19 +1678,24 @@ async function cleanup() {
     }
     const listed = await api("GET", `/guilds/${guildId}/channels`)
     assert.ok(Array.isArray(listed.data))
-    // The unique marker is persisted before creation, so a lost POST response can be reconciled without retrying creation
-    const matches = listed.data.filter((channel) => channel.name === journal.name)
+    // A returned ID is authoritative. Marker lookup is only safe while creation never returned an ID
+    const matches =
+        journal.channelId === undefined ? listed.data.filter((channel) => channel.name === journal.name) : []
     assert.ok(matches.length <= 1)
-    if (matches.length === 0) {
-        // Without a returned ID, absence cannot prove that an interrupted creation will not complete later
-        assert.match(journal.channelId ?? "", /^\d+$/)
-        assert.equal((await api("GET", `/channels/${journal.channelId}`)).status, 404)
+    let channel = matches[0]
+    if (journal.channelId !== undefined) {
+        const recorded = await api("GET", `/channels/${journal.channelId}`)
+        if (recorded.status !== 404) channel = recorded.data
     }
-    for (const channel of matches) {
+    if (journal.channelId === undefined) assert.ok(channel, "Unresolved channel creation retains its journal")
+    if (channel) {
         assert.match(channel.id, /^\d+$/)
+        if (journal.channelId !== undefined) assert.equal(channel.id, journal.channelId)
         assert.equal(channel.guild_id, guildId)
         assert.equal(channel.type, 0)
+        assert.equal(channel.name, journal.name)
         const current = await api("GET", `/channels/${channel.id}`)
+        assert.equal(current.data?.id, channel.id)
         assert.equal(current.data?.name, journal.name)
         assert.equal(current.data?.guild_id, guildId)
         await api("DELETE", `/channels/${channel.id}`)
@@ -3659,14 +3665,24 @@ try {
             }
         } finally {
             clearTimeout(timer)
-            assert.ok((await client.shutdown()).isOk())
-            stopState?.()
+            try {
+                const shutdown = await client.shutdown()
+                if (shutdown.isErr()) quiescent = false
+                assert.ok(shutdown.isOk())
+            } catch (error) {
+                quiescent = false
+                throw error
+            } finally {
+                stopState?.()
+            }
         }
     } else {
         const { Deferred, Effect, Exit, Fiber, Scope, Stream } = await import("effect")
         const { builders, commands, createClient } = await import("@neontechspace/fluxerly/effect")
-        const exit = await Effect.runPromiseExit(
-            Effect.scoped(
+        const effectScope = Scope.makeUnsafe()
+        let exit
+        try {
+            exit = await Effect.runPromiseExit(
                 Effect.gen(function* () {
                     client = yield* createClient({
                         token,
@@ -3792,7 +3808,7 @@ try {
                                             ),
                                             { signal },
                                         )
-                                        assert.ok(Exit.isFailure(result) && Cause.hasInterrupts(result.cause))
+                                        assert.ok(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause))
                                     },
                                 },
                                 channel.id,
@@ -4335,7 +4351,8 @@ try {
                                     { signal },
                                 )
                                 assert.ok(Exit.isFailure(cancelled))
-                                if (Exit.isFailure(cancelled)) assert.equal(Cause.hasInterrupts(cancelled.cause), true)
+                                if (Exit.isFailure(cancelled))
+                                    assert.equal(Cause.hasInterruptsOnly(cancelled.cause), true)
                             },
                         }
                         yield* Effect.promise(() =>
@@ -4499,13 +4516,26 @@ try {
                             }),
                         )
                     }
-                }),
-            ).pipe(
-                recover
-                    ? Effect.provideService(Logger.CurrentLoggers, new Set([diagnosticLogger]))
-                    : (effect) => effect,
-            ),
-        )
+                })
+                    .pipe(Scope.provide(effectScope))
+                    .pipe(
+                        recover
+                            ? Effect.provideService(Logger.CurrentLoggers, new Set([diagnosticLogger]))
+                            : (effect) => effect,
+                    ),
+            )
+        } finally {
+            const scenarioExit = exit ?? Exit.void
+            const scopeExit = await Effect.runPromiseExit(Scope.close(effectScope, scenarioExit))
+            if (Exit.isFailure(scopeExit)) {
+                quiescent = false
+                process.exitCode = 1
+                report("scope_cleanup", false)
+                exit = Exit.isFailure(scenarioExit)
+                    ? Exit.failCause(Cause.combine(scenarioExit.cause, scopeExit.cause))
+                    : scopeExit
+            }
+        }
         if ((attachments || attachmentSources) && Exit.isFailure(exit))
             for (const reason of exit.cause.reasons.slice(0, 8)) {
                 if (reason._tag === "Fail") reportFailure(reason.error)
@@ -4563,7 +4593,7 @@ try {
 } finally {
     gatewayProbe?.restore()
     globalThis.fetch = rawFetch
-    if (verified && journal) {
+    if (quiescent && verified && journal) {
         try {
             await cleanup()
         } catch {
@@ -4571,7 +4601,7 @@ try {
             process.exitCode = 1
         }
     }
-    if (lock !== undefined) {
+    if (quiescent && lock !== undefined) {
         closeSync(lock)
         unlinkSync(lockPath)
     }

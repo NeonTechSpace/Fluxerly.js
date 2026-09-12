@@ -295,6 +295,35 @@ test("cleanup rejects a different client's in-memory plan before dispatch", asyn
     }
 })
 
+test.each(modes)("%s cleanup reports a closed client as known non-dispatch", async (mode) => {
+    const calls: RequestInit[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        calls.push(init)
+        return Response.json([wire("30")])
+    })
+    const api = await cleanupApi(mode)
+    const plan = await api.preview("20", { authorId: "30", maxScanned: 1, maxSelected: 1 })
+    await api.close()
+
+    await expect(api.cleanup(plan)).rejects.toMatchObject({
+        _tag: "MessageCleanupError",
+        phase: "cleanup",
+        reason: "closed",
+        outcome: "notDispatched",
+        scannedCount: 1,
+        selectedMessageIds: ["30"],
+        submittedBatches: [],
+        terminalBatchIds: null,
+    })
+    await expect(api.cleanup(plan)).rejects.toMatchObject({
+        _tag: "MessageCleanupError",
+        reason: "input",
+        outcome: "notDispatched",
+        terminalBatchIds: null,
+    })
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(0)
+})
+
 test.each(modes)(
     "%s bounds preview scans and selections, uses default options, and permits an empty exact plan",
     async (mode) => {

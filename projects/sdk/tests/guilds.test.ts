@@ -19,6 +19,8 @@ import {
     type ClientOptions,
 } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import { InputValidationFailure } from "../src/input-validation.js"
+import { memberTimeout } from "../src/internal/moderation.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "", sockets: [] as import("ws").WebSocket[] }))
@@ -110,6 +112,27 @@ test.each(modes)("%s validates moderation input before dispatch and rejects malf
     ]) {
         rest(async () => Response.json(response))
         await expect(api.member()).rejects.toMatchObject({ reason: "response" })
+    }
+})
+
+test("timeout reasons retain Unicode payloads, allow null, and never project onto members", () => {
+    const set = memberTimeout(target, 60_000, { timeoutReason: "  規則違反  " })
+    expect(set).not.toBeInstanceOf(InputValidationFailure)
+    if (set instanceof InputValidationFailure) throw Error("Expected timeout request")
+    expect(JSON.parse(set.json!)).toMatchObject({ timeout_reason: "  規則違反  " })
+    expect(
+        set.decode({ ...member(), communication_disabled_until: "2026-09-12T12:00:00Z", timeout_reason: "private" }),
+    ).toEqual(expect.not.objectContaining({ timeoutReason: expect.anything() }))
+
+    const clear = memberTimeout(target, null, { timeoutReason: null }, true)
+    expect(clear).not.toBeInstanceOf(InputValidationFailure)
+    if (clear instanceof InputValidationFailure) throw Error("Expected clear-timeout request")
+    expect(JSON.parse(clear.json!)).toEqual({ communication_disabled_until: null, timeout_reason: null })
+    expect(memberTimeout(target, 60_000, { timeoutReason: " " })).not.toBeInstanceOf(InputValidationFailure)
+    for (const timeoutReason of ["", "😀".repeat(513)]) {
+        const result = memberTimeout(target, 60_000, { timeoutReason })
+        expect(result).toBeInstanceOf(InputValidationFailure)
+        expect((result as InputValidationFailure).detail.path).toBe("options.timeoutReason")
     }
 })
 

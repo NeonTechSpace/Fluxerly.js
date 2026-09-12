@@ -85,6 +85,9 @@ export function typedCommandTypes(client: Client) {
                 count: { type: "integer" },
                 mode: { type: "choice", choices: ["fast", "slow"] },
                 target: { type: "user", candidates: [{ id: "1", username: "sample", privateField: true }] },
+                userId: { type: "id", mention: "user" },
+                channelId: { type: "id", mention: "channel" },
+                roleId: { type: "id", mention: "role" },
                 note: { type: "text", optional: true },
             },
             execute: ({ values, args }) => {
@@ -93,6 +96,8 @@ export function typedCommandTypes(client: Client) {
                 const note: string | undefined = values.note
                 const raw: readonly string[] = args
                 const target: string = values.target.id
+                const mentionIds: readonly string[] = [values.userId, values.channelId, values.roleId]
+                void mentionIds
                 // @ts-expect-error Integer conversion yields a number
                 const wrong: string = values.count
                 // @ts-expect-error An omitted trailing argument may be undefined
@@ -830,6 +835,21 @@ export function previewModerationCleanup(client: Client, guildId: string, channe
         const report = yield* client.messages.cleanup(plan, { onProgress: (event) => void event.batch.batchIndex })
         void permissions
         return { hierarchy, report }
+    })
+}
+
+/** Packed native input extensions retain lazy Effect composition */
+export function approvedRequestInputs(client: Client) {
+    const options: import("@neontechspace/fluxerly/effect").TimeoutOptions = {
+        timeoutReason: "Timeout context",
+        auditReason: "Moderator action",
+    }
+    const mention: import("@neontechspace/fluxerly/effect").CommandArgumentMention = "role"
+    return Effect.gen(function* () {
+        yield* client.members.timeout({ guildId: "1", userId: "2" }, 60_000, options)
+        yield* client.members.clearTimeout({ guildId: "1", userId: "2" }, { timeoutReason: null })
+        yield* client.directMessages.editGroup("3", { name: null })
+        return mention
     })
 }
 

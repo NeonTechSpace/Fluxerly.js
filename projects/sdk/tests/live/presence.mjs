@@ -14,6 +14,7 @@ let driver
 let probe
 let selectedGuildId
 let handlerFailed = false
+let quiescent = true
 const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...details }))
 
 async function api(path, token) {
@@ -315,14 +316,17 @@ try {
                 report("sdk_and_sockets_closed")
             }
         } catch {
+            quiescent = false
             console.error(JSON.stringify({ mode, check: "sdk_cleanup", passed: false }))
             process.exitCode = 1
         } finally {
             probe?.restore()
-            clearTimeout(watchdog)
-            if (lock !== undefined) {
-                closeSync(lock)
-                unlinkSync(lockPath)
+            if (quiescent) {
+                clearTimeout(watchdog)
+                if (lock !== undefined) {
+                    closeSync(lock)
+                    unlinkSync(lockPath)
+                }
             }
         }
     }

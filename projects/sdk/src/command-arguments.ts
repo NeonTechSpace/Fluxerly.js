@@ -11,6 +11,8 @@ export interface CommandArgumentMetadata {
     readonly optional: boolean
     /** Whether this final text argument receives every remaining parsed positional argument */
     readonly rest: boolean
+    /** Mention syntax accepted by an ID argument, when explicitly selected. Help rendering keeps the argument name unchanged */
+    readonly mention?: CommandArgumentMention
     /** Accepted literal values for a choice argument, when applicable */
     readonly choices?: readonly string[]
 }
@@ -18,6 +20,9 @@ export interface CommandArgumentMetadata {
 /** Built-in synchronous command argument conversions */
 export type CommandArgumentType =
     "text" | "integer" | "number" | "boolean" | "id" | "user" | "channel" | "role" | "choice"
+
+/** One anchored Fluxer mention kind accepted by an ID argument */
+export type CommandArgumentMention = "user" | "channel" | "role"
 
 /**
  * One explicit user candidate. IDs use base-10 decimal digits, candidates are limited to 100 per descriptor and router registration snapshots this projection.
@@ -98,10 +103,12 @@ export interface CommandArgumentBoolean {
     readonly optional?: true
 }
 
-/** One base-10 decimal ID matching `0` or a nonzero digit followed by digits, retained as a string and never converted to a JavaScript number */
+/** One base-10 decimal ID matching `0` or a nonzero digit followed by digits, retained as a string and never converted to a JavaScript number. An optional selected mention kind accepts only its anchored Fluxer mention syntax and still returns the ID string without a roster lookup */
 export interface CommandArgumentId {
     /** Select decimal ID conversion without numeric coercion */
     readonly type: "id"
+    /** Also accept only anchored user, channel or role mention syntax and return its decimal ID string */
+    readonly mention?: CommandArgumentMention
     /** Allow this trailing value to be omitted */
     readonly optional?: true
 }

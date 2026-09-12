@@ -1,4 +1,4 @@
-import { Effect, Exit, Stream, type Scope } from "effect"
+import { Cause, Effect, Exit, Stream, type Scope } from "effect"
 import { ConfigurationError, type ConnectError } from "#sdk/errors"
 import { attachIdentifyGate } from "#sdk/internal/client"
 import { ChildBridge, createSupervisor } from "#sdk/internal/supervisor"
@@ -60,7 +60,9 @@ export interface NativeSupervisor {
 export interface NativeSupervisorTools {
     /** Lazily validate and snapshot a local process plan without starting child processes */
     create(options: SupervisorOptions): Effect.Effect<NativeSupervisor, ConfigurationError>
-    /** Run one child configured by a parent supervisor. A nested helper scope owns the client and IPC cleanup until this effect settles */
+    /** Run one child configured by a parent supervisor. A nested helper scope owns the client and IPC cleanup until this effect settles.
+     * Parent stop interrupts configuration without reporting a configuration failure; any losing configuration cleanup failure remains in this effect's cause
+     */
     readonly child: {
         run<E = never, R = never>(
             options: NativeSupervisorChildOptions<E, R>,
@@ -122,16 +124,46 @@ export function makeNativeSupervisor(
                         yield* Stream.runForEach(client.observeState(), (state) =>
                             Effect.sync(() => bridge.state(state)),
                         ).pipe(Effect.forkScoped)
+                        const configureExits: Exit.Exit<unknown, E>[] = []
+                        let stoppedDuringConfiguration = false
                         const configured = yield* Effect.exit(
                             Effect.raceFirst(
-                                options
-                                    .configure(Object.freeze({ client, assignment: assigned }))
-                                    .pipe(Effect.as("configured" as const)),
-                                bridge.waitForStop().pipe(Effect.as("stop" as const)),
+                                options.configure(Object.freeze({ client, assignment: assigned })).pipe(
+                                    Effect.onExit((exit) =>
+                                        Effect.sync(() => {
+                                            configureExits.push(exit)
+                                        }),
+                                    ),
+                                    Effect.as("configured" as const),
+                                ),
+                                bridge.waitForStop().pipe(
+                                    Effect.tap(() =>
+                                        Effect.sync(() => {
+                                            stoppedDuringConfiguration = true
+                                        }),
+                                    ),
+                                    Effect.as("stop" as const),
+                                ),
+                            ).pipe(
+                                // raceFirst awaits the interrupted configure branch but discards its finalizer defects
+                                // A cooperative stop remains an IPC success, while the child retains local cleanup defects
+                                Effect.onExit((outcome) => {
+                                    const missing = configureExits.flatMap((exit) =>
+                                        Exit.isFailure(exit)
+                                            ? exit.cause.reasons.filter(
+                                                  (reason) =>
+                                                      reason._tag !== "Interrupt" &&
+                                                      (!Exit.isFailure(outcome) ||
+                                                          !outcome.cause.reasons.includes(reason)),
+                                              )
+                                            : [],
+                                    )
+                                    return missing.length ? Effect.failCause(Cause.fromReasons(missing)) : Effect.void
+                                }),
                             ),
                         )
                         if (Exit.isFailure(configured)) {
-                            bridge.failed("configure")
+                            if (!stoppedDuringConfiguration) bridge.failed("configure")
                             return yield* Effect.failCause(configured.cause)
                         }
                         if (configured.value === "stop") return

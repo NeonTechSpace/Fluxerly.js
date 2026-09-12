@@ -2,6 +2,7 @@ import { once } from "node:events"
 import { createServer } from "node:http"
 import { Session } from "node:inspector"
 import { setImmediate as turn } from "node:timers/promises"
+import { runInNewContext } from "node:vm"
 import { Cause, Clock, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
@@ -448,6 +449,63 @@ test.each(modes)("%s filter throws and non-booleans fail only the collector with
         expect(String(error)).not.toContain("private-")
         expect(api.state()).toBe("Connected")
     }
+})
+
+test.each(modes)("%s message filters contain rejected promises from every realm", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    const rejections: [unknown, Promise<unknown>][] = []
+    const observe = (reason: unknown, promise: Promise<unknown>) => rejections.push([reason, promise])
+    process.on("unhandledRejection", observe)
+    onTestFinished(() => {
+        process.off("unhandledRejection", observe)
+    })
+
+    const localReason = new Error("local rejected filter")
+    const local = await api.open({ filter: () => Promise.reject(localReason) as never })
+    server.send(wire("10"))
+    expect(await local.wait()).toMatchObject({ _tag: "CollectorError", reason: "filter" })
+    await turn()
+    expect(rejections).toEqual([])
+
+    const foreignReason = new Error("foreign rejected filter")
+    const remote = await api.open({
+        filter: (() => runInNewContext("Promise.reject(reason)", { reason: foreignReason }) as Promise<never>) as never,
+    })
+    server.send(wire("11"))
+    expect(await remote.wait()).toMatchObject({ _tag: "CollectorError", reason: "filter" })
+    await turn()
+    expect(rejections).toEqual([])
+})
+
+test.each(modes)("%s message filters contain hostile rejected promise access", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    const privateDetail = "private rejected promise getter"
+    const rejections: [unknown, Promise<unknown>][] = []
+    const observe = (reason: unknown, promise: Promise<unknown>) => rejections.push([reason, promise])
+    process.on("unhandledRejection", observe)
+    onTestFinished(() => {
+        process.off("unhandledRejection", observe)
+    })
+    const collector = await api.open({
+        filter: () => {
+            const rejected = Promise.reject(new Error(privateDetail))
+            for (const key of ["then", "catch"])
+                Object.defineProperty(rejected, key, {
+                    get() {
+                        throw new Error(privateDetail)
+                    },
+                })
+            return rejected as never
+        },
+    })
+    server.send(wire("10"))
+    const error = await collector.wait()
+    expect(error).toMatchObject({ _tag: "CollectorError", reason: "filter" })
+    expect(JSON.stringify(error)).not.toContain(privateDetail)
+    await turn()
+    expect(rejections).toEqual([])
 })
 
 test.each(modes)("%s pending bytes use the full UTF-8 source frame with exact-boundary admission", async (mode) => {

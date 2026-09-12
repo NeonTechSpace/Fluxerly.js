@@ -614,6 +614,8 @@ export type {
  * Standalone delegated OAuth client whose creating scope owns shutdown, not browser sessions, callbacks, token stores, consent, installation policy, or refresh coordination.
  * It copies the client secret until shutdown, admits at most eight concurrent operations with no queue, caps response bodies at 1 MiB, and never retries requests automatically.
  * Expected failures remain in the typed channel; interruption and sanitized cleanup defects remain in the Effect cause
+ *
+ * Operation input properties are read during execution, with throwing accessors retained as defects
  */
 export interface OAuthClient {
     /** Lazily resolve discovery and build an S256 authorization URL from its web application base, including any advertised path. Bot target and permission parameters are consent hints, not installation or authorization proof. State and PKCE values remain caller-owned */
@@ -711,6 +713,7 @@ export { builders, EmbedBuilder, MessageBuilder } from "./builders.js"
 export type {
     CommandArgumentSchema,
     CommandArgumentMetadata,
+    CommandArgumentMention,
     CommandArgumentType,
     CommandArgumentDescriptor,
     CommandArgumentUser,
@@ -1080,8 +1083,8 @@ import {
     guildUnban,
     guildBans,
 } from "#sdk/internal/moderation"
-import type { BanInput, GuildBan, ModerationOptions } from "./guilds.js"
-export type { BanInput, GuildBan, ModerationOptions } from "./guilds.js"
+import type { BanInput, GuildBan, ModerationOptions, TimeoutOptions } from "./guilds.js"
+export type { BanInput, GuildBan, ModerationOptions, TimeoutOptions } from "./guilds.js"
 import type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
 export type { CachePolicyErrorReport, MessageCacheSettings } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"
@@ -1391,7 +1394,7 @@ export interface EventHandlerOptions<E = never, R = never> extends HandlerOption
 export interface Attachments {
     /** Download attachment.url after matching it against this instance's discovered media `/attachments/` base path.
      * maxBytes is required and caps returned bytes at 50 MiB. Packing can briefly retain response chunks beside that result, so it is not a total heap limit. The SDK sends no Authorization header, follows no redirect, caches nothing and never falls back to proxyUrl.
-     * timeoutMs defaults to 30,000 across endpoint resolution, local four-slot media admission and GET. Media shares that slot limit but does not wait for bot API rate limits. Interruption awaits response-reader cleanup and cannot undo already received bytes.
+     * timeoutMs defaults to 30,000 across endpoint resolution, four-slot media admission and GET. Media slots are separate from the four REST/upload slots and do not wait for bot API rate limits. Interruption awaits response-reader cleanup and cannot undo already received bytes.
      * URL expiry metadata is not an availability check. Failures contain a safe reason/status, including local busy, without a URL or response body
      */
     download(
@@ -1399,7 +1402,7 @@ export interface Attachments {
         options: AttachmentDownloadOptions,
     ): Effect.Effect<Uint8Array, AttachmentDownloadFailure>
     /** Lazily read attachment.url as one-use chunks after matching this instance's media `/attachments/` base path.
-     * The first pull starts discovery, shared four-slot media admission and GET. Each later pull reads at most one response chunk, with no SDK byte packing, spooling, retry or durable storage
+     * The first pull starts discovery, four-slot media admission and GET, independently of the four REST/upload slots. Each later pull reads at most one response chunk, with no SDK byte packing, spooling, retry or durable storage
      *
      * maxBytes is required and bounds bytes delivered across this consumption at 50 MiB. A declared Content-Length above it fails before the first chunk, while runtime counting remains authoritative
      *
@@ -1427,8 +1430,9 @@ export interface Attachments {
 
 /**
  * Lazy message operations preserving caller context and interruption. REST/local lookup work without a gateway.
- * Collection with guildId requires its locally owned shard to be ready; channel-only collection requires aggregate Connected. Closing/Closed reject new work.
- * Remote calls share four active HTTP slots and 256 queued requests or 4 MiB of queued JSON bodies, client-wide across locally owned shards.
+ * Collection with guildId requires its locally owned shard to be ready; channel-only collection requires aggregate Connected. Closing/Closed reject new work
+ *
+ * Remote calls share four REST/upload slots, with four separate attachment-download slots, client-wide across locally owned shards. Both pools share a maximum of 256 queued requests or 4 MiB of queued JSON bodies.
  * Each remote call defaults to a 30,000 ms total deadline, including admission, retry and rate waits, with cleanup awaited afterward
  *
  * fetch, fetchHistory, fetchReactionUsers and fetchPins retry fetch transport failures and HTTP 500/502/503/504 at most twice.
@@ -1868,8 +1872,9 @@ export interface Messages {
      *
      * Returns the created snapshot after an API response, not gateway delivery or recipient acknowledgement.
      * Mention notifications default off. Deadline defaults to 30,000 ms across admission, rate waits and HTTP.
-     * Enabled caching retains eligible created snapshots without changing send completion or delivery.
-     * Shared admission allows four active requests and 256 pending bodies or 4 MiB of pending JSON.
+     * Enabled caching retains eligible created snapshots without changing send completion or delivery
+     *
+     * One client admits four REST/upload requests plus four independent attachment downloads. Both pools share at most 256 pending requests or 4 MiB of pending JSON.
      * Only confirmed rate-limit rejections retry within the deadline. Ambiguous sends never retry automatically
      *
      * Input nonce accepts a 1-32 character string or nonnegative safe integer. Omission creates one SDK nonce per execution, while an explicit nonce is retained through confirmed rate-limit retries.
@@ -2390,8 +2395,9 @@ export interface Discovery {
 }
 
 /** Lazy guild REST operations, gateway counts and optional local lookup in caller context.
- * The REST rules below exclude fetchCounts, which requires gateway readiness and has its own documented contract.
- * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with message/member/role operations, client-wide across locally owned shards
+ * The REST rules below exclude fetchCounts, which requires gateway readiness and has its own documented contract
+ *
+ * Shares the client's four REST/upload slots with message/member/role operations, client-wide across locally owned shards. Four attachment-download slots are separate; both pools share 256 pending requests and 4 MiB pending JSON
  *
  * Total deadline defaults to 30,000 ms including waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Backoff is 125–250 ms then 250–500 ms, honoring longer Retry-After. Confirmed 429 waits are separate and never reset the deadline
@@ -2583,7 +2589,7 @@ export interface Guilds {
  * The REST rules below exclude fetchMemberCounts, which requires gateway readiness and has its own documented contract
  *
  * DM operations are outside this API contract. Supply decimal guild-channel IDs. ID-targeted writes do not prefetch or verify their guild type.
- * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with guild/member/role/message operations, client-wide across locally owned shards.
+ * Shares the client's four REST/upload slots with guild/member/role/message operations, client-wide across locally owned shards. Four attachment-download slots are separate; both pools share 256 pending requests and 4 MiB pending JSON.
  * Total deadline defaults to 30,000 ms, including admission, retry and rate waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Writes retry only confirmed 429 responses. Permission, input, 404 and malformed-response failures do not retry
  *
@@ -2866,7 +2872,8 @@ export interface Members {
         deafened: boolean,
         options?: ModerationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
-    /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts
+    /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts.
+     * timeoutReason supplies optional provider audit metadata separately from auditReason. It is not a stored member field or a guarantee that an audit entry is retained
      *
      * Requires ModerateMembers and provider hierarchy rules. The provider rejects self and administrator targets.
      * Queue/network time consumes this duration. An expiry already past at processing time can clear the timeout
@@ -2887,15 +2894,12 @@ export interface Members {
     timeout(
         target: MemberReference,
         durationMs: number,
-        options?: ModerationOptions,
+        options?: TimeoutOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
     /** Clear a timeout with timeout's permissions, execution, cache and failure rules.
      * Sends null, not a negative duration. Returns the HTTP 200 member without waiting for an event
      */
-    clearTimeout(
-        target: MemberReference,
-        options?: ModerationOptions,
-    ): Effect.Effect<GuildMember, GuildOperationFailure>
+    clearTimeout(target: MemberReference, options?: TimeoutOptions): Effect.Effect<GuildMember, GuildOperationFailure>
     /** Kick the selected guild member after HTTP 204, without waiting for a removal event.
      * Requires KickMembers and provider hierarchy rules. Does not ban the user or automatically restore membership.
      * Missing membership is a typed API failure. Dispatched actions invalidate the member cache even on rejection.
@@ -3646,7 +3650,7 @@ export interface DirectMessages {
         channelIds: readonly string[],
         options?: UserOperationOptions,
     ): Effect.Effect<DirectMessageLatestMessages, UserOperationFailure>
-    /** Edit explicit group settings. Fluxer enforces member/owner permissions; failure does not guarantee rollback */
+    /** Edit settings of an existing group. A null name clears it; omission leaves it unchanged. Fluxer enforces member/owner permissions; failure does not guarantee rollback */
     editGroup(
         id: string,
         input: DirectMessageGroupEdit,
@@ -3906,9 +3910,9 @@ export function createClient<E = never, R = never>(
                     owner.guild("members.setMute", () => memberVoiceFlag(target, "mute", muted, options), options),
                 setDeaf: (target: MemberReference, deafened: boolean, options?: ModerationOptions) =>
                     owner.guild("members.setDeaf", () => memberVoiceFlag(target, "deaf", deafened, options), options),
-                timeout: (target: MemberReference, durationMs: number, options?: ModerationOptions) =>
+                timeout: (target: MemberReference, durationMs: number, options?: TimeoutOptions) =>
                     owner.guild("members.timeout", () => memberTimeout(target, durationMs, options), options),
-                clearTimeout: (target: MemberReference, options?: ModerationOptions) =>
+                clearTimeout: (target: MemberReference, options?: TimeoutOptions) =>
                     owner.guild("members.clearTimeout", () => memberTimeout(target, null, options, true), options),
                 kick: (target: MemberReference, options?: ModerationOptions) =>
                     owner.guild("members.kick", () => memberKick(target, options), options),

@@ -117,7 +117,8 @@ function filteredExecArguments(values: readonly string[]): string[] {
     const result: string[] = []
     for (let index = 0; index < values.length; index += 1) {
         const argument = values[index]!
-        if (argument === "--conditions" && values[index + 1] === "fluxerly-source") {
+        // Child processes resolve the shipped output, so neither Node spelling may retain the source-test condition
+        if ((argument === "--conditions" || argument === "-C") && values[index + 1] === "fluxerly-source") {
             index += 1
             continue
         }

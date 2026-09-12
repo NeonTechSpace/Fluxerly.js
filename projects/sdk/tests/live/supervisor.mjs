@@ -397,7 +397,7 @@ try {
     } catch {
         cleanupSucceeded = false
     }
-    const lockReleased = releaseLock()
+    const lockReleased = supervisorClosed && serverClosed ? releaseLock() : false
     if (!lockReleased) cleanupSucceeded = false
     if (supervisorClosed && serverClosed) clearTimeout(watchdog)
     if (!cleanupSucceeded) {

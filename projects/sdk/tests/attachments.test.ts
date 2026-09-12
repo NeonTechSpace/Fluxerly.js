@@ -100,6 +100,7 @@ async function driver(
                 : run(native!.attachments.download(input, options)),
         stream: (input: Attachment, options: { maxBytes: number; timeoutMs?: number; signal?: AbortSignal }) =>
             defaultApi!.attachments.stream(input, options),
+        diagnostics: () => (defaultApi ?? native)!.diagnostics(),
         native,
     }
 }
@@ -1581,6 +1582,60 @@ test.each(modes)("%s falls back once to inline multipart for the exact temporary
     expect(messages).toBe(1)
 })
 
+test.each(modes.flatMap((mode) => [false, true].map((planningRejected) => [mode, planningRejected] as const)))(
+    "%s preserves retained metadata and positional file IDs during inline edits (planning rejected: %s)",
+    async (mode, planningRejected) => {
+        const payloads: unknown[] = []
+        const multipartBodies: string[] = []
+        const fetch = transport({
+            presignedAttachmentUploads: planningRejected,
+            plan: () => Response.json({ code: "FEATURE_TEMPORARILY_DISABLED" }, { status: 403 }),
+            message: async (json, init) => {
+                expect(init.method).toBe("PATCH")
+                payloads.push(json.attachments)
+                return Response.json(wire())
+            },
+        })
+        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+            if (init.method !== "PATCH") return fetch(url, init)
+            const [body, inspection] = (init.body as ReadableStream<Uint8Array>).tee()
+            const result = fetch(url, { ...init, body })
+            multipartBodies.push(new TextDecoder().decode(await readBytes({ body: inspection })))
+            return result
+        })
+        const api = await driver(mode)
+        for (const metadata of [
+            { title: "Updated", description: "Updated description" },
+            { title: null, description: null },
+        ])
+            await api.edit({
+                attachments: [
+                    { id: "40", ...metadata },
+                    { data: new Uint8Array([7]), filename: "first.bin" },
+                    { id: "41" },
+                    { data: new Uint8Array([8]), filename: "second.bin" },
+                ],
+            })
+        expect(payloads).toEqual(
+            [
+                { title: "Updated", description: "Updated description" },
+                { title: null, description: null },
+            ].map((metadata) => [
+                { id: "40", ...metadata },
+                { id: 1, filename: "first.bin", content_type: "application/octet-stream", flags: 0 },
+                { id: "41" },
+                { id: 3, filename: "second.bin", content_type: "application/octet-stream", flags: 0 },
+            ]),
+        )
+        for (const text of multipartBodies) {
+            expect(text).toContain('name="files[1]"; filename="first.bin"')
+            expect(text).toContain('name="files[3]"; filename="second.bin"')
+            expect(text).not.toContain('name="files[0]"')
+            expect(text).not.toContain('name="files[2]"')
+        }
+    },
+)
+
 test.each(modes)("%s does not reread a finite stream after an inline multipart rate limit", async (mode) => {
     let calls = 0
     let reads = 0
@@ -1920,6 +1975,279 @@ const streamInput: Attachment = {
     flags: 0,
     url: "https://media.fluxer.app/attachments/20/40/fixture.bin",
 }
+
+function lazyCopySource(api: Awaited<ReturnType<typeof driver>>, mode: (typeof modes)[number], input = streamInput) {
+    if (mode === "native") {
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+        return {
+            getReader: () => ({
+                read: () => {
+                    reader ??= Stream.toReadableStream(
+                        api.native!.attachments.stream(input, { maxBytes: 2 }),
+                    ).getReader()
+                    return reader.read()
+                },
+                cancel: async () => {
+                    await reader?.cancel()
+                },
+                releaseLock: () => reader?.releaseLock(),
+            }),
+        }
+    }
+    const iterator = api.stream(input, { maxBytes: 2 })[Symbol.asyncIterator]()
+    return {
+        getReader: () => ({
+            read: async () => {
+                const next = await iterator.next()
+                if (next.done) return { done: true as const }
+                if (next.value.isErr()) throw next.value.error
+                return { done: false as const, value: next.value.value }
+            },
+            cancel: async () => {
+                await iterator.return?.()
+            },
+            releaseLock() {},
+        }),
+    }
+}
+
+test.each(modes.flatMap((mode) => [true, false].map((presigned) => [mode, presigned] as const)))(
+    "%s admits source GETs when four lazy copy writes hold their HTTP slots (presigned: %s)",
+    async (mode, presigned) => {
+        let writes = 0
+        let downloads = 0
+        let messages = 0
+        const started = Promise.withResolvers<void>()
+        const pull = Promise.withResolvers<void>()
+        const uploaded: Uint8Array[] = []
+        const fetch = transport({
+            presignedAttachmentUploads: presigned,
+            download: async () => {
+                downloads++
+                return new Response(chunks([new Uint8Array([7]), new Uint8Array([8])]))
+            },
+            put: async (init) => {
+                uploaded.push(await readBytes(init))
+                return new Response(null, { status: 200 })
+            },
+            message: async () => {
+                messages++
+                return Response.json(wire())
+            },
+        })
+        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+            if (init.method === "PUT" || (!presigned && init.method === "POST" && url.endsWith("/messages"))) {
+                if (++writes === 4) started.resolve()
+                await pull.promise
+            }
+            return fetch(url, init)
+        })
+        const api = await driver(mode)
+        const copies = Array.from({ length: 4 }, () =>
+            api.send({ attachments: [{ stream: lazyCopySource(api, mode), size: 2, filename: "copied.bin" }] }, 500),
+        )
+        const settled = Promise.allSettled(copies)
+        await started.promise
+        expect(downloads).toBe(0)
+        pull.resolve()
+        const results = await settled
+        expect(results.map((result) => result.status)).toEqual(Array(4).fill("fulfilled"))
+        expect(downloads).toBe(4)
+        expect(messages).toBe(4)
+        if (presigned) expect(uploaded).toEqual(Array.from({ length: 4 }, () => new Uint8Array([7, 8])))
+    },
+)
+
+test.each(modes)(
+    "%s releases active and queued lazy copies during overlapping cancellation and shutdown",
+    async (mode) => {
+        let downloads = 0
+        let cancelled = 0
+        let released = 0
+        let messages = 0
+        const reading = Promise.withResolvers<void>()
+        transport({
+            download: async () => {
+                downloads++
+                const pending = Promise.withResolvers<void>()
+                const body = new ReadableStream<Uint8Array>(
+                    {
+                        pull: () => {
+                            if (downloads === 4) reading.resolve()
+                            return pending.promise
+                        },
+                        cancel: () => {
+                            cancelled++
+                            pending.resolve()
+                        },
+                    },
+                    { highWaterMark: 0 },
+                )
+                const acquire = body.getReader.bind(body)
+                vi.spyOn(body, "getReader").mockImplementation(() => {
+                    const reader = acquire()
+                    const release = reader.releaseLock.bind(reader)
+                    vi.spyOn(reader, "releaseLock").mockImplementation(() => {
+                        released++
+                        release()
+                    })
+                    return reader
+                })
+                return new Response(body)
+            },
+            put: async (init) => {
+                await readBytes(init)
+                return new Response(null, { status: 200 })
+            },
+            message: async () => {
+                messages++
+                return Response.json(wire())
+            },
+        })
+        const api = await driver(mode)
+        const controller = new AbortController()
+        const settled = Promise.allSettled(
+            Array.from({ length: 8 }, (_, index) =>
+                api.send(
+                    { attachments: [{ stream: lazyCopySource(api, mode), size: 2, filename: "copied.bin" }] },
+                    2000,
+                    index === 0 ? controller.signal : undefined,
+                ),
+            ),
+        )
+        await reading.promise
+        const extraDownload = Promise.allSettled([api.download(streamInput, 2)])
+        await vi.waitFor(() => expect(api.diagnostics().rest.queuedRequests).toBe(5))
+        expect(downloads).toBe(4)
+        expect(api.diagnostics()).toMatchObject({
+            rest: { activeRequests: 8, activeCapacity: 8, queuedRequests: 5 },
+        })
+        controller.abort()
+        await Promise.all([api.close(), api.close()])
+        expect((await settled).map((result) => result.status)).toEqual(Array(8).fill("rejected"))
+        expect((await extraDownload)[0]?.status).toBe("rejected")
+        expect(downloads).toBe(4)
+        expect(cancelled).toBe(4)
+        expect(released).toBe(4)
+        expect(messages).toBe(0)
+        expect(api.diagnostics()).toMatchObject({
+            rest: { activeRequests: 0, queuedRequests: 0, queuedJsonBytes: 0 },
+            uploads: { reservedBytes: 0 },
+        })
+    },
+)
+
+test.each(modes)("%s recovers a cancelled concurrent streamed copy through owned loopback HTTP", async (mode) => {
+    let origin = ""
+    let downloads = 0
+    let messages = 0
+    let sourceCloses = 0
+    const sourceResponses: ServerResponse[] = []
+    const uploaded: Uint8Array[] = []
+    const server = createServer(async (request, response) => {
+        const path = new URL(request.url ?? "/", origin).pathname
+        if (path === "/.well-known/fluxer") {
+            const document = instanceDocument(true)
+            response.setHeader("content-type", "application/json")
+            response.end(
+                JSON.stringify({
+                    ...document,
+                    endpoints: Object.fromEntries(
+                        Object.keys(document.endpoints).map((key) => [
+                            key,
+                            key === "gateway" ? origin.replace("http:", "ws:") : origin,
+                        ]),
+                    ),
+                }),
+            )
+            return
+        }
+        if (path.startsWith("/attachments/")) {
+            downloads++
+            sourceResponses.push(response)
+            response.on("close", () => sourceCloses++)
+            response.writeHead(200, { "content-length": "2" })
+            response.write(new Uint8Array([7]))
+            return
+        }
+        const parts: Buffer[] = []
+        try {
+            for await (const part of request) parts.push(part)
+        } catch {
+            response.destroy()
+            return
+        }
+        const bytes = Buffer.concat(parts)
+        if (request.method === "PUT") {
+            uploaded.push(new Uint8Array(bytes))
+            response.end()
+            return
+        }
+        response.setHeader("content-type", "application/json")
+        if (path.endsWith("/attachments")) {
+            const body = JSON.parse(bytes.toString())
+            response.end(
+                JSON.stringify({
+                    attachments: body.attachments.map((file: any) => ({
+                        ...file,
+                        upload_mode: "singlepart",
+                        upload_filename: "fixture",
+                        upload_url: `${origin}/uploads/fixture`,
+                    })),
+                }),
+            )
+            return
+        }
+        if (path.endsWith("/messages")) {
+            messages++
+            response.end(JSON.stringify(wire()))
+            return
+        }
+        response.statusCode = 404
+        response.end()
+    })
+    server.listen(0, "127.0.0.1")
+    await once(server, "listening")
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("Missing copy fixture address")
+    origin = `http://127.0.0.1:${address.port}`
+    try {
+        const api = await driver(mode, { instance: { url: origin, allowInsecure: true } })
+        const input = { ...streamInput, url: `${origin}/attachments/20/40/fixture.bin` }
+        const controller = new AbortController()
+        const send = (signal?: AbortSignal) =>
+            api.send(
+                {
+                    attachments: [{ stream: lazyCopySource(api, mode, input), size: 2, filename: "copied.bin" }],
+                },
+                2000,
+                signal,
+            )
+        const first = send(controller.signal)
+        const cancelled = expect(first).rejects.toBeDefined()
+        const siblings = Array.from({ length: 3 }, () => send())
+        const siblingsSettled = Promise.all(siblings)
+        await vi.waitFor(() => expect(downloads).toBe(4))
+        controller.abort()
+        await cancelled
+        await vi.waitFor(() => expect(sourceCloses).toBe(1))
+        const later = send()
+        await vi.waitFor(() => expect(downloads).toBe(5))
+        for (const response of sourceResponses) if (!response.destroyed) response.end(new Uint8Array([8]))
+        await Promise.all([siblingsSettled, later])
+        expect(messages).toBe(4)
+        expect(uploaded).toEqual(Array.from({ length: 4 }, () => new Uint8Array([7, 8])))
+        await api.close()
+        expect(api.diagnostics()).toMatchObject({
+            rest: { activeRequests: 0, queuedRequests: 0, queuedJsonBytes: 0 },
+            uploads: { reservedBytes: 0 },
+        })
+    } finally {
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+    expect(server.listening).toBe(false)
+})
 
 test.each(modes)("%s cancels streaming GET acquisition and awaits a late response body", async (mode) => {
     const entered = Promise.withResolvers<AbortSignal>()

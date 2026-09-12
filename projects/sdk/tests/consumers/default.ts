@@ -102,6 +102,9 @@ export function typedCommandTypes() {
             count: { type: "integer" },
             mode: { type: "choice", choices: ["fast", "slow"] },
             target: { type: "user", candidates: [{ id: "1", username: "sample", privateField: true }] },
+            userId: { type: "id", mention: "user" },
+            channelId: { type: "id", mention: "channel" },
+            roleId: { type: "id", mention: "role" },
             note: { type: "text", optional: true },
         },
         execute: ({ values, args }) => {
@@ -110,6 +113,8 @@ export function typedCommandTypes() {
             const note: string | undefined = values.note
             const raw: readonly string[] = args
             const target: string = values.target.id
+            const mentionIds: readonly string[] = [values.userId, values.channelId, values.roleId]
+            void mentionIds
             // @ts-expect-error Integer conversion yields a number
             const wrong: string = values.count
             // @ts-expect-error An omitted trailing argument may be undefined
@@ -845,6 +850,22 @@ export async function previewModerationCleanup(client: Client, guildId: string, 
     // @ts-expect-error A cleanup selection must be bounded
     client.messages.previewCleanup(channelId, { authorId })
     return { hierarchy, report }
+}
+
+/** Packed default input extensions and ResultAsync shutdown composition */
+export function approvedRequestInputs(client: Client, webhook: import("@neontechspace/fluxerly").WebhookClient) {
+    const options: import("@neontechspace/fluxerly").DefaultTimeoutOptions = {
+        timeoutReason: "Timeout context",
+        auditReason: "Moderator action",
+    }
+    const mention: import("@neontechspace/fluxerly").CommandArgumentMention = "role"
+    const shutdown: ReturnType<Client["shutdown"]> = webhook.shutdown()
+    return [
+        client.members.timeout({ guildId: "1", userId: "2" }, 60_000, options),
+        client.members.clearTimeout({ guildId: "1", userId: "2" }, { timeoutReason: null }),
+        client.directMessages.editGroup("3", { name: null }),
+        shutdown.map(() => mention),
+    ]
 }
 
 /** Typechecked local-validation facts through the packed default entry point */

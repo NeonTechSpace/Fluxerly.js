@@ -72,10 +72,12 @@ type Pending = {
     bytes: number
     until: number
     rateLimited: boolean
+    media: boolean
     resume: (effect: Effect.Effect<() => void, RestFailure | ClientClosedError>) => void
 }
 type Bucket = { remaining: number; until: number }
 const activeRequestCapacity = 4
+const activeMediaCapacity = 4
 const queuedRequestCapacity = 256
 const queuedJsonMaxBytes = 4_194_304
 type Outcome = MessageOperationError["outcome"]
@@ -127,7 +129,7 @@ async function completeCleanup(actions: readonly (() => void | PromiseLike<void>
     if (failures.length > 1) throw new AggregateError(failures, "REST cleanup failed")
 }
 
-/** One one-shot media response reader. It retains one client HTTP slot until EOF, cancellation, or release */
+/** One one-shot media response reader. It retains one media HTTP slot until EOF, cancellation, or release */
 export class AttachmentDownloadSource {
     #reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     #response: Response | undefined
@@ -578,6 +580,7 @@ export class RestOwner {
     #uploadBytes = 0
     #closed = false
     #active = 0
+    #activeMedia = 0
     #pending: Pending[] = []
     #bytes = 0
     #buckets = new Map<string, Bucket>()
@@ -591,8 +594,8 @@ export class RestOwner {
 
     diagnostics() {
         return {
-            activeRequests: this.#active,
-            activeCapacity: activeRequestCapacity,
+            activeRequests: this.#active + this.#activeMedia,
+            activeCapacity: activeRequestCapacity + activeMediaCapacity,
             queuedRequests: this.#pending.length,
             queuedCapacity: queuedRequestCapacity,
             queuedJsonBytes: this.#bytes,
@@ -609,8 +612,13 @@ export class RestOwner {
         for (const [key, bucket] of this.#buckets) if (bucket.until <= now) this.#buckets.delete(key)
         if (this.#closed) return
         let earliest = Infinity
-        for (let index = 0; index < this.#pending.length && this.#active < activeRequestCapacity;) {
+        for (let index = 0; index < this.#pending.length;) {
             const item = this.#pending[index]!
+            // Source GETs must remain admissible while uploads await their lazy stream bodies
+            if (item.media ? this.#activeMedia >= activeMediaCapacity : this.#active >= activeRequestCapacity) {
+                index++
+                continue
+            }
             const bucket = item.rateLimited ? this.#buckets.get(item.route) : undefined
             const until = item.rateLimited
                 ? Math.max(item.until, this.#globalUntil, bucket && bucket.remaining <= 0 ? bucket.until : 0)
@@ -622,19 +630,21 @@ export class RestOwner {
             }
             this.#pending.splice(index, 1)
             this.#bytes -= item.bytes
-            this.#active++
+            if (item.media) this.#activeMedia++
+            else this.#active++
             if (bucket) bucket.remaining--
             let released = false
             item.resume(
                 Effect.succeed(() => {
                     if (released) return
                     released = true
-                    this.#active--
+                    if (item.media) this.#activeMedia--
+                    else this.#active--
                     this.#pump()
                 }),
             )
         }
-        if (earliest !== Infinity && this.#active < activeRequestCapacity)
+        if (earliest !== Infinity)
             this.#timer = setTimeout(() => this.#pump(), Math.min(2_147_483_647, Math.max(1, earliest - now)))
     }
 
@@ -643,6 +653,7 @@ export class RestOwner {
         bytes: number,
         until = 0,
         rateLimited = true,
+        media = false,
     ): Effect.Effect<() => void, RestFailure | ClientClosedError> {
         return Effect.callback((resume) => {
             if (this.#closed) {
@@ -654,7 +665,7 @@ export class RestOwner {
                 resume(Effect.fail(new RestFailure("busy", "notDispatched")))
                 return
             }
-            const item = { route, bytes, until, rateLimited, resume }
+            const item = { route, bytes, until, rateLimited, media, resume }
             this.#pending.push(item)
             this.#bytes += bytes
             this.#pump()
@@ -1122,7 +1133,7 @@ export class RestOwner {
                 const instance =
                     resolved ??
                     (yield* Effect.acquireUseRelease(
-                        Effect.interruptible(owner.#acquire("media:discovery", 0, 0, false)),
+                        Effect.interruptible(owner.#acquire("media:discovery", 0, 0, false, true)),
                         () => owner.resolveInstance(),
                         (release) => Effect.sync(release),
                     ).pipe(
@@ -1144,7 +1155,7 @@ export class RestOwner {
                 const url = attachmentDownloadUrl(attachmentUrl, instance)
                 if (!url) return yield* Effect.fail(new AttachmentDownloadError("untrustedUrl"))
                 const release = yield* owner
-                    .#acquire("media:download", 0, 0, false)
+                    .#acquire("media:download", 0, 0, false, true)
                     .pipe(Effect.interruptible)
                     .pipe(
                         mapFailureCause((error) =>
@@ -1307,7 +1318,7 @@ export class RestOwner {
                 const instance =
                     resolved ??
                     (yield* Effect.acquireUseRelease(
-                        Effect.interruptible(owner.#acquire("media:discovery", 0, 0, false)),
+                        Effect.interruptible(owner.#acquire("media:discovery", 0, 0, false, true)),
                         () => owner.resolveInstance(),
                         (release) => Effect.sync(release),
                     ).pipe(
@@ -1328,9 +1339,9 @@ export class RestOwner {
                 if (!resolved) owner.#instance = instance
                 const url = attachmentDownloadUrl(attachmentUrl, instance)
                 if (!url) return yield* Effect.fail(new AttachmentDownloadError("untrustedUrl"))
-                // Media transfers share the client's four HTTP slots but not API rate-limit buckets
+                // Media has four independent slots so lazy upload sources cannot exhaust their own GET admission
                 release = yield* owner
-                    .#acquire("media:download", 0, 0, false)
+                    .#acquire("media:download", 0, 0, false, true)
                     .pipe(Effect.interruptible)
                     .pipe(
                         mapFailureCause((error) =>
@@ -2020,7 +2031,7 @@ export class RestOwner {
                 const payload = JSON.parse(body.json) as { attachments: Record<string, unknown>[] }
                 payload.attachments = payload.attachments.map((item) => {
                     const file = body.files.find((file) => file.id === item.id)
-                    if (!file) throw new Error("Inline attachment source is missing")
+                    if (!file) return item
                     return { ...item, filename: file.filename, content_type: file.contentType }
                 })
                 body.json = JSON.stringify(payload)
@@ -2166,6 +2177,7 @@ export class RestOwner {
                         key !== "timeoutMs" &&
                         key !== "signal" &&
                         !(input.moderation && key === "auditReason") &&
+                        !(input.timeoutReason && key === "timeoutReason") &&
                         !(
                             key === "purge" &&
                             input.method === "DELETE" &&

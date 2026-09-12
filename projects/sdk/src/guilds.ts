@@ -377,6 +377,15 @@ export interface ModerationOptions extends GuildOperationOptions {
 /** Default moderation starts immediately. Aborting waits for owned cleanup but cannot roll back a dispatched action */
 export interface DefaultModerationOptions extends ModerationOptions, OperationOptions {}
 
+/** Timeout-only request settings. A timeoutReason is provider audit metadata, not a stored GuildMember field */
+export interface TimeoutOptions extends ModerationOptions {
+    /** Optional timeout audit metadata. Null or omission sends no meaningful reason; nonempty strings allow 1–512 Unicode code points */
+    readonly timeoutReason?: string | null
+}
+
+/** Default timeout operations begin immediately. Aborting waits for owned cleanup but cannot roll back a dispatched timeout change */
+export interface DefaultTimeoutOptions extends TimeoutOptions, OperationOptions {}
+
 /** Explicit ban settings. The server owns expiry and any requested message-deletion job */
 export interface BanInput {
     /** Stored ban reason, up to 512 Unicode code points. Omit to use auditReason when supplied, otherwise no reason */

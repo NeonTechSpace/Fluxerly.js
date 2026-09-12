@@ -42,7 +42,7 @@ assert.equal((await webhookClient.value.send({ content: "x" }, { timeoutMs: 0 })
 assert.equal((await webhookClient.value.fetch({ timeoutMs: 0 })).error._tag, "WebhookOperationError")
 assert.equal((await webhookClient.value.edit({ name: "packed" }, { timeoutMs: 0 })).error._tag, "WebhookOperationError")
 assert.equal((await webhookClient.value.delete({ timeoutMs: 0 })).error._tag, "WebhookOperationError")
-await webhookClient.value.shutdown()
+assert.equal((await webhookClient.value.shutdown().map(() => "closed"))._unsafeUnwrap(), "closed")
 assert.equal((await webhookClient.value.fetchMessage("400")).error._tag, "ClientClosedError")
 
 globalThis.fetch = () => {

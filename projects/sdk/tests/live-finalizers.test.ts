@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { Effect, Exit, Scope } from "effect"
+import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, test } from "vitest"
 
 const temporaryParent = realpathSync(tmpdir())
@@ -242,6 +242,51 @@ function voiceFixture() {
     return root
 }
 
+function supervisorFixture() {
+    const root = mkdtempSync(join(temporaryParent, "fluxerly-supervisor-finalizers-"))
+    temporaryRoots.push(root)
+    mkdirSync(join(root, "tests/live"), { recursive: true })
+    copyFileSync(new URL("./live/supervisor.mjs", import.meta.url), join(root, "tests/live/supervisor.mjs"))
+    writeFileSync(
+        join(root, "trap.mjs"),
+        `
+            const original = globalThis.clearTimeout
+            globalThis.clearTimeout = (timer) => {
+                console.log(JSON.stringify({ fixture: "watchdog_cleared" }))
+                return original(timer)
+            }
+        `,
+    )
+    const scriptPath = join(root, "tests/live/supervisor.mjs")
+    const script = readFileSync(scriptPath, "utf8")
+    const injected = script.replace(
+        'try {\n    assert.ok(mode === "default" || mode === "effect")',
+        `try {
+    if (process.env.FLUXERLY_SUPERVISOR_FINALIZER_FIXTURE === "1") {
+        lock = openSync(lockPath, "wx")
+        writeSync(lock, String(process.pid))
+        proofServer = {
+            close: async () => console.log(JSON.stringify({ fixture: "proof_server_closed" })),
+            proofs: () => [],
+        }
+        supervisor = {
+            waitForClose: async () => ({ isOk: () => true, value: undefined }),
+            shutdown: async () => {
+                console.log(JSON.stringify({ fixture: "supervisor_shutdown" }))
+                if (process.env.FLUXERLY_SUPERVISOR_SHUTDOWN_FAILURE === "1") throw Error(${JSON.stringify(privateFailure)})
+                return { isOk: () => true, value: undefined }
+            },
+            status: () => ({ children: [] }),
+        }
+        throw Error("fixture main failure")
+    }
+    assert.ok(mode === "default" || mode === "effect")`,
+    )
+    expect(injected).not.toBe(script)
+    writeFileSync(scriptPath, injected)
+    return root
+}
+
 function finalizerBody(file: string) {
     const source = readFileSync(new URL(`./live/${file}.mjs`, import.meta.url), "utf8")
     const marker = source.lastIndexOf("} finally {")
@@ -266,6 +311,29 @@ function finalizerBody(file: string) {
     throw Error(`Could not extract ${file} finalizer`)
 }
 
+function finalizerBodyAfter(source: string, marker: string) {
+    const index = source.indexOf(marker)
+    expect(index).toBeGreaterThanOrEqual(0)
+    const start = index + "} finally ".length
+    let depth = 0
+    let quote = ""
+    for (let cursor = start; cursor < source.length; cursor++) {
+        const character = source.charAt(cursor)
+        if (quote) {
+            if (character === "\\") cursor++
+            else if (character === quote) quote = ""
+            continue
+        }
+        if (["'", '"', "`"].includes(character)) {
+            quote = character
+            continue
+        }
+        if (character === "{") depth++
+        else if (character === "}" && --depth === 0) return source.slice(start + 1, cursor)
+    }
+    throw Error("Could not extract finalizer")
+}
+
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 const extractedOwners = [
     { file: "consumer-operations", remote: true, watchdog: true },
@@ -279,9 +347,16 @@ const extractedOwners = [
     { file: "member-chunks", remote: false, watchdog: true },
     { file: "member-search", remote: false, watchdog: true },
     { file: "guild-lifecycle", remote: false, watchdog: true },
+    { file: "own-history", remote: true, watchdog: true },
+    { file: "command-conveniences", remote: true, watchdog: true },
+    { file: "role-display-reset", remote: true, watchdog: true },
 ]
 
-async function runExtractedFinalizer(owner: (typeof extractedOwners)[number], failShutdown: boolean) {
+async function runExtractedFinalizer(
+    owner: (typeof extractedOwners)[number],
+    failShutdown: boolean,
+    failScope = false,
+) {
     const root = mkdtempSync(join(temporaryParent, `fluxerly-${owner.file}-finalizer-`))
     temporaryRoots.push(root)
     const lockPath = join(root, ".env.test.local.lock")
@@ -290,9 +365,12 @@ async function runExtractedFinalizer(owner: (typeof extractedOwners)[number], fa
     const events: string[] = []
     const scope = Scope.makeUnsafe()
     await Effect.runPromise(
-        Effect.addFinalizer(() => Effect.sync(() => events.push("scope_close"))).pipe(
-            Effect.provideService(Scope.Scope, scope),
-        ),
+        Effect.addFinalizer(() =>
+            Effect.sync(() => {
+                events.push("scope_close")
+                if (failScope) throw Error(privateFailure)
+            }),
+        ).pipe(Effect.provideService(Scope.Scope, scope)),
     )
     const client = {
         state: "Connected",
@@ -323,6 +401,8 @@ async function runExtractedFinalizer(owner: (typeof extractedOwners)[number], fa
         clientFetch: originalFetch,
         closeSync,
         console: { error: () => undefined },
+        deadlineTimer: {},
+        feature: "fixture",
         gateway: { restore: () => events.push("gateway_restore") },
         journal: { owned: true },
         lock,
@@ -338,6 +418,7 @@ async function runExtractedFinalizer(owner: (typeof extractedOwners)[number], fa
             unlinkSync(lockPath)
         },
         report: (name: string, passed?: boolean) => events.push(`report:${name}:${passed}`),
+        reportsScope: "fixture",
         scope,
         unlinkSync,
         value: async (operation: unknown) =>
@@ -482,6 +563,229 @@ test("voice recovery runs only after its original client is quiescent", () => {
     expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
 })
 
+test("supervisor retains its lock and watchdog when child shutdown is uncertain", () => {
+    const root = supervisorFixture()
+    const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/supervisor.mjs", "default"], {
+        cwd: root,
+        env: {
+            ...process.env,
+            FLUXERLY_SUPERVISOR_FINALIZER_FIXTURE: "1",
+            FLUXERLY_SUPERVISOR_SHUTDOWN_FAILURE: "1",
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+    })
+    expect(child.error).toBeUndefined()
+    expect(child.status).toBe(1)
+    const output = child.stdout + child.stderr
+    expect(output).not.toContain(privateFailure)
+    expect(output).toContain('"fixture":"supervisor_shutdown"')
+    expect(output).toContain('"fixture":"proof_server_closed"')
+    expect(output).not.toContain('"fixture":"watchdog_cleared"')
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(true)
+    closeSync(openSync(join(root, ".env.test.local.lock"), "r+"))
+    unlinkSync(join(root, ".env.test.local.lock"))
+})
+
+test("supervisor releases its lock only after child shutdown and proof-server closure", () => {
+    const root = supervisorFixture()
+    const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/supervisor.mjs", "default"], {
+        cwd: root,
+        env: { ...process.env, FLUXERLY_SUPERVISOR_FINALIZER_FIXTURE: "1" },
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+    })
+    expect(child.error).toBeUndefined()
+    expect(child.status).toBe(1)
+    const output = child.stdout + child.stderr
+    expect(output).not.toContain(privateFailure)
+    expect(output).toContain('"fixture":"supervisor_shutdown"')
+    expect(output).toContain('"fixture":"proof_server_closed"')
+    expect(output).toContain('"fixture":"watchdog_cleared"')
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+})
+
+test("messages default shutdown rejection retains the recovery lock", async () => {
+    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const shutdownBody = finalizerBodyAfter(source, "} finally {\n            clearTimeout(timer)")
+    const runShutdown = new AsyncFunction(
+        "client",
+        "quiescent",
+        "timer",
+        "stopState",
+        "assert",
+        `try {${shutdownBody}} catch {} return quiescent`,
+    )
+    let stopped = false
+    const quiescent = await runShutdown(
+        { shutdown: async () => Promise.reject(Error(privateFailure)) },
+        true,
+        {},
+        () => {
+            stopped = true
+        },
+        assert,
+    )
+    expect(quiescent).toBe(false)
+    expect(stopped).toBe(true)
+
+    const root = mkdtempSync(join(temporaryParent, "fluxerly-messages-finalizer-"))
+    temporaryRoots.push(root)
+    const lockPath = join(root, ".env.test.local.lock")
+    writeFileSync(lockPath, String(process.pid))
+    const lock = openSync(lockPath, "r+")
+    let cleaned = false
+    const cleanup = async () => {
+        cleaned = true
+    }
+    const runCleanup = new AsyncFunction(
+        "gatewayProbe",
+        "rawFetch",
+        "quiescent",
+        "verified",
+        "journal",
+        "cleanup",
+        "report",
+        "lock",
+        "lockPath",
+        "closeSync",
+        "unlinkSync",
+        finalizerBody("messages"),
+    )
+    try {
+        await runCleanup(
+            undefined,
+            globalThis.fetch,
+            quiescent,
+            true,
+            {},
+            cleanup,
+            () => undefined,
+            lock,
+            lockPath,
+            closeSync,
+            unlinkSync,
+        )
+        expect(cleaned).toBe(false)
+        expect(existsSync(lockPath)).toBe(true)
+    } finally {
+        closeSync(lock)
+        unlinkSync(lockPath)
+    }
+})
+
+test("messages native scope-close failure is reported and folded into the scenario exit", async () => {
+    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const scopeBody = finalizerBodyAfter(source, "} finally {\n            const scenarioExit")
+    const runScope = new AsyncFunction(
+        "effectScope",
+        "exit",
+        "Effect",
+        "Scope",
+        "Exit",
+        "Cause",
+        "quiescent",
+        "process",
+        "report",
+        `${scopeBody}; return { exit, quiescent }`,
+    )
+    const scenarioExit = Exit.void
+    const scopeFailure = Exit.failCause(Cause.die("fixture scope defect"))
+    const calls: unknown[] = []
+    const reports: unknown[] = []
+    const process = { exitCode: 0 }
+    const result = await runScope(
+        {},
+        scenarioExit,
+        { runPromiseExit: async () => scopeFailure },
+        { close: (_scope: unknown, exit: unknown) => (calls.push(exit), undefined) },
+        Exit,
+        Cause,
+        true,
+        process,
+        (...args: unknown[]) => reports.push(args),
+    )
+    expect(calls).toEqual([scenarioExit])
+    expect(Exit.isFailure(result.exit)).toBe(true)
+    expect(result.quiescent).toBe(false)
+    expect(process.exitCode).toBe(1)
+    expect(reports).toEqual([["scope_cleanup", false]])
+})
+
+test("messages native scenario failure releases recovery protection after successful scope close", async () => {
+    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const scopeBody = finalizerBodyAfter(source, "} finally {\n            const scenarioExit")
+    const runScope = new AsyncFunction(
+        "effectScope",
+        "exit",
+        "Effect",
+        "Scope",
+        "Exit",
+        "Cause",
+        "quiescent",
+        "process",
+        "report",
+        `${scopeBody}; return { exit, quiescent }`,
+    )
+    const scenarioExit = Exit.fail("fixture scenario failure")
+    const calls: unknown[] = []
+    const reports: unknown[] = []
+    const process = { exitCode: 0 }
+    const result = await runScope(
+        {},
+        scenarioExit,
+        { runPromiseExit: async () => Exit.void },
+        { close: (_scope: unknown, exit: unknown) => (calls.push(exit), undefined) },
+        Exit,
+        Cause,
+        true,
+        process,
+        (...args: unknown[]) => reports.push(args),
+    )
+    expect(calls).toEqual([scenarioExit])
+    expect(result.exit).toBe(scenarioExit)
+    expect(result.quiescent).toBe(true)
+    expect(process.exitCode).toBe(0)
+    expect(reports).toEqual([])
+})
+
+test("messages native scope-close failure preserves the scenario failure", async () => {
+    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const scopeBody = finalizerBodyAfter(source, "} finally {\n            const scenarioExit")
+    const runScope = new AsyncFunction(
+        "effectScope",
+        "exit",
+        "Effect",
+        "Scope",
+        "Exit",
+        "Cause",
+        "quiescent",
+        "process",
+        "report",
+        `${scopeBody}; return { exit, quiescent }`,
+    )
+    const scopeFailure = Exit.failCause(Cause.die("fixture scope defect"))
+    const result = await runScope(
+        {},
+        Exit.fail("fixture scenario failure"),
+        { runPromiseExit: async () => scopeFailure },
+        { close: () => undefined },
+        Exit,
+        Cause,
+        true,
+        { exitCode: 0 },
+        () => undefined,
+    )
+    expect(Exit.isFailure(result.exit)).toBe(true)
+    if (Exit.isFailure(result.exit)) {
+        expect(Cause.hasFails(result.exit.cause)).toBe(true)
+        expect(Cause.hasDies(result.exit.cause)).toBe(true)
+    }
+    expect(result.quiescent).toBe(false)
+})
+
 test.each(extractedOwners)("$file finalizer closes its scope before successful owned cleanup", async (owner) => {
     const result = await runExtractedFinalizer(owner, false)
     expect(result.client.state).toBe("Closed")
@@ -506,3 +810,17 @@ test.each(extractedOwners)(
         expect(result.lockExists).toBe(true)
     },
 )
+
+test.each(
+    extractedOwners.filter((owner) =>
+        ["own-history", "command-conveniences", "role-display-reset"].includes(owner.file),
+    ),
+)("$file retains protection when scope close cannot prove writer quiescence", async (owner) => {
+    const result = await runExtractedFinalizer(owner, false, true)
+    expect(result.client.state).toBe("Closed")
+    expect(result.events).toContain("client_shutdown")
+    expect(result.events).toContain("scope_close")
+    expect(result.events).not.toContain("remote_cleanup")
+    expect(result.events).not.toContain("watchdog_cleared")
+    expect(result.lockExists).toBe(true)
+})

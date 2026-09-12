@@ -309,7 +309,7 @@ export function directMessageEdit(
             "Group DM input may contain only name, icon, ownerId, and nicknames",
         )
     if (
-        (input.name !== undefined && !text(input.name, 1, 100)) ||
+        (input.name !== undefined && input.name !== null && !text(input.name, 1, 100)) ||
         (input.icon !== undefined &&
             input.icon !== null &&
             (typeof input.icon !== "string" ||

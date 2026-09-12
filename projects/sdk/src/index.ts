@@ -487,6 +487,7 @@ export { builders, EmbedBuilder, MessageBuilder } from "./builders.js"
 export type {
     CommandArgumentSchema,
     CommandArgumentMetadata,
+    CommandArgumentMention,
     CommandArgumentType,
     CommandArgumentDescriptor,
     CommandArgumentUser,
@@ -775,8 +776,15 @@ import {
     guildUnban,
     guildBans,
 } from "#sdk/internal/moderation"
-import type { BanInput, GuildBan, DefaultModerationOptions } from "./guilds.js"
-export type { BanInput, GuildBan, ModerationOptions, DefaultModerationOptions } from "./guilds.js"
+import type { BanInput, GuildBan, DefaultModerationOptions, DefaultTimeoutOptions } from "./guilds.js"
+export type {
+    BanInput,
+    GuildBan,
+    ModerationOptions,
+    DefaultModerationOptions,
+    TimeoutOptions,
+    DefaultTimeoutOptions,
+} from "./guilds.js"
 import {
     CancelledError,
     ConfigurationError,
@@ -958,7 +966,7 @@ export interface EventHandlerOptions extends HandlerOptions {
 export interface Attachments {
     /** Download attachment.url after matching it against this instance's discovered media `/attachments/` base path.
      * maxBytes is required and caps returned bytes at 50 MiB. Packing can briefly retain response chunks beside that result, so it is not a total heap limit. The SDK sends no Authorization header, follows no redirect, caches nothing and never falls back to proxyUrl.
-     * timeoutMs defaults to 30,000 across endpoint resolution, local four-slot media admission and GET. Media shares that slot limit but does not wait for bot API rate limits. AbortSignal cancellation awaits response-reader cleanup and cannot undo already received bytes.
+     * timeoutMs defaults to 30,000 across endpoint resolution, four-slot media admission and GET. Media slots are separate from the four REST/upload slots and do not wait for bot API rate limits. AbortSignal cancellation awaits response-reader cleanup and cannot undo already received bytes.
      * URL expiry metadata is not an availability check. Failures contain a safe reason/status, including local busy, without a URL or response body
      */
     download(
@@ -966,11 +974,11 @@ export interface Attachments {
         options: DefaultAttachmentDownloadOptions,
     ): ResultAsync<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
     /** Lazily read attachment.url as one-use chunks after matching this instance's media `/attachments/` base path.
-     * The first next starts discovery, shared four-slot media admission and GET. Each later next reads at most one response chunk, with no SDK byte packing, spooling, retry or durable storage
+     * The first next starts discovery, four-slot media admission and GET, independently of the four REST/upload slots. Each later next reads at most one response chunk, with no SDK byte packing, spooling, retry or durable storage
      *
      * maxBytes is required and bounds bytes delivered across this consumption at 50 MiB. A declared Content-Length above it fails before the first chunk, while runtime counting remains authoritative.
      * timeoutMs defaults to 30,000 across opening, consumer pauses and reads. Early loop exit, return, throw, signal cancellation, failures and shutdown cancel the body, await reader cleanup and release the slot.
-     * This iterable is single-consumption. Expected failures yield one Err, including safe local busy/network/response/limit/deadline reasons. Defects reject with SdkDefect and retain cleanup defects.
+     * This iterable is single-consumption. Expected failures yield one Err, including safe local busy/network/response/limit/deadline reasons. Input accessors are read on the first next, not iterable creation. Listener failures reject with SdkDefect after independent cleanup is attempted; operation and cleanup defects are retained.
      * Overlapping next calls return a local busy error without starting another read or cancelling the pending pull
      *
      * The GET sends no Authorization header, follows no redirect, caches nothing and never uses proxyUrl. Attachment size and expiry metadata do not establish availability or byte safety
@@ -993,8 +1001,9 @@ export interface Attachments {
 
 /**
  * Client-owned message operations. REST and local lookup work without a gateway connection.
- * Collection with guildId requires its locally owned shard to be ready; channel-only collection requires aggregate Connected.
- * Remote calls share four active HTTP slots and at most 256 queued requests or 4 MiB of queued JSON bodies, client-wide across locally owned shards.
+ * Collection with guildId requires its locally owned shard to be ready; channel-only collection requires aggregate Connected
+ *
+ * Remote calls share four REST/upload slots, with four separate attachment-download slots, client-wide across locally owned shards. Both pools share a maximum of 256 queued requests or 4 MiB of queued JSON bodies.
  * Each remote call defaults to a 30,000 ms total deadline, including admission, retry and rate waits, with cleanup awaited afterward
  *
  * fetch, fetchHistory, fetchReactionUsers and fetchPins retry fetch transport failures and HTTP 500/502/503/504 at most twice.
@@ -1473,7 +1482,7 @@ export interface Messages {
      * Mentions are disabled by default. Total budget defaults to 30,000 ms including admission and rate waits.
      * Enabled caching retains eligible created snapshots without changing send completion or delivery
      *
-     * One client admits four active HTTP requests and at most 256 pending bodies or 4 MiB of pending JSON.
+     * One client admits four REST/upload requests plus four independent attachment downloads. Both pools share at most 256 pending requests or 4 MiB of pending JSON.
      * Confirmed rate-limit rejections may retry within that budget. Uncertain sends never retry automatically
      *
      * Input nonce accepts a 1-32 character string or nonnegative safe integer. Omission creates one SDK nonce per send, while an explicit nonce is retained through confirmed rate-limit retries.
@@ -2062,8 +2071,9 @@ export interface Discovery {
 }
 
 /** Guild REST operations, gateway counts and optional local lookup.
- * The REST rules below exclude fetchCounts, which requires gateway readiness and has its own documented contract.
- * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with message/member/role operations, client-wide across locally owned shards.
+ * The REST rules below exclude fetchCounts, which requires gateway readiness and has its own documented contract
+ *
+ * Shares the client's four REST/upload slots with message/member/role operations, client-wide across locally owned shards. Four attachment-download slots are separate; both pools share 256 pending requests and 4 MiB pending JSON.
  * Total deadline defaults to 30,000 ms, including waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Backoff is 125–250 ms then 250–500 ms, honoring longer Retry-After. Confirmed 429 waits are separate and never reset the deadline
  *
@@ -2272,7 +2282,7 @@ export interface Guilds {
  * The REST rules below exclude fetchMemberCounts, which requires gateway readiness and has its own documented contract
  *
  * DM operations are outside this API contract. Supply decimal guild-channel IDs. ID-targeted writes do not prefetch or verify their guild type.
- * Shares the client's four HTTP slots, 256 pending requests and 4 MiB pending JSON budget with guild/member/role/message operations, client-wide across locally owned shards.
+ * Shares the client's four REST/upload slots with guild/member/role/message operations, client-wide across locally owned shards. Four attachment-download slots are separate; both pools share 256 pending requests and 4 MiB pending JSON.
  * Total deadline defaults to 30,000 ms, including admission, retry and rate waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Writes retry only confirmed 429 responses. Permission, input, 404 and malformed-response failures do not retry
  *
@@ -2575,7 +2585,8 @@ export interface Members {
         deafened: boolean,
         options?: DefaultModerationOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
-    /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts
+    /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts.
+     * timeoutReason supplies optional provider audit metadata separately from auditReason. It is not a stored member field or a guarantee that an audit entry is retained
      *
      * Requires ModerateMembers and provider hierarchy rules. The provider rejects self and administrator targets.
      * Queue/network time consumes this duration. An expiry already past at processing time can clear the timeout
@@ -2597,14 +2608,14 @@ export interface Members {
     timeout(
         target: MemberReference,
         durationMs: number,
-        options?: DefaultModerationOptions,
+        options?: DefaultTimeoutOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Clear a timeout with timeout's permissions, execution, cache and failure rules.
      * Sends null, not a negative duration. Returns the HTTP 200 member without waiting for an event
      */
     clearTimeout(
         target: MemberReference,
-        options?: DefaultModerationOptions,
+        options?: DefaultTimeoutOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Kick the selected guild member after HTTP 204, without waiting for a removal event.
      * Requires KickMembers and provider hierarchy rules. Does not ban the user or automatically restore membership.
@@ -2946,9 +2957,10 @@ export interface WebhookClient {
         options?: DefaultMessageOperationOptions,
     ): ResultAsync<void, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Permanently reject new work, cancel admitted work, await transport cleanup and release the owned token reference.
-     * Does not delete the remote webhook or invalidate caller-held credentials. Concurrent calls share the same pending cleanup
+     * Does not delete the remote webhook or invalidate caller-held credentials. Concurrent calls share the same pending cleanup.
+     * Returns ResultAsync with no expected failure; unexpected cleanup defects reject with SdkDefect
      */
-    shutdown(): Promise<void>
+    shutdown(): ResultAsync<void, never>
 }
 
 /** Local cache controls. They never fetch, refresh, mutate remote resources, or expose diagnostics through callbacks */
@@ -3496,10 +3508,14 @@ export function createWebhookClient(options: WebhookClientOptions): Result<Webho
                     "webhooks.deleteMessage",
                     options,
                 ),
-            shutdown: async () => {
-                const result = fromExit(await Effect.runPromiseExit(owner.shutdown()), "shutdown")
-                if (result.isErr()) throw new SdkDefect("shutdown")
-            },
+            shutdown: () =>
+                new ResultAsync(
+                    Effect.runPromiseExit(owner.shutdown()).then((exit) => {
+                        const result = fromExit(exit, "shutdown")
+                        if (result.isErr()) throw new SdkDefect("shutdown")
+                        return ok(undefined)
+                    }),
+                ),
         }),
     )
 }
@@ -3664,7 +3680,7 @@ export interface DirectMessages {
         channelIds: readonly string[],
         options?: DefaultUserOperationOptions,
     ): ResultAsync<DirectMessageLatestMessages, UserOperationFailure | CancelledError | ConfigurationError>
-    /** Edit explicit group settings. Fluxer enforces member/owner permissions; failure does not guarantee rollback */
+    /** Edit settings of an existing group. A null name clears it; omission leaves it unchanged. Fluxer enforces member/owner permissions; failure does not guarantee rollback */
     editGroup(
         id: string,
         input: DirectMessageGroupEdit,
@@ -3870,60 +3886,66 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 }
                 consumed = true
                 const controller = new AbortController()
-                const signal = options?.signal
                 let removeSignal: (() => void) | undefined
                 let source: AttachmentDownloadSource | undefined
                 let opening:
-                    | ResultAsync<
-                          AttachmentDownloadSource,
-                          AttachmentDownloadFailure | CancelledError | ConfigurationError
-                      >
+                    | Promise<Exit.Exit<AttachmentDownloadSource, AttachmentDownloadFailure | ConfigurationError>>
                     | undefined
+                let cleanup: Promise<Exit.Exit<void>> | undefined
                 let closed = false
                 let bound = false
                 let pulling = false
-                const bindSignal = () => {
-                    if (
-                        removeSignal ||
-                        !signal ||
-                        typeof signal.aborted !== "boolean" ||
-                        typeof signal.addEventListener !== "function" ||
-                        typeof signal.removeEventListener !== "function"
-                    )
-                        return
-                    const abort = () => controller.abort()
-                    signal.addEventListener("abort", abort, { once: true })
-                    removeSignal = () => signal.removeEventListener("abort", abort)
-                    if (signal.aborted) abort()
-                }
-                const open = () => {
-                    const invalidSignal = operationSignalError(signal)
-                    if (invalidSignal)
-                        return new ResultAsync<AttachmentDownloadSource, ConfigurationError>(
-                            Promise.resolve(err(invalidSignal)),
-                        )
-                    bindSignal()
-                    opening ??= execute(owner.streamAttachment(attachment, options), "attachments.stream", {
-                        signal: controller.signal,
-                    })
-                    return opening
-                }
-                const detach = async () => {
-                    removeSignal?.()
+                const releaseSignal = () => {
+                    const remove = removeSignal
                     removeSignal = undefined
-                    controller.abort()
-                    const opened = opening && (await opening)
-                    if (!opened || opened.isErr()) return
-                    const cleaned = await execute((source ?? opened.value).closeEffect, "attachments.stream")
-                    if (cleaned.isErr()) throw cleaned.error
+                    remove?.()
                 }
+                const open = () =>
+                    (opening ??= Effect.runPromiseExit(
+                        owner.logging.provide(
+                            Effect.suspend<
+                                AttachmentDownloadSource,
+                                AttachmentDownloadFailure | ConfigurationError,
+                                never
+                            >(() => {
+                                const signal = options?.signal
+                                const invalidSignal = operationSignalError(signal)
+                                if (invalidSignal) return Effect.fail(invalidSignal)
+                                if (signal) {
+                                    const abort = () => controller.abort()
+                                    // Record ownership before invoking a caller-controlled registration method
+                                    removeSignal = () => signal.removeEventListener("abort", abort)
+                                    signal.addEventListener("abort", abort, { once: true })
+                                    if (signal.aborted) {
+                                        abort()
+                                        return Effect.interrupt
+                                    }
+                                }
+                                return owner.streamAttachment(attachment, options)
+                            }),
+                        ),
+                        { signal: controller.signal },
+                    ))
+                const detach = () =>
+                    (cleanup ??= (async () => {
+                        // Listener failure must not prevent cancellation, body closure or reservation release
+                        const removed = await Effect.runPromiseExit(Effect.sync(releaseSignal))
+                        const aborted = await Effect.runPromiseExit(Effect.sync(() => controller.abort()))
+                        const opened = opening && (await opening)
+                        const cleaned =
+                            opened && Exit.isSuccess(opened)
+                                ? await Effect.runPromiseExit((source ?? opened.value).closeEffect)
+                                : Exit.void
+                        const cause = [removed, aborted, cleaned].reduce(
+                            (cause, exit) => (Exit.isFailure(exit) ? Cause.combine(cause, exit.cause) : cause),
+                            Cause.empty as Cause.Cause<never>,
+                        )
+                        return cause.reasons.length ? Exit.failCause(cause) : Exit.void
+                    })())
                 const bind = () => {
                     if (bound) return
                     bound = true
-                    source!.bindSignal(controller.signal, () => {
-                        removeSignal?.()
-                        removeSignal = undefined
-                    })
+                    source!.bindSignal(controller.signal, releaseSignal)
                 }
                 return {
                     async next(): Promise<
@@ -3936,30 +3958,32 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         pulling = true
                         try {
                             const opened = await open()
-                            if (opened.isErr()) {
-                                closed = true
-                                await detach()
-                                return { done: false, value: err(opened.error) }
+                            let chunk: Exit.Exit<Uint8Array | undefined, AttachmentDownloadFailure | ConfigurationError>
+                            if (Exit.isFailure(opened)) chunk = Exit.failCause(opened.cause)
+                            else {
+                                source = opened.value
+                                chunk = await Effect.runPromiseExit(
+                                    owner.logging.provide(
+                                        Effect.suspend(() => {
+                                            bind()
+                                            return closed ? Effect.succeed(undefined) : source!.next
+                                        }),
+                                    ),
+                                )
                             }
-                            source = opened.value
-                            bind()
-                            if (closed) return { done: true, value: undefined }
-                            const chunk = await execute(source.next, "attachments.stream")
-                            if (chunk.isErr()) {
+                            if (Exit.isFailure(chunk) || chunk.value === undefined || closed) {
                                 closed = true
-                                await detach()
-                                return { done: false, value: err(chunk.error) }
+                                const cleaned = await detach()
+                                if (Exit.isFailure(cleaned))
+                                    chunk = Exit.failCause(
+                                        Cause.combine(Exit.isFailure(chunk) ? chunk.cause : Cause.empty, cleaned.cause),
+                                    )
                             }
-                            if (chunk.value === undefined) {
-                                closed = true
-                                await detach()
-                                return { done: true, value: undefined }
-                            }
-                            return { done: false, value: ok(chunk.value) }
-                        } catch (error) {
-                            closed = true
-                            await detach()
-                            throw error
+                            const result = fromExit(chunk, "attachments.stream")
+                            if (result.isErr()) return { done: false, value: err(result.error) }
+                            return result.value === undefined || closed
+                                ? { done: true, value: undefined }
+                                : { done: false, value: ok(result.value) }
                         } finally {
                             pulling = false
                         }
@@ -3969,10 +3993,8 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                             Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
                         >
                     > {
-                        if (!closed) {
-                            closed = true
-                            await detach()
-                        }
+                        closed = true
+                        fromExit(await detach(), "attachments.stream")
                         return { done: true, value: undefined }
                     },
                     async throw(
@@ -3982,10 +4004,13 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                             Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
                         >
                     > {
-                        if (!closed) {
-                            closed = true
-                            await detach()
-                        }
+                        closed = true
+                        const cleaned = await detach()
+                        if (Exit.isFailure(cleaned))
+                            fromExit(
+                                Exit.failCause(Cause.combine(Cause.die(error), cleaned.cause)),
+                                "attachments.stream",
+                            )
                         throw error
                     },
                 }
@@ -4538,13 +4563,13 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         "members.setDeaf",
                         options,
                     ),
-                timeout: (target: MemberReference, durationMs: number, options?: DefaultModerationOptions) =>
+                timeout: (target: MemberReference, durationMs: number, options?: DefaultTimeoutOptions) =>
                     execute(
                         owner.guild("members.timeout", () => memberTimeout(target, durationMs, options), options),
                         "members.timeout",
                         options,
                     ),
-                clearTimeout: (target: MemberReference, options?: DefaultModerationOptions) =>
+                clearTimeout: (target: MemberReference, options?: DefaultTimeoutOptions) =>
                     execute(
                         owner.guild("members.clearTimeout", () => memberTimeout(target, null, options, true), options),
                         "members.clearTimeout",
@@ -4989,7 +5014,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
 /**
  * Standalone delegated OAuth client with no browser, callback, token-store, or bot-transport ownership.
  * It copies the client secret until shutdown, admits at most eight concurrent operations with no queue, caps response bodies at 1 MiB, and never retries requests automatically.
- * Expected failures are Result errors; unexpected cleanup defects reject with SdkDefect without upstream text
+ * Expected failures are Result errors; unexpected input-accessor and cleanup defects reject with SdkDefect without upstream text
  */
 export interface OAuthClient {
     /** Build an S256 authorization URL from the selected instance's discovered web application base, including any advertised path. Bot target and permission parameters are consent hints, not installation or authorization proof. State and PKCE values remain caller-owned */
@@ -5074,42 +5099,55 @@ export const oauth = Object.freeze({
             Object.freeze({
                 authorizationUrl: (input: OAuthAuthorizationInput, options?: DefaultOAuthOperationOptions) =>
                     executeOperation(
-                        owner.authorizationUrl(input, oauthOwnerOptions(options)),
+                        Effect.suspend(() => owner.authorizationUrl(input, oauthOwnerOptions(options))),
                         "oauth.authorizationUrl",
                         options,
                     ),
                 exchangeCode: (input: OAuthCodeExchangeInput, options?: DefaultOAuthOperationOptions) =>
                     executeOperation(
-                        owner.exchangeCode(input, oauthOwnerOptions(options)),
+                        Effect.suspend(() => owner.exchangeCode(input, oauthOwnerOptions(options))),
                         "oauth.exchangeCode",
                         options,
                     ),
                 refresh: (refreshToken: string, options?: DefaultOAuthOperationOptions) =>
-                    executeOperation(owner.refresh(refreshToken, oauthOwnerOptions(options)), "oauth.refresh", options),
+                    executeOperation(
+                        Effect.suspend(() => owner.refresh(refreshToken, oauthOwnerOptions(options))),
+                        "oauth.refresh",
+                        options,
+                    ),
                 revoke: (
                     input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
                     options?: DefaultOAuthOperationOptions,
-                ) => executeOperation(owner.revoke(input, oauthOwnerOptions(options)), "oauth.revoke", options),
+                ) =>
+                    executeOperation(
+                        Effect.suspend(() => owner.revoke(input, oauthOwnerOptions(options))),
+                        "oauth.revoke",
+                        options,
+                    ),
                 fetchIdentity: (accessToken: string, options?: DefaultOAuthOperationOptions) =>
                     executeOperation(
-                        owner.fetchIdentity(accessToken, oauthOwnerOptions(options)),
+                        Effect.suspend(() => owner.fetchIdentity(accessToken, oauthOwnerOptions(options))),
                         "oauth.fetchIdentity",
                         options,
                     ),
                 fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: DefaultOAuthOperationOptions) =>
                     executeOperation(
-                        owner.fetchGuilds(accessToken, query, oauthOwnerOptions(options)),
+                        Effect.suspend(() => owner.fetchGuilds(accessToken, query, oauthOwnerOptions(options))),
                         "oauth.fetchGuilds",
                         options,
                     ),
                 fetchConnections: (accessToken: string, options?: DefaultOAuthOperationOptions) =>
                     executeOperation(
-                        owner.fetchConnections(accessToken, oauthOwnerOptions(options)),
+                        Effect.suspend(() => owner.fetchConnections(accessToken, oauthOwnerOptions(options))),
                         "oauth.fetchConnections",
                         options,
                     ),
                 introspect: (token: string, options?: DefaultOAuthOperationOptions) =>
-                    executeOperation(owner.introspect(token, oauthOwnerOptions(options)), "oauth.introspect", options),
+                    executeOperation(
+                        Effect.suspend(() => owner.introspect(token, oauthOwnerOptions(options))),
+                        "oauth.introspect",
+                        options,
+                    ),
                 shutdown: () =>
                     new ResultAsync(
                         Effect.runPromiseExit(owner.shutdown()).then((exit) => {

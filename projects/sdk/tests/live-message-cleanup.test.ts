@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { Cause } from "effect"
 import { afterEach, expect, test } from "vitest"
 
 const temporaryParent = realpathSync(tmpdir())
@@ -61,18 +62,23 @@ function fixture() {
         join(root, "trap.mjs"),
         `
             const name = "fluxerly-sdk-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            const ownershipConflict = process.env.FLUXERLY_MESSAGES_OWNERSHIP_CONFLICT_FIXTURE === "1"
             let channelPresent = true
             const fixtureFetch = async (url, options = {}) => {
                 const path = new URL(url).pathname
                 const method = options.method ?? "GET"
                 if (path === "/v1/users/@me") throw Error("fixture moderation cleanup failure")
                 if (method === "GET" && path === "/v1/guilds/100/channels")
-                    return Response.json(channelPresent ? [{ id: "300", name, guild_id: "100", type: 0 }] : [])
+                    return Response.json(channelPresent ? [{ id: ownershipConflict ? "301" : "300", name, guild_id: "100", type: 0 }] : [])
                 if (method === "GET" && path === "/v1/channels/300")
                     return channelPresent
-                        ? Response.json({ id: "300", name, guild_id: "100", type: 0 })
+                        ? Response.json({ id: "300", name: ownershipConflict ? "renamed-owned-channel" : name, guild_id: "100", type: 0 })
                         : Response.json(null, { status: 404 })
-                if (method === "DELETE" && path === "/v1/channels/300") {
+                if (method === "GET" && path === "/v1/channels/301")
+                    return channelPresent
+                        ? Response.json({ id: "301", name, guild_id: "100", type: 0 })
+                        : Response.json(null, { status: 404 })
+                if (method === "DELETE" && (path === "/v1/channels/300" || path === "/v1/channels/301")) {
                     channelPresent = false
                     return Response.json({})
                 }
@@ -94,7 +100,7 @@ function fixture() {
         journal = {
             guildId: process.env.FLUXERLY_MESSAGES_INVALID_JOURNAL_FIXTURE === "1" ? "999" : guildId,
             name: "fluxerly-sdk-test-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            channelId: "300",
+            ...(process.env.FLUXERLY_MESSAGES_UNKNOWN_CHANNEL_ID_FIXTURE === "1" ? {} : { channelId: "300" }),
             moderation: {
                 userId: moderationUserId,
                 botId: "200",
@@ -134,6 +140,75 @@ test.each(["default", "effect"])(
         expect(output).toContain('"check":"test_channel_and_messages_removed","passed":true')
         expect(output).toContain('"fixture":"channel_present","channelPresent":false')
         expect(output).not.toContain("fixture moderation cleanup failure")
+        expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
+        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+    },
+)
+
+test("native message cancellation accepts no paired defect", () => {
+    const mixed = Cause.combine(Cause.interrupt(1), Cause.die("fixture cleanup defect"))
+    expect(Cause.hasInterrupts(mixed)).toBe(true)
+    expect(Cause.hasDies(mixed)).toBe(true)
+    expect(Cause.hasInterruptsOnly(mixed)).toBe(false)
+
+    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const history = source.lastIndexOf("cancelHistory: async")
+    const download = source.lastIndexOf("cancelDownload: async")
+    expect(history).toBeGreaterThanOrEqual(0)
+    expect(download).toBeGreaterThanOrEqual(0)
+    expect(source.slice(history, history + 1_000)).toContain("Cause.hasInterruptsOnly(result.cause)")
+    expect(source.slice(download, download + 1_000)).toContain("Cause.hasInterruptsOnly(cancelled.cause)")
+})
+
+test.each(["default", "effect"])(
+    "%s message cleanup reconciles an unknown channel ID through its unique marker",
+    (mode) => {
+        const root = fixture()
+        const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
+            cwd: root,
+            env: {
+                ...process.env,
+                FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1",
+                FLUXERLY_MESSAGES_UNKNOWN_CHANNEL_ID_FIXTURE: "1",
+            },
+            encoding: "utf8",
+            timeout: 10_000,
+            windowsHide: true,
+        })
+
+        expect(child.error).toBeUndefined()
+        expect(child.signal).toBeNull()
+        expect(child.status).toBe(1)
+        const output = child.stdout + child.stderr
+        expect(output).toContain('"check":"test_channel_and_messages_removed","passed":true')
+        expect(output).toContain('"fixture":"channel_present","channelPresent":false')
+        expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
+        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+    },
+)
+
+test.each(["default", "effect"])(
+    "%s message cleanup retains evidence when the recorded channel ID conflicts with a matching marker",
+    (mode) => {
+        const root = fixture()
+        const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
+            cwd: root,
+            env: {
+                ...process.env,
+                FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1",
+                FLUXERLY_MESSAGES_OWNERSHIP_CONFLICT_FIXTURE: "1",
+            },
+            encoding: "utf8",
+            timeout: 10_000,
+            windowsHide: true,
+        })
+
+        expect(child.error).toBeUndefined()
+        expect(child.signal).toBeNull()
+        expect(child.status).toBe(1)
+        const output = child.stdout + child.stderr
+        expect(output).not.toContain('"check":"test_channel_and_messages_removed","passed":true')
+        expect(output).toContain('"fixture":"channel_present","channelPresent":true')
         expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
         expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
     },

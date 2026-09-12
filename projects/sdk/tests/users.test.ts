@@ -378,6 +378,30 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s sets, clears and omits a group name without other group changes", async (mode) => {
+    const bodies: Record<string, unknown>[] = []
+    let name: string | null = "fixture group"
+    rest(async (url, init) => {
+        const path = new URL(url).pathname
+        if (init.method === "GET") return Response.json(group("10", { name }))
+        if (init.method === "PATCH") {
+            const body = JSON.parse(String(init.body)) as Record<string, unknown>
+            bodies.push(body)
+            if (Object.hasOwn(body, "name")) name = body.name as string | null
+            return Response.json(group("10", { name, ...(body.icon === undefined ? {} : { icon: body.icon }) }))
+        }
+        throw Error(`Unexpected request ${init.method} ${path}`)
+    })
+    const api = await setup(mode)
+
+    expect((await api.editGroup("10", { name: "renamed" })).name).toBe("renamed")
+    expect(bodies.at(-1)).toEqual({ name: "renamed" })
+    expect((await api.editGroup("10", { name: null })).name).toBeNull()
+    expect(bodies.at(-1)).toEqual({ name: null })
+    expect((await api.editGroup("10", { icon: null })).name).toBeNull()
+    expect(bodies.at(-1)).toEqual({ icon: null })
+})
+
 test.each(modes)("%s uses one deadline across mutation preflight and write", async (mode) => {
     const calls: string[] = []
     rest(async (url, init) => {

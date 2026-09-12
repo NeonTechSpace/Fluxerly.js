@@ -176,7 +176,7 @@ export interface ClientDiagnostics {
     readonly gatewayLatencyMs: number | null
     /** Current locally owned shard state only, in configured local order */
     readonly shards: readonly ShardState[]
-    /** Shared local HTTP scheduler occupancy. Queued JSON bytes exclude uploads and do not bound heap or process memory */
+    /** Shared local HTTP scheduler occupancy. Active requests and capacity total the four REST/upload and four media slots. Queued JSON bytes exclude uploads and do not bound heap or process memory */
     readonly rest: {
         readonly activeRequests: number
         readonly activeCapacity: number

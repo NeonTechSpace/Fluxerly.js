@@ -4,6 +4,7 @@ import type {
     GuildMember,
     MemberReference,
     ModerationOptions,
+    TimeoutOptions,
     VoiceConnectionReference,
 } from "#sdk/guilds"
 import { identifier, record } from "./message.js"
@@ -12,6 +13,8 @@ import { InputValidationFailure, inputValidationFailure } from "#sdk/input-valid
 
 const integer = (value: unknown, min: number, max: number): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
+const text = (value: unknown, min: number, max: number): value is string =>
+    typeof value === "string" && [...value].length >= min && [...value].length <= max
 const timestamp = (value: unknown): value is string =>
     typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && Number.isFinite(Date.parse(value))
 
@@ -38,14 +41,29 @@ export function auditSettings(
     return { moderation: true as const, auditReason: trimmed }
 }
 
+function timeoutSettings(
+    options?: TimeoutOptions,
+): { readonly moderation: true; readonly auditReason?: string } | InputValidationFailure {
+    const settings = auditSettings(options)
+    if (settings instanceof InputValidationFailure) return settings
+    const reason = options?.timeoutReason
+    if (reason !== undefined && reason !== null && !text(reason, 1, 512))
+        return inputValidationFailure(
+            "options.timeoutReason",
+            "length",
+            "Timeout reason must contain 1 through 512 Unicode code points",
+        )
+    return settings
+}
+
 export function memberTimeout(
     target: MemberReference,
     durationMs: number | null,
-    options?: ModerationOptions,
+    options?: TimeoutOptions,
     clear = false,
 ): GuildRequest<GuildMember> | InputValidationFailure {
     const request = memberFetch(target)
-    const extra = auditSettings(options)
+    const extra = timeoutSettings(options)
     if (request instanceof InputValidationFailure) return request
     if (extra instanceof InputValidationFailure) return extra
     if (!clear && !integer(durationMs, 1, 31_536_000_000))
@@ -58,9 +76,11 @@ export function memberTimeout(
     return {
         ...request,
         ...extra,
+        timeoutReason: true,
         method: "PATCH",
         json: JSON.stringify({
             communication_disabled_until: clear ? null : new Date(Date.now() + durationMs!).toISOString(),
+            ...(options?.timeoutReason === undefined ? {} : { timeout_reason: options.timeoutReason }),
         }),
         cache: { selection: { kind: "members", guildId, id: userId }, mutation: true },
         decode: (value) => {
