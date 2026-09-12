@@ -138,7 +138,7 @@ export const snowflakes = Object.freeze({
 })
 
 /** Pure user/member display-name fallback with no remote or cache lookup */
-export const display = sharedDisplay
+export const display: typeof sharedDisplay = sharedDisplay
 
 /** Pure raw-permission composition, membership, missing-name inspection and decimal serialization. Calls are lazy Effects, never authorization decisions */
 export const permissionBits = Object.freeze({

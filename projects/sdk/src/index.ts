@@ -82,19 +82,19 @@ function oauthOwnerOptions(options: DefaultOAuthOperationOptions | undefined) {
  * Pure Fluxer markup helpers with no client, network, cache, or notification-state ownership.
  * Fallible helpers return `Result`; `escapeMarkdown` returns text directly. Mention markup does not enable notifications
  */
-export const format = sharedFormat
+export const format: typeof sharedFormat = sharedFormat
 
 /** Pure decimal-string snowflake helpers. Fallible conversions return `Result` and never pass IDs through Number */
-export const snowflakes = sharedSnowflakes
+export const snowflakes: typeof sharedSnowflakes = sharedSnowflakes
 
 /** Pure user/member display-name fallback with no remote or cache lookup */
-export const display = sharedDisplay
+export const display: typeof sharedDisplay = sharedDisplay
 
 /** Pure raw-permission composition, membership, missing-name inspection and decimal serialization, not an authorization decision */
-export const permissionBits = sharedPermissionBits
+export const permissionBits: typeof sharedPermissionBits = sharedPermissionBits
 
 /** Pure validated numeric RGB, six-digit hex and RGB-tuple conversions. Fallible calls return Result without coercion or network work */
-export const colors = sharedColors
+export const colors: typeof sharedColors = sharedColors
 
 /**
  * Pure lossless splitting into bounded UTF-16 pieces. Results are frozen. Sending and Markdown handling remain explicit
@@ -114,13 +114,13 @@ export const colors = sharedColors
  * }
  * ```
  */
-export const text = sharedText
+export const text: typeof sharedText = sharedText
 
 /** Pure hosted Fluxer guild-channel, direct-message, message, and bot-installation link helpers. Fallible route validation returns `Result` */
-export const links = sharedLinks
+export const links: typeof sharedLinks = sharedLinks
 
 /** Pure hosted Fluxer avatar, member, guild, emoji, and sticker URL helpers. Fallible calls return `Result` without a client, network, cache, or arbitrary origin */
-export const assets = sharedAssets
+export const assets: typeof sharedAssets = sharedAssets
 import {
     BotApplicationOperationError,
     type BotApplication,

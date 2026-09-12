@@ -64,6 +64,48 @@ const sourceCommentProject = sourceCommentSnapshot
     .find((candidate) => candidate.configFileName.endsWith("/tsconfig.json"))
 assert.ok(sourceCommentProject, "TypeScript project was not loaded")
 const symbolIsAlias = 1 << 21
+const documentedHelpers = ["format", "snowflakes", "display", "permissionBits", "colors", "text", "links", "assets"]
+
+function helperMemberComments(project, file, names = documentedHelpers) {
+    const source = project.program.getSourceFile(file)
+    assert.ok(source, `Helper documentation entry ${file} was not loaded`)
+    const module = project.checker.getSymbolAtLocation(source)
+    assert.ok(module, `Helper documentation entry ${file} is not a module`)
+    const exports = new Map(project.checker.getExportsOfModule(module).map((symbol) => [symbol.name, symbol]))
+    return names.map((name) => {
+        const exported = exports.get(name)
+        assert.ok(exported, `Helper ${name} is missing`)
+        const symbol = exported.flags & symbolIsAlias ? project.checker.getAliasedSymbol(exported) : exported
+        const members = project.checker.getPropertiesOfType(project.checker.getTypeOfSymbol(symbol))
+        assert.ok(members.length > 0, `Helper ${name} has no visible members`)
+        return [
+            name,
+            members.map((member) => {
+                const comment = project.checker.getDocumentationCommentOfSymbol(member)
+                assert.ok(comment.length > 0, `Consumer helper ${name}.${member.name} has no member documentation`)
+                return [member.name, comment]
+            }),
+        ]
+    })
+}
+
+function assertPackedHelperComments(consumer, kind) {
+    const api = new API({ cwd: consumer })
+    try {
+        const project = api
+            .updateSnapshot({ openProjects: ["tsconfig.json"] })
+            .getProjects()
+            .find((candidate) => candidate.configFileName.endsWith("/tsconfig.json"))
+        assert.ok(project, "Packed helper documentation project was not loaded")
+        assert.deepEqual(
+            helperMemberComments(project, join(consumer, "helper-comments.ts")),
+            helperMemberComments(sourceCommentProject, join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts")),
+            `${kind} packed helper member documentation differs from source`,
+        )
+    } finally {
+        api.close()
+    }
+}
 
 const publicCommentOwners = new Map()
 
@@ -139,6 +181,9 @@ function assertExportedOwnerCommentGuards() {
         join(sourceRoot, "shared.ts"),
         `/** reexported fixture documentation */\nexport type Shared = {\n    /** reexported member documentation */\n    readonly value: string\n} & {\n    /** nested member documentation */\n    readonly options: {\n        /** nested option documentation */\n        readonly enabled: boolean\n    }\n}\n`,
     )
+    const documentedHelper = `export declare const helper: {\n    /** Member documentation */\n    readonly value: string\n}\n`
+    writeFileSync(join(sourceRoot, "helper.ts"), documentedHelper)
+    writeFileSync(join(sourceRoot, "missing.ts"), documentedHelper.replace("/** Member documentation */", ""))
     const api = new API({ cwd: temporary })
     try {
         const snapshot = api.updateSnapshot({ openProjects: ["tsconfig.json"] })
@@ -153,6 +198,13 @@ function assertExportedOwnerCommentGuards() {
             "/** nested member documentation */",
             "/** nested option documentation */",
         ])
+        assert.deepEqual(helperMemberComments(project, join(sourceRoot, "helper.ts"), ["helper"]), [
+            ["helper", [["value", "Member documentation"]]],
+        ])
+        assert.throws(
+            () => helperMemberComments(project, join(sourceRoot, "missing.ts"), ["helper"]),
+            /Consumer helper helper.value has no member documentation/,
+        )
     } finally {
         api.close()
         const target = realpathSync(temporary)
@@ -328,6 +380,10 @@ try {
         )
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
+        writeFileSync(
+            join(consumer, "helper-comments.ts"),
+            `export { ${documentedHelpers.join(", ")} } from ${JSON.stringify(kind === "default" ? manifest.name : `${manifest.name}/effect`)}\n`,
+        )
         copyFileSync(join(fixtureDirectory, "event-waits.mjs"), join(consumer, "event-waits.mjs"))
         process.stdout.write(run(process.execPath, ["event-waits.mjs", kind], consumer, 10_000))
         writeFileSync(
@@ -567,6 +623,7 @@ try {
                 exclude: ["run-bot-example.ts"],
             }),
         )
+        assertPackedHelperComments(consumer, kind)
         run(process.execPath, [compiler, "-p", "tsconfig.json"], consumer)
         copyFileSync(join(fixtureDirectory, "workflow.mjs"), join(consumer, "workflow.mjs"))
         process.stdout.write(run(process.execPath, ["--enable-source-maps", "workflow.mjs", kind], consumer, 15_000))
