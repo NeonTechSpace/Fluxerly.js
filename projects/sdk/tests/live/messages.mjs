@@ -1647,8 +1647,13 @@ async function cleanup() {
     if (!journal) return
     assert.equal(journal.guildId, guildId)
     assert.match(journal.name, /^fluxerly-sdk-test-[a-f0-9]{32}$/)
-    await cleanupModeration(api, journal, moderationUserId)
-    if (journal.moderation) report("moderation_ban_and_timeout_cleared", true)
+    let moderationFailure
+    try {
+        await cleanupModeration(api, journal, moderationUserId)
+        if (journal.moderation) report("moderation_ban_and_timeout_cleared", true)
+    } catch (error) {
+        moderationFailure = error
+    }
     let emojiFailure
     try {
         await cleanupReactionEmoji(api, journal)
@@ -1693,6 +1698,7 @@ async function cleanup() {
     const after = await api("GET", `/guilds/${guildId}/channels`)
     assert.ok(Array.isArray(after.data) && !after.data.some((channel) => channel.name === journal.name))
     report("test_channel_and_messages_removed", true)
+    if (moderationFailure) throw moderationFailure
     if (emojiFailure) throw emojiFailure
     if (roleFailure) throw roleFailure
     if (channelFixtureFailure) throw channelFixtureFailure

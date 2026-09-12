@@ -43,9 +43,60 @@ function fixture() {
     writeFileSync(
         join(root, "trap.mjs"),
         `
-            const fixtureFetch = async (url) => {
-                console.log(JSON.stringify({ fixture: "remote_reconciliation", path: new URL(url).pathname }))
+            const marker = "fluxerly-wh-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            const hooks = [
+                {
+                    id: "400",
+                    name: marker + "-token",
+                    user: { id: "200" },
+                    guild_id: "100",
+                    channel_id: "300",
+                },
+                {
+                    id: "401",
+                    name: marker + "-unknown",
+                    user: { id: "200" },
+                    guild_id: "100",
+                    channel_id: "999",
+                },
+            ]
+            if (process.env.FLUXERLY_WEBHOOKS_FOREIGN_COLLISION === "1")
+                hooks.unshift({
+                    id: "402",
+                    name: marker + "-token",
+                    user: { id: "201" },
+                    guild_id: "100",
+                    channel_id: "300",
+                })
+            const channels = [{ id: "300", name: marker + "-a", guild_id: "100", type: 0 }]
+            const deletions = []
+            const fixtureFetch = async (url, options = {}) => {
+                const path = new URL(url).pathname
+                const method = options.method ?? "GET"
+                console.log(JSON.stringify({ fixture: "remote_reconciliation", path }))
                 if (process.env.FLUXERLY_WEBHOOKS_CLEANUP_FAILURE === "1") throw Error(${JSON.stringify(privateFailure)})
+                if (process.env.FLUXERLY_WEBHOOKS_RECOVERY_FIXTURE === "1") {
+                    if (path === "/v1/guilds/100/webhooks") return Response.json(hooks)
+                    if (method === "DELETE" && path === "/v1/webhooks/400") {
+                        hooks.splice(
+                            hooks.findIndex((item) => item.id === "400"),
+                            1,
+                        )
+                        deletions.push("400")
+                        return Response.json({})
+                    }
+                    if (method === "GET" && path === "/v1/webhooks/400") return Response.json(null, { status: 404 })
+                    if (path === "/v1/guilds/100/channels") return Response.json(channels)
+                    if (method === "DELETE" && path === "/v1/channels/300") {
+                        channels.splice(
+                            channels.findIndex((item) => item.id === "300"),
+                            1,
+                        )
+                        deletions.push("300")
+                        return Response.json({})
+                    }
+                    if (method === "GET" && path === "/v1/channels/300") return Response.json(null, { status: 404 })
+                }
                 return Response.json([])
             }
             globalThis.fetch = fixtureFetch
@@ -64,10 +115,31 @@ function fixture() {
             process.on("exit", () =>
                 console.log(JSON.stringify({ fixture: "fetch_restored", restored: globalThis.fetch === fixtureFetch })),
             )
+            process.on("exit", () =>
+                console.log(JSON.stringify({ fixture: "recovery_state", hooks, channels, deletions })),
+            )
         `,
     )
     const script = readFileSync(join(root, "tests/live/webhooks.mjs"), "utf8")
     const fixtureBranch = `
+    if (process.env.FLUXERLY_WEBHOOKS_RECOVERY_FIXTURE === "1") {
+        lock = openSync(lockPath, "wx")
+        writeSync(lock, String(process.pid))
+        token = ${JSON.stringify(fixtureToken)}
+        guildId = "100"
+        botId = "200"
+        verified = true
+        journal = {
+            guildId,
+            botId,
+            marker: "fluxerly-wh-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            webhookPending: true,
+            channels: [{ id: "300", name: "fluxerly-wh-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-a" }],
+        }
+        writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+        await cleanup()
+        throw Error("Fixture recovery complete")
+    }
     if (process.env.FLUXERLY_WEBHOOKS_FINALIZER_FIXTURE === "1") {
         lock = openSync(lockPath, "wx")
         writeSync(lock, String(process.pid))
@@ -114,7 +186,13 @@ function fixture() {
 function run(
     root: string,
     mode: string,
-    options: { cleanupFailure?: boolean; failures?: string[]; activeWriter?: boolean } = {},
+    options: {
+        cleanupFailure?: boolean
+        failures?: string[]
+        activeWriter?: boolean
+        recovery?: boolean
+        foreignCollision?: boolean
+    } = {},
 ) {
     const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/webhooks.mjs", mode], {
         cwd: root,
@@ -124,6 +202,8 @@ function run(
             FLUXERLY_WEBHOOKS_CLEANUP_FAILURE: options.cleanupFailure ? "1" : "0",
             FLUXERLY_WEBHOOKS_FINALIZER_FAILURES: options.failures?.join(",") ?? "",
             FLUXERLY_WEBHOOKS_ACTIVE_WRITER: options.activeWriter ? "1" : "0",
+            FLUXERLY_WEBHOOKS_RECOVERY_FIXTURE: options.recovery ? "1" : "0",
+            FLUXERLY_WEBHOOKS_FOREIGN_COLLISION: options.foreignCollision ? "1" : "0",
         },
         encoding: "utf8",
         timeout: 10_000,
@@ -176,6 +256,31 @@ test.each(["default", "effect"])(
         const recovered = run(root, mode)
         expect(recovered).toContain('"check":"webhook_and_channels_cleanup_verified","passed":true')
         expect(existsSync(join(root, ".env.test.webhooks.local"))).toBe(false)
+        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+    },
+)
+
+test.each(["default", "effect"])("%s webhook live recovery removes only the owned token-edited webhook", (mode) => {
+    const root = fixture()
+    const output = run(root, mode, { recovery: true })
+
+    expect(output).toContain('"check":"webhook_and_channels_cleanup_verified","passed":true')
+    expect(output).toContain('"deletions":["400","300"]')
+    expect(output).toContain('"id":"401","name":"fluxerly-wh-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-unknown"')
+    expect(existsSync(join(root, ".env.test.webhooks.local"))).toBe(false)
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+})
+
+test.each(["default", "effect"])(
+    "%s webhook live recovery retains the journal and channel for a foreign token-name collision",
+    (mode) => {
+        const root = fixture()
+        const output = run(root, mode, { recovery: true, foreignCollision: true })
+
+        expect(output).toContain('"id":"402","name":"fluxerly-wh-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-token"')
+        expect(output).toContain('"channels":[{"id":"300"')
+        expect(output).toContain('"deletions":[]')
+        expect(existsSync(join(root, ".env.test.webhooks.local"))).toBe(true)
         expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
     },
 )

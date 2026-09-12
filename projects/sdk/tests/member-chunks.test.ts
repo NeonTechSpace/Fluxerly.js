@@ -364,9 +364,8 @@ for (const mode of ["default", "native"] as const) {
                 .next()
                 .catch((error) => error)
             expect(failure).toMatchObject({
-                _tag: "MemberChunkError",
-                reason: "input",
-                inputValidation: { path: "options.signal", constraint: "type" },
+                _tag: "ConfigurationError",
+                field: "signal",
             })
             expect(JSON.stringify(failure)).not.toContain("callerSecret")
             expect(JSON.stringify(failure)).not.toContain("private rejected value")

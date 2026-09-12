@@ -368,19 +368,38 @@ try {
     report(stage, false, safeFailure(error))
     process.exitCode = 1
 } finally {
-    try {
-        if (client && client.state !== "Closed") await value(client.shutdown())
-        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-        watch?.verifyClosed()
-    } catch {
-        report("client_cleanup", false)
+    let quiescent = true
+    const retainEvidence = (finalizer) => {
+        quiescent = false
+        report("client_cleanup", false, { finalizer, lockRetained: lock !== undefined })
         process.exitCode = 1
     }
+    if (client && client.state !== "Closed")
+        try {
+            await value(client.shutdown())
+        } catch {
+            retainEvidence("client_shutdown")
+        }
+    if (scope)
+        try {
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+        } catch {
+            retainEvidence("scope_close")
+        }
+    if (quiescent)
+        try {
+            watch?.verifyClosed()
+        } catch {
+            retainEvidence("socket_verification")
+        }
     watch?.restore()
-    clearTimeout(watchdog)
-    if (lock !== undefined) {
-        assert.equal(readFileSync(lockPath, "utf8"), String(process.pid))
-        closeSync(lock)
-        unlinkSync(lockPath)
-    }
+    if (quiescent && lock !== undefined)
+        try {
+            assert.equal(readFileSync(lockPath, "utf8"), String(process.pid))
+            closeSync(lock)
+            unlinkSync(lockPath)
+        } catch {
+            retainEvidence("sandbox_lock_cleanup")
+        }
+    if (quiescent) clearTimeout(watchdog)
 }

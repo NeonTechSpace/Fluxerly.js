@@ -1,4 +1,5 @@
 import type { PermissionInput, PermissionTarget } from "./permissions.js"
+import { operationSignalError } from "#sdk/internal/operation-signal"
 import {
     MemberChunkError,
     type MemberChunk,
@@ -924,7 +925,9 @@ export interface Subscription {
      * Cancelling this wait affects only the wait. Late observers retain the same outcome.
      * Unexpected cleanup defects reject with SdkDefect
      */
-    waitForClose(options?: OperationOptions): ResultAsync<void, EventOverflowError | CancelledError>
+    waitForClose(
+        options?: OperationOptions,
+    ): ResultAsync<void, EventOverflowError | CancelledError | ConfigurationError>
 }
 
 /** Live subscription for one event type without subscription history. The default type preserves existing messageCreate annotations */
@@ -934,7 +937,9 @@ export interface EventSubscription<K extends EventName = "messageCreate"> extend
      * Concurrent reads return EventReadBusyError. Cancellation releases only this read.
      * Overflow remains a typed failure after the queue is discarded. SDK defects reject with SdkDefect
      */
-    next(options?: OperationOptions): ResultAsync<EventMap[K] | null, EventReadError | CancelledError>
+    next(
+        options?: OperationOptions,
+    ): ResultAsync<EventMap[K] | null, EventReadError | CancelledError | ConfigurationError>
 }
 
 /** Default callback scheduling and optional safe error reporting */
@@ -959,7 +964,7 @@ export interface Attachments {
     download(
         attachment: Attachment,
         options: DefaultAttachmentDownloadOptions,
-    ): ResultAsync<Uint8Array, AttachmentDownloadFailure | CancelledError>
+    ): ResultAsync<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
     /** Lazily read attachment.url as one-use chunks after matching this instance's media `/attachments/` base path.
      * The first next starts discovery, shared four-slot media admission and GET. Each later next reads at most one response chunk, with no SDK byte packing, spooling, retry or durable storage
      *
@@ -983,7 +988,7 @@ export interface Attachments {
     stream(
         attachment: Attachment,
         options: DefaultAttachmentStreamOptions,
-    ): AsyncIterable<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>
+    ): AsyncIterable<Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>>
 }
 
 /**
@@ -1032,7 +1037,7 @@ export interface Messages {
         channelId: string,
         query: HistoryIterationQuery,
         options?: DefaultMessageOperationOptions,
-    ): AsyncIterable<Result<Message, MessageOperationFailure | PaginationError | CancelledError>>
+    ): AsyncIterable<Result<Message, MessageOperationFailure | PaginationError | CancelledError | ConfigurationError>>
     /** Search one current-scope indexed page in an explicit guild or channel context, without gateway readiness, cache lookup or cache admission.
      * Starts immediately and completes with a frozen indexing state or frozen result page. Fluxerly always sends scope current.
      * Indexing means Fluxer accepted the request but is not ready; retry is caller-controlled and never happens automatically.
@@ -1052,7 +1057,7 @@ export interface Messages {
         context: MessageSearchContext,
         query?: MessageSearchQuery,
         options?: DefaultMessageSearchOptions,
-    ): ResultAsync<MessageSearchPage, MessageOperationFailure | CancelledError>
+    ): ResultAsync<MessageSearchPage, MessageOperationFailure | CancelledError | ConfigurationError>
     /** Lazily traverse indexed messages from the first contextual page through opaque provider cursors, without polling or prefetching.
      * Each consumption copies inputs and retains one bounded page. maxItems is required; pageSize is 1–25 and maxPages defaults to 100.
      * An indexing page ends traversal with PaginationError indexing so the caller decides whether and when to retry.
@@ -1073,7 +1078,7 @@ export interface Messages {
         filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
         limits: MessageSearchIterationLimits,
         options?: DefaultMessageSearchOptions,
-    ): AsyncIterable<Result<Message, MessageOperationFailure | PaginationError | CancelledError>>
+    ): AsyncIterable<Result<Message, MessageOperationFailure | PaginationError | CancelledError | ConfigurationError>>
     /** Traverse ascending remote user IDs for one message and the selected literal Unicode or custom emoji.
      * Uses iterateHistory's lazy Result, cancellation, deadline, failure and release rules, with fetchReactionUsers remote errors.
      * Stops at maxItems or the server's hasMore=false. No reactor cache or automatic member lookup is added.
@@ -1097,7 +1102,10 @@ export interface Messages {
         query: UserIterationQuery,
         options?: DefaultMessageOperationOptions,
     ): AsyncIterable<
-        Result<import("./reactions.js").ReactionUser, MessageOperationFailure | PaginationError | CancelledError>
+        Result<
+            import("./reactions.js").ReactionUser,
+            MessageOperationFailure | PaginationError | CancelledError | ConfigurationError
+        >
     >
     /** Traverse remote pins in descending timestamp order, without populating the message cache.
      * Uses iterateHistory's lazy Result, cancellation, deadline, failure and release rules, with fetchPins remote errors.
@@ -1121,7 +1129,12 @@ export interface Messages {
         channelId: string,
         query: PinIterationQuery,
         options?: DefaultMessageOperationOptions,
-    ): AsyncIterable<Result<import("./pins.js").MessagePin, MessageOperationFailure | PaginationError | CancelledError>>
+    ): AsyncIterable<
+        Result<
+            import("./pins.js").MessagePin,
+            MessageOperationFailure | PaginationError | CancelledError | ConfigurationError
+        >
+    >
     /**
      * Pin one message identified by decimal id and channelId, without requiring gateway readiness.
      * Starts immediately. AbortSignal cancellation returns CancelledError and unexpected defects reject with SdkDefect.
@@ -1155,7 +1168,7 @@ export interface Messages {
     pin(
         message: MessageReference,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Unpin one explicit message using pin's admission, deadline, retry, cancellation and cache-invalidation rules.
      * Starts immediately. AbortSignal cancellation returns CancelledError and unexpected defects reject with SdkDefect.
@@ -1167,7 +1180,7 @@ export interface Messages {
     unpin(
         message: MessageReference,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one frozen pin page for a decimal channel ID, without gateway readiness, cache reads or cache population.
      * Starts immediately. AbortSignal cancellation returns CancelledError and unexpected defects reject with SdkDefect
@@ -1187,7 +1200,7 @@ export interface Messages {
         channelId: string,
         query?: MessagePinsQuery,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<MessagePinsPage, MessageOperationFailure | CancelledError>
+    ): ResultAsync<MessagePinsPage, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove one named user's reaction, leaving other users and emoji groups untouched.
      * userId is a required decimal ID; naming the bot removes its own reaction.
@@ -1217,7 +1230,7 @@ export interface Messages {
         emoji: ReactionEmojiInput,
         userId: string,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete every user's reaction for one emoji, preserving other emoji groups.
      * Uses removeUserReaction's execution, permission, deadline, failure and cleanup rules, with operation clearReaction.
@@ -1229,7 +1242,7 @@ export interface Messages {
         message: MessageReference,
         emoji: ReactionEmojiInput,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete every user's reactions for every emoji on this message, without deleting the message.
      * Uses clearReaction's execution, permission, deadline, failure and cleanup rules, with operation clearReactions.
@@ -1240,7 +1253,7 @@ export interface Messages {
     clearReactions(
         message: MessageReference,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one frozen page of users who currently hold the specified reaction, without requiring gateway readiness.
      * Accept the same literal Unicode or custom emoji input as addReaction.
@@ -1270,7 +1283,7 @@ export interface Messages {
         emoji: ReactionEmojiInput,
         query?: ReactionUsersQuery,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<ReactionUsersPage, MessageOperationFailure | CancelledError>
+    ): ResultAsync<ReactionUsersPage, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Add the bot's own reaction and complete after HTTP 204, without waiting for or synthesizing a gateway event.
      * Accept literal Unicode or a custom { name, id }; Fluxer owns emoji availability and permission checks
@@ -1298,7 +1311,7 @@ export interface Messages {
         message: MessageReference,
         emoji: ReactionEmojiInput,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove only the bot's own reaction and complete after HTTP 204.
      * Uses addReaction's input, admission, timeout, retry, failure and cancellation rules.
@@ -1309,7 +1322,7 @@ export interface Messages {
         message: MessageReference,
         emoji: ReactionEmojiInput,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Start a bounded collection of future messageCreate observations in one decimal channel ID.
      * Returns a ready handle synchronously. Register before sending a prompt. No history, cache reads or implicit connection
@@ -1379,7 +1392,7 @@ export interface Messages {
     collect(
         channelId: string,
         options?: DefaultCollectorOptions,
-    ): Result<Collector, CollectorRegistrationError | CancelledError>
+    ): Result<Collector, CollectorRegistrationError | CancelledError | ConfigurationError>
     /**
      * Synchronously register future reaction additions on one message with decimal id and channelId.
      * Register before the expected reaction. No REST request, existing-reactor lookup, implicit connect or cache reads
@@ -1439,7 +1452,7 @@ export interface Messages {
     collectReactions(
         message: MessageReference,
         options?: DefaultReactionCollectorOptions,
-    ): Result<ReactionCollector, CollectorRegistrationError | CancelledError>
+    ): Result<ReactionCollector, CollectorRegistrationError | CancelledError | ConfigurationError>
     /**
      * Read this client's local retained snapshot synchronously, never making a request.
      * Disabled caching, absent/evicted/expired entries and a mismatched channel return Ok(undefined), not server absence.
@@ -1473,7 +1486,7 @@ export interface Messages {
         channelId: string,
         input: MessageInput,
         options?: DefaultSendOptions,
-    ): ResultAsync<Message, SendError | CancelledError>
+    ): ResultAsync<Message, SendError | CancelledError | ConfigurationError>
     /** Forward an accessible source message into an explicit destination, without fetching or caching the source.
      * Starts immediately and returns the created message after HTTP, not gateway delivery or recipient acknowledgement
      *
@@ -1499,7 +1512,7 @@ export interface Messages {
         channelId: string,
         input: ForwardMessageInput,
         options?: DefaultSendOptions,
-    ): ResultAsync<Message, SendError | CancelledError>
+    ): ResultAsync<Message, SendError | CancelledError | ConfigurationError>
     /**
      * Tell Fluxer that this bot is typing in one decimal channel ID, completing after HTTP 204.
      * No gateway connection, event confirmation, cache entry, presence update or retained local typing state is created.
@@ -1512,7 +1525,7 @@ export interface Messages {
     typing(
         channelId: string,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Start one typing request, run task, and refresh typing no sooner than every 8,000 ms until task settles.
      * The first request completes before task starts; an initial typing failure returns Err and never calls task.
@@ -1535,7 +1548,7 @@ export interface Messages {
         channelId: string,
         task: (signal: NonNullable<OperationOptions["signal"]>) => PromiseLike<A>,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<A, MessageOperationFailure | CancelledError>
+    ): ResultAsync<A, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Reference an existing message through send. Missing targets fail rather than falling back to an unreferenced send.
      * Input nonce follows send's caller correlation and retry contract. A lost response remains unknown and the SDK does not replay it.
@@ -1546,7 +1559,7 @@ export interface Messages {
         message: MessageReference,
         input: ReplyInput,
         options?: DefaultSendOptions,
-    ): ResultAsync<Message, SendError | CancelledError>
+    ): ResultAsync<Message, SendError | CancelledError | ConfigurationError>
     /**
      * Fetch a frozen message snapshot from Fluxer, never from a cache. Accepts a reference or an existing Message.
      * Returns after the API response is decoded and its message/channel IDs match the requested target.
@@ -1567,7 +1580,7 @@ export interface Messages {
     fetch(
         message: MessageReference,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<Message, MessageOperationFailure | CancelledError>
+    ): ResultAsync<Message, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one remote history page for a decimal channel ID, without requiring a gateway connection or consulting a cache.
      * Defaults to the latest 50 messages. Query limit is 1 through 100 with at most one before, after or around cursor
@@ -1586,7 +1599,7 @@ export interface Messages {
         channelId: string,
         query?: MessageHistoryQuery,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<readonly Message[], MessageOperationFailure | CancelledError>
+    ): ResultAsync<readonly Message[], MessageOperationFailure | CancelledError | ConfigurationError>
     /** Preview one bounded exact cleanup selection without deleting, rereading cache, or requiring a gateway connection.
      * maxScanned and maxSelected are each required integers from 1 through 10,000. Supply authorId, a synchronous filter, or both as combined criteria
      *
@@ -1601,7 +1614,7 @@ export interface Messages {
         channelId: string,
         selection: MessageCleanupSelection,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<MessageCleanupPlan, MessageCleanupFailure | CancelledError>
+    ): ResultAsync<MessageCleanupPlan, MessageCleanupFailure | CancelledError | ConfigurationError>
     /** Submit one prior plan's exact IDs in sequential batches of at most 100, without rereading history or rerunning selection criteria.
      * A plan is single-use even after an error or cancellation, preventing accidental replay. Preview again or use explicit deleteMany for journaled reconciliation.
      * One 30,000 ms default deadline covers all batch submissions. submittedBatches in a report or MessageCleanupError records only earlier HTTP-success submissions.
@@ -1625,7 +1638,7 @@ export interface Messages {
     cleanup(
         plan: MessageCleanupPlan,
         options?: DefaultMessageCleanupOptions,
-    ): ResultAsync<MessageCleanupReport, MessageCleanupFailure | CancelledError>
+    ): ResultAsync<MessageCleanupReport, MessageCleanupFailure | CancelledError | ConfigurationError>
     /**
      * Replace text/embeds/files and return the frozen updated snapshot after the API response, without waiting for a gateway event.
      * Existing stickers are preserved; sticker replacement is not supported by this edit operation.
@@ -1651,7 +1664,7 @@ export interface Messages {
         message: MessageReference,
         input: EditMessageInput,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<Message, MessageOperationFailure | CancelledError>
+    ): ResultAsync<Message, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete the target and complete without a value after HTTP 204, without waiting for a gateway event.
      * Missing targets fail with MessageOperationError reason notFound, including a repeated delete.
@@ -1662,7 +1675,7 @@ export interface Messages {
     delete(
         message: MessageReference,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /** Delete one attachment by decimal ID from a message authored by this bot, without fetching or rewriting the retained attachment list.
      * Starts immediately, copies the target and uses message REST deadlines and failures; no gateway connection is required
      *
@@ -1683,7 +1696,7 @@ export interface Messages {
         message: MessageReference,
         attachmentId: string,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete 1–100 distinct decimal message IDs from one guild channel, requiring ManageMessages permission.
      * Starts immediately without a gateway connection. No hidden selection, chunking, age filter or audit reason.
@@ -1705,7 +1718,7 @@ export interface Messages {
         channelId: string,
         messageIds: readonly string[],
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /** Irreversibly delete this bot's whole authored history in one decimal channel ID, without selecting IDs or requiring a gateway connection.
      * Starts immediately and completes only after Fluxer returns empty HTTP 202, not a job, count, gateway event or proof that the channel is empty.
      * Other authors' messages are preserved. Fluxer can leave new or concurrent messages. Deletion is not atomic, may be partial, and has no recovery token or automatic reconciliation
@@ -1720,7 +1733,7 @@ export interface Messages {
     deleteMine(
         channelId: string,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, MessageOperationFailure | CancelledError>
+    ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** One default collection, independent of observers and the client's connection lifetime */
@@ -1733,7 +1746,9 @@ export interface Collector {
      * Timeout/stop may return empty results. Collection cancellation, filter/handler/overflow/gap failure or client closure returns Err without partial replies.
      * Unexpected SDK defects reject with SdkDefect. Keeping the handle/result retains successful message snapshots in memory
      */
-    waitForClose(options?: OperationOptions): ResultAsync<CollectorResult, CollectorFailure | CancelledError>
+    waitForClose(
+        options?: OperationOptions,
+    ): ResultAsync<CollectorResult, CollectorFailure | CancelledError | ConfigurationError>
 }
 
 /** One default reaction collection, independent of each result observer */
@@ -1746,7 +1761,9 @@ export interface ReactionCollector {
      * Collection abort, filter/handler/overflow/gap failure and client shutdown return Err without partial observations.
      * Unexpected defects reject with SdkDefect. Keeping the handle/result retains successful snapshots in memory
      */
-    waitForClose(options?: OperationOptions): ResultAsync<ReactionCollectorResult, CollectorFailure | CancelledError>
+    waitForClose(
+        options?: OperationOptions,
+    ): ResultAsync<ReactionCollectorResult, CollectorFailure | CancelledError | ConfigurationError>
 }
 
 export type {
@@ -1796,7 +1813,7 @@ export interface AuditLogs {
         guildId: string,
         query: AuditLogQuery,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<AuditLogPage, GuildOperationFailure | CancelledError>
+    ): ResultAsync<AuditLogPage, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Traverse filtered records newest-to-oldest on demand, buffering one page and never prefetching.
      * maxItems is required; pageSize defaults to 50 (1–100), maxPages to 100. timeoutMs applies to each page.
      * Stops at maxItems or an empty page, not merely a short page. Concurrent changes can prevent complete enumeration.
@@ -1809,7 +1826,9 @@ export interface AuditLogs {
         guildId: string,
         query: AuditLogIterationQuery,
         options?: DefaultGuildOperationOptions,
-    ): AsyncIterable<Result<AuditLogEntry, GuildOperationFailure | PaginationError | CancelledError>>
+    ): AsyncIterable<
+        Result<AuditLogEntry, GuildOperationFailure | PaginationError | CancelledError | ConfigurationError>
+    >
 }
 
 /** Remote invite operations, without invite retention or gateway readiness requirements.
@@ -1825,7 +1844,7 @@ export interface Invites {
     fetch(
         code: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<Invite, GuildOperationFailure | CancelledError>
+    ): ResultAsync<Invite, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Create an invite to a channel the bot can access, including an existing group DM.
      * Defaults to a new code, 86400 seconds, unlimited uses and non-temporary membership.
      * Does not send the code, create a group or add members. Cancellation cannot revoke an already-created invite.
@@ -1835,21 +1854,24 @@ export interface Invites {
         channelId: string,
         input?: InviteCreate,
         options?: DefaultModerationOptions,
-    ): ResultAsync<InviteMetadata, GuildOperationFailure | CancelledError>
+    ): ResultAsync<InviteMetadata, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Remote management list in provider order, subject to channel permissions; not a stable snapshot */
     fetchChannel(
         channelId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly InviteMetadata[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly InviteMetadata[], GuildOperationFailure | CancelledError | ConfigurationError>
     /** Remote guild management list, requiring ManageGuild and excluding the guild vanity invite */
     fetchGuild(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly InviteMetadata[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly InviteMetadata[], GuildOperationFailure | CancelledError | ConfigurationError>
     /** Revoke a code after HTTP 204, subject to provider creator/management permissions.
      * Does not remove existing members. A missing code is an error, not proof of a previous successful deletion
      */
-    delete(code: string, options?: DefaultModerationOptions): ResultAsync<void, GuildOperationFailure | CancelledError>
+    delete(
+        code: string,
+        options?: DefaultModerationOptions,
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Emojis share guild REST admission, deadlines and typed GuildOperationError failures.
@@ -1869,12 +1891,12 @@ export interface Emojis {
     fetchAll(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly GuildEmoji[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly GuildEmoji[], GuildOperationFailure | CancelledError | ConfigurationError>
     /** Remote minimal metadata by decimal ID without source-guild membership. Does not populate the cache */
     fetchMetadata(
         id: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<ExpressionMetadata, GuildOperationFailure | CancelledError>
+    ): ResultAsync<ExpressionMetadata, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Upload one expression. Fluxer enforces format, dimensions, permissions and capacity.
      * Copies input at execution start, without implicit URL fetching or replay of uncertain writes
      */
@@ -1882,7 +1904,7 @@ export interface Emojis {
         guildId: string,
         input: EmojiCreate,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Submit 1–50 uploads in one batch, with separate successes and failures and no rollback.
      * Duplicate names cannot map failures to input positions. No automatic chunking or replay.
      * Unknown outcomes require fresh remote observations and caller reconciliation
@@ -1891,26 +1913,26 @@ export interface Emojis {
         guildId: string,
         input: readonly EmojiCreate[],
         options?: DefaultModerationOptions,
-    ): ResultAsync<ExpressionBatch<GuildEmoji>, GuildOperationFailure | CancelledError>
+    ): ResultAsync<ExpressionBatch<GuildEmoji>, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Server-side copy by source ID, preserving source metadata. Fluxer enforces source cloning restrictions */
     clone(
         guildId: string,
         sourceId: string,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Rename without replacing the image or implicitly reading old metadata */
     edit(
         target: ExpressionReference,
         input: EmojiEdit,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Remove after HTTP 204, invalidating retained observations. A missing target is an error, not proof of prior deletion.
      * Purging defaults false; explicit true also queues irreversible media removal subject to provider restrictions
      */
     delete(
         target: ExpressionReference,
         options?: DefaultExpressionDeleteOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Stickers share guild REST admission, deadlines and typed GuildOperationError failures.
@@ -1928,7 +1950,7 @@ export interface Stickers {
         target: ExpressionReference,
         input: StickerEdit,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Local metadata lookup, never HTTP. Disabled, absent, expired or conflicting entries return undefined.
      * Decimal IDs are required; lookup updates LRU order but not expiry. Synchronous; defects throw SdkDefect
      */
@@ -1939,12 +1961,12 @@ export interface Stickers {
     fetchAll(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly GuildSticker[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly GuildSticker[], GuildOperationFailure | CancelledError | ConfigurationError>
     /** Remote minimal metadata by decimal ID without source-guild membership. Does not populate the cache */
     fetchMetadata(
         id: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<ExpressionMetadata, GuildOperationFailure | CancelledError>
+    ): ResultAsync<ExpressionMetadata, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Upload one expression. Fluxer enforces format, dimensions, permissions and capacity.
      * Copies input at execution start, without implicit URL fetching or replay of uncertain writes
      */
@@ -1952,7 +1974,7 @@ export interface Stickers {
         guildId: string,
         input: StickerCreate,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Submit 1–50 uploads in one batch, with separate successes and failures and no rollback.
      * Duplicate names cannot map failures to input positions. No automatic chunking or replay.
      * Unknown outcomes require fresh remote observations and caller reconciliation
@@ -1961,20 +1983,20 @@ export interface Stickers {
         guildId: string,
         input: readonly StickerCreate[],
         options?: DefaultModerationOptions,
-    ): ResultAsync<ExpressionBatch<GuildSticker>, GuildOperationFailure | CancelledError>
+    ): ResultAsync<ExpressionBatch<GuildSticker>, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Server-side copy by source ID, preserving source metadata. Fluxer enforces source cloning restrictions */
     clone(
         guildId: string,
         sourceId: string,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Remove after HTTP 204, invalidating retained observations. A missing target is an error, not proof of prior deletion.
      * Purging defaults false; explicit true also queues irreversible media removal subject to provider restrictions
      */
     delete(
         target: ExpressionReference,
         options?: DefaultExpressionDeleteOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Public server-directory management through the shared guild REST owner, without a discovery cache.
@@ -1993,7 +2015,7 @@ export interface Discovery {
     search(
         query?: DiscoverySearchQuery,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<DiscoverySearchPage, GuildOperationFailure | CancelledError>
+    ): ResultAsync<DiscoverySearchPage, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Remote eligibility and application state for a decimal guild ID, requiring ManageGuild.
      * Returns eligible false when discovery is disabled or the member threshold is unmet, not a diagnosis distinguishing them.
      * Eligibility can change before submission. Reviewed/removed applications include available reasons
@@ -2001,13 +2023,13 @@ export interface Discovery {
     fetchStatus(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<DiscoveryStatus, GuildOperationFailure | CancelledError>
+    ): ResultAsync<DiscoveryStatus, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Remote category IDs and provider labels in provider order, without a retained copy.
      * Requires an authenticated client, not membership of a particular guild or ManageGuild
      */
     fetchCategories(
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly DiscoveryCategory[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly DiscoveryCategory[], GuildOperationFailure | CancelledError | ConfigurationError>
     /** Submit a guild application, requiring ManageGuild, enabled discovery and current provider eligibility.
      * Pending/approved existing applications fail remotely. Eligible verified/partnered guilds can be approved immediately.
      * Success is the stored application observation, not a guarantee of approval or search-index visibility.
@@ -2017,7 +2039,7 @@ export interface Discovery {
         guildId: string,
         input: DiscoveryApplicationInput,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<DiscoveryApplication, GuildOperationFailure | CancelledError>
+    ): ResultAsync<DiscoveryApplication, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Nonempty patch of a pending or approved application, requiring ManageGuild and enabled discovery.
      * Omitted fields remain unchanged. Uses the input's documented tag normalization and replacement semantics.
      * No hidden fetch/merge. Approved listing updates can become public, and search-index changes may lag or partially fail
@@ -2026,7 +2048,7 @@ export interface Discovery {
         guildId: string,
         input: DiscoveryApplicationEdit,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<DiscoveryApplication, GuildOperationFailure | CancelledError>
+    ): ResultAsync<DiscoveryApplication, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Withdraw an application or remove an approved listing, requiring ManageGuild and enabled discovery.
      * HTTP 204 returns no value. An absent application is a remote error, not an assumed successful no-op.
      * Removes the provider record and may separately remove its discoverable feature/search entry.
@@ -2036,7 +2058,7 @@ export interface Discovery {
     withdraw(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Guild REST operations, gateway counts and optional local lookup.
@@ -2077,7 +2099,7 @@ export interface Guilds {
     fetchCounts(
         guildIds: readonly string[],
         options?: DefaultCountOperationOptions,
-    ): ResultAsync<GuildCountsResult, CountOperationFailure | CancelledError>
+    ): ResultAsync<GuildCountsResult, CountOperationFailure | CancelledError | ConfigurationError>
     /** Fetch one fresh remote membership page for this bot, ordered by ascending guild ID.
      * limit defaults to 200 (1–200); before/after are mutually exclusive existing-membership cursors.
      * withCounts defaults to false. Fluxer can omit permission bits or requested approximate counts. Missing means unavailable, not zero.
@@ -2097,7 +2119,7 @@ export interface Guilds {
     fetchPage(
         query?: GuildListQuery,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly GuildListSummary[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly GuildListSummary[], GuildOperationFailure | CancelledError | ConfigurationError>
     /** Lazily traverse ascending guild IDs, retaining one page and never prefetching.
      * maxItems is required; pageSize defaults to 200 and maxPages to 100. Stop at maxItems or an empty page, not a short page
      *
@@ -2119,7 +2141,9 @@ export interface Guilds {
     iterate(
         query: GuildIterationQuery,
         options?: DefaultGuildOperationOptions,
-    ): AsyncIterable<Result<GuildListSummary, GuildOperationFailure | PaginationError | CancelledError>>
+    ): AsyncIterable<
+        Result<GuildListSummary, GuildOperationFailure | PaginationError | CancelledError | ConfigurationError>
+    >
     /** Leave the named guild as the authenticated bot, explicitly preserving authored messages.
      * HTTP 204 completes membership removal, not gateway delivery. The client stays usable for other guilds.
      * Fluxer rejects owners and restricted memberships. Only confirmed 429 rejection is retried; cancellation or a lost
@@ -2132,7 +2156,7 @@ export interface Guilds {
     leave(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Irreversibly delete this bot's whole authored history across one decimal guild ID, without leaving the guild or changing roles.
      * Starts immediately and completes only after Fluxer returns empty HTTP 202, not a job, count, gateway event or proof that the guild is empty.
      * Other authors' messages are preserved. Fluxer can leave new or concurrent messages. Deletion is not atomic, may be partial, and has no recovery token or automatic reconciliation
@@ -2157,7 +2181,7 @@ export interface Guilds {
     deleteMine(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Read a decimal guild's custom invite and use count, requiring ManageGuild.
      * Always remote, without a vanity cache or gateway requirement. Null code/url means no custom invite.
      * Starts immediately, using this group's read retries, deadline, cancellation and typed failure rules
@@ -2165,7 +2189,7 @@ export interface Guilds {
     fetchVanityUrl(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<GuildVanityUrlUsage, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildVanityUrlUsage, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Set or replace a guild's custom invite, or explicitly remove it with null.
      * Code must already be lowercase, 2–32 ASCII letters/digits with single internal hyphens. No implicit normalization.
      * Requires ManageGuild and, when setting a code, the server's VANITY_URL feature. Reserved/taken codes fail remotely
@@ -2181,7 +2205,7 @@ export interface Guilds {
         guildId: string,
         code: string | null,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildVanityUrl, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildVanityUrl, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Patch bot-permitted server settings without a hidden read or merge; omitted fields remain unchanged.
      * Requires ManageGuild. Fluxer owns feature restrictions and validation beyond GuildEdit's local checks.
      * Dispatched mutations invalidate guild-cache observations even when the outcome is unknown.
@@ -2193,7 +2217,7 @@ export interface Guilds {
         guildId: string,
         input: GuildEdit,
         options?: DefaultModerationOptions,
-    ): ResultAsync<Guild, GuildOperationFailure | CancelledError>
+    ): ResultAsync<Guild, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Ban a decimal guild/user target, including a user who is not currently a member.
      * Requires BanMembers and provider hierarchy/MFA rules. Defaults to permanent with no message deletion
      *
@@ -2212,7 +2236,7 @@ export interface Guilds {
         target: MemberReference,
         input?: BanInput,
         options?: DefaultModerationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Remove a ban after HTTP 204, without rejoining the user or cancelling queued message deletion.
      * Requires BanMembers. A user who is not banned is an API failure, not a successful no-op.
      * Uses ban's execution, failure, cleanup and member-cache invalidation rules
@@ -2220,7 +2244,7 @@ export interface Guilds {
     unban(
         target: MemberReference,
         options?: DefaultModerationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Fetch the provider's full ban list as frozen observations, requiring BanMembers.
      * Always remote, without a ban cache, pagination or guaranteed order. Separate reads are not a consistent snapshot.
      * Starts immediately. Uses shared guild read deadline/retry rules, rejecting malformed responses as a whole
@@ -2228,7 +2252,7 @@ export interface Guilds {
     fetchBans(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly GuildBan[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly GuildBan[], GuildOperationFailure | CancelledError | ConfigurationError>
     /** Synchronously read the enabled guild cache without HTTP or requiring a connection.
      * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote observation.
      * Invalid decimal IDs fail with GuildOperationError(input). Closing/closed clients fail with ClientClosedError.
@@ -2241,7 +2265,7 @@ export interface Guilds {
     fetch(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<Guild, GuildOperationFailure | CancelledError>
+    ): ResultAsync<Guild, GuildOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Guild-channel REST operations, gateway member counts and optional local lookup.
@@ -2271,7 +2295,7 @@ export interface Channels {
         guildId: string,
         channelIds: readonly string[],
         options?: DefaultCountOperationOptions,
-    ): ResultAsync<ChannelMemberCountsResult, CountOperationFailure | CancelledError>
+    ): ResultAsync<ChannelMemberCountsResult, CountOperationFailure | CancelledError | ConfigurationError>
     /** Synchronously read the enabled channel cache without HTTP or requiring a connection.
      * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote observation.
      * Invalid decimal IDs fail with ChannelOperationError(input). Closing/closed clients fail with ClientClosedError.
@@ -2284,16 +2308,17 @@ export interface Channels {
     fetch(
         channelId: string,
         options?: DefaultChannelOperationOptions,
-    ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError>
+    ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /** Fetch Fluxer's visible guild-channel list for one decimal guild ID, without pagination or a completeness guarantee.
      * The response is a point-in-time observation, not a subscription. It does not fetch members, roles, DMs or missing permission-overwrite targets
      */
     fetchAll(
         guildId: string,
         options?: DefaultChannelOperationOptions,
-    ): ResultAsync<readonly GuildChannel[], ChannelOperationFailure | CancelledError>
+    ): ResultAsync<readonly GuildChannel[], ChannelOperationFailure | CancelledError | ConfigurationError>
     /** Create one supported guild channel and return Fluxer's frozen observation. Fluxer chooses its initial position.
-     * Omitted permissionOverwrites inherits the selected parent category's overrides. [] creates no explicit overrides, not private visibility
+     * Omitted permissionOverwrites inherits the selected parent category's overrides. [] creates no explicit overrides, not private visibility.
+     * Explicit overwrite bits include ViewChannelMembers through Fluxer's required feature opt-in
      * @example
      * ```ts
      * import { ChannelType, Permissions, type Client } from "@neontechspace/fluxerly"
@@ -2316,22 +2341,23 @@ export interface Channels {
         guildId: string,
         input: ChannelCreate,
         options?: DefaultChannelOperationOptions,
-    ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError>
+    ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /** Patch only supplied channel settings and return Fluxer's frozen observation. Empty/unknown-field patches are input errors.
-     * Channel type and parent are intentionally not editable here. Move a channel with reorder. Omitted permissionOverwrites preserves them, while [] clears them
+     * Channel type and parent are intentionally not editable here. Move a channel with reorder. Omitted permissionOverwrites preserves them, while [] clears them.
+     * Explicit overwrite replacements opt into Fluxer's ViewChannelMembers permission handling, including clearing that bit
      */
     edit(
         channelId: string,
         input: ChannelEdit,
         options?: DefaultChannelOperationOptions,
-    ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError>
+    ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /** Delete a guild channel and complete after HTTP 204, without waiting for a gateway event or proving a prior channel existed.
      * The SDK does not prefetch to verify the ID. A lost response or timeout after dispatch can leave deletion applied
      */
     delete(
         channelId: string,
         options?: DefaultChannelOperationOptions,
-    ): ResultAsync<void, ChannelOperationFailure | CancelledError>
+    ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /** Apply submitted guild-channel moves sequentially and complete after HTTP 204, without fabricating a reordered snapshot.
      * syncPermissionsOnMove copies the target category's overwrites. A bulk channel event can arrive before that permission copy completes.
      * Fluxer may normalize positions. This bulk mutation is not a transaction, so failures can leave partial movement. Refetch when final order matters
@@ -2340,15 +2366,16 @@ export interface Channels {
         guildId: string,
         positions: readonly ChannelPosition[],
         options?: DefaultChannelOperationOptions,
-    ): ResultAsync<void, ChannelOperationFailure | CancelledError>
+    ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /** Replace one explicit role/member overwrite with its supplied raw bigint allow and deny bits, then complete after HTTP 204.
+     * Sets and clears ViewChannelMembers through Fluxer's required feature opt-in, alongside the other raw bits.
      * Fluxer enforces ManageRoles. This does not calculate inherited/effective permissions or prefetch the target
      */
     setPermissionOverwrite(
         channelId: string,
         input: PermissionOverwrite,
         options?: DefaultChannelOperationOptions,
-    ): ResultAsync<void, ChannelOperationFailure | CancelledError>
+    ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /** Remove one explicit role/member overwrite by decimal target ID and complete after HTTP 204.
      * Fluxer enforces ManageChannels and ManageRoles. Other overwrites remain unchanged, and an unknown outcome requires an explicit follow-up read
      */
@@ -2356,7 +2383,7 @@ export interface Channels {
         channelId: string,
         targetId: string,
         options?: DefaultChannelOperationOptions,
-    ): ResultAsync<void, ChannelOperationFailure | CancelledError>
+    ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Guild membership reads, moderation and targeted role writes, sharing Guilds' REST admission, deadlines and failure rules.
@@ -2402,7 +2429,7 @@ export interface Members {
         guildId: string,
         query: MemberChunkQuery,
         options?: DefaultMemberChunkOptions,
-    ): AsyncIterable<Result<MemberChunk, MemberChunkFailure | CancelledError>>
+    ): AsyncIterable<Result<MemberChunk, MemberChunkFailure | CancelledError | ConfigurationError>>
     /** Replace the member's entire explicit role set with 0–250 distinct positive decimal role IDs in one PATCH.
      * Starts immediately, copies IDs and performs no prefetch or merge. [] clears assigned roles; the everyone role is implicit and rejected as input
      *
@@ -2424,7 +2451,7 @@ export interface Members {
         member: MemberReference,
         roleIds: readonly string[],
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Search indexed member observations remotely, not the local member cache.
      * Starts immediately. query defaults to an unfiltered page of 25, ordered by join time descending
      *
@@ -2445,7 +2472,7 @@ export interface Members {
         guildId: string,
         filters?: MemberSearchQuery,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<MemberSearchPage, GuildOperationFailure | CancelledError>
+    ): ResultAsync<MemberSearchPage, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Demand-driven best-effort search traversal, not a consistent or complete member snapshot.
      * Reusable lazy AsyncIterable with independent state per consumption. Copies filters at consumption, never prefetches
      *
@@ -2464,7 +2491,9 @@ export interface Members {
         filters: Omit<MemberSearchQuery, "limit">,
         limits: MemberSearchIterationLimits,
         options?: DefaultGuildOperationOptions,
-    ): AsyncIterable<Result<MemberSearchHit, GuildOperationFailure | PaginationError | CancelledError>>
+    ): AsyncIterable<
+        Result<MemberSearchHit, GuildOperationFailure | PaginationError | CancelledError | ConfigurationError>
+    >
     /** Edit this bot's server profile, not its global account or another member.
      * Omitted fields remain unchanged and null clears an override. Fluxer enforces permissions and field-specific rate limits.
      * Empty or unknown-key input fails locally.
@@ -2476,7 +2505,7 @@ export interface Members {
         guildId: string,
         input: MemberProfileEdit,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Set or clear one member nickname without replacing that member's roles or profile fields.
      * nickname is 1–32 Unicode code points; null clears it. Fluxer decides whether the bot may target this member,
      * including ManageNicknames, hierarchy and self rules. The returned frozen member is the HTTP observation, not an
@@ -2496,7 +2525,7 @@ export interface Members {
         member: MemberReference,
         nickname: string | null,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Move an already-connected member to one positive decimal voice-channel ID.
      * Requires MoveMembers plus Fluxer's hierarchy and destination visibility/connect checks. Supplying target.connectionId
      * targets only that observed connection; omission targets every active connection for the member.
@@ -2516,7 +2545,7 @@ export interface Members {
         target: VoiceConnectionReference,
         channelId: string,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Disconnect one observed connection, or every active connection when target.connectionId is omitted.
      * Requires MoveMembers and returns the HTTP member projection without waiting for voiceStateUpdate.
      * Repeating after completion can fail because the target is no longer connected. Unknown outcomes must be reconciled from
@@ -2525,7 +2554,7 @@ export interface Members {
     disconnect(
         target: VoiceConnectionReference,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Set or clear Fluxer's server mute flag for one currently connected member.
      * Requires MuteMembers and provider hierarchy rules. Returns an HTTP member projection with isMuted, without waiting for
      * a voice-state event. This does not control the participant's self-mute state or join a voice channel.
@@ -2535,7 +2564,7 @@ export interface Members {
         target: MemberReference,
         muted: boolean,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Set or clear Fluxer's server deafen flag for one currently connected member.
      * Requires DeafenMembers and provider hierarchy rules. Returns an HTTP member projection with isDeafened, without waiting
      * for a voice-state event. This does not control the participant's self-deafen state or join a voice channel.
@@ -2545,7 +2574,7 @@ export interface Members {
         target: MemberReference,
         deafened: boolean,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Set a timeout for integer durationMs in 1–31,536,000,000 milliseconds, calculated when execution starts
      *
      * Requires ModerateMembers and provider hierarchy rules. The provider rejects self and administrator targets.
@@ -2569,14 +2598,14 @@ export interface Members {
         target: MemberReference,
         durationMs: number,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Clear a timeout with timeout's permissions, execution, cache and failure rules.
      * Sends null, not a negative duration. Returns the HTTP 200 member without waiting for an event
      */
     clearTimeout(
         target: MemberReference,
         options?: DefaultModerationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Kick the selected guild member after HTTP 204, without waiting for a removal event.
      * Requires KickMembers and provider hierarchy rules. Does not ban the user or automatically restore membership.
      * Missing membership is a typed API failure. Dispatched actions invalidate the member cache even on rejection.
@@ -2585,7 +2614,7 @@ export interface Members {
     kick(
         target: MemberReference,
         options?: DefaultModerationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Traverse ascending remote user IDs without connecting or downloading the whole guild eagerly.
      * Reusable lazy AsyncIterable of frozen Ok members and at most one terminal Err, with independent state per consumption
      *
@@ -2615,7 +2644,7 @@ export interface Members {
         guildId: string,
         query: UserIterationQuery,
         options?: DefaultGuildOperationOptions,
-    ): AsyncIterable<Result<GuildMember, GuildOperationFailure | PaginationError | CancelledError>>
+    ): AsyncIterable<Result<GuildMember, GuildOperationFailure | PaginationError | CancelledError | ConfigurationError>>
     /** Local-only lookup by decimal guild/user IDs, with Guilds.get's miss, freshness, failure and LRU rules.
      * Enable cache.members and cache.roles when creating the client. Explicit fetches or subsequent events populate them
      * @example
@@ -2639,12 +2668,12 @@ export interface Members {
     fetch(
         member: MemberReference,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Fetch the authenticated bot's membership directly, without requiring READY or a known bot ID */
     fetchSelf(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Fetch fresh guild, authenticated-bot member, target member and role observations in parallel, then evaluate canManageHierarchy.
      * One 30,000 ms default deadline covers the whole composition. Sibling cleanup is awaited on failure or cancellation.
      * This never reads a guild cache, retains no helper snapshot, evaluates no permissions or MFA, and does not authorize or perform an action.
@@ -2660,7 +2689,7 @@ export interface Members {
     fetchHierarchyCheck(
         target: MemberReference,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<boolean, GuildOperationFailure | CancelledError>
+    ): ResultAsync<boolean, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Fetch an ascending user-ID page; default limit 100, range 1–1000.
      * Use the last userId as after. An empty page ends traversal; separate pages are not a consistent snapshot.
      * No hasMore guarantee, automatic traversal or partial malformed page. Input is copied when this call starts
@@ -2669,7 +2698,7 @@ export interface Members {
         guildId: string,
         query?: MemberQuery,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly GuildMember[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly GuildMember[], GuildOperationFailure | CancelledError | ConfigurationError>
     /** Grant one decimal role ID without replacing other roles. Reject the implicit everyone role locally.
      * Fluxer enforces MANAGE_ROLES and hierarchy. HTTP 204 is completion, not event acknowledgement or proof the role was previously absent
      * @example
@@ -2698,7 +2727,7 @@ export interface Members {
         member: MemberReference,
         roleId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Revoke one role with addRole's permission/completion rules. Other roles remain untouched.
      * No local snapshot suppresses the request; success does not prove a previously assigned role was removed
      */
@@ -2706,7 +2735,7 @@ export interface Members {
         member: MemberReference,
         roleId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Explicit permission-bit calculations, not channel visibility, role hierarchy, timeout or action-authorization checks */
@@ -2729,7 +2758,7 @@ export interface PermissionHelpers {
     fetch(
         target: PermissionTarget,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<bigint, GuildOperationFailure | ChannelOperationFailure | CancelledError>
+    ): ResultAsync<bigint, GuildOperationFailure | ChannelOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Immediate role operations sharing Guilds' admission, deadlines and read retries.
@@ -2745,8 +2774,9 @@ export interface Roles {
     fetchAll(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<readonly GuildRole[], GuildOperationFailure | CancelledError>
+    ): ResultAsync<readonly GuildRole[], GuildOperationFailure | CancelledError | ConfigurationError>
     /** Create a role with name, color and permissions. Permissions default to 0n, not Fluxer's inherited everyone grants.
+     * Explicit permissions include ViewChannelMembers through Fluxer's required feature opt-in.
      * Returns the server's actual grants, which can differ from the request. Hoist/mentionable changes require a separate edit
      * @example
      * ```ts
@@ -2766,20 +2796,21 @@ export interface Roles {
         guildId: string,
         input: RoleCreate,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Patch only defined fields and return the server's observation. Empty/unknown-field patches are input errors.
-     * permissions replaces the raw grants; it is not an additive grant. Everyone edits remain subject to server rules */
+     * permissions replaces the raw grants, including setting or clearing ViewChannelMembers; it is not an additive grant.
+     * The default/everyone role accepts only color and permissions. Other defined fields fail locally, including mixed patches */
     edit(
         role: RoleReference,
         input: RoleEdit,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError>
+    ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Delete a role, also removing its assignments upstream. Everyone cannot be deleted.
      * HTTP 204 is completion, not proof of member-event delivery; old member/role observations remain unchanged */
     delete(
         role: RoleReference,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Reorder distinct role IDs using nonnegative safe-integer positions; everyone cannot move.
      * Fluxer normalizes manageable positions, so fetchAll afterward when final order matters. HTTP 204 carries no list.
      * This operation and multi-step workflows are not transactions: Failures can leave partial state; refetch before reconciliation */
@@ -2787,7 +2818,7 @@ export interface Roles {
         guildId: string,
         positions: readonly RolePosition[],
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Set display positions for distinct roles without changing permission hierarchy or enabling hoist.
      * Requires a nonempty list of signed 32-bit positions, excluding everyone. Fluxer enforces ManageRoles and hierarchy.
      * HTTP 204 returns no roles. Successful or uncertain writes invalidate retained guild roles, including pending reads.
@@ -2804,7 +2835,7 @@ export interface Roles {
         guildId: string,
         positions: readonly RoleHoistPosition[],
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /** Clear display-position assignments for every role in the guild, not just roles below the bot.
      * Fluxer enforces ManageRoles. Permission hierarchy and hoist flags remain unchanged.
      * HTTP 204 has no role list. This is not transactional; a failure can leave partial changes.
@@ -2813,7 +2844,7 @@ export interface Roles {
     resetHoistPositions(
         guildId: string,
         options?: DefaultGuildOperationOptions,
-    ): ResultAsync<void, GuildOperationFailure | CancelledError>
+    ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Bot-authenticated remote webhook management, available before connect.
@@ -2829,33 +2860,33 @@ export interface Webhooks {
         channelId: string,
         input: WebhookCreate,
         options?: DefaultWebhookOperationOptions,
-    ): ResultAsync<CreatedWebhook, WebhookOperationFailure | CancelledError>
+    ): ResultAsync<CreatedWebhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Fetch metadata remotely by decimal ID, discarding the returned token. HTTP 404 reports notFound */
     fetch(
         id: string,
         options?: DefaultWebhookOperationOptions,
-    ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError>
+    ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Read the channel's complete accessible webhook list remotely, without caching, token retention or pagination */
     fetchChannel(
         channelId: string,
         options?: DefaultWebhookOperationOptions,
-    ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError>
+    ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Read the guild's accessible webhook list remotely. Server permissions determine visibility, and concurrent changes prevent snapshot guarantees */
     fetchGuild(
         guildId: string,
         options?: DefaultWebhookOperationOptions,
-    ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError>
+    ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Update explicit settings, including destination moves. Returned metadata omits credentials. Failure does not guarantee rollback */
     edit(
         id: string,
         input: WebhookEdit,
         options?: DefaultWebhookOperationOptions,
-    ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError>
+    ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Delete the webhook and revoke its credential. Does not delete its old messages or restore the credential after a failure */
     delete(
         id: string,
         options?: DefaultWebhookOperationOptions,
-    ): ResultAsync<void, WebhookOperationFailure | CancelledError>
+    ): ResultAsync<void, WebhookOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Token-only HTTP client, without a bot token, gateway, caches or persistent storage.
@@ -2873,30 +2904,34 @@ export interface WebhookClient {
     /** Immutable endpoint discovery and pure URL helpers for this webhook client's selected instance */
     readonly instance: Instance
     /** Fetch this credential's current remote metadata without bot authentication or retaining creator/private fields */
-    fetch(options?: DefaultMessageOperationOptions): ResultAsync<Webhook, WebhookOperationFailure | CancelledError>
+    fetch(
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Update only this webhook's name or avatar through its credential. Channel moves require bot webhooks.edit.
      * Returns the remote token-safe metadata. A failed or cancelled write can have applied and does not close this client
      */
     edit(
         input: WebhookTokenEdit,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError>
+    ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Delete this remote webhook through its credential. HTTP 204 does not close this client or erase its local credential reference.
      * Later remote operations normally receive notFound after revocation. Use shutdown separately to release local resources
      */
-    delete(options?: DefaultMessageOperationOptions): ResultAsync<void, WebhookOperationFailure | CancelledError>
+    delete(
+        options?: DefaultMessageOperationOptions,
+    ): ResultAsync<void, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Send with wait=true and return the created message. Mentions default off. Reply references can include files; forwarded references preserve only their source snapshot and reject new content/uploads.
      * Files use bounded multipart streaming, with 50 MiB maximum per file. Image/thumbnail attachment URLs match a new upload in this request. flags accepts only the two non-voice MessageFlags bits.
      * Snapshot inputs at execution, including admitted file bytes. Never retry an uncertain send, which may already have posted */
     send(
         input: WebhookMessageInput,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<Message, WebhookOperationFailure | CancelledError>
+    ): ResultAsync<Message, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Fetch a decimal message ID authored by this webhook in its current channel, with bounded transient read retries */
     fetchMessage(
         messageId: string,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<Message, WebhookOperationFailure | CancelledError>
+    ): ResultAsync<Message, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Edit this webhook's message and return its snapshot. Omitted fields remain unchanged, mentions default off, and attachments cannot be replaced.
      * flags-only edits replace the two writable non-voice bits; zero clears them. Existing file references are not resolved for embed inputs
      */
@@ -2904,12 +2939,12 @@ export interface WebhookClient {
         messageId: string,
         input: WebhookMessageEdit,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<Message, WebhookOperationFailure | CancelledError>
+    ): ResultAsync<Message, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Delete this webhook's message. 204 is success without proving earlier existence, and uncertain failures may follow deletion */
     deleteMessage(
         messageId: string,
         options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, WebhookOperationFailure | CancelledError>
+    ): ResultAsync<void, WebhookOperationFailure | CancelledError | ConfigurationError>
     /** Permanently reject new work, cancel admitted work, await transport cleanup and release the owned token reference.
      * Does not delete the remote webhook or invalidate caller-held credentials. Concurrent calls share the same pending cleanup
      */
@@ -2944,6 +2979,7 @@ export interface ClientCache {
 
 /**
  * Default client with SDK-owned execution of asynchronous operations.
+ * Malformed operation signals return ConfigurationError with field signal before execution; valid cancellation returns CancelledError.
  * Expected failures use ResultAsync Err values, while SDK defects reject with SdkDefect.
  * Cleanup defects stop retries and retain any operation failure or cancellation in SdkDefect's safe reasons.
  * Use run for a managed lifetime, or pair connect with waitForClose and shutdown
@@ -3066,7 +3102,7 @@ export interface Client extends ClientState {
     waitFor<K extends EventName>(
         event: K,
         options?: DefaultEventWaitOptions<K>,
-    ): ResultAsync<EventMap[K], EventWaitFailure | CancelledError>
+    ): ResultAsync<EventMap[K], EventWaitFailure | CancelledError | ConfigurationError>
     /**
      * Read an immutable point-in-time local occupancy snapshot without network work, telemetry, persistence, tokens, remote routes, resource IDs or payloads.
      * Counts cover this client's owned shards and admitted local work only. Accounted bytes are cache/queue budgets, not heap, process memory or remote storage.
@@ -3088,7 +3124,7 @@ export interface Client extends ClientState {
      * A competing call returns ClientBusyError without affecting the active operation
      * @throws SdkDefect as a rejection for an unexpected SDK or cleanup defect
      */
-    connect(options?: OperationOptions): ResultAsync<void, ConnectError | CancelledError>
+    connect(options?: OperationOptions): ResultAsync<void, ConnectError | CancelledError | ConfigurationError>
     /**
      * Own startup, connection, recovery and permanent cleanup as one operation.
      * Remains pending while the client is connected or recovering.
@@ -3120,7 +3156,7 @@ export interface Client extends ClientState {
      * }
      * ```
      */
-    run(options?: OperationOptions): ResultAsync<void, ConnectError | CancelledError>
+    run(options?: OperationOptions): ResultAsync<void, ConnectError | CancelledError | ConfigurationError>
     /**
      * Observe the retained terminal outcome without starting or owning a connection.
      * Recovery keeps this wait pending, and late observers receive the same terminal outcome.
@@ -3130,7 +3166,7 @@ export interface Client extends ClientState {
      * @returns Success after normal shutdown, a permanent connection failure, or CancelledError for this wait
      * @throws SdkDefect as a rejection for a retained unexpected background or cleanup defect
      */
-    waitForClose(options?: OperationOptions): ResultAsync<void, ConnectionFailure | CancelledError>
+    waitForClose(options?: OperationOptions): ResultAsync<void, ConnectionFailure | CancelledError | ConfigurationError>
     /**
      * Permanently stop startup and recovery, release credentials and await owned-resource cleanup.
      * Release cached message references and expiry timers, without waiting for application-owned reporter promises.
@@ -3186,7 +3222,7 @@ export interface Instance {
      */
     resolve(
         options?: DefaultInstanceResolveOptions,
-    ): ResultAsync<ResolvedInstance, InstanceResolveError | CancelledError>
+    ): ResultAsync<ResolvedInstance, InstanceResolveError | CancelledError | ConfigurationError>
 }
 
 /** Default selected-instance resolution settings. Abort cancels only this caller's wait */
@@ -3198,6 +3234,7 @@ export interface DefaultEventWaitOptions<K extends EventName> extends EventWaitO
 const executeOperation = <
     A,
     E extends
+        | ConfigurationError
         | ConnectError
         | InstanceResolveError
         | EventReadError
@@ -3227,7 +3264,13 @@ const executeOperation = <
     let registered = false
     try {
         signal = options?.signal
-        if (signal?.aborted) return new ResultAsync<A, E | CancelledError>(Promise.resolve(err(new CancelledError())))
+        const invalidSignal = operationSignalError(signal)
+        if (invalidSignal)
+            return new ResultAsync<A, E | CancelledError | ConfigurationError>(Promise.resolve(err(invalidSignal)))
+        if (signal?.aborted)
+            return new ResultAsync<A, E | CancelledError | ConfigurationError>(
+                Promise.resolve(err(new CancelledError())),
+            )
         const controller = signal ? new AbortController() : undefined
         abort = () => controller?.abort()
         if (signal?.aborted) abort()
@@ -3268,7 +3311,7 @@ const executeOperation = <
                 cleanupDefect = true
             }
         }
-        return new ResultAsync<A, E | CancelledError>(
+        return new ResultAsync<A, E | CancelledError | ConfigurationError>(
             Promise.reject(
                 new SdkDefect(
                     operation,
@@ -3533,7 +3576,7 @@ export interface CurrentBotApplication {
     /** Fetch this token's frozen application allowlist remotely, without a cache write, gateway event, owner lookup, or hidden follow-up request */
     fetchCurrent(
         options?: DefaultBotApplicationOperationOptions,
-    ): ResultAsync<BotApplication, BotApplicationOperationFailure | CancelledError>
+    ): ResultAsync<BotApplication, BotApplicationOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Immediate ResultAsync operations with shared 30-second default deadlines and bounded read retries.
@@ -3544,7 +3587,10 @@ export interface Users {
     /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not observation age. May miss or be stale; closed clients fail */
     get(id: string): Result<User | undefined, UserOperationFailure>
     /** Fetch a public account snapshot remotely by decimal ID; unknown IDs fail with notFound */
-    fetch(id: string, options?: DefaultUserOperationOptions): ResultAsync<User, UserOperationFailure | CancelledError>
+    fetch(
+        id: string,
+        options?: DefaultUserOperationOptions,
+    ): ResultAsync<User, UserOperationFailure | CancelledError | ConfigurationError>
     /** Fetch one frozen privacy-filtered profile by decimal user ID, optionally in an explicit guild context.
      * Starts immediately without a gateway connection, hidden member fetch or account/profile cache read, write or invalidation.
      * Returns allowlisted account identity and profile fields. isLimited reports Fluxer's privacy restriction, not missing membership.
@@ -3564,9 +3610,11 @@ export interface Users {
         id: string,
         query?: UserProfileQuery,
         options?: DefaultUserOperationOptions,
-    ): ResultAsync<UserProfile, UserOperationFailure | CancelledError>
+    ): ResultAsync<UserProfile, UserOperationFailure | CancelledError | ConfigurationError>
     /** Fetch the authenticated bot remotely, stripping private account fields */
-    fetchSelf(options?: DefaultUserOperationOptions): ResultAsync<User, UserOperationFailure | CancelledError>
+    fetchSelf(
+        options?: DefaultUserOperationOptions,
+    ): ResultAsync<User, UserOperationFailure | CancelledError | ConfigurationError>
 }
 
 /** Immediate ResultAsync operations with shared 30-second default deadlines and bounded read retries.
@@ -3591,23 +3639,23 @@ export interface DirectMessages {
         userId: string,
         input: ReplyInput,
         options?: DefaultSendOptions,
-    ): ResultAsync<Message, SendError | CancelledError>
+    ): ResultAsync<Message, SendError | CancelledError | ConfigurationError>
     /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not observation age. May miss or be stale; closed clients fail */
     get(id: string): Result<DirectMessageChannel | undefined, UserOperationFailure>
     /** Open or reopen a one-to-one conversation. Privacy checks may prevent delivery even after opening succeeds */
     open(
         userId: string,
         options?: DefaultUserOperationOptions,
-    ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError>
+    ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError | ConfigurationError>
     /** Fetch a private channel remotely. Guild channels are rejected as invalid responses */
     fetch(
         id: string,
         options?: DefaultUserOperationOptions,
-    ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError>
+    ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError | ConfigurationError>
     /** Read open one-to-one and group conversations remotely, excluding personal notes. This is not an atomic snapshot or a complete message history */
     fetchAll(
         options?: DefaultUserOperationOptions,
-    ): ResultAsync<readonly DirectMessageChannel[], UserOperationFailure | CancelledError>
+    ): ResultAsync<readonly DirectMessageChannel[], UserOperationFailure | CancelledError | ConfigurationError>
     /** Fetch the latest message for 1–100 explicitly selected distinct DM/group-DM IDs through Fluxer's batch endpoint.
      * POST is read-shaped but is not retried after a dispatched uncertain failure. It does not enumerate conversations or hydrate any cache.
      * Returned null is ambiguous. omittedChannelIds preserves requested IDs Fluxer omitted, rather than treating omission as null, an empty channel or access denial
@@ -3615,21 +3663,24 @@ export interface DirectMessages {
     fetchLatestMessages(
         channelIds: readonly string[],
         options?: DefaultUserOperationOptions,
-    ): ResultAsync<DirectMessageLatestMessages, UserOperationFailure | CancelledError>
+    ): ResultAsync<DirectMessageLatestMessages, UserOperationFailure | CancelledError | ConfigurationError>
     /** Edit explicit group settings. Fluxer enforces member/owner permissions; failure does not guarantee rollback */
     editGroup(
         id: string,
         input: DirectMessageGroupEdit,
         options?: DefaultUserOperationOptions,
-    ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError>
+    ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError | ConfigurationError>
     /** Close a DM for this bot or leave a group. Does not erase another recipient's conversation; owner departure may transfer ownership */
-    close(id: string, options?: DefaultUserOperationOptions): ResultAsync<void, UserOperationFailure | CancelledError>
+    close(
+        id: string,
+        options?: DefaultUserOperationOptions,
+    ): ResultAsync<void, UserOperationFailure | CancelledError | ConfigurationError>
     /** Remove a group recipient as owner, or remove self. Does not request deletion of that user's messages; a last-recipient departure deletes the group */
     removeRecipient(
         id: string,
         userId: string,
         options?: DefaultUserOperationOptions,
-    ): ResultAsync<void, UserOperationFailure | CancelledError>
+    ): ResultAsync<void, UserOperationFailure | CancelledError | ConfigurationError>
 }
 
 /**
@@ -3671,6 +3722,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     const execute = <
         A,
         E extends
+            | ConfigurationError
             | ConnectError
             | InstanceResolveError
             | EventReadError
@@ -3701,11 +3753,15 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         ) => Effect.Effect<Pagination<A, E>, PaginationError>,
         operation: PaginationOperation,
         options?: DefaultMessageOperationOptions,
-    ): AsyncIterable<Result<A, E | PaginationError | CancelledError | import("./errors.js").ClientClosedError>> =>
+    ): AsyncIterable<
+        Result<A, E | PaginationError | CancelledError | ConfigurationError | import("./errors.js").ClientClosedError>
+    > =>
         Object.freeze({
             async *[Symbol.asyncIterator]() {
                 const opened = await execute(
                     Effect.gen(function* () {
+                        const invalidSignal = operationSignalError(options?.signal)
+                        if (invalidSignal) return yield* Effect.fail(invalidSignal)
                         const copied = iterationOptions(options)
                         if (copied instanceof InputValidationFailure)
                             return yield* Effect.fail(new PaginationError(operation, "input", copied.detail))
@@ -3743,12 +3799,14 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
         guildId: string,
         query: MemberChunkQuery,
         options?: DefaultMemberChunkOptions,
-    ): AsyncIterable<Result<MemberChunk, MemberChunkFailure | CancelledError>> =>
+    ): AsyncIterable<Result<MemberChunk, MemberChunkFailure | CancelledError | ConfigurationError>> =>
         Object.freeze({
             async *[Symbol.asyncIterator]() {
                 const operation = "members.iterateChunks"
                 const opened = await execute(
                     Effect.gen(function* () {
+                        const invalidSignal = operationSignalError(options?.signal)
+                        if (invalidSignal) return yield* Effect.fail(invalidSignal)
                         const copied = memberChunkIterationOptions(options)
                         if (copied instanceof InputValidationFailure)
                             return yield* Effect.fail(new MemberChunkError("input", null, copied.detail))
@@ -3782,10 +3840,12 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
     const attachmentStream = (
         attachment: Attachment,
         options: DefaultAttachmentStreamOptions,
-    ): AsyncIterable<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>> => {
+    ): AsyncIterable<Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>> => {
         let consumed = false
         return Object.freeze({
-            [Symbol.asyncIterator](): AsyncIterator<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>> {
+            [Symbol.asyncIterator](): AsyncIterator<
+                Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
+            > {
                 if (consumed) {
                     let delivered = false
                     return {
@@ -3799,7 +3859,11 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         },
                         async throw(
                             error?: unknown,
-                        ): Promise<IteratorResult<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>> {
+                        ): Promise<
+                            IteratorResult<
+                                Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
+                            >
+                        > {
                             throw error
                         },
                     }
@@ -3810,7 +3874,11 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 let removeSignal: (() => void) | undefined
                 let source: AttachmentDownloadSource | undefined
                 let opening:
-                    ResultAsync<AttachmentDownloadSource, AttachmentDownloadFailure | CancelledError> | undefined
+                    | ResultAsync<
+                          AttachmentDownloadSource,
+                          AttachmentDownloadFailure | CancelledError | ConfigurationError
+                      >
+                    | undefined
                 let closed = false
                 let bound = false
                 let pulling = false
@@ -3829,6 +3897,11 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     if (signal.aborted) abort()
                 }
                 const open = () => {
+                    const invalidSignal = operationSignalError(signal)
+                    if (invalidSignal)
+                        return new ResultAsync<AttachmentDownloadSource, ConfigurationError>(
+                            Promise.resolve(err(invalidSignal)),
+                        )
                     bindSignal()
                     opening ??= execute(owner.streamAttachment(attachment, options), "attachments.stream", {
                         signal: controller.signal,
@@ -3854,7 +3927,9 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 }
                 return {
                     async next(): Promise<
-                        IteratorResult<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>
+                        IteratorResult<
+                            Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
+                        >
                     > {
                         if (closed) return { done: true, value: undefined }
                         if (pulling) return { done: false, value: err(new AttachmentDownloadError("busy")) }
@@ -3890,7 +3965,9 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                         }
                     },
                     async return(): Promise<
-                        IteratorResult<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>
+                        IteratorResult<
+                            Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
+                        >
                     > {
                         if (!closed) {
                             closed = true
@@ -3900,7 +3977,11 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                     },
                     async throw(
                         error?: unknown,
-                    ): Promise<IteratorResult<Result<Uint8Array, AttachmentDownloadFailure | CancelledError>>> {
+                    ): Promise<
+                        IteratorResult<
+                            Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
+                        >
+                    > {
                         if (!closed) {
                             closed = true
                             await detach()
@@ -4646,7 +4727,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 collect: (
                     channelId: string,
                     options?: DefaultCollectorOptions,
-                ): Result<Collector, CollectorRegistrationError | CancelledError> => {
+                ): Result<Collector, CollectorRegistrationError | CancelledError | ConfigurationError> => {
                     const opened = fromExit(
                         Effect.runSyncExit(
                             Effect.suspend(() =>
@@ -4668,7 +4749,7 @@ export function createClient(options: ClientOptions): Result<Client, Configurati
                 collectReactions: (
                     target: MessageReference,
                     options?: DefaultReactionCollectorOptions,
-                ): Result<ReactionCollector, CollectorRegistrationError | CancelledError> => {
+                ): Result<ReactionCollector, CollectorRegistrationError | CancelledError | ConfigurationError> => {
                     let callback: DefaultReactionCollectorOptions["onReaction"]
                     try {
                         callback = options?.onReaction
@@ -4915,43 +4996,43 @@ export interface OAuthClient {
     authorizationUrl(
         input: OAuthAuthorizationInput,
         options?: DefaultOAuthOperationOptions,
-    ): ResultAsync<string, OAuthOperationFailure | CancelledError>
+    ): ResultAsync<string, OAuthOperationFailure | CancelledError | ConfigurationError>
     /** Exchange one callback code. Cancellation after dispatch cannot establish whether Fluxer consumed the code, so do not retry it */
     exchangeCode(
         input: OAuthCodeExchangeInput,
         options?: DefaultOAuthOperationOptions,
-    ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError>
+    ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError | ConfigurationError>
     /** Exchange one refresh token. Fluxer rotates refresh tokens, so the caller must atomically replace its stored pair only after success and never retry an unknown outcome */
     refresh(
         refreshToken: string,
         options?: DefaultOAuthOperationOptions,
-    ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError>
+    ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError | ConfigurationError>
     /** Revoke one access or refresh token. A lost response can still mean the token was revoked */
     revoke(
         input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
         options?: DefaultOAuthOperationOptions,
-    ): ResultAsync<void, OAuthOperationFailure | CancelledError>
+    ): ResultAsync<void, OAuthOperationFailure | CancelledError | ConfigurationError>
     /** Read the identify-scoped identity with a bearer token, without retaining that token */
     fetchIdentity(
         accessToken: string,
         options?: DefaultOAuthOperationOptions,
-    ): ResultAsync<OAuthIdentity, OAuthOperationFailure | CancelledError>
+    ): ResultAsync<OAuthIdentity, OAuthOperationFailure | CancelledError | ConfigurationError>
     /** Read one bounded guild-membership page with a bearer token that has Fluxer's guilds scope. This never uses bot authentication */
     fetchGuilds(
         accessToken: string,
         query?: GuildListQuery,
         options?: DefaultOAuthOperationOptions,
-    ): ResultAsync<readonly GuildListSummary[], OAuthOperationFailure | CancelledError>
+    ): ResultAsync<readonly GuildListSummary[], OAuthOperationFailure | CancelledError | ConfigurationError>
     /** Read the full delegated connections list with a bearer token that has Fluxer's connections scope. This does not create, verify, reorder, or retain connections */
     fetchConnections(
         accessToken: string,
         options?: DefaultOAuthOperationOptions,
-    ): ResultAsync<readonly OAuthConnection[], OAuthOperationFailure | CancelledError>
+    ): ResultAsync<readonly OAuthConnection[], OAuthOperationFailure | CancelledError | ConfigurationError>
     /** Confidentially inspect one access or refresh token using this client's Basic credentials. Inactive does not identify revocation, expiry, ownership, or token existence */
     introspect(
         token: string,
         options?: DefaultOAuthOperationOptions,
-    ): ResultAsync<OAuthIntrospection, OAuthOperationFailure | CancelledError>
+    ): ResultAsync<OAuthIntrospection, OAuthOperationFailure | CancelledError | ConfigurationError>
     /** Permanently reject new OAuth work, clear the copied client secret, abort active requests, and wait for their fetch and response-reader cleanup. Unexpected cleanup defects reject with SdkDefect */
     shutdown(): ResultAsync<void, never>
 }

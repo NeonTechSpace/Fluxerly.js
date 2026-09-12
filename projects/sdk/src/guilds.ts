@@ -442,17 +442,17 @@ export interface RoleCreate {
     readonly name: string
     /** RGB integer 0–16,777,215, default 0 */
     readonly color?: number
-    /** Unsigned 64-bit bigint, default 0n: Unlike raw Fluxer, never inherit everyone's grants implicitly */
+    /** Unsigned 64-bit bigint, default 0n: Unlike raw Fluxer, never inherit everyone's grants implicitly. Explicit ViewChannelMembers replacements are advertised to Fluxer by the SDK */
     readonly permissions?: bigint
 }
 
-/** Explicit role patch. Omitted fields stay unchanged; at least one defined field is required */
+/** Explicit role patch. Omitted fields stay unchanged; at least one defined field is required. The guild default role accepts only color and permissions */
 export interface RoleEdit {
     /** Nonblank role name, 1–100 Unicode code points */
     readonly name?: string
     /** RGB integer 0–16,777,215 */
     readonly color?: number
-    /** Replace raw grants with this unsigned 64-bit bigint, not an incremental grant */
+    /** Replace raw grants with this unsigned 64-bit bigint, not an incremental grant. Explicit ViewChannelMembers replacements are advertised to Fluxer by the SDK */
     readonly permissions?: bigint
     /** Display members separately */
     readonly hoist?: boolean

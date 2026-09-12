@@ -680,22 +680,44 @@ try {
 } finally {
     globalThis.fetch = rawFetch
     gateway?.restore()
-    try {
-        if (client && client.state !== "Closed") await value(client.shutdown())
-        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-    } catch {
-        report("client_cleanup", false, { code: "cleanup_failed" })
+    let quiescent = true
+    const retainEvidence = (finalizer) => {
+        quiescent = false
+        report("client_cleanup", false, {
+            code: "cleanup_failed",
+            finalizer,
+            journalRetained: journal !== undefined,
+            lockRetained: lock !== undefined,
+        })
         process.exitCode = 1
     }
-    try {
-        if (verified && journal) await cleanup()
-    } catch {
-        report("resource_cleanup", false, { code: "cleanup_failed", journalRetained: true })
-        process.exitCode = 1
+    if (client && client.state !== "Closed")
+        try {
+            await value(client.shutdown())
+        } catch {
+            retainEvidence("client_shutdown")
+        }
+    if (scope)
+        try {
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+        } catch {
+            retainEvidence("scope_close")
+        }
+    if (quiescent)
+        try {
+            if (verified && journal) await cleanup()
+        } catch {
+            report("resource_cleanup", false, { code: "cleanup_failed", journalRetained: journal !== undefined })
+            process.exitCode = 1
+        }
+    if (quiescent && lock !== undefined) {
+        try {
+            closeSync(lock)
+            unlinkSync(lockPath)
+        } catch {
+            report("lock_cleanup", false, { code: "cleanup_failed", lockRetained: true })
+            process.exitCode = 1
+        }
     }
-    clearTimeout(watchdog)
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
-    }
+    if (quiescent) clearTimeout(watchdog)
 }

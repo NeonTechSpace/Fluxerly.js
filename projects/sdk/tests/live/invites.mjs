@@ -265,26 +265,57 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    try {
-        if (client) {
+    let quiescent = true
+    const retainEvidence = (finalizer) => {
+        quiescent = false
+        console.error(
+            JSON.stringify({
+                mode,
+                stage: "client_cleanup",
+                passed: false,
+                finalizer,
+                journalRetained: journal !== undefined,
+                lockRetained: lock !== undefined,
+            }),
+        )
+        process.exitCode = 1
+    }
+    if (client)
+        try {
             const closed = client.shutdown()
             if (Effect.isEffect(closed)) await Effect.runPromise(closed)
             else await closed
+        } catch {
+            retainEvidence("client_shutdown")
         }
-        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-    } catch {
-        console.error(JSON.stringify({ mode, stage: "client_cleanup", passed: false }))
-        process.exitCode = 1
+    if (scope)
+        try {
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+        } catch {
+            retainEvidence("scope_close")
+        }
+    if (quiescent)
+        try {
+            await cleanup()
+        } catch {
+            console.error(
+                JSON.stringify({
+                    mode,
+                    stage: "resource_cleanup",
+                    passed: false,
+                    journalRetained: journal !== undefined,
+                }),
+            )
+            process.exitCode = 1
+        }
+    if (quiescent && lock !== undefined) {
+        try {
+            closeSync(lock)
+            unlinkSync(lockPath)
+        } catch {
+            console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
+            process.exitCode = 1
+        }
     }
-    try {
-        await cleanup()
-    } catch {
-        console.error(JSON.stringify({ mode, stage: "resource_cleanup", passed: false, journalRetained: true }))
-        process.exitCode = 1
-    }
-    clearTimeout(watchdog)
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
-    }
+    if (quiescent) clearTimeout(watchdog)
 }

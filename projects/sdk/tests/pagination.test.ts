@@ -195,7 +195,11 @@ test.each(modes)(
         for (const options of [{ timeoutMs: 0 }, { extra: true }, { signal: {} }])
             await expect(
                 gather(api.iterate("history", { maxItems: 2 }, options as DefaultMessageOperationOptions)),
-            ).rejects.toMatchObject({ reason: "input" })
+            ).rejects.toMatchObject(
+                api.defaultApi && "signal" in options
+                    ? { _tag: "ConfigurationError", field: "signal" }
+                    : { _tag: "PaginationError", reason: "input" },
+            )
         if (api.native)
             await expect(
                 gather(api.iterate("history", { maxItems: 2 }, { signal: new AbortController().signal })),

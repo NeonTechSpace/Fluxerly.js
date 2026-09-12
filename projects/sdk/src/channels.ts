@@ -11,7 +11,7 @@ export const ChannelType = Object.freeze({
     Link: 998,
 })
 
-/** One explicit role or member replacement, not an effective permission calculation */
+/** One explicit role or member replacement, not an effective permission calculation. SDK writes advertise ViewChannelMembers replacements to Fluxer */
 export interface PermissionOverwrite {
     /** Decimal role or member ID */
     readonly id: string

@@ -95,6 +95,7 @@ type Request<A> = {
     resourceGuard?: ResourceGuard
     channelCache?: ChannelCacheRequest
     channelGuard?: ChannelCacheGuard
+    features?: readonly string[]
     path: string
     body: EncodedBody | undefined
     status?: number
@@ -785,6 +786,9 @@ export class RestOwner {
                                           ...(request.auditReason === undefined
                                               ? {}
                                               : { "X-Audit-Log-Reason": request.auditReason }),
+                                          ...(request.features === undefined
+                                              ? {}
+                                              : { "X-Fluxer-Features": request.features.join(",") }),
                                           ...(state.multipartHeaders
                                               ? state.multipartHeaders
                                               : request.body === undefined
@@ -2185,6 +2189,7 @@ export class RestOwner {
                     ...(input.auditReason === undefined ? {} : { auditReason: input.auditReason }),
                     ...(input.deleteAuthorId === undefined ? {} : { deleteAuthorId: input.deleteAuthorId }),
                     ...(input.invalidateMessages === undefined ? {} : { invalidateMessages: input.invalidateMessages }),
+                    ...(input.features === undefined ? {} : { features: input.features }),
                     path: input.path,
                     method: input.method,
                     status: input.status,
@@ -2229,6 +2234,7 @@ export class RestOwner {
                     bucket: input.bucket,
                     cache: false,
                     channelCache: input.cache,
+                    ...(input.features === undefined ? {} : { features: input.features }),
                     path: input.path,
                     method: input.method,
                     status: input.status,

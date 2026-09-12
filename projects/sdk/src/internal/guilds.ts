@@ -36,6 +36,8 @@ export interface GuildRequest<A> {
     readonly auditReason?: string
     readonly deleteAuthorId?: string
     readonly invalidateMessages?: true
+    /** Private client capabilities required for one explicit provider-gated replacement */
+    readonly features?: readonly string[]
     /** REST supplies the immutable endpoint snapshot after request admission. One-argument decoders ignore it */
     readonly decode: (value: unknown, instance?: InstanceEndpointContext) => A | undefined
     readonly cache?: ResourceRequest
@@ -675,6 +677,7 @@ export function roleCreate(guildId: string, input: RoleCreate): GuildValidationR
         method: "POST",
         status: 200,
         json,
+        ...(input.permissions === undefined ? {} : { features: ["view_channel_members_permission"] }),
         decode: (value) => {
             const role = decodeRole(value, guildId)
             return role?.id !== guildId ? role : undefined
@@ -690,6 +693,18 @@ export function roleEdit(target: RoleReference, input: RoleEdit): GuildValidatio
     const { guildId, id } = target
     const json = roleBody(input, false)
     if (json instanceof InputValidationFailure) return json
+    if (
+        id === guildId &&
+        (input.name !== undefined ||
+            input.hoist !== undefined ||
+            input.hoistPosition !== undefined ||
+            input.mentionable !== undefined)
+    )
+        return inputValidationFailure(
+            "input",
+            "relationship",
+            "The guild default role supports only color and permissions edits",
+        )
     return {
         guildId,
         bucket: "guild:role:update",
@@ -701,6 +716,7 @@ export function roleEdit(target: RoleReference, input: RoleEdit): GuildValidatio
         method: "PATCH",
         status: 200,
         json,
+        ...(input.permissions === undefined ? {} : { features: ["view_channel_members_permission"] }),
         decode: (value) => {
             const role = decodeRole(value, guildId)
             return role?.id === id ? role : undefined

@@ -198,18 +198,39 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    try {
-        if (client) await value(client.shutdown())
-        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-        if (client) assert.equal(client.state, "Closed")
-        report("sdk_closed")
-    } catch {
-        console.error(JSON.stringify({ mode, stage: "sdk_cleanup", passed: false }))
+    let quiescent = true
+    const retainEvidence = (finalizer) => {
+        quiescent = false
+        console.error(
+            JSON.stringify({ mode, stage: "sdk_cleanup", passed: false, finalizer, lockRetained: lock !== undefined }),
+        )
         process.exitCode = 1
     }
-    clearTimeout(watchdog)
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
-    }
+    if (client)
+        try {
+            await value(client.shutdown())
+        } catch {
+            retainEvidence("client_shutdown")
+        }
+    if (scope)
+        try {
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+        } catch {
+            retainEvidence("scope_close")
+        }
+    if (quiescent)
+        try {
+            if (client) assert.equal(client.state, "Closed")
+            report("sdk_closed")
+        } catch {
+            retainEvidence("client_state")
+        }
+    if (quiescent && lock !== undefined)
+        try {
+            closeSync(lock)
+            unlinkSync(lockPath)
+        } catch {
+            retainEvidence("sandbox_lock_cleanup")
+        }
+    if (quiescent) clearTimeout(watchdog)
 }

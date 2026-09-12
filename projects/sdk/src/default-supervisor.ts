@@ -3,6 +3,7 @@ import { err, ok, ResultAsync, type Result } from "neverthrow"
 import type { ClientOptions } from "#sdk/client"
 import { CancelledError, ConfigurationError, SdkDefect, type ConnectError, type DefectReason } from "#sdk/errors"
 import { attachIdentifyGate } from "#sdk/internal/client"
+import { operationSignalError } from "#sdk/internal/operation-signal"
 import { ChildBridge, createSupervisor, type SupervisorOwner } from "#sdk/internal/supervisor"
 import {
     SupervisorChildError,
@@ -41,9 +42,12 @@ export interface DefaultSupervisor {
     /** Await the retained terminal local supervisor outcome after every owned child exits, including closed after a current child outlives its IPC-loss observation window */
     waitForClose(): ResultAsync<void, SupervisorError>
     /** Observe all children becoming gateway-ready without starting or owning the supervisor. A current child IPC loss clears readiness immediately.
-     * A signal cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error
+     * A signal cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error.
+     * A malformed signal returns ConfigurationError with field signal without starting observation
      */
-    waitForReady(options?: SupervisorWaitOptions): ResultAsync<void, SupervisorError | CancelledError>
+    waitForReady(
+        options?: SupervisorWaitOptions,
+    ): ResultAsync<void, SupervisorError | CancelledError | ConfigurationError>
     /** Return one immutable safe local status snapshot without child output, environment, arguments or paths */
     status(): SupervisorStatus
     /** Ask every owned child to stop, force-terminate only an unresponsive owned child after the configured grace period, then await verified exit.
@@ -104,8 +108,10 @@ function bridgeResult<A>(effect: Effect.Effect<A, SupervisorChildError>): Promis
 }
 
 function readyResult(owner: SupervisorOwner, options?: SupervisorWaitOptions) {
-    const signal = options?.signal
-    const readiness = Effect.suspend(() => {
+    const readiness = Effect.suspend((): Effect.Effect<void, SupervisorError | CancelledError | ConfigurationError> => {
+        const signal = options?.signal
+        const invalidSignal = operationSignalError(signal)
+        if (invalidSignal) return Effect.fail(invalidSignal)
         if (signal?.aborted) return Effect.fail(new CancelledError())
         if (!signal) return owner.waitForReady()
         const cancelled = Effect.callback<never, CancelledError>((resume) => {
@@ -115,7 +121,7 @@ function readyResult(owner: SupervisorOwner, options?: SupervisorWaitOptions) {
         })
         return Effect.raceFirst(owner.waitForReady(), cancelled)
     })
-    return new ResultAsync<void, SupervisorError | CancelledError>(
+    return new ResultAsync<void, SupervisorError | CancelledError | ConfigurationError>(
         Effect.runPromiseExit(readiness).then((exit) => resultFromExit(exit, "supervisor.waitForReady")),
     )
 }
@@ -167,7 +173,7 @@ export function makeDefaultSupervisor(
                         | Promise<
                               | {
                                     readonly kind: "client"
-                                    readonly result: Result<void, ConnectError | CancelledError>
+                                    readonly result: Result<void, ConnectError | CancelledError | ConfigurationError>
                                 }
                               | { readonly kind: "defect"; readonly reasons: readonly DefectReason[] }
                           >

@@ -18,6 +18,8 @@ export interface ChannelRequest<A> {
     readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"
     readonly status: 200 | 204
     readonly json?: string
+    /** Private client capabilities required for one explicit provider-gated replacement */
+    readonly features?: readonly string[]
     readonly decode: (value: unknown) => A | undefined
     /** Cache ownership hints consumed by the channel cache owner */
     readonly cache: {
@@ -438,6 +440,7 @@ export function channelCreate(guildId: string, input: ChannelCreate): ChannelVal
         method: "POST",
         status: 200,
         json,
+        ...(input.permissionOverwrites === undefined ? {} : { features: ["view_channel_members_permission"] }),
         cache: { guildId, mutation: true },
         decode: (value) => {
             const channel = decodeGuildChannel(value)
@@ -458,6 +461,7 @@ export function channelEdit(channelId: string, input: ChannelEdit): ChannelValid
         method: "PATCH",
         status: 200,
         json,
+        ...(input.permissionOverwrites === undefined ? {} : { features: ["view_channel_members_permission"] }),
         cache: { channelId, mutation: true },
         decode: (value) => {
             const channel = decodeGuildChannel(value)
@@ -581,6 +585,7 @@ export function permissionSet(channelId: string, input: PermissionOverwrite): Ch
         method: "PUT",
         status: 204,
         json,
+        features: ["view_channel_members_permission"],
         cache: { channelId, mutation: true },
         decode: () => undefined,
     }

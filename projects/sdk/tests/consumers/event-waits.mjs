@@ -21,6 +21,22 @@ try {
             sdk.createClient({ token: "fixture-only-not-a-credential" }).pipe(runtime.Scope.provide(scope)),
         )
     }
+    if (mode === "default") {
+        for (const operation of [
+            client.users.fetch("20", { signal: {} }),
+            client.waitForClose({ signal: { aborted: true } }),
+        ]) {
+            const invalid = await operation
+            assert.ok(invalid.isErr())
+            assert.ok(invalid.error instanceof sdk.ConfigurationError)
+            assert.equal(invalid.error.field, "signal")
+        }
+        const controller = new AbortController()
+        controller.abort()
+        const cancelled = await client.users.fetch("20", { signal: controller.signal })
+        assert.equal(cancelled._unsafeUnwrapErr()._tag, "CancelledError")
+        assert.equal(requests, 0)
+    }
     const waiting = client.waitFor("typingStart", { timeoutMs: 5 })
     const result = mode === "default" ? await waiting : await runtime.Effect.runPromise(runtime.Effect.result(waiting))
     const error = mode === "default" ? result._unsafeUnwrapErr() : result.failure

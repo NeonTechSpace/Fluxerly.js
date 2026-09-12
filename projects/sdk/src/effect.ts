@@ -2626,7 +2626,8 @@ export interface Channels {
         options?: ChannelOperationOptions,
     ): Effect.Effect<readonly GuildChannel[], ChannelOperationFailure>
     /** Create one supported guild channel and return Fluxer's frozen observation. Fluxer chooses its initial position.
-     * Omitted permissionOverwrites inherits the selected parent category's overrides. [] creates no explicit overrides, not private visibility
+     * Omitted permissionOverwrites inherits the selected parent category's overrides. [] creates no explicit overrides, not private visibility.
+     * Explicit overwrite bits include ViewChannelMembers through Fluxer's required feature opt-in
      * @example
      * ```ts
      * import { ChannelType, Permissions, type Client } from "@neontechspace/fluxerly/effect"
@@ -2648,7 +2649,8 @@ export interface Channels {
         options?: ChannelOperationOptions,
     ): Effect.Effect<GuildChannel, ChannelOperationFailure>
     /** Patch only supplied channel settings and return Fluxer's frozen observation. Empty/unknown-field patches are input errors.
-     * Channel type and parent are intentionally not editable here. Move a channel with reorder. Omitted permissionOverwrites preserves them, while [] clears them
+     * Channel type and parent are intentionally not editable here. Move a channel with reorder. Omitted permissionOverwrites preserves them, while [] clears them.
+     * Explicit overwrite replacements opt into Fluxer's ViewChannelMembers permission handling, including clearing that bit
      */
     edit(
         channelId: string,
@@ -2669,6 +2671,7 @@ export interface Channels {
         options?: ChannelOperationOptions,
     ): Effect.Effect<void, ChannelOperationFailure>
     /** Replace one explicit role/member overwrite with its supplied raw bigint allow and deny bits, then complete after HTTP 204.
+     * Sets and clears ViewChannelMembers through Fluxer's required feature opt-in, alongside the other raw bits.
      * Fluxer enforces ManageRoles. This does not calculate inherited/effective permissions or prefetch the target
      */
     setPermissionOverwrite(
@@ -3040,6 +3043,7 @@ export interface Roles {
         options?: GuildOperationOptions,
     ): Effect.Effect<readonly GuildRole[], GuildOperationFailure>
     /** Create a role with name, color and permissions. Permissions default to 0n, not Fluxer's inherited everyone grants.
+     * Explicit permissions include ViewChannelMembers through Fluxer's required feature opt-in.
      * Returns the server's actual grants, which can differ from the request. Hoist/mentionable changes require a separate edit
      * @example
      * ```ts
@@ -3058,7 +3062,8 @@ export interface Roles {
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildRole, GuildOperationFailure>
     /** Patch only defined fields and return the server's observation. Empty/unknown-field patches are input errors.
-     * permissions replaces the raw grants; it is not an additive grant. Everyone edits remain subject to server rules */
+     * permissions replaces the raw grants, including setting or clearing ViewChannelMembers; it is not an additive grant.
+     * The default/everyone role accepts only color and permissions. Other defined fields fail locally, including mixed patches */
     edit(
         role: RoleReference,
         input: RoleEdit,

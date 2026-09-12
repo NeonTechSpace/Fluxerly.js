@@ -734,6 +734,21 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
+    let quiescent = true
+    const retainEvidence = (finalizer) => {
+        quiescent = false
+        console.error(
+            JSON.stringify({
+                mode,
+                check: "cleanup",
+                passed: false,
+                finalizer,
+                journalRetained: journal !== undefined,
+                lockRetained: lock !== undefined,
+            }),
+        )
+        process.exitCode = 1
+    }
     try {
         if (bot && bot.state === "Connected") {
             await (mode === "default"
@@ -748,21 +763,38 @@ try {
         console.error(JSON.stringify({ mode, check: "presence_reset", passed: false }))
         process.exitCode = 1
     }
-    try {
-        if (bot && bot.state !== "Closed") {
+    if (bot && bot.state !== "Closed")
+        try {
             const stopped = bot.shutdown()
             await (Effect.isEffect(stopped) ? Effect.runPromise(stopped) : stopped)
+        } catch {
+            retainEvidence("bot_client_shutdown")
         }
-        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-        await cleanup()
-    } catch {
-        console.error(JSON.stringify({ mode, check: "cleanup", passed: false, journalRetained: true }))
-        process.exitCode = 1
-    }
-    clearTimeout(watchdog)
+    if (scope)
+        try {
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+        } catch {
+            retainEvidence("scope_close")
+        }
+    if (quiescent)
+        try {
+            await cleanup()
+        } catch {
+            console.error(
+                JSON.stringify({ mode, check: "cleanup", passed: false, journalRetained: journal !== undefined }),
+            )
+            process.exitCode = 1
+        }
     WebSocket.prototype.send = rawSend
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (quiescent && lock !== undefined) {
+        try {
+            closeSync(lock)
+            unlinkSync(lockPath)
+        } catch {
+            console.error(JSON.stringify({ mode, check: "lock_cleanup", passed: false, lockRetained: true }))
+            process.exitCode = 1
+        }
     }
+    // Keep the deadline if a failed owned finalizer may have left a writer alive
+    if (quiescent) clearTimeout(watchdog)
 }

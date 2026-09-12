@@ -48,9 +48,10 @@ async function cleanup() {
     assert.ok(Array.isArray(hooks.data))
     for (const item of hooks.data.filter(
         (item) =>
-            item.id === journal.webhookId || item.name === journal.marker || item.name === `${journal.marker}-edited`,
+            item.id === journal.webhookId ||
+            [journal.marker, `${journal.marker}-token`, `${journal.marker}-edited`].includes(item.name),
     )) {
-        assert.ok([journal.marker, `${journal.marker}-edited`].includes(item.name))
+        assert.ok([journal.marker, `${journal.marker}-token`, `${journal.marker}-edited`].includes(item.name))
         assert.equal(item.user?.id, botId)
         assert.equal(item.guild_id, guildId)
         assert.ok(journal.channels.some((channel) => channel.id === item.channel_id))
@@ -67,6 +68,7 @@ async function cleanup() {
             (item) =>
                 item.id === journal.webhookId ||
                 item.name === journal.marker ||
+                item.name === `${journal.marker}-token` ||
                 item.name === `${journal.marker}-edited`,
         ),
     )

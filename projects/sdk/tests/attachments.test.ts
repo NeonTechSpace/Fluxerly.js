@@ -1864,7 +1864,9 @@ test("default validates malformed streamed signals and leaves never-started stre
     const fetch = transport({ download: async () => new Response(new Uint8Array([1])) })
     const api = await driver("default")
     const malformed = api.stream(input, { maxBytes: 1, signal: {} as AbortSignal })[Symbol.asyncIterator]()
-    await expect(malformed.next()).resolves.toMatchObject({ value: { error: { reason: "input" } } })
+    await expect(malformed.next()).resolves.toMatchObject({
+        value: { error: { _tag: "ConfigurationError", field: "signal" } },
+    })
     const controller = new AbortController()
     controller.abort()
     const aborted = api.stream(input, { maxBytes: 1, signal: controller.signal })[Symbol.asyncIterator]()

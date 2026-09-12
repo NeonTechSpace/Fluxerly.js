@@ -184,6 +184,124 @@ test.each(modes)("%s manages guild channels through exact routes with frozen, lo
     expect(calls.at(-1)).toMatchObject({ path: "/v1/channels/10", method: "DELETE" })
 })
 
+test.each(modes)(
+    "%s advertises protected channel-permission replacements without changing omitted fields or reads",
+    async (mode) => {
+        const calls: { path: string; method: string; body: unknown; features: string | null }[] = []
+        let overwrites = [{ id: "50", type: 0, allow: "0", deny: "0" }]
+        rest(async (url, init) => {
+            const path = new URL(url).pathname
+            const body = init.body ? JSON.parse(String(init.body)) : undefined
+            const features = new Headers(init.headers).get("X-Fluxer-Features")
+            calls.push({ path, method: init.method!, body, features })
+            if (init.method === "GET") return Response.json(channel("10", { permission_overwrites: overwrites }))
+            const requested = (body as { permission_overwrites?: typeof overwrites }).permission_overwrites
+            if (requested !== undefined && features === "view_channel_members_permission") overwrites = requested
+            if (path.includes("/permissions/")) {
+                if (features === "view_channel_members_permission")
+                    overwrites = [{ ...(body as (typeof overwrites)[0]), id: "50" }]
+                return new Response(null, { status: 204 })
+            }
+            return Response.json(
+                channel(init.method === "POST" ? "13" : "10", {
+                    ...(body as Record<string, unknown>),
+                    permission_overwrites: overwrites,
+                }),
+            )
+        })
+        const api = await setup(mode)
+        const bit = 1n << 54n
+        const enabled = [{ id: "50", type: "role" as const, allow: bit, deny: 0n }]
+        const cleared = [{ id: "50", type: "role" as const, allow: 0n, deny: 0n }]
+
+        await api.fetch()
+        await api.create("20", { type: ChannelType.Text, name: "inherited" })
+        await api.edit("10", { name: "unchanged permissions" })
+        expect(
+            (await api.create("20", { type: ChannelType.Text, name: "enabled", permissionOverwrites: enabled }))
+                .permissionOverwrites,
+        ).toEqual(enabled)
+        expect(
+            (await api.create("20", { type: ChannelType.Text, name: "cleared", permissionOverwrites: cleared }))
+                .permissionOverwrites,
+        ).toEqual(cleared)
+        await api.edit("10", { permissionOverwrites: enabled })
+        expect((await api.fetch()).permissionOverwrites).toEqual(enabled)
+        await api.edit("10", { permissionOverwrites: cleared })
+        expect((await api.fetch()).permissionOverwrites).toEqual(cleared)
+        await api.setPermissionOverwrite("10", enabled[0])
+        expect((await api.fetch()).permissionOverwrites).toEqual(enabled)
+        await api.setPermissionOverwrite("10", cleared[0])
+        expect((await api.fetch()).permissionOverwrites).toEqual(cleared)
+
+        expect(calls.filter((call) => call.features === null)).toEqual([
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            {
+                path: "/v1/guilds/20/channels",
+                method: "POST",
+                body: { type: 0, name: "inherited" },
+                features: null,
+            },
+            {
+                path: "/v1/channels/10",
+                method: "PATCH",
+                body: { name: "unchanged permissions" },
+                features: null,
+            },
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+        ])
+        expect(calls.filter((call) => call.features !== null)).toEqual([
+            {
+                path: "/v1/guilds/20/channels",
+                method: "POST",
+                body: {
+                    type: 0,
+                    name: "enabled",
+                    permission_overwrites: [{ id: "50", type: 0, allow: bit.toString(), deny: "0" }],
+                },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/guilds/20/channels",
+                method: "POST",
+                body: {
+                    type: 0,
+                    name: "cleared",
+                    permission_overwrites: [{ id: "50", type: 0, allow: "0", deny: "0" }],
+                },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/channels/10",
+                method: "PATCH",
+                body: { permission_overwrites: [{ id: "50", type: 0, allow: bit.toString(), deny: "0" }] },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/channels/10",
+                method: "PATCH",
+                body: { permission_overwrites: [{ id: "50", type: 0, allow: "0", deny: "0" }] },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/channels/10/permissions/50",
+                method: "PUT",
+                body: { type: 0, allow: bit.toString(), deny: "0" },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/channels/10/permissions/50",
+                method: "PUT",
+                body: { type: 0, allow: "0", deny: "0" },
+                features: "view_channel_members_permission",
+            },
+        ])
+    },
+)
+
 test.each(modes)("%s rejects invalid writes before dispatch and whole malformed channel responses", async (mode) => {
     let calls = 0
     let response: unknown = channel()

@@ -82,16 +82,34 @@ const flags = (member) => ({ muted: member.mute, deafened: member.deaf })
 const save = () => writeFileSync(journalPath, JSON.stringify(journal))
 
 async function stopClient() {
-    for (const stop of stops.reverse()) await stop()
-    stops = []
+    const failures = []
+    const failedStops = []
+    for (const stop of stops.reverse())
+        try {
+            await stop()
+        } catch {
+            failures.push("subscription_stop")
+            failedStops.push(stop)
+        }
+    stops = failedStops.reverse()
     if (client) {
-        const closed = client.shutdown()
-        if (Effect.isEffect(closed)) await Effect.runPromise(closed)
-        else await closed
+        try {
+            const closed = client.shutdown()
+            if (Effect.isEffect(closed)) await Effect.runPromise(closed)
+            else await closed
+            client = undefined
+        } catch {
+            failures.push("client_shutdown")
+        }
     }
-    if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-    client = undefined
-    scope = undefined
+    if (scope)
+        try {
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+            scope = undefined
+        } catch {
+            failures.push("scope_close")
+        }
+    if (failures.length) throw new Error("Owned voice client finalization failed")
 }
 
 async function startClient() {
@@ -516,21 +534,56 @@ try {
     )
     process.exitCode = 1
 } finally {
-    try {
-        await restore()
-    } catch {
-        console.error(JSON.stringify({ mode, stage: "voice_recovery", passed: false, journalRetained: true }))
+    let quiescent = true
+    const retainEvidence = (finalizer) => {
+        quiescent = false
+        console.error(
+            JSON.stringify({
+                mode,
+                stage: "client_cleanup",
+                passed: false,
+                finalizer,
+                journalRetained: journal !== undefined,
+                lockRetained: lock !== undefined,
+            }),
+        )
         process.exitCode = 1
     }
     try {
         await stopClient()
     } catch {
-        console.error(JSON.stringify({ mode, stage: "client_cleanup", passed: false }))
-        process.exitCode = 1
+        retainEvidence("initial_client_shutdown")
     }
-    clearTimeout(watchdog)
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (quiescent)
+        try {
+            await restore()
+        } catch {
+            quiescent = false
+            console.error(
+                JSON.stringify({
+                    mode,
+                    stage: "voice_recovery",
+                    passed: false,
+                    journalRetained: journal !== undefined,
+                    lockRetained: lock !== undefined,
+                }),
+            )
+            process.exitCode = 1
+        }
+    try {
+        await stopClient()
+    } catch {
+        retainEvidence("restoration_client_shutdown")
     }
+    if (quiescent && lock !== undefined) {
+        try {
+            closeSync(lock)
+            unlinkSync(lockPath)
+        } catch {
+            console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
+            process.exitCode = 1
+        }
+    }
+    // Keep the deadline if failed owned finalizers or recovery leave work uncertain
+    if (quiescent) clearTimeout(watchdog)
 }

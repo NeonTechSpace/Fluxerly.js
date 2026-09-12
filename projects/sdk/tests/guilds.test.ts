@@ -277,6 +277,92 @@ test.each(modes)(
 )
 
 test.each(modes)(
+    "%s advertises protected role-permission replacements without changing unrelated requests",
+    async (mode) => {
+        const calls: { path: string; method: string; body: unknown; features: string | null }[] = []
+        let storedPermissions = 0n
+        rest(async (url, init) => {
+            const path = new URL(url).pathname
+            const body = init.body ? JSON.parse(String(init.body)) : undefined
+            const features = new Headers(init.headers).get("X-Fluxer-Features")
+            calls.push({ path, method: init.method!, body, features })
+            if (init.method === "GET") return Response.json([wireRole("50"), wireRole("20", { position: 0 })])
+            const requestedPermissions = BigInt((body as { permissions: string }).permissions)
+            if (features === "view_channel_members_permission") storedPermissions = requestedPermissions
+            return Response.json(wireRole("50", { ...body, permissions: storedPermissions.toString() }))
+        })
+        const api = await setup(mode)
+        const bit = Permissions.ViewChannelMembers
+
+        await api.roles.list()
+        expect((await api.roles.create({ name: "enabled", permissions: bit })).permissions).toBe(bit)
+        expect((await api.roles.create({ name: "cleared", permissions: 0n })).permissions).toBe(0n)
+        expect((await api.roles.edit({ permissions: bit })).permissions).toBe(bit)
+        expect((await api.roles.edit({ permissions: 0n })).permissions).toBe(0n)
+
+        expect(calls).toEqual([
+            { path: "/v1/guilds/20/roles", method: "GET", body: undefined, features: null },
+            {
+                path: "/v1/guilds/20/roles",
+                method: "POST",
+                body: { name: "enabled", color: 0, permissions: bit.toString() },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/guilds/20/roles",
+                method: "POST",
+                body: { name: "cleared", color: 0, permissions: "0" },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/guilds/20/roles/50",
+                method: "PATCH",
+                body: { permissions: bit.toString() },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/guilds/20/roles/50",
+                method: "PATCH",
+                body: { permissions: "0" },
+                features: "view_channel_members_permission",
+            },
+        ])
+    },
+)
+
+test.each(modes)(
+    "%s rejects default-role display patches locally while retaining color and permission patches",
+    async (mode) => {
+        const calls: { body: unknown }[] = []
+        rest(async (_url, init) => {
+            calls.push({ body: init.body ? JSON.parse(String(init.body)) : undefined })
+            return Response.json(wireRole("20", init.body ? JSON.parse(String(init.body)) : {}))
+        })
+        const api = await setup(mode)
+
+        for (const input of [
+            { name: "renamed" },
+            { hoist: true },
+            { hoistPosition: 1 },
+            { mentionable: true },
+            { name: "renamed", color: 1, permissions: Permissions.ViewChannel },
+            { hoist: true, color: 1, permissions: Permissions.ViewChannel },
+            { hoistPosition: 1, color: 1, permissions: Permissions.ViewChannel },
+            { mentionable: true, color: 1, permissions: Permissions.ViewChannel },
+        ])
+            await expect(api.roles.edit(input, "20")).rejects.toMatchObject({
+                reason: "input",
+                outcome: "notDispatched",
+            })
+        expect(calls).toEqual([])
+
+        await api.roles.edit({ color: 1 }, "20")
+        await api.roles.edit({ permissions: Permissions.ViewChannel }, "20")
+        expect(calls).toEqual([{ body: { color: 1 } }, { body: { permissions: Permissions.ViewChannel.toString() } }])
+    },
+)
+
+test.each(modes)(
     "%s rejects invalid role writes before dispatch and malformed successes without partial data",
     async (mode) => {
         let calls = 0

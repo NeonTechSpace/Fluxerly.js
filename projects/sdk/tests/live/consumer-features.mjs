@@ -430,16 +430,42 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    try {
-        if (client && client.state !== "Closed") await value(client.shutdown())
-        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-        if (verified && journal) await cleanup()
-    } catch {
-        report("cleanup", false, { journalRetained: true })
+    let quiescent = true
+    const retainEvidence = (finalizer) => {
+        quiescent = false
+        report("cleanup", false, {
+            finalizer,
+            journalRetained: journal !== undefined,
+            lockRetained: lock !== undefined,
+        })
         process.exitCode = 1
     }
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (client && client.state !== "Closed")
+        try {
+            await value(client.shutdown())
+        } catch {
+            retainEvidence("client_shutdown")
+        }
+    if (scope)
+        try {
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+        } catch {
+            retainEvidence("scope_close")
+        }
+    if (quiescent)
+        try {
+            if (verified && journal) await cleanup()
+        } catch {
+            report("cleanup", false, { journalRetained: journal !== undefined })
+            process.exitCode = 1
+        }
+    if (quiescent && lock !== undefined) {
+        try {
+            closeSync(lock)
+            unlinkSync(lockPath)
+        } catch {
+            report("lock_cleanup", false, { lockRetained: true })
+            process.exitCode = 1
+        }
     }
 }

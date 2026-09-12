@@ -684,7 +684,10 @@ export async function searchIndexedMessages(
 export async function manageMessage(client: Client, target: MessageReference): Promise<void> {
     const fetched = await client.messages.fetch(target, { timeoutMs: 5_000 })
     if (fetched.isErr()) {
-        const error: MessageOperationFailure | { readonly _tag: "CancelledError" } = fetched.error
+        const error:
+            | MessageOperationFailure
+            | { readonly _tag: "CancelledError" }
+            | import("@neontechspace/fluxerly").ConfigurationError = fetched.error
         if (error._tag === "MessageOperationError") {
             const outcome: "notDispatched" | "rejected" | "unknown" = error.outcome
             void outcome
@@ -847,4 +850,16 @@ export async function previewModerationCleanup(client: Client, guildId: string, 
 /** Typechecked local-validation facts through the packed default entry point */
 export function describeDefaultInputValidation(error: MessageOperationFailure): InputValidationDetail | null {
     return error._tag === "MessageOperationError" ? error.inputValidation : null
+}
+
+/** Malformed default signals are represented in the packed resource and lifecycle failure unions */
+export async function describeSignalFailure(client: Client, signal: import("@neontechspace/fluxerly").OperationSignal) {
+    const results = [await client.users.fetch("20", { signal }), await client.waitForClose({ signal })]
+    return results.map((result) => {
+        if (result.isErr() && result.error._tag === "ConfigurationError") {
+            const field: import("@neontechspace/fluxerly").ConfigurationError["field"] = result.error.field
+            return field
+        }
+        return undefined
+    })
 }

@@ -216,6 +216,8 @@ export interface ClientState {
 export interface OperationOptions {
     /**
      * A standard AbortSignal, expressed structurally to avoid requiring DOM declarations in consumer projects.
+     * A malformed signal returns ConfigurationError with field signal before work starts; lazy iterators report it on first next.
+     * A throwing signal accessor or listener method is a defect, not an input failure.
      * An already-aborted signal cancels without acquiring ownership.
      * Controls startup for connect, the full accepted lifetime for run, and only the observation for waitForClose.
      * No signal is accepted by shutdown, and completion is never undone by a later abort
