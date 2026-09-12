@@ -8,13 +8,21 @@ import WebSocket from "ws"
 // Manual, currently authorized recipient checks only; never run through check, CI or a schedule
 const mode = process.argv[2]
 const latestOnly = process.argv.includes("--latest-only")
+const withoutGroup = process.argv.includes("--without-group")
+const groupChecks = !latestOnly && !withoutGroup
 assert.ok(mode === "default" || mode === "effect")
+// Stored sandbox configuration identifies the bot, never a currently authorized private recipient
+const recipient = process.env.FLUXER_TEST_DM_USER_ID
+const groupId = process.env.FLUXER_TEST_GROUP_DM_ID
+const extraGroupUser = process.env.FLUXER_TEST_GROUP_EXTRA_USER_ID
+const processId = /^[1-9][0-9]{0,19}$/
+function requireProcessId(value, name) {
+    assert.ok(typeof value === "string" && processId.test(value), `Set the currently authorized ${name}`)
+}
+requireProcessId(recipient, "DM recipient")
+if (groupId !== undefined) requireProcessId(groupId, "group ID")
+if (extraGroupUser !== undefined) requireProcessId(extraGroupUser, "group participant")
 const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-const recipient = process.env.FLUXER_TEST_DM_USER_ID ?? env.FLUXER_TEST_DM_USER_ID
-const groupId = process.env.FLUXER_TEST_GROUP_DM_ID ?? env.FLUXER_TEST_GROUP_DM_ID
-const extraGroupUser = process.env.FLUXER_TEST_GROUP_EXTRA_USER_ID ?? env.FLUXER_TEST_GROUP_EXTRA_USER_ID
-if (extraGroupUser !== undefined) assert.match(extraGroupUser, /^[1-9][0-9]{0,19}$/)
-assert.match(recipient ?? "", /^[1-9][0-9]{0,19}$/, "Set the currently authorized DM recipient")
 const token = env.FLUXER_TEST_BOT_TOKEN
 const guildId = env.FLUXER_TEST_GUILD_ID
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
@@ -180,7 +188,7 @@ try {
         journal = JSON.parse(readFileSync(journalPath, "utf8"))
         await cleanup()
     }
-    if (!latestOnly && groupId && !process.argv.includes("--without-group")) {
+    if (groupChecks && groupId) {
         stage = "group_preflight"
         assert.match(groupId, /^[1-9][0-9]{0,19}$/)
         const group = await api("GET", `/channels/${groupId}`)
@@ -400,7 +408,7 @@ try {
         )
         report(stage, { providerPresenceAcknowledgement: false })
         stage = "existing_group"
-        if (!groupId || process.argv.includes("--without-group")) {
+        if (!groupChecks || !groupId) {
             console.log(
                 JSON.stringify({
                     mode,

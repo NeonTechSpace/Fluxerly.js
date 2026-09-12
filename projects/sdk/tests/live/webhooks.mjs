@@ -379,21 +379,64 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    for (const client of [hook, bot])
-        if (client) {
-            const operation = client.shutdown()
-            await (Effect.isEffect(operation) ? Effect.runPromise(operation) : operation)
-        }
-    if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-    try {
-        await cleanup()
-    } catch {
-        console.error(JSON.stringify({ mode, check: "cleanup", passed: false, journalRetained: true }))
+    let quiescent = true
+    const retainEvidence = (finalizer) => {
+        quiescent = false
+        console.error(
+            JSON.stringify({
+                mode,
+                check: "local_cleanup",
+                finalizer,
+                passed: false,
+                journalRetained: journal !== undefined,
+                lockRetained: lock !== undefined,
+            }),
+        )
         process.exitCode = 1
     }
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    for (const [finalizer, client] of [
+        ["webhook_client_shutdown", hook],
+        ["bot_client_shutdown", bot],
+    ])
+        if (client)
+            try {
+                const operation = client.shutdown()
+                await (Effect.isEffect(operation) ? Effect.runPromise(operation) : operation)
+            } catch {
+                retainEvidence(finalizer)
+            }
+    if (scope)
+        try {
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+        } catch {
+            retainEvidence("scope_close")
+        }
+    if (quiescent)
+        try {
+            await cleanup()
+        } catch {
+            console.error(
+                JSON.stringify({ mode, check: "cleanup", passed: false, journalRetained: journal !== undefined }),
+            )
+            process.exitCode = 1
+        }
+    if (quiescent && lock !== undefined) {
+        let closed = true
+        try {
+            closeSync(lock)
+        } catch {
+            closed = false
+            console.error(JSON.stringify({ mode, check: "lock_close", passed: false, lockRetained: true }))
+            process.exitCode = 1
+        }
+        if (closed)
+            try {
+                unlinkSync(lockPath)
+            } catch {
+                console.error(JSON.stringify({ mode, check: "lock_unlink", passed: false, lockRetained: true }))
+                process.exitCode = 1
+            }
     }
-    clearTimeout(watchdog)
+    // Keep the deadline if failed local cleanup may have left a writer alive
+    if (quiescent) clearTimeout(watchdog)
 }

@@ -10,6 +10,16 @@ const applicationCheck = process.argv[3] === "--application"
 const diagnosticsCheck = process.argv[3] === "--diagnostics"
 const instanceCheck = process.argv[3] === "--instance"
 const qualityCheck = process.argv[3] === "--quality"
+const processId = /^[1-9][0-9]{0,19}$/
+const qualityUserId = qualityCheck ? process.env.FLUXER_TEST_DM_USER_ID : undefined
+const qualityGroupId = qualityCheck ? process.env.FLUXER_TEST_GROUP_DM_ID : undefined
+function requireProcessId(value, name) {
+    assert.ok(typeof value === "string" && processId.test(value), `Set the currently authorized ${name}`)
+}
+if (qualityCheck) {
+    requireProcessId(qualityUserId, "quality user")
+    requireProcessId(qualityGroupId, "quality group")
+}
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, ...details }))
 let stage = "configuration"
@@ -264,10 +274,8 @@ async function verifyDiagnostics(client, guildId, token, run) {
 
 async function verifyQuality(client, token, run, fail) {
     stage = "quality_target_identity"
-    const userId = process.env.FLUXER_TEST_DM_USER_ID
-    const groupId = process.env.FLUXER_TEST_GROUP_DM_ID
-    assert.match(userId ?? "", /^\d+$/)
-    assert.match(groupId ?? "", /^\d+$/)
+    const userId = qualityUserId
+    const groupId = qualityGroupId
     const externalUser = await get(`/users/${userId}`, token)
     const externalGroup = await get(`/channels/${groupId}`, token)
     assert.equal(externalUser.id, userId)
