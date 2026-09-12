@@ -30,7 +30,7 @@ function capturedLogs(throws = false) {
             message: entry.message,
             cause: entry.cause,
             annotation: entry.fiber.getRef(References.CurrentLogAnnotations).requestId,
-            span: entry.fiber.currentSpan?._tag === "Span" ? entry.fiber.currentSpan.name : undefined,
+            span: entry.fiber.cache.span?._tag === "Span" ? entry.fiber.cache.span.name : undefined,
         })
         if (throws) throw new Error("private-logger-sentinel")
     })

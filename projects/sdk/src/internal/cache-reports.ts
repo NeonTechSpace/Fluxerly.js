@@ -22,7 +22,7 @@ export class CacheReports {
 
     #log(reason: string) {
         const fiber = this.creator
-        if (!fiber || LogLevel.isLessThan("Error", fiber.minimumLogLevel)) return
+        if (!fiber || LogLevel.isLessThan("Error", fiber.cache.minimumLogLevel)) return
         for (const logger of this.loggers) {
             try {
                 logger.log({

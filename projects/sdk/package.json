@@ -107,7 +107,7 @@
         "check": "pnpm run format:check && pnpm run build && pnpm run test:public-contract && pnpm run test:types && pnpm run test && pnpm run test:package"
     },
     "dependencies": {
-        "effect": "4.0.0-rc.112",
+        "effect": "4.0.0-rc.115",
         "neverthrow": "8.2.0",
         "ws": "8.21.3"
     },

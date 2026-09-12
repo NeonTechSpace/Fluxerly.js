@@ -60,7 +60,7 @@ export class ClientLogging {
     }
 
     emit(fiber: Fiber.Fiber<unknown, unknown>, diagnostic: Diagnostic) {
-        if (!this.development || LogLevel.isLessThan("Info", fiber.minimumLogLevel)) return
+        if (!this.development || LogLevel.isLessThan("Info", fiber.cache.minimumLogLevel)) return
         for (const logger of fiber.getRef(Logger.CurrentLoggers)) {
             try {
                 logger.log({
