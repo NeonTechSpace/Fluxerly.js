@@ -120,13 +120,15 @@ export const GuildSplashCardAlignments = Object.freeze({
 /** One Fluxer invite splash-card alignment */
 export type GuildSplashCardAlignment = (typeof GuildSplashCardAlignments)[keyof typeof GuildSplashCardAlignments]
 
-/** Guild features that bots with ManageGuild may toggle */
+/** Guild features that bots with ManageGuild may toggle; cloning is opt-in on the source guild */
 export const GuildFeatureToggles = Object.freeze({
     InvitesDisabled: "INVITES_DISABLED",
     TextChannelFlexibleNames: "TEXT_CHANNEL_FLEXIBLE_NAMES",
     DetachedBanner: "DETACHED_BANNER",
-    CloneEmojiDisabled: "CLONE_EMOJI_DISABLED",
-    CloneStickerDisabled: "CLONE_STICKER_DISABLED",
+    /** Allow eligible callers to clone this guild's emoji into another guild */
+    CloneEmojiEnabled: "CLONE_EMOJI_ENABLED",
+    /** Allow eligible callers to clone this guild's stickers into another guild */
+    CloneStickerEnabled: "CLONE_STICKER_ENABLED",
     HideOwnerCrown: "HIDE_OWNER_CROWN",
 })
 
@@ -210,9 +212,12 @@ export interface GuildEdit {
     readonly splashCardAlignment?: GuildSplashCardAlignment
     /**
      * Complete desired set of bot-toggleable features, replacing every prior toggle in GuildFeatureToggles.
-     * Fluxer preserves its managed and unknown features. Disabling TextChannelFlexibleNames makes Fluxer sanitize
-     * existing channel names, an external side effect that is not rolled back if the response is lost. The SDK
-     * conservatively invalidates retained guild-channel observations when this list disables that toggle
+     * Include CloneEmojiEnabled and CloneStickerEnabled to allow cloning from this guild; omitting them disables
+     * that permission. Keep them in the list when changing another toggle if cloning should remain enabled.
+     * Deprecated CLONE_EMOJI_DISABLED and CLONE_STICKER_DISABLED values are rejected, not inverted or translated.
+     * Fluxer preserves its managed, unknown and deprecated observed features. Disabling TextChannelFlexibleNames
+     * makes Fluxer sanitize existing channel names, an external side effect that is not rolled back if the response
+     * is lost. The SDK conservatively invalidates retained guild-channel observations when this list disables that toggle
      */
     readonly featureToggles?: readonly GuildFeatureToggle[]
     /**

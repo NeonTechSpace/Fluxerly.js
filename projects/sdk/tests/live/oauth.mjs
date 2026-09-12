@@ -86,6 +86,21 @@ async function verifyRevokedIdentity(token) {
     }
 }
 
+async function verifySdkIntrospection(client, token, tokenType, grantedScopes, clientId) {
+    const result = await operation(client.introspect(token, { timeoutMs: 15_000 }))
+    assert.equal(result.active, true)
+    assert.equal(result.clientId, clientId)
+    assert.equal(result.tokenType, tokenType)
+    assert.deepEqual([...result.scopes].sort(), [...grantedScopes].sort())
+    assert.ok(Number.isSafeInteger(result.issuedAtUnixSeconds))
+    if (tokenType === "Bearer") assert.ok(Number.isSafeInteger(result.expiresAtUnixSeconds))
+    else assert.equal(Object.hasOwn(result, "expiresAtUnixSeconds"), false)
+}
+
+function assertGrantedScopes(grantedScopes, requiredScopes) {
+    for (const scope of requiredScopes) assert.ok(grantedScopes.includes(scope))
+}
+
 function hasUnknownOAuthFailure(value, seen = new Set()) {
     if (!value || typeof value !== "object" || seen.has(value)) return false
     seen.add(value)
@@ -323,6 +338,7 @@ try {
     } else {
         const pkce = sdk.oauth.createPkce()
         const state = randomBytes(32).toString("base64url")
+        const requestedScopes = [sdk.OAuthScopes.Identify, sdk.OAuthScopes.Guilds, sdk.OAuthScopes.Connections]
         stage = "callback_listener"
         const listener = await openCallbackListener(state)
         server = listener.server
@@ -331,7 +347,7 @@ try {
             client.authorizationUrl(
                 {
                     redirectUri,
-                    scopes: [sdk.OAuthScopes.Identify, sdk.OAuthScopes.Guilds],
+                    scopes: requestedScopes,
                     state,
                     codeChallenge: pkce.challenge,
                 },
@@ -342,7 +358,8 @@ try {
         assert.equal(url.searchParams.get("client_id"), clientId)
         assert.equal(url.searchParams.get("state"), state)
         assert.equal(url.searchParams.get("code_challenge"), pkce.challenge)
-        assert.equal(url.searchParams.get("scope"), "identify guilds")
+        assert.equal(url.searchParams.get("scope"), "identify guilds connections")
+        assert.equal(url.searchParams.get("response_type"), "code")
         assert.equal(url.searchParams.has("client_secret"), false)
         assert.equal(url.searchParams.has("code_verifier"), false)
         report(stage, { passed: true, authorizationUrl })
@@ -372,6 +389,17 @@ try {
             throw error
         }
         report(stage, { passed: true })
+        assertGrantedScopes(currentTokens.scopes, requestedScopes)
+        stage = "sdk_introspection"
+        await verifySdkIntrospection(client, currentTokens.accessToken, "Bearer", currentTokens.scopes, clientId)
+        await verifySdkIntrospection(
+            client,
+            currentTokens.refreshToken,
+            "refresh_token",
+            currentTokens.scopes,
+            clientId,
+        )
+        report(stage, { passed: true, accessAndRefreshActive: true })
         await verifyToken(currentTokens.accessToken, true)
         await verifyToken(currentTokens.refreshToken, true)
 
@@ -380,9 +408,11 @@ try {
         const guilds = await operation(
             client.fetchGuilds(currentTokens.accessToken, { limit: 200 }, { timeoutMs: 15_000 }),
         )
+        const connections = await operation(client.fetchConnections(currentTokens.accessToken, { timeoutMs: 15_000 }))
         assert.match(identity.id, /^\d+$/)
         assert.ok(Array.isArray(guilds))
-        report(stage, { passed: true, guildCount: guilds.length })
+        assert.ok(Array.isArray(connections))
+        report(stage, { passed: true, guildCount: guilds.length, connectionsRead: true })
 
         stage = "independent_bearer_reads"
         const rawIdentity = await bearerGet("/oauth2/userinfo", currentTokens.accessToken, "userinfo_read")
@@ -391,13 +421,33 @@ try {
             currentTokens.accessToken,
             "guilds_read",
         )
+        const rawConnections = await bearerGet("/users/@me/connections", currentTokens.accessToken, "connections_read")
         assert.equal(rawIdentity.id, identity.id)
         assert.ok(Array.isArray(rawGuilds))
+        assert.ok(Array.isArray(rawConnections))
         assert.deepEqual(
             rawGuilds.map((guild) => guild.id),
             guilds.map((guild) => guild.id),
         )
-        report(stage, { passed: true, identityMatches: true, guildCount: rawGuilds.length })
+        assert.deepEqual(
+            connections.map((connection) => ({
+                id: connection.id,
+                type: connection.type,
+                name: connection.name,
+                verified: connection.verified,
+                visibility_flags: connection.visibilityFlags,
+                sort_order: connection.sortOrder,
+            })),
+            rawConnections.map((connection) => ({
+                id: connection.id,
+                type: connection.type,
+                name: connection.name,
+                verified: connection.verified,
+                visibility_flags: connection.visibility_flags,
+                sort_order: connection.sort_order,
+            })),
+        )
+        report(stage, { passed: true, identityMatches: true, guildCount: rawGuilds.length, connectionsMatch: true })
 
         stage = "refresh_rotation"
         const previousTokens = currentTokens
@@ -413,6 +463,18 @@ try {
         await verifyToken(previousTokens.refreshToken, false)
         await verifyToken(currentTokens.accessToken, true)
         await verifyToken(currentTokens.refreshToken, true)
+        assertGrantedScopes(currentTokens.scopes, requestedScopes)
+        stage = "refreshed_sdk_introspection"
+        await verifySdkIntrospection(client, currentTokens.accessToken, "Bearer", currentTokens.scopes, clientId)
+        await verifySdkIntrospection(
+            client,
+            currentTokens.refreshToken,
+            "refresh_token",
+            currentTokens.scopes,
+            clientId,
+        )
+        report(stage, { passed: true, accessAndRefreshActive: true })
+        stage = "refreshed_identity"
         const refreshedIdentity = await operation(
             client.fetchIdentity(currentTokens.accessToken, { timeoutMs: 15_000 }),
         )

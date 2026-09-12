@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { once } from "node:events"
 import { createServer } from "node:http"
 import { setTimeout as sleep } from "node:timers/promises"
+import { installPing } from "./out/optional-tools-example.js"
 
 const kind = process.argv[2]
 assert.ok(kind === "default" || kind === "effect", "Select default or effect workflow")
@@ -47,6 +48,7 @@ async function fixture() {
         completeCancellationRequest = resolve
     })
     const requests = []
+    const replies = []
     const sockets = new Set()
     const gatewayPaths = []
     const server = createServer(async (request, response) => {
@@ -68,6 +70,29 @@ async function fixture() {
                     features: { presigned_attachment_uploads: false },
                 }),
             )
+            return
+        }
+        if (target.pathname === "/api/v1/channels/20/messages" && request.method === "POST") {
+            assert.equal(request.headers.authorization, "Bot fixture-only")
+            assert.equal(request.headers["content-type"], "application/json")
+            const chunks = []
+            for await (const chunk of request) chunks.push(chunk)
+            const body = JSON.parse(Buffer.concat(chunks).toString())
+            const stored = {
+                ...message(String(200 + replies.length), body.content),
+                author: { id: "90", username: "fixture-bot", bot: true },
+                nonce: body.nonce,
+                message_reference: body.message_reference,
+            }
+            replies.push({ body, stored })
+            response.setHeader("content-type", "application/json")
+            response.end(JSON.stringify(stored))
+            return
+        }
+        const reply = replies.find(({ stored }) => target.pathname === `/api/v1/channels/20/messages/${stored.id}`)
+        if (reply && request.method === "GET") {
+            response.setHeader("content-type", "application/json")
+            response.end(JSON.stringify(reply.stored))
             return
         }
         if (target.pathname === "/api/v1/channels/20/messages" && request.method === "GET") {
@@ -154,19 +179,22 @@ async function fixture() {
     return {
         origin,
         requests,
+        replies,
         gatewayPaths,
         deliver(content) {
+            const incoming = message(String(100 + ++sequence), content)
             for (const socket of sockets)
                 socket.write(
                     frame(
                         JSON.stringify({
                             op: 0,
-                            s: ++sequence,
+                            s: sequence,
                             t: "MESSAGE_CREATE",
-                            d: message(String(100 + sequence), content),
+                            d: incoming,
                         }),
                     ),
                 )
+            return incoming
         },
         awaitCancellationRequest() {
             return cancellationRequest
@@ -190,6 +218,35 @@ async function runWorkflow() {
     }
 }
 
+async function verifyReplies(remote, incoming, fetchMessage) {
+    assert.equal(remote.replies.length, 2)
+    for (const [index, content] of ["Pong", "Unknown command: unknown"].entries()) {
+        const { body, stored } = remote.replies[index]
+        assert.equal(body.content, content)
+        assert.equal(typeof body.nonce, "string")
+        assert.ok(body.nonce.length > 0 && body.nonce.length <= 32)
+        assert.deepEqual(body.allowed_mentions, { parse: [], users: [], roles: [], replied_user: false })
+        assert.deepEqual(body.message_reference, {
+            message_id: incoming[index].id,
+            channel_id: incoming[index].channel_id,
+            type: 0,
+        })
+        const target = { id: stored.id, channelId: "20" }
+        const fetched = await fetchMessage(target)
+        assert.equal(fetched.id, target.id)
+        assert.equal(fetched.channelId, target.channelId)
+        assert.equal(fetched.content, content)
+        assert.equal(fetched.author.isBot, true)
+        assert.equal(fetched.nonce, body.nonce)
+        assert.deepEqual(fetched.messageReference, { id: incoming[index].id, channelId: "20", type: 0 })
+        assert.equal(
+            remote.requests.filter((request) => request === `GET /api/v1/channels/20/messages/${target.id}`).length,
+            1,
+        )
+    }
+    assert.notEqual(remote.replies[0].body.nonce, remote.replies[1].body.nonce)
+}
+
 async function defaultWorkflow(remote) {
     const { commands, createClient } = await import("@neontechspace/fluxerly")
     const invalid = createClient({ token: "" })
@@ -202,24 +259,17 @@ async function defaultWorkflow(remote) {
     })._unsafeUnwrap()
     let running
     try {
-        const commandsSeen = []
         const eventsSeen = []
-        const rejections = []
-        let router = commands
-            .create({ prefix: "!", onUnmatched: (_context, unmatched) => rejections.push(unmatched._tag) })
-            ._unsafeUnwrap()
+        const router = commands.create({ prefix: "!" })._unsafeUnwrap()
         assert.ok(router.register({ name: "", execute: () => undefined }).isErr())
-        router = router.register({ name: "ping", execute: () => commandsSeen.push("ping") })._unsafeUnwrap()
-        router.attach(client)._unsafeUnwrap()
+        installPing(client)._unsafeUnwrap()
         client.on("messageCreate", (event) => eventsSeen.push(event.content))._unsafeUnwrap()
         running = client.run()
         await waitFor(() => client.state === "Connected", "Default run did not become ready")
-        remote.deliver("!ping")
-        remote.deliver("!unknown")
-        await waitFor(
-            () => commandsSeen.length === 1 && eventsSeen.length === 2 && rejections.length === 1,
-            "Default event workflow stalled",
-        )
+        const incoming = [remote.deliver("!ping"), remote.deliver("!unknown")]
+        await waitFor(() => remote.replies.length === 2 && eventsSeen.length === 2, "Default event workflow stalled")
+        assert.deepEqual(eventsSeen, ["!ping", "!unknown"])
+        await verifyReplies(remote, incoming, async (target) => (await client.messages.fetch(target))._unsafeUnwrap())
         await advancedDefault(client, remote)
         ;(await client.shutdown())._unsafeUnwrap()
         ;(await running)._unsafeUnwrap()
@@ -271,23 +321,13 @@ async function effectWorkflow(remote) {
         }).pipe(Scope.provide(scope)),
     )
     try {
-        const commandsSeen = []
         const eventsSeen = []
-        const rejections = []
-        let router = await Effect.runPromise(
-            commands.create({
-                prefix: "!",
-                onUnmatched: (_context, unmatched) => Effect.sync(() => rejections.push(unmatched._tag)),
-            }),
-        )
+        const router = await Effect.runPromise(commands.create({ prefix: "!" }))
         const invalidRegistration = await Effect.runPromise(
             Effect.result(router.register({ name: "", execute: () => Effect.void })),
         )
         assert.equal(invalidRegistration._tag, "Failure")
-        router = await Effect.runPromise(
-            router.register({ name: "ping", execute: () => Effect.sync(() => commandsSeen.push("ping")) }),
-        )
-        await Effect.runPromise(router.attach(client).pipe(Scope.provide(registration)))
+        await Effect.runPromise(installPing(client).pipe(Scope.provide(registration)))
         await Effect.runPromise(
             client
                 .on("messageCreate", (event) => Effect.sync(() => eventsSeen.push(event.content)))
@@ -295,12 +335,10 @@ async function effectWorkflow(remote) {
         )
         const running = Effect.runFork(client.run())
         await waitFor(() => client.state === "Connected", "Effect run did not become ready")
-        remote.deliver("!ping")
-        remote.deliver("!unknown")
-        await waitFor(
-            () => commandsSeen.length === 1 && eventsSeen.length === 2 && rejections.length === 1,
-            "Effect event workflow stalled",
-        )
+        const incoming = [remote.deliver("!ping"), remote.deliver("!unknown")]
+        await waitFor(() => remote.replies.length === 2 && eventsSeen.length === 2, "Effect event workflow stalled")
+        assert.deepEqual(eventsSeen, ["!ping", "!unknown"])
+        await verifyReplies(remote, incoming, (target) => Effect.runPromise(client.messages.fetch(target)))
         await advancedEffect(client, remote, { Cause, Effect, Exit, Fiber, Stream })
         await Effect.runPromise(client.shutdown())
         await Effect.runPromise(Fiber.join(running))

@@ -176,6 +176,7 @@ try {
     }
     assert.ok(files.every((file) => file === "package.json" || file.startsWith("dist/") || file.startsWith("src/")))
 
+    copyFileSync(join(sdk, "tests/hosted-discovery.mjs"), join(temporary, "hosted-discovery.mjs"))
     for (const kind of ["default", "effect"]) {
         const consumer = join(temporary, kind)
         mkdirSync(consumer)
@@ -262,7 +263,6 @@ try {
             "discovery",
             "permissions",
             "member-search",
-            "messages",
             "helpers",
             "colors",
             "text",
@@ -320,10 +320,26 @@ try {
         if (kind === "default") assert.equal(existsSync(join(consumer, "node_modules/effect")), false)
         copyFileSync(join(fixtureDirectory, `${kind}.mjs`), join(consumer, "consumer.mjs"))
         process.stdout.write(run(process.execPath, ["--enable-source-maps", "consumer.mjs"], consumer, 10_000))
-        copyFileSync(join(fixtureDirectory, "workflow.mjs"), join(consumer, "workflow.mjs"))
-        process.stdout.write(run(process.execPath, ["--enable-source-maps", "workflow.mjs", kind], consumer, 15_000))
+        copyFileSync(join(fixtureDirectory, "sharding-workflow.mjs"), join(consumer, "sharding-workflow.mjs"))
+        process.stdout.write(
+            run(process.execPath, ["--enable-source-maps", "sharding-workflow.mjs", kind], consumer, 15_000),
+        )
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
+        writeFileSync(
+            join(consumer, "builders-state.ts"),
+            readFileSync(join(fixtureDirectory, "builders-state.ts"), "utf8").replaceAll(
+                '"@neontechspace/fluxerly"',
+                JSON.stringify(kind === "default" ? manifest.name : `${manifest.name}/effect`),
+            ),
+        )
+        writeFileSync(
+            join(consumer, "guild-feature-types.ts"),
+            readFileSync(join(fixtureDirectory, "guild-feature-types.ts"), "utf8").replaceAll(
+                '"@neontechspace/fluxerly"',
+                JSON.stringify(kind === "default" ? manifest.name : `${manifest.name}/effect`),
+            ),
+        )
         const publicSource = readFileSync(join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"), "utf8")
         const publicExamples = examples(publicSource)
         const publicFixtureInventory = [
@@ -610,6 +626,8 @@ try {
             }),
         )
         run(process.execPath, [compiler, "-p", "tsconfig.json"], consumer)
+        copyFileSync(join(fixtureDirectory, "workflow.mjs"), join(consumer, "workflow.mjs"))
+        process.stdout.write(run(process.execPath, ["--enable-source-maps", "workflow.mjs", kind], consumer, 15_000))
         writeFileSync(
             join(consumer, "run-bot-tsconfig.json"),
             JSON.stringify({

@@ -1,7 +1,14 @@
 import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { createClient, type Guild, type GuildEdit, type DefaultModerationOptions } from "../src/index.js"
+import {
+    createClient,
+    GuildFeatureToggles,
+    type Guild,
+    type GuildEdit,
+    type DefaultModerationOptions,
+} from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
+import { GuildFeatureToggles as NativeGuildFeatureToggles } from "../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const modes = ["default", "native"] as const
@@ -137,6 +144,54 @@ test.each(modes)("%s sends only a complete desired toggle set without a hidden g
     expect(result.features).toEqual(["BANNER", "PROVIDER_MANAGED", "INVITES_DISABLED"])
 })
 
+test.each(modes)("%s enables, preserves and disables source-guild cloning opt-ins", async (mode) => {
+    // Fluxer 4a285cbb117447ad714ec7b25df4b19c84902203, GuildOperationsService.computeUpdatedFeatures
+    // Keep this wire-contract fixture independent of the SDK constants; the opt-in upstream check detects later drift
+    const toggleable = new Set([
+        "INVITES_DISABLED",
+        "TEXT_CHANNEL_FLEXIBLE_NAMES",
+        "DETACHED_BANNER",
+        "CLONE_EMOJI_ENABLED",
+        "CLONE_STICKER_ENABLED",
+        "HIDE_OWNER_CROWN",
+    ])
+    const preserved = ["BANNER", "FUTURE_FEATURE", "CLONE_EMOJI_DISABLED", "CLONE_STICKER_DISABLED"]
+    let features = [...preserved]
+    const bodies: Record<string, unknown>[] = []
+    rest((_url, init) => {
+        expect(init.method).toBe("PATCH")
+        const body = JSON.parse(String(init.body))
+        bodies.push(body)
+        if (body.features !== undefined) {
+            const desired = new Set<string>(body.features)
+            for (const feature of desired) expect(toggleable.has(feature)).toBe(true)
+            features = [...features.filter((feature) => !toggleable.has(feature)), ...desired]
+        }
+        return Response.json(guild({ features, ...(body.name === undefined ? {} : { name: body.name }) }))
+    })
+    const api = await setup(mode)
+    const toggles = mode === "default" ? GuildFeatureToggles : NativeGuildFeatureToggles
+    const cloning = [toggles.CloneEmojiEnabled, toggles.CloneStickerEnabled]
+    const enabled = await api.edit({ featureToggles: cloning })
+    expect(enabled.features).toEqual([...preserved, "CLONE_EMOJI_ENABLED", "CLONE_STICKER_ENABLED"])
+    expect(await api.get()).toEqual(enabled)
+    expect((await api.edit({ name: "Renamed without changing features" })).features).toEqual(enabled.features)
+    const kept = await api.edit({ featureToggles: [...cloning, toggles.HideOwnerCrown] })
+    expect(kept.features).toEqual([...enabled.features!, "HIDE_OWNER_CROWN"])
+    const emojiDisabled = await api.edit({ featureToggles: [toggles.CloneStickerEnabled, toggles.HideOwnerCrown] })
+    expect(emojiDisabled.features).toEqual([...preserved, "CLONE_STICKER_ENABLED", "HIDE_OWNER_CROWN"])
+    const disabled = await api.edit({ featureToggles: [] })
+    expect(disabled.features).toEqual(preserved)
+    expect(await api.get()).toEqual(disabled)
+    expect(bodies).toEqual([
+        { features: ["CLONE_EMOJI_ENABLED", "CLONE_STICKER_ENABLED"] },
+        { name: "Renamed without changing features" },
+        { features: ["CLONE_EMOJI_ENABLED", "CLONE_STICKER_ENABLED", "HIDE_OWNER_CROWN"] },
+        { features: ["CLONE_STICKER_ENABLED", "HIDE_OWNER_CROWN"] },
+        { features: [] },
+    ])
+})
+
 test.each(modes)("%s accepts image data URIs with MIME parameters", async (mode) => {
     const bodies: unknown[] = []
     rest((_url, init) => {
@@ -171,6 +226,8 @@ test.each(modes)("%s rejects unsupported, malformed and empty guild-setting patc
         { featureToggles: ["INVITES_DISABLED", "INVITES_DISABLED"] },
         { featureToggles: Array(1) },
         { featureToggles: ["BANNER"] },
+        { featureToggles: ["CLONE_EMOJI_DISABLED"] },
+        { featureToggles: ["CLONE_STICKER_DISABLED"] },
         { messageHistoryCutoff: "2026-09-09" },
         { name: "" },
         { icon: "not-an-image" },

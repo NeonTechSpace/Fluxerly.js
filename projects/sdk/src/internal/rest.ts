@@ -2276,14 +2276,6 @@ export class RestOwner {
         request: Request<A>,
         options?: MessageOperationOptions,
     ): Effect.Effect<A, RestFailure | ClientClosedError> {
-        return this.#executeResolved(token, request, options)
-    }
-
-    #executeResolved<A>(
-        token: Redacted.Redacted<string>,
-        request: Request<A>,
-        options?: MessageOperationOptions,
-    ): Effect.Effect<A, RestFailure | ClientClosedError> {
         const owner = this
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (owner.#closed) return Effect.fail(new ClientClosedError())

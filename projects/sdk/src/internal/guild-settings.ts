@@ -1,4 +1,10 @@
-import type { Guild, GuildEdit, GuildFeatureToggle, ModerationOptions } from "#sdk/guilds"
+import {
+    GuildFeatureToggles,
+    type Guild,
+    type GuildEdit,
+    type GuildFeatureToggle,
+    type ModerationOptions,
+} from "#sdk/guilds"
 import { decodeGuild, type GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
@@ -16,14 +22,7 @@ const timestamp = (value: unknown): value is string =>
     typeof value === "string" &&
     /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(value) &&
     Number.isFinite(Date.parse(value))
-const guildFeatureToggles = new Set<GuildFeatureToggle>([
-    "INVITES_DISABLED",
-    "TEXT_CHANNEL_FLEXIBLE_NAMES",
-    "DETACHED_BANNER",
-    "CLONE_EMOJI_DISABLED",
-    "CLONE_STICKER_DISABLED",
-    "HIDE_OWNER_CROWN",
-])
+const guildFeatureToggles = new Set<GuildFeatureToggle>(Object.values(GuildFeatureToggles))
 
 /** Builds the bot-permitted guild settings patch; REST owns dispatch, retry, audit headers and cache invalidation */
 export function guildEdit(

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { withHostedDiscovery } from "../hosted-discovery.mjs"
 import { createWebhookClient, colors, text, permissionBits, builders, commands } from "@neontechspace/fluxerly/effect"
 
 assert.equal(await Effect.runPromise(colors.parse("#ff8800")), 0xff8800)
@@ -62,32 +63,6 @@ import {
     AuthenticationError,
 } from "@neontechspace/fluxerly/effect"
 import { createClient as createDefault } from "@neontechspace/fluxerly"
-
-const hostedDiscoveryDocument = {
-    api_code_version: 1,
-    endpoints: {
-        api_public: "https://api.fluxer.app",
-        gateway: "wss://gateway.fluxer.app",
-        media: "https://fluxerusercontent.com",
-        static_cdn: "https://fluxerstatic.com",
-        webapp: "https://fluxer.app",
-        invite: "https://fluxer.gg",
-    },
-    features: { presigned_attachment_uploads: true },
-}
-
-function installHostedFetch(handler) {
-    globalThis.fetch = async (url, init = {}) => {
-        const target = typeof url === "string" ? url : url instanceof URL ? url.href : url.url
-        if (target === "https://fluxer.app/.well-known/fluxer") {
-            assert.equal(init.method, "GET")
-            assert.equal(init.redirect, "manual")
-            assert.equal(new Headers(init.headers).has("authorization"), false)
-            return Response.json(hostedDiscoveryDocument)
-        }
-        return handler(target, init)
-    }
-}
 
 globalThis.fetch = () => {
     throw new Error("Creation must not make HTTP requests")
@@ -222,7 +197,7 @@ const client = await Effect.runPromise(
             const invalidEdit = yield* client.messages.edit({ channelId: "20", id: "10" }, {}).pipe(Effect.flip)
             assert.ok(invalidEdit instanceof MessageOperationError)
             const requests = []
-            installHostedFetch(async (url, init) => {
+            globalThis.fetch = withHostedDiscovery(async (url, init) => {
                 assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages/10")
                 requests.push(init.method)
                 return init.method === "DELETE"
@@ -247,7 +222,7 @@ const client = await Effect.runPromise(
             assert.deepEqual(yield* client.cache.entries("messages"), [])
             assert.equal(yield* client.messages.delete(edited), undefined)
             assert.deepEqual(requests, ["GET", "PATCH", "DELETE"])
-            installHostedFetch(async (url, init) => {
+            globalThis.fetch = withHostedDiscovery(async (url, init) => {
                 assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages?limit=2&after=9")
                 assert.equal(init.method, "GET")
                 return Response.json([
@@ -308,7 +283,7 @@ const nativeReported = new Promise((resolve) => {
     completeNativeReport = resolve
 })
 let policyCalls = 0
-installHostedFetch(async (url, init) => {
+globalThis.fetch = withHostedDiscovery(async (url, init) => {
     assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages/10")
     assert.equal(init.method, "GET")
     return Response.json({

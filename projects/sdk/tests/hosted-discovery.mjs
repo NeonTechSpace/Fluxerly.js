@@ -1,3 +1,5 @@
+import assert from "node:assert/strict"
+
 export const hostedDiscoveryUrl = "https://fluxer.app/.well-known/fluxer"
 
 export const hostedDiscoveryDocument = Object.freeze({
@@ -21,6 +23,13 @@ function target(input) {
 export function withHostedDiscovery(handler) {
     return async (input, init) => {
         const url = target(input)
-        return url === hostedDiscoveryUrl ? Response.json(hostedDiscoveryDocument) : handler(url, init ?? {})
+        const options = init ?? {}
+        if (url === hostedDiscoveryUrl) {
+            assert.equal(options.method, "GET")
+            assert.equal(options.redirect, "manual")
+            assert.equal(new Headers(options.headers).has("authorization"), false)
+            return Response.json(hostedDiscoveryDocument)
+        }
+        return handler(url, options)
     }
 }

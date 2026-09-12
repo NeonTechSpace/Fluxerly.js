@@ -1319,6 +1319,30 @@ async function verifyCacheExpiry(send, get, channelId) {
     report(stage, true)
 }
 
+async function verifyCacheRestAdmissionAndExpiry(send, reply, get, channelId) {
+    stage = "cache_rest_send_and_reply"
+    const seed = await send(channelId, { content: `cache-rest-seed-${randomUUID()}` })
+    assert.equal((await get(seed))?.content, seed.content)
+    const replied = await reply(seed, { content: `cache-rest-reply-${randomUUID()}` })
+    assert.equal((await get(replied))?.content, replied.content)
+    report(stage, true)
+    await verifyCacheExpiry(send, get, channelId)
+}
+
+async function verifyCacheGatewayRebuild(get, channelId) {
+    stage = "cache_gateway_rebuild_after_recovery"
+    const content = `cache-gateway-rebuild-${randomUUID()}`
+    const sent = await api("POST", `/channels/${channelId}/messages`, { content })
+    assert.equal(sent.status, 200)
+    assert.match(sent.data?.id ?? "", /^\d+$/)
+    const target = { channelId, id: sent.data.id }
+    await waitForCache(get, target, (snapshot) => snapshot?.content === content)
+    const remote = await api("GET", `/channels/${channelId}/messages/${target.id}`)
+    assert.equal(remote.status, 200)
+    assert.equal(remote.data?.content, content)
+    report("cache_rebuilt_after_recovery", true)
+}
+
 async function verifyChannels(ops, mainChannelId, botId, interrupt) {
     const rawChannel = async (id) => {
         const response = await api("GET", `/channels/${id}`)
@@ -2884,6 +2908,11 @@ try {
             assert.ok(sent.isOk())
             return sent.value
         }
+        const cacheReply = async (target, input) => {
+            const sent = await client.messages.reply(target, input)
+            assert.ok(sent.isOk())
+            return sent.value
+        }
         if (nonceOnly)
             await verifyNonce(
                 {
@@ -3096,6 +3125,7 @@ try {
             }
             let beforeRecovery
             if (cache) {
+                await verifyCacheRestAdmissionAndExpiry(cacheSend, cacheReply, cacheGet, channel.id)
                 stage = "cache_pre_recovery_rest_intake"
                 beforeRecovery = await cacheSend(channel.id, { content: `cache-before-recovery-${randomUUID()}` })
                 assert.equal((await cacheGet(beforeRecovery))?.content, beforeRecovery.content)
@@ -3582,10 +3612,7 @@ try {
             assert.ok((await registered.value.waitForClose()).isOk())
             await terminal
             if (cache) {
-                assert.equal((await cacheGet(seed))?.content, seed.content)
-                assert.equal((await cacheGet(reply))?.content, reply.content)
-                report("cache_rest_send_and_reply", true)
-                if (forceRecovery) report("cache_rebuilt_after_recovery", true)
+                await verifyCacheGatewayRebuild(cacheGet, channel.id)
                 await verifyCacheProjectionConflict(
                     cacheSend,
                     async (target) => {
@@ -3596,7 +3623,6 @@ try {
                     cacheGet,
                     channel.id,
                 )
-                await verifyCacheExpiry(cacheSend, cacheGet, channel.id)
             }
             if (changes || cache) {
                 const probe = observeMessageChanges(channel.id)
@@ -3653,6 +3679,7 @@ try {
                         return cached.value
                     }
                     const cacheSend = (channelId, input) => Effect.runPromise(client.messages.send(channelId, input))
+                    const cacheReply = (target, input) => Effect.runPromise(client.messages.reply(target, input))
                     if (nonceOnly)
                         yield* Effect.promise(() =>
                             verifyNonce(
@@ -3835,6 +3862,9 @@ try {
                     }
                     let beforeRecovery
                     if (cache) {
+                        yield* Effect.promise(() =>
+                            verifyCacheRestAdmissionAndExpiry(cacheSend, cacheReply, cacheGet, channel.id),
+                        )
                         stage = "cache_pre_recovery_rest_intake"
                         beforeRecovery = yield* Effect.promise(() =>
                             cacheSend(channel.id, { content: `cache-before-recovery-${randomUUID()}` }),
@@ -4435,10 +4465,7 @@ try {
                     yield* subscription.unsubscribe()
                     yield* subscription.waitForClose()
                     if (cache) {
-                        assert.equal((yield* Effect.promise(() => cacheGet(seed)))?.content, seed.content)
-                        assert.equal((yield* Effect.promise(() => cacheGet(reply)))?.content, reply.content)
-                        report("cache_rest_send_and_reply", true)
-                        if (forceRecovery) report("cache_rebuilt_after_recovery", true)
+                        yield* Effect.promise(() => verifyCacheGatewayRebuild(cacheGet, channel.id))
                         yield* Effect.promise(() =>
                             verifyCacheProjectionConflict(
                                 cacheSend,
@@ -4447,7 +4474,6 @@ try {
                                 channel.id,
                             ),
                         )
-                        yield* Effect.promise(() => verifyCacheExpiry(cacheSend, cacheGet, channel.id))
                     }
                     if (changes || cache) {
                         const probe = observeMessageChanges(channel.id)

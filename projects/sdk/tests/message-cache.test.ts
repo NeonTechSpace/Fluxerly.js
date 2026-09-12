@@ -480,14 +480,21 @@ test("count and UTF-8 JSON bounds are global, LRU reads retain recency, and over
 
 test("retention age resets only for accepted snapshots, while zero removes and null does not expire", async () => {
     const server = await fixture()
+    let monotonicNanos = 1_000_000_000n
+    // Control retention age without replacing real network or cleanup timers
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => monotonicNanos)
     const client = defaultApi({ cache: { messages: { maxAgeMs: 70 } } })
     const first = value(await client.messages.fetch(target))
-    await new Promise((resolve) => setTimeout(resolve, 45))
+    monotonicNanos += 45_000_000n
     const second = value(await client.messages.fetch(target))
     expect(second).toEqual(first)
-    await new Promise((resolve) => setTimeout(resolve, 45))
+    expect(
+        server.requests.filter((request) => request.method === "GET" && request.path === "/v1/channels/20/messages/10"),
+    ).toHaveLength(2)
+    monotonicNanos += 45_000_000n
     expect(cached(client, target)).toEqual(second)
-    await vi.waitFor(() => expect(cached(client, target)).toBeUndefined(), { timeout: 200 })
+    monotonicNanos += 25_000_000n
+    expect(cached(client, target)).toBeUndefined()
 
     const policy = defaultApi({
         cache: {
@@ -498,6 +505,8 @@ test("retention age resets only for accepted snapshots, while zero removes and n
     })
     const retained = value(await policy.messages.fetch({ id: "50", channelId: "20" }))
     expect(cached(policy, retained)).toEqual(retained)
+    monotonicNanos += 1_000_000_000n
+    expect(cached(policy, retained)).toEqual(retained)
     server.control.respond = (request) => {
         if (request.method === "GET" && request.path === "/v1/channels/20/messages/50")
             request.response.end(JSON.stringify(wire("50", "20", "forget")))
@@ -506,7 +515,7 @@ test("retention age resets only for accepted snapshots, while zero removes and n
     const removed = value(await policy.messages.fetch({ id: "50", channelId: "20" }))
     expect(removed.content).toBe("forget")
     expect(cached(policy, retained)).toBeUndefined()
-    await new Promise((resolve) => setTimeout(resolve, 90))
+    monotonicNanos += 90_000_000n
     expect(cached(policy, { id: "50", channelId: "20" })).toBeUndefined()
 
     server.control.respond = (request) => {

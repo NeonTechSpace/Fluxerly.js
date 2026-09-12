@@ -137,6 +137,7 @@ Run these commands from [projects/](/projects/) using the development Node versi
 | `pnpm --filter @neontechspace/fluxerly format:check` | Check SDK formatting without writing files |
 | `pnpm check` | Check SDK formatting, build, paired public-client surface, source/test types, Vitest and isolated packed JavaScript/TypeScript consumers |
 | `pnpm --filter @neontechspace/fluxerly test:public-contract` | Check paired public client namespace names, runtime keys and JSDoc presence |
+| `pnpm --filter @neontechspace/fluxerly test:upstream:guild-features` | Opt-in current Fluxer toggle-set and cloning-guard source comparison, requiring authenticated `gh`; no provider requests or mutations |
 | `pnpm --filter @neontechspace/fluxerly test:experiment:effect-transport` | Run the rejected Effect unstable HTTP/socket transport characterization outside the default SDK check |
 
 The SDK's [Prettier configuration](/projects/sdk/.prettierrc.json) sets a 120-column target and omits optional semicolons.
@@ -155,6 +156,9 @@ The default SDK checks retain selected `ws` transport coverage and built SDK nat
 
 The public-client contract covers only its inventoried default/native client interfaces and direct runtime namespace keys.
 It does not compare member types or behavior, assess comment accuracy, or cover every type-only export
+
+The upstream guild-feature check pins one current Fluxer commit per run and fails on changed values or unrecognized source structure.
+It is a manual source-drift signal, not hosted behavior proof; the live feature-toggle check owns semantic round trips and restoration
 
 Run `pnpm --filter @neontechspace/fluxerly test:cache:memory` for isolated GC-enabled retention checks.
 Run `pnpm --filter @neontechspace/fluxerly test:cache:workload` for local cache workloads.
@@ -200,7 +204,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live` | Hosted protocol discovery, readiness and heartbeats | No server-content changes |
 | `test:live:sdk` | Built default/native client connection and shutdown | No server-content changes |
 | `test:live:application` | Built default/native current-bot application allowlist and hosted installation-link construction | Read-only; no navigation, authorization, or server-content changes |
-| `test:live:oauth:default`, `test:live:oauth:effect` | Manual authorization-code exchange, bearer reads, refresh and revocation | Interactive identity and guild-list consent, temporary tokens and an owned localhost callback listener |
+| `test:live:oauth:default`, `test:live:oauth:effect` | Manual authorization-code exchange, bearer reads, introspection, refresh and revocation | Interactive identity, guild-list and connections consent, temporary tokens and an owned localhost callback listener; no bot installation or permission changes |
 | `test:live:oauth:no-consent` | Combined code-grant URL construction, inactive confidential introspection and invalid-bearer connections rejection through both built APIs | Shared sandbox lock and read-only application, bot, guild, OAuth and connection checks. No browser navigation, consent, callback listener, token issuance, refresh or revocation |
 | `test:live:instance` | Built default/native hosted instance discovery comparison and fresh bot-self read | Read-only unauthenticated bootstrap and bot-self REST requests; no server-content changes |
 | `test:live:diagnostics` | Built default/native diagnostics and cache clearing across a delayed live guild read | Read-only with the shared sandbox lock, no gateway connection or remote mutation |
@@ -222,8 +226,10 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:batch-delete` | Explicit message batches, events/cache, missing IDs and lost-response reconciliation | Temporary channel/messages and test-owned response loss |
 | `test:live:moderation:default`, `test:live:moderation:effect` | Timeout/clear, kick, ban expiry/unban, events and lost-response reconciliation | Authorized disposable member moderation, temporary channel/messages, test-owned response loss |
 | `test:live:webhooks` | Bot/token webhook management, reply/forward readback, permission rejection classification, lost-response reconciliation and credential revocation through both APIs | Temporary webhooks, channels/messages, file uploads and test-owned response loss |
+| `test:live:expressions` | Emoji/sticker lifecycle, gateway updates, partial batches and sticker messages through both built APIs | Journaled temporary expressions and a channel, with verified test-owned removal and no media purging |
 | `test:live:invites` | Invite creation, create/delete notices, inspection, lists, revocation and lost-response reconciliation through both APIs | Temporary channel and invites; no invite acceptance or membership changes |
 | `test:live:administration` | Server-setting edits, live audit-entry notices and filtered audit reads/traversal through both APIs | Temporary sandbox server renaming, restoration, audit records and test-owned response loss |
+| `test:live:guild-features` | Clone opt-in enable/disable, preservation during another feature edit and lost-response reconciliation through both APIs | Temporary sandbox cloning permissions and owner-crown visibility, audit records and verified restoration |
 | `test:live:vanity` | Custom-invite reads, read recovery and disabled-feature rejection through both APIs | No intended successful mutation, uses a reserved code for rejection checks |
 | `test:live:vanity:mutate:default`, `test:live:vanity:mutate:effect` | Manual custom-invite lifecycle and lost-response reconciliation | Opt-in temporary custom codes on an eligible sandbox with no existing code |
 | `test:live:discovery` | Directory search, categories, eligibility/status and read recovery through both APIs | Read-only, never submits an application |
@@ -238,6 +244,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:guilds` | Guild/member reads, reaction-driven role assignment, role management/events, optional caches and recovery | Temporary channel/messages, two zero-permission test roles with assignment only to the designated bot, plus test-socket termination and test-owned response loss |
 | `test:live:guild-events` | Bot-session guild create delivery after READY | Read-only gateway connection to the existing sandbox guild; fails when it is unavailable or the bounded event wait expires |
 | `test:live:voice` | Initial voice snapshots and member mute/deaf flags through both built APIs | Read-only sandbox gateway/member observations; no participant moderation, joining or media |
+| `test:live:voice-controls:default`, `test:live:voice-controls:effect` | Manual selected-participant move/disconnect and mute/deafen controls, with snapshots, events and REST readback | Temporary voice channel and participant state changes, followed by participant rejoin, baseline restoration and verified channel removal |
 | `test:live:channels` | Guild channel management, permission overwrites, inheritance, events/cache and recovery | Temporary channels/categories, overwrites targeting only the bot and test guild's everyone role, test-socket termination and test-owned response loss |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
 | `test:live:cleanup` | REST guild summaries, bot-self hierarchy and bounded message cleanup through both APIs | Temporary channel and test-bot messages, with one lost batch response. Uses the existing channel recovery journal and verifies test-owned cleanup |
@@ -250,8 +257,11 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:attachment-sources` | `openAsBlob` file and finite multipart-stream uploads, SDK/raw binary readback, bounded download failure/cancellation and injected inline fallback through both APIs | Temporary channel/messages, one test-owned temporary file and delayed-EOF wrapper; the injected 403 targets only the current channel's unique attachment plan and does not change provider configuration |
 
 OAuth checks require `FLUXER_TEST_CLIENT_SECRET` and `FLUXER_TEST_OAUTH_REDIRECT_URI=http://localhost:3000/auth/fluxer/callback` in the ignored SDK env file.
-Register that exact redirect on the sandbox bot's application and leave localhost port 3000 free.
-Run one OAuth mode at a time, with the consenting account owner's current permission for identity and guild-list reads
+Register that exact redirect on the sandbox bot's application and leave localhost port 3000 free
+
+Run one OAuth mode at a time, with fresh consent and the account owner's current permission for identity, guild-list and connections reads.
+The URL requests only `identify guilds connections`; do not include `bot`, because Fluxer rejects adding the existing sandbox bot again.
+Keep the bot's membership and permissions unchanged; installation URL construction is covered separately by the no-consent check
 
 Open the printed authorization URL and approve within five minutes, without sharing the callback URL or code.
 The harness retains issued tokens only in memory and revokes known tokens before closing its callback listener and SDK lifetime
@@ -261,6 +271,20 @@ Open personal settings, then Account → Security → Account access → Authori
 Tokens cannot be recovered from a journal, and successful token revocation does not remove the provider's saved consent record
 
 These checks are excluded from `pnpm check`, CI, schedules and unattended runs
+
+Voice-control checks require process-only `FLUXER_TEST_VOICE_USER_ID` for a currently consenting sandbox member connected to one voice session.
+The bot needs ManageChannels, Connect, MoveMembers, MuteMembers and DeafenMembers, plus a successful hierarchy check for that participant
+
+Run each mode separately. Keep the participant available to rejoin the original channel within 90 seconds after disconnection.
+The harness cannot make a disconnected participant join and never joins the bot or handles media
+
+It journals the baseline, test-channel marker and pending operation in `.env.test.voice-controls.local` before mutations.
+Recovery uses fresh gateway and REST observations, refuses unexpected state and retains the journal if restoration or resource removal is uncertain.
+When a journal exists, the next invocation performs recovery only; start a fresh test in a separate invocation after verified cleanup
+
+Use `node tests/live/voice-controls.mjs default --flags-only` (or `effect`) from the SDK directory to isolate mute/deafen checks without moving or disconnecting the participant.
+Use `--no-move` instead to include disconnect and participant rejoin without creating a channel or testing move handoff.
+Run `node tests/live/voice-controls.mjs --self-test` from the SDK directory for the local journal-state check; this is not live recovery proof
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools
 
@@ -297,6 +321,11 @@ Cleanup reconciles the owned channel, verifies invite destination and creator be
 
 Administration checks use the shared lock and an ignored `.env.test.administration.local` journal containing sandbox identity, a unique marker and the original server name.
 Restoration refuses to overwrite an unexpected concurrent name change and retains its journal on conflict
+
+Guild-feature checks use the same lock and `.env.test.guild-features.local` journal to preserve the original feature set.
+They modify only the clone opt-ins and owner-crown visibility, refuse unexpected feature changes and verify full feature restoration.
+The provider has no conditional PATCH, so conflict checks are not atomic; the journal remains if restoration is uncertain.
+Disabling cloning again cannot revoke copies another caller made during the temporary opt-in
 
 Audit queries always include a user or action filter; no unfiltered read is used because Fluxer may rewrite deletion records during that request
 

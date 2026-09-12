@@ -104,8 +104,13 @@ export class EmbedBuilder {
     }
 }
 
-/** Fluent message-payload construction. `true` means a body field was selected before `build` */
+/**
+ * Fluent message-payload construction. A new builder has no selected body, so `build` becomes callable only after
+ * content, an embed, an attachment or a sticker is selected. Runtime callers can still construct an empty builder,
+ * and message operations remain responsible for rejecting a resulting empty payload
+ */
 export class MessageBuilder<HasBody extends boolean = false> {
+    declare private readonly hasBodyState: HasBody
     private contentValue: string | undefined
     private readonly embedValues: EmbedInput[] = []
     private readonly attachmentValues: AttachmentInput[] = []
@@ -113,6 +118,9 @@ export class MessageBuilder<HasBody extends boolean = false> {
     private allowedMentionsValue: AllowedMentions | undefined
     private messageReferenceValue: MessageReference | undefined
     private flagsValue: number | undefined
+
+    /** Construct an empty builder. A buildable state can arise only from a fluent body-selection method */
+    constructor(..._empty: IsExactly<HasBody, false> extends true ? [] : [never]) {}
 
     /** Set message content without trimming or validating it */
     content(value: string): MessageBuilder<true> {
@@ -182,8 +190,9 @@ export class MessageBuilder<HasBody extends boolean = false> {
     }
 
     /**
-     * Return a fresh plain `MessageInput` snapshot. The selected body shape is tracked only to reject an entirely empty builder at compile time.
-     * Direct send/reply validation still owns empty-text, array, attachment and provider-limit decisions
+     * Return a fresh plain `MessageInput` snapshot after a body field is selected. Direct send/reply validation still
+     * owns empty-text, array, attachment and provider-limit decisions. Runtime callers can invoke this method on an
+     * empty builder and receive `{}`, which those message operations reject locally
      */
     readonly build = (() => {
         return {
@@ -201,8 +210,10 @@ export class MessageBuilder<HasBody extends boolean = false> {
                 : { messageReference: { ...this.messageReferenceValue } }),
             ...(this.flagsValue === undefined ? {} : { flags: this.flagsValue }),
         } as MessageInput
-    }) as HasBody extends true ? () => MessageInput : never
+    }) as IsExactly<HasBody, true> extends true ? () => MessageInput : never
 }
+
+type IsExactly<Value, Expected> = [Value] extends [Expected] ? ([Expected] extends [Value] ? true : false) : false
 
 /** Optional plain-payload builders with no client, request, cache or connection ownership */
 export const builders = Object.freeze({

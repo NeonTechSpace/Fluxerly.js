@@ -56,11 +56,6 @@ const contentTypes = new Set<MessageSearchContentType>([
 const embedTypes = new Set<MessageSearchEmbedType>(["image", "video", "sound", "article"])
 const authorTypes = new Set(["user", "bot", "webhook"])
 
-export interface EncodedMessageSearchQuery {
-    readonly limit: number
-    readonly json: string
-}
-
 const integer = (value: unknown, minimum: number, maximum: number): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum
 
