@@ -244,6 +244,58 @@ async function loopbackGateway({
     }
 }
 
+async function disconnectBarrier(phase = "terminal") {
+    let response: import("node:http").ServerResponse | undefined
+    let closed = false
+    const entered = Promise.withResolvers<void>()
+    const server = createServer((request, current) => {
+        const target = new URL(request.url ?? "/", "http://127.0.0.1")
+        if (
+            request.method !== "GET" ||
+            target.pathname !== "/disconnect" ||
+            target.searchParams.get("phase") !== phase
+        ) {
+            current.statusCode = 404
+            current.end()
+            return
+        }
+        response = current
+        entered.resolve()
+    })
+    server.listen(0, "127.0.0.1")
+    await once(server, "listening")
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("Missing supervisor disconnect barrier address")
+    return {
+        origin: `http://127.0.0.1:${address.port}/disconnect?phase=${phase}`,
+        entered: entered.promise,
+        release() {
+            response?.writeHead(204)
+            response?.end()
+            response = undefined
+        },
+        async close() {
+            if (closed) return
+            closed = true
+            response?.writeHead(503)
+            response?.end()
+            response = undefined
+            server.closeAllConnections()
+            await new Promise<void>((resolve) => server.close(() => resolve()))
+        },
+    }
+}
+
+function processRunning(pid: number): boolean {
+    try {
+        process.kill(pid, 0)
+        return true
+    } catch (error) {
+        if (record(error) && error.code === "ESRCH") return false
+        throw error
+    }
+}
+
 async function managed(mode: Mode, options: SupervisorOptions): Promise<Managed> {
     if (mode === "default") {
         const created = defaultSupervisor.create(options)
@@ -429,6 +481,227 @@ test("default clears a current-generation connection observation as soon as owne
         { interval: 5, timeout: 2_000 },
     )
 }, 12_000)
+
+test.each(["default", "native"] as const)(
+    "%s supervisor fails after the configured IPC-disconnect observation window and waits for every owned exit",
+    async (mode) => {
+        const timeoutMs = 250
+        const barrier = await disconnectBarrier()
+        const disconnectWorker = new URL("./supervisor-disconnect-worker.mjs", import.meta.url)
+        const owner = await managed(mode, {
+            entry: mode === "default" ? fileURLToPath(disconnectWorker) : disconnectWorker,
+            totalShards: 2,
+            assignments: [
+                { id: "disconnected", shardIds: [0] },
+                { id: "sibling", shardIds: [1] },
+            ],
+            startupTimeoutMs: 5_000,
+            shutdownTimeoutMs: timeoutMs,
+            childEnvironment: { FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin },
+        })
+        onTestFinished(async () => {
+            await owner.shutdown().catch(() => undefined)
+            await barrier.close()
+        })
+        await owner.start()
+        await owner.waitForReady()
+        await barrier.entered
+        const readyChildren = owner.status().children
+        const disconnectedPid = readyChildren.find((child) => child.id === "disconnected")?.pid
+        const siblingPid = readyChildren.find((child) => child.id === "sibling")?.pid
+        expect(readyChildren).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ id: "disconnected", pid: expect.any(Number), connectionState: "Connected" }),
+                expect.objectContaining({ id: "sibling", pid: expect.any(Number), connectionState: "Connected" }),
+            ]),
+        )
+        if (typeof disconnectedPid !== "number" || typeof siblingPid !== "number")
+            throw new Error("Expected owned process IDs before releasing IPC disconnect")
+        expect(processRunning(disconnectedPid)).toBe(true)
+        expect(processRunning(siblingPid)).toBe(true)
+        barrier.release()
+        await vi.waitFor(() =>
+            expect(owner.status().children).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({ id: "disconnected", pid: disconnectedPid, connectionState: null }),
+                    expect.objectContaining({ id: "sibling", pid: siblingPid, connectionState: "Connected" }),
+                ]),
+            ),
+        )
+
+        await expect(owner.waitForClose()).rejects.toMatchObject({
+            _tag: "SupervisorError",
+            childId: "disconnected",
+            reason: "closed",
+        })
+        expect(owner.status()).toMatchObject({
+            state: "failed",
+            children: [
+                { id: "disconnected", pid: null, state: "failed" },
+                { id: "sibling", pid: null, state: "failed" },
+            ],
+        })
+        expect(processRunning(disconnectedPid)).toBe(false)
+        expect(processRunning(siblingPid)).toBe(false)
+        await barrier.close()
+    },
+    12_000,
+)
+
+test.each(["default", "native"] as const)(
+    "%s parent shutdown remains successful while a current child is in its IPC-disconnect observation window",
+    async (mode) => {
+        const barrier = await disconnectBarrier()
+        const disconnectWorker = new URL("./supervisor-disconnect-worker.mjs", import.meta.url)
+        const owner = await managed(mode, {
+            entry: mode === "default" ? fileURLToPath(disconnectWorker) : disconnectWorker,
+            totalShards: 1,
+            assignments: [{ id: "disconnected", shardIds: [0] }],
+            startupTimeoutMs: 5_000,
+            shutdownTimeoutMs: 1_000,
+            childEnvironment: { FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin },
+        })
+        onTestFinished(async () => {
+            await owner.shutdown().catch(() => undefined)
+            await barrier.close()
+        })
+        await owner.start()
+        await owner.waitForReady()
+        await barrier.entered
+        expect(owner.status()).toMatchObject({
+            children: [{ id: "disconnected", pid: expect.any(Number), connectionState: "Connected" }],
+        })
+        barrier.release()
+        await vi.waitFor(
+            () =>
+                expect(owner.status().children[0]).toMatchObject({
+                    pid: expect.any(Number),
+                    connectionState: null,
+                }),
+            { interval: 5, timeout: 2_000 },
+        )
+        await Promise.all([owner.shutdown(), owner.shutdown()])
+        await owner.waitForClose()
+        expect(owner.status()).toMatchObject({
+            state: "closed",
+            children: [{ id: "disconnected", pid: null, state: "closed" }],
+        })
+        await barrier.close()
+    },
+    12_000,
+)
+
+test.each(["default", "native"] as const)(
+    "%s IPC loss during startup uses the disconnect observation window instead of startupTimeout",
+    async (mode) => {
+        const barrier = await disconnectBarrier("startup")
+        const worker = new URL("./supervisor-disconnect-coordination-worker.mjs", import.meta.url)
+        const owner = await managed(mode, {
+            entry: mode === "default" ? fileURLToPath(worker) : worker,
+            totalShards: 1,
+            assignments: [{ id: "startup", shardIds: [0] }],
+            startupTimeoutMs: 500,
+            shutdownTimeoutMs: 1_000,
+            childEnvironment: {
+                FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin,
+                FLUXERLY_SUPERVISOR_DISCONNECT_COORDINATION: "startup",
+            },
+        })
+        onTestFinished(async () => {
+            await owner.shutdown().catch(() => undefined)
+            await barrier.close()
+        })
+        const starting = owner.start()
+        await barrier.entered
+        barrier.release()
+        await vi.waitFor(
+            () => expect(owner.status().children[0]).toMatchObject({ pid: expect.any(Number), connectionState: null }),
+            { interval: 5, timeout: 2_000 },
+        )
+        await new Promise<void>((resolve) => setTimeout(resolve, 600))
+        expect(owner.status()).toMatchObject({ state: "starting", children: [{ pid: expect.any(Number) }] })
+        await expect(starting).rejects.toMatchObject({ _tag: "SupervisorError", childId: "startup", reason: "closed" })
+        await expect(owner.waitForClose()).rejects.toMatchObject({
+            _tag: "SupervisorError",
+            childId: "startup",
+            reason: "closed",
+        })
+        expect(owner.status()).toMatchObject({ state: "failed", children: [{ pid: null, state: "failed" }] })
+        await barrier.close()
+    },
+    12_000,
+)
+
+test.each(["default", "native"] as const)(
+    "%s IPC loss freezes a queued Identify without replacing the observation failure",
+    async (mode) => {
+        const barrier = await disconnectBarrier("queued")
+        const worker = new URL("./supervisor-disconnect-coordination-worker.mjs", import.meta.url)
+        const owner = await managed(mode, {
+            entry: mode === "default" ? fileURLToPath(worker) : worker,
+            totalShards: 1,
+            assignments: [{ id: "queued", shardIds: [0] }],
+            identify: { minimumSpacingMs: 1_000 },
+            startupTimeoutMs: 5_000,
+            shutdownTimeoutMs: 1_500,
+            childEnvironment: {
+                FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin,
+                FLUXERLY_SUPERVISOR_DISCONNECT_COORDINATION: "queued",
+            },
+        })
+        onTestFinished(async () => {
+            await owner.shutdown().catch(() => undefined)
+            await barrier.close()
+        })
+        await owner.start()
+        await owner.waitForReady()
+        await barrier.entered
+        barrier.release()
+        await expect(owner.waitForClose()).rejects.toMatchObject({
+            _tag: "SupervisorError",
+            childId: "queued",
+            reason: "closed",
+        })
+        expect(owner.status()).toMatchObject({ state: "failed", children: [{ pid: null, state: "failed" }] })
+        await barrier.close()
+    },
+    12_000,
+)
+
+test.each(["default", "native"] as const)(
+    "%s IPC loss freezes an outstanding Identify acknowledgement without replacing the observation failure",
+    async (mode) => {
+        const barrier = await disconnectBarrier("outstanding")
+        const worker = new URL("./supervisor-disconnect-coordination-worker.mjs", import.meta.url)
+        const owner = await managed(mode, {
+            entry: mode === "default" ? fileURLToPath(worker) : worker,
+            totalShards: 1,
+            assignments: [{ id: "outstanding", shardIds: [0] }],
+            startupTimeoutMs: 5_000,
+            shutdownTimeoutMs: 5_100,
+            childEnvironment: {
+                FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin,
+                FLUXERLY_SUPERVISOR_DISCONNECT_COORDINATION: "outstanding",
+            },
+        })
+        onTestFinished(async () => {
+            await owner.shutdown().catch(() => undefined)
+            await barrier.close()
+        })
+        await owner.start()
+        await owner.waitForReady()
+        await barrier.entered
+        barrier.release()
+        await expect(owner.waitForClose()).rejects.toMatchObject({
+            _tag: "SupervisorError",
+            childId: "outstanding",
+            reason: "closed",
+        })
+        expect(owner.status()).toMatchObject({ state: "failed", children: [{ pid: null, state: "failed" }] })
+        await barrier.close()
+    },
+    15_000,
+)
 
 test.each(["default", "native"] as const)(
     "%s readiness observer cancellation leaves the configured supervisor running",

@@ -66,6 +66,8 @@ export interface SupervisorOptions {
      */
     readonly startupTimeoutMs?: number
     /** Grace period before this parent force-terminates one unresponsive owned child, in milliseconds.
+     * It also bounds how long a current child that loses IPC may exit naturally before the supervisor fails with closed.
+     * The disconnected child is force-terminated after that one observation window, while other owned children receive their normal graceful stop.
      * A positive safe integer no greater than 2,147,483,647. Verified exit can take longer than this grace period
      * @defaultValue 5000
      */

@@ -34,16 +34,21 @@ export interface DefaultSupervisorChildOptions extends SupervisorChildOptions {
 /** One optional local process supervisor */
 export interface DefaultSupervisor {
     /** Start the configured children and await each assignment/configuration acknowledgement, not gateway READY.
-     * Concurrent calls share startup. Expected failure waits for owned process exit; start after shutdown fails with closed
+     * Concurrent calls share startup. Expected failure waits for owned process exit; start after shutdown fails with closed.
+     * Terminal child IPC loss fails any still-pending startup with closed only after all owned children exit
      */
     start(): ResultAsync<void, SupervisorError>
-    /** Await the terminal local supervisor outcome after every owned child exits */
+    /** Await the retained terminal local supervisor outcome after every owned child exits, including closed after a current child outlives its IPC-loss observation window */
     waitForClose(): ResultAsync<void, SupervisorError>
-    /** Observe all children becoming gateway-ready without starting or owning the supervisor. A signal cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error */
+    /** Observe all children becoming gateway-ready without starting or owning the supervisor. A current child IPC loss clears readiness immediately.
+     * A signal cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error
+     */
     waitForReady(options?: SupervisorWaitOptions): ResultAsync<void, SupervisorError | CancelledError>
     /** Return one immutable safe local status snapshot without child output, environment, arguments or paths */
     status(): SupervisorStatus
-    /** Ask every owned child to stop, force-terminate only an unresponsive owned child after the configured grace period, then await verified exit */
+    /** Ask every owned child to stop, force-terminate only an unresponsive owned child after the configured grace period, then await verified exit.
+     * Explicit shutdown remains successful when a child has already lost IPC
+     */
     shutdown(): ResultAsync<void, never>
 }
 

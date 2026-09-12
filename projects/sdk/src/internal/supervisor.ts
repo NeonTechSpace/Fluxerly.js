@@ -61,6 +61,7 @@ interface ChildSlot {
     restartTimer: ReturnType<typeof setTimeout> | undefined
     startupTimer: ReturnType<typeof setTimeout> | undefined
     stopTimer: ReturnType<typeof setTimeout> | undefined
+    disconnectTimer: ReturnType<typeof setTimeout> | undefined
 }
 
 const connectionStates = ["Disconnected", "Connecting", "Connected", "Recovering", "Closing", "Closed"] as const
@@ -375,6 +376,7 @@ export class SupervisorOwner {
             restartTimer: undefined,
             startupTimer: undefined,
             stopTimer: undefined,
+            disconnectTimer: undefined,
         }))
     }
 
@@ -441,6 +443,7 @@ export class SupervisorOwner {
 
     #spawn(slot: ChildSlot) {
         if (this.#stopping || this.#failed) return
+        this.#clearDisconnectTimer(slot)
         slot.generation += 1
         slot.hello = false
         slot.ready = false
@@ -478,6 +481,7 @@ export class SupervisorOwner {
         if (typeof child.pid !== "number") {
             if (slot.stopTimer) clearTimeout(slot.stopTimer)
             slot.stopTimer = undefined
+            this.#clearDisconnectTimer(slot)
             slot.child = undefined
             this.#checkStopped()
             return
@@ -489,10 +493,36 @@ export class SupervisorOwner {
         if (slot.child !== child || slot.generation !== generation) return
         slot.connectionState = null
         this.#refreshReadiness()
+        if (this.#stopping || this.#failed || slot.disconnectTimer) return
+        if (slot.startupTimer) clearTimeout(slot.startupTimer)
+        slot.startupTimer = undefined
+        this.#pending = this.#pending.filter((request) => request.slot !== slot || request.generation !== generation)
+        if (this.#outstanding?.slot === slot && this.#outstanding.generation === generation)
+            clearTimeout(this.#outstanding.timer)
+        // A normal process exit closes IPC just before its exit event. Reuse the configured graceful deadline
+        // before classifying a still-running current child as a terminal supervisor failure
+        slot.disconnectTimer = setTimeout(() => {
+            slot.disconnectTimer = undefined
+            if (
+                this.#stopping ||
+                this.#failed ||
+                slot.child !== child ||
+                slot.generation !== generation ||
+                child.exitCode !== null ||
+                child.signalCode !== null
+            )
+                return
+            // The observation window is the disconnected child's only graceful exit window. Do not give it a
+            // second shutdown timeout after terminal coordination loss, while sibling children still receive
+            // their normal graceful stop request
+            this.#fail(new SupervisorError(slot.configuration.id, "closed"))
+            this.#requestStop(slot, true)
+        }, this.#configuration!.shutdownTimeoutMs)
     }
 
     #message(slot: ChildSlot, child: ChildProcess, generation: number, message: unknown) {
         if (this.#stopping || this.#failed || slot.child !== child || slot.generation !== generation) return
+        if (slot.disconnectTimer) return
         if (!record(message) || typeof message.type !== "string")
             return this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
         if ("generation" in message && message.generation !== generation) return
@@ -676,15 +706,20 @@ export class SupervisorOwner {
     #send(slot: ChildSlot, message: object): boolean {
         const child = slot.child
         if (!child || !child.connected) {
-            this.#fail(new SupervisorError(slot.configuration.id, "spawn"))
+            // Parent-initiated shutdown remains successful when a child has already lost IPC. The owned process
+            // still follows the normal stop deadline and verified-exit path
+            if (!this.#stopping && !this.#failed && !slot.disconnectTimer)
+                this.#fail(new SupervisorError(slot.configuration.id, "spawn"))
             return false
         }
         try {
             child.send(message, undefined, undefined, (error) => {
-                if (error && slot.child === child) this.#childError(slot, child, slot.generation)
+                if (error && slot.child === child && !(this.#stopping && !child.connected) && !slot.disconnectTimer)
+                    this.#childError(slot, child, slot.generation)
             })
             return true
         } catch {
+            if ((this.#stopping && !child.connected) || slot.disconnectTimer) return false
             this.#childError(slot, child, slot.generation)
             return false
         }
@@ -699,6 +734,7 @@ export class SupervisorOwner {
         slot.startupTimer = undefined
         if (slot.stopTimer) clearTimeout(slot.stopTimer)
         slot.stopTimer = undefined
+        this.#clearDisconnectTimer(slot)
         this.#pending = this.#pending.filter((request) => request.slot !== slot || request.generation !== generation)
         if (this.#outstanding?.slot === slot && this.#outstanding.generation === generation) {
             this.#clearOutstanding()
@@ -731,9 +767,22 @@ export class SupervisorOwner {
         this.#scheduleGrant()
     }
 
-    #requestStop(slot: ChildSlot) {
+    #requestStop(slot: ChildSlot, force = false) {
         const child = slot.child
-        if (!child || slot.stopTimer) return
+        if (!child) return
+        if (force) {
+            if (slot.stopTimer) clearTimeout(slot.stopTimer)
+            slot.stopTimer = undefined
+            slot.state = "stopping"
+            try {
+                // The disconnected child has already consumed its configured observation window
+                child.kill("SIGKILL")
+            } catch {
+                this.#childError(slot, child, slot.generation)
+            }
+            return
+        }
+        if (slot.stopTimer) return
         slot.state = "stopping"
         const generation = slot.generation
         slot.stopTimer = setTimeout(() => {
@@ -763,12 +812,13 @@ export class SupervisorOwner {
         if (this.#grantTimer) clearTimeout(this.#grantTimer)
         this.#grantTimer = undefined
         this.#pending = []
-        this.#clearOutstanding()
+        if (this.#outstanding) clearTimeout(this.#outstanding.timer)
         for (const slot of this.#slots) {
             if (slot.restartTimer) clearTimeout(slot.restartTimer)
             slot.restartTimer = undefined
             if (slot.startupTimer) clearTimeout(slot.startupTimer)
             slot.startupTimer = undefined
+            this.#clearDisconnectTimer(slot)
             if (slot.child) this.#requestStop(slot)
             else {
                 slot.state = this.#failed ? "failed" : "closed"
@@ -778,8 +828,14 @@ export class SupervisorOwner {
         this.#checkStopped()
     }
 
+    #clearDisconnectTimer(slot: ChildSlot) {
+        if (slot.disconnectTimer) clearTimeout(slot.disconnectTimer)
+        slot.disconnectTimer = undefined
+    }
+
     #checkStopped() {
         if (this.#slots.some((slot) => slot.child !== undefined)) return
+        this.#clearOutstanding()
         if (this.#failed) {
             Deferred.doneUnsafe(this.#startup, Effect.fail(this.#failure!))
             Deferred.doneUnsafe(this.#terminal, Effect.fail(this.#failure!))

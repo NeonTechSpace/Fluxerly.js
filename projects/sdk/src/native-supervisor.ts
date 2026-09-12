@@ -35,17 +35,23 @@ export interface NativeSupervisorChildOptions<E = never, R = never> {
 export interface NativeSupervisor {
     /** Start the configured children and await each assignment/configuration acknowledgement, not gateway READY.
      * Concurrent calls share startup. Interruption stops this supervisor and awaits its owned process exits.
-     * Expected failure also waits for those exits; start after shutdown fails with closed
+     * Expected failure also waits for those exits; start after shutdown fails with closed.
+     * Terminal child IPC loss fails any still-pending startup with closed only after all owned children exit
      */
     start(): Effect.Effect<void, SupervisorError>
-    /** Await the terminal local supervisor outcome after every owned child exits. Interrupting this observer does not stop the supervisor */
+    /** Await the retained terminal local supervisor outcome after every owned child exits, including closed after a current child outlives its IPC-loss observation window.
+     * Interrupting this observer does not stop the supervisor
+     */
     waitForClose(): Effect.Effect<void, SupervisorError>
-    /** Observe all children becoming gateway-ready without starting or owning the supervisor. Interruption cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error */
+    /** Observe all children becoming gateway-ready without starting or owning the supervisor. A current child IPC loss clears readiness immediately.
+     * Interruption cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error
+     */
     waitForReady(): Effect.Effect<void, SupervisorError>
     /** Return one immutable safe local status snapshot without child output, environment, arguments or paths */
     status(): SupervisorStatus
     /** Ask every owned child to stop, force-terminate only an unresponsive owned child after the configured grace period, then await verified exit.
-     * Shutdown is coalesced and uninterruptible once executed
+     * Shutdown is coalesced and uninterruptible once executed.
+     * Explicit shutdown remains successful when a child has already lost IPC
      */
     shutdown(): Effect.Effect<void>
 }
