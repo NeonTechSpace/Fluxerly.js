@@ -25,7 +25,7 @@ Fluxerly.js is taking shape as a Fluxer-native JavaScript SDK, with APIs, types,
 ## Using the SDK
 
 > [!NOTE]
-> Fluxerly.js is in its prerelease phase. The temporary documentation is available [here](https://preview.fluxerly.neontechspace.com)
+> Fluxerly.js is in its prerelease phase. Read the [canary documentation](https://preview.fluxerly.neontechspace.com/docs/1000.0.0-canary.0/)
 
 Use Node.js 24.11.0 or newer with JavaScript or TypeScript 7.
 TypeScript 6 and earlier are not supported.

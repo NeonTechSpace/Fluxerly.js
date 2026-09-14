@@ -1,7 +1,7 @@
 {
     "name": "@neontechspace/fluxerly",
     "description": "A JavaScript and TypeScript SDK for building Fluxer bots on Node.js",
-    "homepage": "https://github.com/NeonTechSpace/Fluxerly.js",
+    "homepage": "https://fluxerly.neontechspace.com",
     "bugs": {
         "url": "https://github.com/NeonTechSpace/Fluxerly.js/issues"
     },
