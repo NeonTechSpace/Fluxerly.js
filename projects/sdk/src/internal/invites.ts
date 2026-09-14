@@ -115,7 +115,11 @@ export function decodeInviteDelete(value: unknown): InviteDeleteEvent | undefine
 
 export function inviteFetch(code: string, inviteBase = hostedInvite): GuildRequest<Invite> | InputValidationFailure {
     if (!codeValue(code))
-        return inputValidationFailure("code", "format", "Invite code must contain 1 through 128 URL-safe characters")
+        return inputValidationFailure(
+            "code",
+            "format",
+            "Invite code must be nonempty well-formed text without whitespace, control characters or URL path/query/fragment separators, and cannot be . or ..",
+        )
     return {
         guildId: "invites",
         bucket: "invites:code",

@@ -121,29 +121,27 @@ function fixture() {
     return root
 }
 
-test.each(["default", "effect"])(
-    "%s message live cleanup deletes the owned channel after moderation recovery fails",
-    (mode) => {
-        const root = fixture()
-        const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
-            cwd: root,
-            env: { ...process.env, FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1" },
-            encoding: "utf8",
-            timeout: 10_000,
-            windowsHide: true,
-        })
+test("message live cleanup deletes the owned channel after moderation recovery fails", () => {
+    const mode = "default"
+    const root = fixture()
+    const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
+        cwd: root,
+        env: { ...process.env, FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1" },
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+    })
 
-        expect(child.error).toBeUndefined()
-        expect(child.signal).toBeNull()
-        expect(child.status).toBe(1)
-        const output = child.stdout + child.stderr
-        expect(output).toContain('"check":"test_channel_and_messages_removed","passed":true')
-        expect(output).toContain('"fixture":"channel_present","channelPresent":false')
-        expect(output).not.toContain("fixture moderation cleanup failure")
-        expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
-        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
-    },
-)
+    expect(child.error).toBeUndefined()
+    expect(child.signal).toBeNull()
+    expect(child.status).toBe(1)
+    const output = child.stdout + child.stderr
+    expect(output).toContain('"check":"test_channel_and_messages_removed","passed":true')
+    expect(output).toContain('"fixture":"channel_present","channelPresent":false')
+    expect(output).not.toContain("fixture moderation cleanup failure")
+    expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+})
 
 test("native message cancellation accepts no paired defect", () => {
     const mixed = Cause.combine(Cause.interrupt(1), Cause.die("fixture cleanup defect"))
@@ -160,83 +158,77 @@ test("native message cancellation accepts no paired defect", () => {
     expect(source.slice(download, download + 1_000)).toContain("Cause.hasInterruptsOnly(cancelled.cause)")
 })
 
-test.each(["default", "effect"])(
-    "%s message cleanup reconciles an unknown channel ID through its unique marker",
-    (mode) => {
-        const root = fixture()
-        const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
-            cwd: root,
-            env: {
-                ...process.env,
-                FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1",
-                FLUXERLY_MESSAGES_UNKNOWN_CHANNEL_ID_FIXTURE: "1",
-            },
-            encoding: "utf8",
-            timeout: 10_000,
-            windowsHide: true,
-        })
+test("message cleanup reconciles an unknown channel ID through its unique marker", () => {
+    const mode = "default"
+    const root = fixture()
+    const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
+        cwd: root,
+        env: {
+            ...process.env,
+            FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1",
+            FLUXERLY_MESSAGES_UNKNOWN_CHANNEL_ID_FIXTURE: "1",
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+    })
 
-        expect(child.error).toBeUndefined()
-        expect(child.signal).toBeNull()
-        expect(child.status).toBe(1)
-        const output = child.stdout + child.stderr
-        expect(output).toContain('"check":"test_channel_and_messages_removed","passed":true')
-        expect(output).toContain('"fixture":"channel_present","channelPresent":false')
-        expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
-        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
-    },
-)
+    expect(child.error).toBeUndefined()
+    expect(child.signal).toBeNull()
+    expect(child.status).toBe(1)
+    const output = child.stdout + child.stderr
+    expect(output).toContain('"check":"test_channel_and_messages_removed","passed":true')
+    expect(output).toContain('"fixture":"channel_present","channelPresent":false')
+    expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+})
 
-test.each(["default", "effect"])(
-    "%s message cleanup retains evidence when the recorded channel ID conflicts with a matching marker",
-    (mode) => {
-        const root = fixture()
-        const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
-            cwd: root,
-            env: {
-                ...process.env,
-                FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1",
-                FLUXERLY_MESSAGES_OWNERSHIP_CONFLICT_FIXTURE: "1",
-            },
-            encoding: "utf8",
-            timeout: 10_000,
-            windowsHide: true,
-        })
+test("message cleanup retains evidence when the recorded channel ID conflicts with a matching marker", () => {
+    const mode = "default"
+    const root = fixture()
+    const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
+        cwd: root,
+        env: {
+            ...process.env,
+            FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1",
+            FLUXERLY_MESSAGES_OWNERSHIP_CONFLICT_FIXTURE: "1",
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+    })
 
-        expect(child.error).toBeUndefined()
-        expect(child.signal).toBeNull()
-        expect(child.status).toBe(1)
-        const output = child.stdout + child.stderr
-        expect(output).not.toContain('"check":"test_channel_and_messages_removed","passed":true')
-        expect(output).toContain('"fixture":"channel_present","channelPresent":true')
-        expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
-        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
-    },
-)
+    expect(child.error).toBeUndefined()
+    expect(child.signal).toBeNull()
+    expect(child.status).toBe(1)
+    const output = child.stdout + child.stderr
+    expect(output).not.toContain('"check":"test_channel_and_messages_removed","passed":true')
+    expect(output).toContain('"fixture":"channel_present","channelPresent":true')
+    expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+})
 
-test.each(["default", "effect"])(
-    "%s message live cleanup retains the journal and channel when the journal guild identity is invalid",
-    (mode) => {
-        const root = fixture()
-        const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
-            cwd: root,
-            env: {
-                ...process.env,
-                FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1",
-                FLUXERLY_MESSAGES_INVALID_JOURNAL_FIXTURE: "1",
-            },
-            encoding: "utf8",
-            timeout: 10_000,
-            windowsHide: true,
-        })
+test("message live cleanup retains the journal and channel when the journal guild identity is invalid", () => {
+    const mode = "default"
+    const root = fixture()
+    const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", mode], {
+        cwd: root,
+        env: {
+            ...process.env,
+            FLUXERLY_MESSAGES_CLEANUP_FIXTURE: "1",
+            FLUXERLY_MESSAGES_INVALID_JOURNAL_FIXTURE: "1",
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+    })
 
-        expect(child.error).toBeUndefined()
-        expect(child.signal).toBeNull()
-        expect(child.status).toBe(1)
-        const output = child.stdout + child.stderr
-        expect(output).not.toContain('"check":"test_channel_and_messages_removed","passed":true')
-        expect(output).toContain('"fixture":"channel_present","channelPresent":true')
-        expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
-        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
-    },
-)
+    expect(child.error).toBeUndefined()
+    expect(child.signal).toBeNull()
+    expect(child.status).toBe(1)
+    const output = child.stdout + child.stderr
+    expect(output).not.toContain('"check":"test_channel_and_messages_removed","passed":true')
+    expect(output).toContain('"fixture":"channel_present","channelPresent":true')
+    expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+})

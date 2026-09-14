@@ -1,16 +1,18 @@
 import { Effect, Redacted } from "effect"
 import { ConfigurationError } from "#sdk/errors"
 import type { MessageCacheSettings, ResourceCacheSettings, CachePolicyErrorReport } from "#sdk/cache"
+import type { Message, MessageCore, MessageFields, SelectedMessage } from "#sdk/messages"
+import { createMessageDecoder, snapshotMessageFields, type MessageDecoder } from "./message-fields.js"
 import { record } from "./message.js"
 import { loggingConfiguration, type ClientLogging } from "./logging.js"
 import type { ResourceConfiguration } from "./guild-cache.js"
 import { parseShardPlan, type ShardPlan } from "./sharding.js"
 import { instanceConfiguration, type InstanceConfiguration } from "./instance.js"
 
-export interface CacheConfiguration {
+export interface CacheConfiguration<M extends MessageCore = Message> {
     readonly maxEntries: number
     readonly maxBytes: number
-    readonly maxAgeMs: MessageCacheSettings["maxAgeMs"]
+    readonly maxAgeMs: MessageCacheSettings<M>["maxAgeMs"]
     readonly onError: ((report: CachePolicyErrorReport) => unknown) | undefined
 }
 
@@ -18,7 +20,9 @@ export function validAge(value: unknown): value is number | null {
     return value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
 }
 
-function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationError | undefined {
+function cacheConfiguration<M extends MessageCore = Message>(
+    value: unknown,
+): CacheConfiguration<M> | ConfigurationError | undefined {
     if (value === undefined) return undefined
     if (
         !record(value) ||
@@ -63,8 +67,8 @@ function cacheConfiguration(value: unknown): CacheConfiguration | ConfigurationE
     return {
         maxEntries: (maxEntries ?? 1_000) as number,
         maxBytes: (maxBytes ?? 8_388_608) as number,
-        maxAgeMs: maxAgeMs as MessageCacheSettings["maxAgeMs"],
-        onError: onError as CacheConfiguration["onError"],
+        maxAgeMs: maxAgeMs as MessageCacheSettings<M>["maxAgeMs"],
+        onError: onError as CacheConfiguration<M>["onError"],
     }
 }
 
@@ -108,13 +112,14 @@ function resourceConfiguration(value: unknown): ResourceSettings | Configuration
     return result
 }
 
-export interface Configuration {
+export interface Configuration<M extends MessageCore = Message> {
+    readonly decodeMessage: MessageDecoder<M>
     readonly uploadMaxBytes: number
     readonly logging: ClientLogging
     readonly token: Redacted.Redacted<string>
     readonly startupTimeoutMs: number
     readonly maxStartupAttempts: number
-    readonly cache: CacheConfiguration | undefined
+    readonly cache: CacheConfiguration<M> | undefined
     readonly resourceCache: ResourceConfiguration
     readonly channelCache: Required<ResourceCacheSettings> | undefined
     readonly userCache: Pick<ResourceSettings, "users" | "directMessages">
@@ -122,10 +127,10 @@ export interface Configuration {
     readonly instance: InstanceConfiguration
 }
 
-export function validateConfiguration(
+export function validateConfiguration<F extends MessageFields | undefined = undefined>(
     options: unknown,
     native = false,
-): Effect.Effect<Configuration, ConfigurationError> {
+): Effect.Effect<Configuration<SelectedMessage<F>>, ConfigurationError> {
     return Effect.suspend(() => {
         if (typeof options !== "object" || options === null || Array.isArray(options)) {
             return Effect.fail(new ConfigurationError("configuration", "Client configuration must be an object"))
@@ -164,7 +169,14 @@ export function validateConfiguration(
                 new ConfigurationError("maxStartupAttempts", "Startup attempts must be a positive safe integer"),
             )
         }
-        const cache = cacheConfiguration("cache" in options ? options.cache : undefined)
+        let selectedFields: ReturnType<typeof snapshotMessageFields>
+        try {
+            selectedFields = snapshotMessageFields("messageFields" in options ? options.messageFields : undefined)
+        } catch (error) {
+            if (error instanceof ConfigurationError) return Effect.fail(error)
+            throw error
+        }
+        const cache = cacheConfiguration<SelectedMessage<F>>("cache" in options ? options.cache : undefined)
         const uploads = "uploads" in options ? options.uploads : undefined
         if (uploads !== undefined && (!record(uploads) || Object.keys(uploads).some((key) => key !== "maxBytes")))
             return Effect.fail(new ConfigurationError("uploads", "Upload settings must contain only maxBytes"))
@@ -187,6 +199,7 @@ export function validateConfiguration(
         const instance = instanceConfiguration("instance" in options ? options.instance : undefined)
         if (instance instanceof ConfigurationError) return Effect.fail(instance)
         return Effect.succeed({
+            decodeMessage: createMessageDecoder<F>(selectedFields),
             uploadMaxBytes,
             logging,
             cache,

@@ -3,27 +3,45 @@ import type { ClientClosedError } from "./errors.js"
 import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** Numeric Fluxer channel types this SDK can create, with received guild-channel types remaining numeric for forward compatibility */
-export const ChannelType = Object.freeze({
+/** Choose what a new guild channel does: Text messages, voice calls, a category that groups channels, or a link.
+ * Received GuildChannel.type values can also contain future numeric types that this SDK cannot create
+ */
+export const ChannelType: Readonly<{
+    /** A guild text conversation */
+    Text: 0
+    /** A guild voice-call channel */
+    Voice: 2
+    /** A grouping parent for guild channels */
+    Category: 4
+    /** A channel that points to an external URL */
+    Link: 998
+}> = Object.freeze({
     Text: 0,
     Voice: 2,
     Category: 4,
     Link: 998,
 })
 
-/** One explicit role or member replacement, not an effective permission calculation. SDK writes advertise ViewChannelMembers replacements to Fluxer */
+/** Channel-specific grants and denials for one role or member.
+ * A bit absent from both allow and deny leaves that permission to the other applicable roles and overwrites.
+ * Use Permissions constants and bigint bitwise operators to build the bitfields. This is one explicit overwrite,
+ * not the member's final permissions. SDK writes advertise ViewChannelMembers replacements to Fluxer
+ */
 export interface PermissionOverwrite {
     /** Decimal role or member ID */
     readonly id: string
     /** Whether id identifies a role or a guild member */
     readonly type: "role" | "member"
-    /** Unsigned 64-bit raw allow bits */
+    /** Permissions explicitly granted here, as an unsigned 64-bit bigint. 0n grants nothing explicitly */
     readonly allow: bigint
-    /** Unsigned 64-bit raw deny bits */
+    /** Permissions explicitly denied here, as an unsigned 64-bit bigint. 0n denies nothing explicitly */
     readonly deny: bigint
 }
 
-/** Frozen guild-channel observation from an explicit read or guild channel event, not a live object or permission decision */
+/** Settings and identity of a channel inside a guild, as observed by a read or gateway event.
+ * The object is frozen and does not update when the channel changes. Optional fields can be unavailable rather than
+ * set to their creation defaults. This excludes private conversations, which use DirectMessageChannel
+ */
 export interface GuildChannel {
     /** Decimal channel ID */
     readonly id: string
@@ -55,9 +73,9 @@ export interface GuildChannel {
     readonly lastPinTimestamp?: string | null
     /** Explicit channel overwrites, not inherited or effective permissions */
     readonly permissionOverwrites?: readonly PermissionOverwrite[]
-    /** Effective legacy NSFW setting, when supplied */
+    /** Effective adult-content setting from Fluxer's older NSFW field, when supplied */
     readonly nsfw?: boolean
-    /** Channel NSFW override, with null inheriting from its category then guild */
+    /** Channel adult-content override, with null inheriting from its category then guild */
     readonly nsfwOverride?: boolean | null
     /** Channel content-warning override, when supplied */
     readonly contentWarningLevel?: number
@@ -67,17 +85,21 @@ export interface GuildChannel {
     readonly rateLimitPerUser?: number
 }
 
-/** Common fields accepted by Fluxer's supported guild-channel create schemas, with omitted permissionOverwrites inheriting and [] explicitly clearing */
+/** Settings shared by new text, voice, category and link channels.
+ * Supply the matching type through ChannelCreate. Fluxer decides which settings apply to that channel type and
+ * enforces permissions. Omitted permissionOverwrites inherit from the parent category, while [] requests none.
+ * Unknown input keys fail locally. The encoded request body must fit within 4,194,304 bytes
+ */
 export interface ChannelCreateBase {
     /** Nonblank channel name, 1–100 Unicode code points */
     readonly name: string
-    /** Topic, or null to clear */
+    /** Description shown for the channel, 1–1,024 Unicode code points, or null to clear */
     readonly topic?: string | null
-    /** Link URL, or null to clear */
+    /** Absolute URL for a link channel, or null to clear. The SDK does not open or fetch the URL */
     readonly url?: string | null
     /** Parent category, with null or omission creating a top-level channel */
     readonly parentId?: string | null
-    /** Voice bitrate from 8,000 through 320,000, default 64,000 for voice channels */
+    /** Voice audio bitrate in bits per second, integer 8,000–320,000 or null, default 64,000 for voice channels */
     readonly bitrate?: number | null
     /** Maximum voice users from 0 through 99, with 0 unlimited and the voice default */
     readonly userLimit?: number | null
@@ -85,15 +107,15 @@ export interface ChannelCreateBase {
     readonly voiceConnectionLimit?: number | null
     /** Explicit overrides, omitted to inherit a parent category and [] to create no overrides */
     readonly permissionOverwrites?: readonly PermissionOverwrite[]
-    /** Legacy NSFW setting */
+    /** Adult-content setting using Fluxer's older NSFW field */
     readonly nsfw?: boolean
-    /** Explicit NSFW override, with null inheriting */
+    /** Explicit adult-content override, with null inheriting */
     readonly nsfwOverride?: boolean | null
-    /** Content-warning override */
+    /** 0 inherits the content-warning level, 1 requests a channel content warning */
     readonly contentWarningLevel?: number
-    /** Custom content-warning text, with null inheriting */
+    /** Warning shown before viewing content, at most 200 Unicode code points, with null inheriting */
     readonly contentWarningText?: string | null
-    /** Slowmode seconds, from 0 through 21,600 */
+    /** Delay between a user's messages in seconds, integer 0–21,600 or null. Zero disables slowmode */
     readonly rateLimitPerUser?: number | null
 }
 
@@ -109,13 +131,13 @@ export interface VoiceChannelCreate extends ChannelCreateBase {
     readonly type: typeof ChannelType.Voice
 }
 
-/** Creates a category channel */
+/** Create a category to group guild channels, rather than a message conversation */
 export interface CategoryChannelCreate extends ChannelCreateBase {
     /** Category channel type */
     readonly type: typeof ChannelType.Category
 }
 
-/** Creates a link channel */
+/** Create a guild channel that points readers to a URL */
 export interface LinkChannelCreate extends ChannelCreateBase {
     /** Link channel type */
     readonly type: typeof ChannelType.Link
@@ -124,37 +146,44 @@ export interface LinkChannelCreate extends ChannelCreateBase {
 /** One supported guild-channel creation request, with Fluxer positioning a new channel itself */
 export type ChannelCreate = TextChannelCreate | VoiceChannelCreate | CategoryChannelCreate | LinkChannelCreate
 
-/** Explicit guild-channel settings patch, with every omitted field unchanged and moves owned by reorder */
+/** Change settings of an existing guild channel without replacing the channel.
+ * Omitted fields stay unchanged. permissionOverwrites replaces the whole explicit list, so preserve entries you
+ * still need. Use channels.reorder for category moves and ordering. Unknown keys and an empty patch fail locally.
+ * Fluxer checks channel-type compatibility and permissions after local validation
+ */
 export interface ChannelEdit {
     /** Nonblank channel name, 1–100 Unicode code points */
     readonly name?: string
-    /** Topic, or null to clear */
+    /** Channel description, 1–1,024 Unicode code points, or null to clear */
     readonly topic?: string | null
-    /** Link URL, or null to clear */
+    /** Absolute link-channel URL, or null to clear. No URL is fetched by this request */
     readonly url?: string | null
-    /** Voice bitrate in bits per second, or null */
+    /** Voice bitrate in bits per second, integer 8,000–320,000, or null */
     readonly bitrate?: number | null
-    /** Voice user limit, or null */
+    /** Maximum voice users, integer 0–99, or null. Zero requests unlimited users */
     readonly userLimit?: number | null
-    /** Voice connections permitted per user, or null */
+    /** Maximum simultaneous voice connections per user, integer 1–100, or null */
     readonly voiceConnectionLimit?: number | null
-    /** Legacy NSFW setting, with null restoring inheritance */
+    /** Adult-content setting using Fluxer's older NSFW field, with null restoring inheritance */
     readonly nsfw?: boolean | null
-    /** Explicit NSFW override, with null inheriting */
+    /** Explicit adult-content override, with null inheriting */
     readonly nsfwOverride?: boolean | null
-    /** Content-warning override */
+    /** 0 inherits the content-warning level, 1 requests a channel content warning */
     readonly contentWarningLevel?: number
-    /** Custom content-warning text, with null inheriting */
+    /** Warning text of at most 200 Unicode code points, with null inheriting */
     readonly contentWarningText?: string | null
-    /** Slowmode seconds, or null */
+    /** Delay between a user's messages in seconds, integer 0–21,600, or null. Zero disables slowmode */
     readonly rateLimitPerUser?: number | null
     /** Replace all explicit overwrites, with [] clearing them and omission preserving them */
     readonly permissionOverwrites?: readonly PermissionOverwrite[]
-    /** Voice region ID, with null selecting automatic routing */
+    /** Voice region ID of 1–64 Unicode code points, with null selecting automatic routing */
     readonly rtcRegion?: string | null
 }
 
-/** One partial guild-channel reordering or move request, with Fluxer applying submitted entries sequentially */
+/** Move or reorder one existing guild channel as part of channels.reorder.
+ * Unlisted channels are not explicit targets. Fluxer applies submitted entries sequentially, so this describes the
+ * requested placement rather than a guaranteed final index during concurrent changes
+ */
 export interface ChannelPosition {
     /** Decimal channel ID */
     readonly id: string
@@ -168,7 +197,7 @@ export interface ChannelPosition {
     readonly syncPermissionsOnMove?: boolean
 }
 
-/** A visibility-filtered bulk guild channel notification, never a complete guild channel list */
+/** Visible channel updates delivered together, not a complete guild channel list */
 export interface GuildChannelUpdateBulk {
     /** Decimal guild ID */
     readonly guildId: string
@@ -178,14 +207,16 @@ export interface GuildChannelUpdateBulk {
 
 /** Settings shared by remote guild-channel operations */
 export interface ChannelOperationOptions {
-    /** Total milliseconds across admission, rate waits, retries and HTTP, integer 1–2,147,483,647, default 30,000 */
+    /** Total milliseconds across local queueing, rate waits, retries and HTTP, integer 1–2,147,483,647, default 30,000.
+     * Owned cleanup is awaited afterward, so the call can finish later than this deadline
+     */
     readonly timeoutMs?: number
 }
 
-/** Default calls start immediately, with abort cancelling only this call and awaiting owned cleanup */
+/** Default API calls start immediately, with abort cancelling only this call and awaiting owned cleanup */
 export interface DefaultChannelOperationOptions extends ChannelOperationOptions, OperationOptions {}
 
-/** Guild-channel operation identified by expected failures and default defects */
+/** The channel action named in an expected failure or SdkDefect */
 export type ChannelOperation =
     | "channels.get"
     | "channels.fetch"
@@ -197,24 +228,34 @@ export type ChannelOperation =
     | "channels.setPermissionOverwrite"
     | "channels.removePermissionOverwrite"
 
-/** Expected guild-channel failure with safe metadata, never a token, input value or upstream response body */
+/** Expected failure when reading or changing guild channels.
+ * Read reason to identify the failure and check outcome before retrying a change. Metadata excludes tokens, private
+ * input values and upstream response bodies. Default API calls return this error in an Err, while Effect-native calls
+ * fail in the typed error channel
+ */
 export class ChannelOperationError extends Error {
     /** Stable expected-failure discriminator */
     readonly _tag = "ChannelOperationError"
-    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    /** Safe explanation of the locally invalid property, or null when no input problem could be identified */
     readonly inputValidation: InputValidationDetail | null
     constructor(
         /** Requested operation */
         readonly operation: ChannelOperation,
-        /** notFound is HTTP 404, not proof that an earlier deletion succeeded */
+        /** input is local validation failure, busy is full local request capacity, notFound is HTTP 404, and rejected is an API rejection.
+         * network is transport failure, response is unusable success data, timeout is an expired deadline,
+         * and rateLimit means a required provider wait could not be completed. A 404 is not deletion-success proof
+         */
         readonly reason: "input" | "busy" | "notFound" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
-        /** unknown means a write may have applied, rejected is an API rejection and not rollback proof */
+        /** notDispatched means no request was submitted, rejected means an API rejection was observed,
+         * and unknown means the remote result is uncertain. A write with an unknown outcome may have applied,
+         * so inspect remote state before repeating it. A rejection does not prove rollback
+         */
         readonly outcome: "notDispatched" | "rejected" | "unknown",
         /** HTTP status when available, otherwise null */
         readonly status: number | null = null,
         /** Usable server-required retry wait in milliseconds, otherwise null */
         readonly retryAfterMs: number | null = null,
-        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        /** Safe classification of why Fluxer rejected the request, or null when the response could not be classified */
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
@@ -235,5 +276,5 @@ export class ChannelOperationError extends Error {
     }
 }
 
-/** Native interruption is outside this union, with default methods additionally returning CancelledError */
+/** Native interruption is outside this union, with default API methods additionally returning CancelledError */
 export type ChannelOperationFailure = ChannelOperationError | ClientClosedError

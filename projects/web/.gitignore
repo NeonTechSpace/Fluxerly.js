@@ -1,0 +1,9 @@
+node_modules/
+.astro/
+dist/
+content/docs/
+content/versions.json
+released/
+playwright-report/
+test-results/
+.wrangler/

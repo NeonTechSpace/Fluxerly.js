@@ -11,59 +11,95 @@ import {
 } from "#sdk/supervisor"
 import type { Client, ClientOptions } from "./effect.js"
 
-/** Context passed to the Effect-native helper-owned child client before its managed run begins */
+/** Client and fixed shard assignment available to configure before the helper starts the gateway connection */
 export interface NativeSupervisorChildContext {
-    /** The child client with the parent-provided immutable local shard assignment */
+    /** Native client created and owned by child.run. Register application behavior rather than starting or stopping this client */
     readonly client: Client
     /** Fixed assignment for this child process. It cannot be changed during this run */
     readonly assignment: SupervisorAssignment
 }
 
-/** Native child settings. The callback preserves its Effect environment and registers work before child.run owns client.run */
+/**
+ * Bot credentials, native client settings and setup Effect for a module launched by a supervisor.
+ * E represents application failures and R represents required services.
+ * The helper provides Scope, Effect's lifetime boundary for resource cleanup. Other services remain caller-provided
+ */
 export interface NativeSupervisorChildOptions<E = never, R = never> {
-    /** Credential passed by child.run to its helper-owned client */
+    /** Bot token for the client created by child.run. The parent assignment does not supply this credential */
     readonly token: string
     /** Native client settings copied into the child client. Runtime validation rejects token and sharding overrides */
     readonly clientOptions?: Omit<ClientOptions<E, R>, "token" | "sharding">
-    /** Register subscriptions and local application behavior before child.run owns client.run.
-     * Scoped tasks use the helper's nested scope, which closes before child.run settles; other required services remain caller-provided
+    /** Register subscriptions and local application behavior before the helper executes client.run.
+     * Finish this Effect when setup is complete, not when the bot stops. Do not execute client.run, connect or shutdown here.
+     * Scope-bound tasks and resources belong to the helper's nested Scope, which closes before child.run settles.
+     * Parent stop interrupts unfinished configuration and awaits its cleanup without starting the client afterward.
+     * Application failures remain typed as E. Defects and cleanup failures remain in the Effect cause
      */
     readonly configure: (context: NativeSupervisorChildContext) => Effect.Effect<void, E, R | Scope.Scope>
 }
 
-/** One optional local process supervisor with lazy native operations */
+/**
+ * Parent that starts and stops the child processes in one fixed local shard plan.
+ * Asynchronous methods return lazy Effects. Calling a method does not execute it, while status reads immediately.
+ * Creation neither starts children nor adds a Scope finalizer for the parent. Execute shutdown to release its processes.
+ * Expected failures use SupervisorError. Unexpected defects remain in the Effect cause
+ */
 export interface NativeSupervisor {
-    /** Start the configured children and await each assignment/configuration acknowledgement, not gateway READY.
-     * Concurrent calls share startup. Interruption stops this supervisor and awaits its owned process exits.
-     * Expected failure also waits for those exits; start after shutdown fails with closed.
-     * Terminal child IPC loss fails any still-pending startup with closed only after all owned children exit
+    /** Start the configured children and succeed when each child acknowledges its assignment and finishes configure.
+     * This is setup completion, not gateway readiness. Execute waitForReady to observe connected gateway sessions.
+     * Concurrent executions share startup. Executing again does not launch extra children or await replacement startup.
+     * Interruption stops the whole supervisor, including when another caller is waiting for the same startup, and awaits owned process exits.
+     * Expected failure also awaits those exits. Start during or after shutdown fails with reason closed.
+     * If a child remains alive after losing its message channel for shutdownTimeoutMs, pending startup fails with closed after cleanup
      */
     start(): Effect.Effect<void, SupervisorError>
-    /** Await the retained terminal local supervisor outcome after every owned child exits, including closed after a current child outlives its IPC-loss observation window.
-     * Interrupting this observer does not stop the supervisor
+    /** Wait until the supervisor's lifetime ends and its owned child processes have exited.
+     * Succeeds after normal shutdown or fails with the retained SupervisorError after failure, even on a later execution.
+     * Does not start or stop the parent. Before startup, waits until a later shutdown or failure.
+     * Interrupting this wait detaches only the observer without stopping the supervisor
      */
     waitForClose(): Effect.Effect<void, SupervisorError>
-    /** Observe all children becoming gateway-ready without starting or owning the supervisor. A current child IPC loss clears readiness immediately.
-     * Interruption cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error
+    /** Succeed when every current child has reported its aggregate gateway state as Connected.
+     * Execute start first. This observes reports, not simultaneous cross-process health or lasting readiness.
+     * Losing a child's message channel clears its readiness immediately. A later execution waits for current readiness again.
+     * Interrupting this wait cancels only this observer without stopping or restarting a child.
+     * An idle, stopping or closed supervisor fails with reason closed. A failed supervisor returns its retained failure
      */
     waitForReady(): Effect.Effect<void, SupervisorError>
     /** Return one immutable safe local status snapshot without child output, environment, arguments or paths */
     status(): SupervisorStatus
-    /** Ask every owned child to stop, force-terminate only an unresponsive owned child after the configured grace period, then await verified exit.
-     * Shutdown is coalesced and uninterruptible once executed.
-     * Explicit shutdown remains successful when a child has already lost IPC
+    /** Ask owned children to stop and succeed only after their processes exit.
+     * After shutdownTimeoutMs, force-terminate an owned child that has not exited, then keep waiting for its exit.
+     * Concurrent and repeated executions share cleanup, which cannot be interrupted once executed.
+     * Shutdown before startup closes the parent without launching children.
+     * Succeeds even after a supervisor failure or a child's message-channel loss. It does not erase waitForClose's retained failure
      */
     shutdown(): Effect.Effect<void>
 }
 
-/** Effect-native optional local-supervisor tools */
+/** Create a local parent supervisor or run its child module using the Effect-native public API */
 export interface NativeSupervisorTools {
-    /** Lazily validate and snapshot a local process plan without starting child processes */
-    create(options: SupervisorOptions): Effect.Effect<NativeSupervisor, ConfigurationError>
-    /** Run one child configured by a parent supervisor. A nested helper scope owns the client and IPC cleanup until this effect settles.
-     * Parent stop interrupts configuration without reporting a configuration failure; any losing configuration cleanup failure remains in this effect's cause
+    /** Return a lazy Effect that validates and copies options, then succeeds with an idle supervisor or fails with ConfigurationError.
+     * Does not start a process or check whether the entry module can execute. Launch failures are reported by start.
+     * The parent has no automatic Scope finalizer. Arrange to execute its shutdown Effect when your application stops
      */
+    create(options: SupervisorOptions): Effect.Effect<NativeSupervisor, ConfigurationError>
+    /** Child-module helper. Execute run inside the module selected by the parent's entry option */
     readonly child: {
+        /** Receive the parent's assignment, create a client, finish configure, then run the client until stop or failure
+         *
+         * A nested Scope owns the client, configuration resources and parent-message listeners until this Effect settles.
+         * The helper supplies Scope and requires any remaining R services from the caller
+         *
+         * Normal parent stop succeeds. Stop or interruption awaits cleanup, including interrupted configuration branches
+         *
+         * Running outside a connected supervisor child fails with SupervisorChildError with reason disconnected.
+         * Invalid client settings fail with ConfigurationError. Client execution can fail with ConnectError and application setup with E.
+         * Message-channel loss or invalid coordination data fails with SupervisorChildError
+         *
+         * Parent stop during configure is not an application configuration failure, but cleanup failures remain in the cause.
+         * Defects remain in the cause alongside typed failures, including failures during cleanup
+         */
         run<E = never, R = never>(
             options: NativeSupervisorChildOptions<E, R>,
         ): Effect.Effect<void, ConfigurationError | ConnectError | SupervisorChildError | E, Exclude<R, Scope.Scope>>

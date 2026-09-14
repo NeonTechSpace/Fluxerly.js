@@ -6,7 +6,13 @@ import { runInNewContext } from "node:vm"
 import { Cause, Clock, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
-import { createClient, SdkDefect, type CollectorResult, type DefaultCollectorOptions } from "../src/index.js"
+import {
+    createClient,
+    SdkDefect,
+    type CollectorResult,
+    type DefaultCollectorOptions,
+    type Message,
+} from "../src/index.js"
 import { createClient as createNative } from "../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
@@ -234,6 +240,12 @@ test.each(modes)("%s registration validates locally and never implicitly connect
         { unknown: true },
     ])
         await expect(api.open(options as any)).rejects.toMatchObject({ _tag: "ConfigurationError" })
+    for (const idleMs of [0, -1, 1.5, NaN, Infinity, "1", null, 2_147_483_648])
+        await expect(api.open({ idleMs } as any)).rejects.toMatchObject({
+            _tag: "ConfigurationError",
+            field: "idleMs",
+        })
+    await expect(api.open({ idleMs: 2_147_483_647 })).rejects.toMatchObject({ reason: "notConnected" })
     await expect(api.open({}, "not-an-id")).rejects.toMatchObject({ _tag: "ConfigurationError", field: "channelId" })
     expect(server.requests).toEqual([])
     await api.shutdown()
@@ -351,6 +363,102 @@ test.each(modes)("%s rejects a filter result completed at the deadline", async (
     })
     server.send(wire("10"))
     expect(await collector.wait()).toEqual({ reason: "timeout", messages: [] })
+})
+
+test.each(modes)("%s idle renews only after accepting a new ID and snapshots its interval", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    let now = 0
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
+    const filter = vi.fn((message: Message) => message.content === "answer")
+    const options = { idleMs: 100, timeoutMs: 1_000, maxMessages: 5, filter }
+    const collector = await api.open(options)
+    options.idleMs = 1
+    now = 50
+    server.deliver(wire("10", "20", "answer"))
+    await turn()
+    now = 149
+    server.deliver(wire("10", "20", "answer"))
+    server.deliver(wire("11", "20", "ignored"))
+    server.deliver(wire("12", "21", "answer"))
+    await turn()
+    expect(filter.mock.calls.map(([message]) => message.id)).toEqual(["10", "11"])
+    now = 150
+    server.deliver(wire("13", "20", "answer"))
+    const result = await collector.wait()
+    expect(result).toEqual({ reason: "idle", messages: [projection("10", "answer")] })
+    await collector.stop()
+    server.deliver(wire("14", "20", "answer"))
+    await turn()
+    expect(filter).toHaveBeenCalledTimes(2)
+    expect(await collector.wait()).toBe(result)
+})
+
+test.each(modes)("%s idle timer handles empty collection and an early wakeup after renewal", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    let now = 0
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
+    const empty = await api.open({ idleMs: 1 })
+    now = 1
+    expect(await empty.wait()).toEqual({ reason: "idle", messages: [] })
+    const collector = await api.open({ idleMs: 10, maxMessages: 5 })
+    now = 10
+    server.deliver(wire("10"))
+    await turn()
+    let closed = false
+    const result = collector.wait().then((value) => {
+        closed = true
+        return value
+    })
+    now = 11
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(closed).toBe(false)
+    now = 20
+    expect(await result).toEqual({ reason: "idle", messages: [projection("10")] })
+})
+
+test.each(modes)("%s earlier collector deadline wins overdue observations and timeout wins ties", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    let now = 0
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
+    for (const [idleMs, timeoutMs, reason] of [
+        [50, 100, "idle"],
+        [100, 50, "timeout"],
+        [50, 50, "timeout"],
+    ] as const) {
+        const collector = await api.open({ idleMs, timeoutMs })
+        now += 120
+        server.deliver(wire("10"))
+        expect(await collector.wait()).toEqual({ reason, messages: [] })
+    }
+    const collector = await api.open({ idleMs: 60, timeoutMs: 100, maxMessages: 5 })
+    now += 50
+    server.deliver(wire("10"))
+    await turn()
+    now += 49
+    server.deliver(wire("11"))
+    await turn()
+    now += 1
+    server.deliver(wire("12"))
+    expect(await collector.wait()).toEqual({ reason: "timeout", messages: [projection("10"), projection("11")] })
+})
+
+test.each(modes)("%s a slow filter cannot renew an expired quiet interval", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    let now = 0
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
+    const collector = await api.open({
+        idleMs: 50,
+        filter: () => {
+            now = 50
+            return true
+        },
+    })
+    server.deliver(wire("10"))
+    expect(await collector.wait()).toEqual({ reason: "idle", messages: [] })
 })
 
 test.each(modes)(
@@ -478,35 +586,42 @@ test.each(modes)("%s message filters contain rejected promises from every realm"
     expect(rejections).toEqual([])
 })
 
-test.each(modes)("%s message filters contain hostile rejected promise access", async (mode) => {
-    const server = await fixture()
-    const api = await driver(mode)
-    const privateDetail = "private rejected promise getter"
-    const rejections: [unknown, Promise<unknown>][] = []
-    const observe = (reason: unknown, promise: Promise<unknown>) => rejections.push([reason, promise])
-    process.on("unhandledRejection", observe)
-    onTestFinished(() => {
-        process.off("unhandledRejection", observe)
-    })
-    const collector = await api.open({
-        filter: () => {
-            const rejected = Promise.reject(new Error(privateDetail))
-            for (const key of ["then", "catch"])
-                Object.defineProperty(rejected, key, {
-                    get() {
-                        throw new Error(privateDetail)
-                    },
-                })
-            return rejected as never
-        },
-    })
-    server.send(wire("10"))
-    const error = await collector.wait()
-    expect(error).toMatchObject({ _tag: "CollectorError", reason: "filter" })
-    expect(JSON.stringify(error)).not.toContain(privateDetail)
-    await turn()
-    expect(rejections).toEqual([])
-})
+test.each(modes.flatMap((mode) => [false, true].map((foreign) => ({ mode, foreign }))))(
+    "$mode message filters contain hostile rejected promise access, foreign=$foreign",
+    async ({ mode, foreign }) => {
+        const server = await fixture()
+        const api = await driver(mode)
+        const privateDetail = "private rejected promise getter"
+        const rejections: [unknown, Promise<unknown>][] = []
+        const observe = (reason: unknown, promise: Promise<unknown>) => rejections.push([reason, promise])
+        process.on("unhandledRejection", observe)
+        onTestFinished(() => {
+            process.off("unhandledRejection", observe)
+        })
+        const collector = await api.open({
+            filter: () => {
+                const rejected = foreign
+                    ? (runInNewContext("Promise.reject(reason)", {
+                          reason: new Error(privateDetail),
+                      }) as Promise<never>)
+                    : Promise.reject(new Error(privateDetail))
+                for (const key of ["then", "catch"])
+                    Object.defineProperty(rejected, key, {
+                        get() {
+                            throw new Error(privateDetail)
+                        },
+                    })
+                return rejected as never
+            },
+        })
+        server.send(wire("10"))
+        const error = await collector.wait()
+        expect(error).toMatchObject({ _tag: "CollectorError", reason: "filter" })
+        expect(JSON.stringify(error)).not.toContain(privateDetail)
+        await turn()
+        expect(rejections).toEqual([])
+    },
+)
 
 test.each(modes)("%s pending bytes use the full UTF-8 source frame with exact-boundary admission", async (mode) => {
     const server = await fixture()

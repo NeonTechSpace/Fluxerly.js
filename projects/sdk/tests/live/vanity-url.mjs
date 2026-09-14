@@ -97,7 +97,10 @@ try {
     verified = true
     report(stage)
     if (existsSync(journalPath)) {
-        assert.ok(mutate && env.FLUXER_TEST_VANITY_MUTATIONS === "1", "Manual recovery requires mutation authorization")
+        assert.ok(
+            mutate && process.env.FLUXER_TEST_VANITY_MUTATIONS === "1",
+            "Manual recovery requires mutation authorization",
+        )
         journal = JSON.parse(readFileSync(journalPath, "utf8"))
         await cleanup()
     }
@@ -153,7 +156,7 @@ try {
         )
     } else {
         stage = "manual_mutation_preflight"
-        assert.equal(env.FLUXER_TEST_VANITY_MUTATIONS, "1", "Set explicit mutation authorization")
+        assert.equal(process.env.FLUXER_TEST_VANITY_MUTATIONS, "1", "Set explicit mutation authorization")
         assert.ok(guild.features.includes("VANITY_URL"), "Server needs VANITY_URL")
         assert.equal(before.code, null, "Existing custom codes must never be replaced by this test")
         const codes = [env.FLUXER_TEST_VANITY_CODE, env.FLUXER_TEST_VANITY_SECOND_CODE]

@@ -1,7 +1,20 @@
 import type { PaginationQuery } from "./pagination.js"
 
 /** Fluxer's known sources for a guild membership recorded by the indexed member-search service */
-export const GuildMemberJoinSourceTypes = Object.freeze({
+export const GuildMemberJoinSourceTypes: Readonly<{
+    /** The member created the guild */
+    Creator: 0
+    /** The member joined through a regular invitation code */
+    InstantInvite: 1
+    /** The member joined through the guild's custom invitation code */
+    VanityUrl: 2
+    /** The bot was added through a bot installation invitation */
+    BotInvite: 3
+    /** The member was added by an administrator */
+    AdminForceAdd: 4
+    /** The member joined through the public server directory */
+    Discovery: 6
+}> = Object.freeze({
     Creator: 0,
     InstantInvite: 1,
     VanityUrl: 2,
@@ -14,8 +27,10 @@ export const GuildMemberJoinSourceTypes = Object.freeze({
 export type GuildMemberJoinSourceType = (typeof GuildMemberJoinSourceTypes)[keyof typeof GuildMemberJoinSourceTypes]
 
 /**
- * One remote indexed-member-search page request. This searches Fluxer's eventually consistent member index, not the
- * SDK cache or complete guild-member records. Fluxer requires a member-management permission for every search.
+ * Find guild members by text, roles, join dates or membership source using Fluxer's search index.
+ * The search index can lag behind current membership and profile changes. Search results are partial
+ * records, not the SDK cache or complete GuildMember snapshots.
+ * Fluxer requires a member-management permission for every search.
  * Join-source and source-invite filters require ManageGuild. The SDK checks that permission before sending filters.
  * Fluxer would silently ignore. Timestamps use whole Unix seconds. Unknown keys and values outside the documented
  * bounds fail locally before the POST. The provider can return an empty, non-indexing page when its search service is
@@ -33,13 +48,13 @@ export type GuildMemberJoinSourceType = (typeof GuildMemberJoinSourceTypes)[keyo
  * ```
  */
 export interface MemberSearchQuery {
-    /** Text matched by Fluxer against indexed usernames, display names, nicknames, discriminators and user IDs; at most 100 UTF-16 code units */
+    /** Text matched by Fluxer against indexed usernames, display names, nicknames, discriminators and user IDs. At most 100 UTF-16 code units */
     readonly query?: string
     /** Results in this offset page, 1–100, default 25 */
     readonly limit?: number
     /** Zero-based indexed-result offset, a nonnegative safe integer, default 0. It is not a durable cursor or snapshot token */
     readonly offset?: number
-    /** Require every supplied role ID. At most 10 distinct decimal role IDs; an empty list has no filtering effect */
+    /** Require every supplied role ID. At most 10 distinct decimal role IDs. An empty list has no filtering effect */
     readonly roleIds?: readonly string[]
     /** Include members whose indexed guild-join time is at or after this nonnegative whole Unix-second value */
     readonly joinedAtAfterSeconds?: number
@@ -51,17 +66,20 @@ export interface MemberSearchQuery {
     readonly userCreatedAtBeforeSeconds?: number
     /** Require one of these indexed membership sources. At most 10 distinct values and requires ManageGuild */
     readonly joinSourceTypes?: readonly GuildMemberJoinSourceType[]
-    /** Require one of these indexed invite codes. At most 10 distinct values and requires ManageGuild; codes are never included in SDK diagnostics */
+    /** Require one of these indexed invite codes. At most 10 distinct values and requires ManageGuild. Codes are never included in SDK diagnostics */
     readonly sourceInviteCodes?: readonly string[]
     /** Include only bot or only non-bot indexed members */
     readonly isBot?: boolean
     /** Fluxer relevance or indexed join-time ordering. Omission uses indexed join time */
     readonly sortBy?: "joinedAt" | "relevance"
-    /** Indexed join-time direction. Omission uses descending; Fluxer ignores this when sorting by relevance */
+    /** Indexed join-time direction. Omission uses descending. Fluxer ignores this when sorting by relevance */
     readonly sortOrder?: "asc" | "desc"
 }
 
-/** One frozen, partial observation from Fluxer's member-search index, not a hydrated GuildMember or permission decision */
+/** A member matched by the search index, with indexed identity, roles and available membership-source details.
+ * Use guildId and userId with members.fetch when you need a fresh GuildMember. This frozen hit does not populate
+ * the member cache and cannot establish current membership or permissions
+ */
 export interface MemberSearchHit {
     /** Decimal guild ID, equal to the requested guild */
     readonly guildId: string
@@ -90,14 +108,15 @@ export interface MemberSearchHit {
 }
 
 /**
- * One frozen offset page from Fluxer's member-search index. Counts and order are observations of a changing index, not
- * a complete membership snapshot. When indexing is true, Fluxer accepted the request but is building the guild index;
- * callers should wait and issue a new page request rather than treating the empty page as completion
+ * Matching indexed members and counts from one search request.
+ * Counts and order describe a changing index, not a complete membership snapshot.
+ * When indexing is true, Fluxer accepted the request but is building the guild index.
+ * Wait and issue a new page request rather than treating that empty page as completion
  */
 export interface MemberSearchPage {
     /** Decimal guild ID, equal to the requested guild */
     readonly guildId: string
-    /** Frozen indexed hit observations; this does not admit or replace member-cache entries */
+    /** Frozen indexed hit observations. This does not admit or replace member-cache entries */
     readonly members: readonly MemberSearchHit[]
     /** Number of returned members in this page */
     readonly pageResultCount: number
@@ -107,7 +126,11 @@ export interface MemberSearchPage {
     readonly indexing: boolean
 }
 
-/** Bounds for a demand-driven, best-effort member-search traversal */
+/** Limit how much work members.iterateSearch may perform while reading matching indexed members.
+ * maxItems is required through PaginationQuery. Each consumption requests pages only as needed and yields each user
+ * at most once, but concurrent index changes can skip members. Index-building pages fail with PaginationError/indexing,
+ * and an empty page that cannot advance fails with cursorStalled rather than silently reporting completion
+ */
 export interface MemberSearchIterationLimits extends PaginationQuery {
     /** Indexed hits requested per POST, 1–100 and default 100 */
     readonly pageSize?: number

@@ -18,6 +18,8 @@ async function fixture(
         | "stall"
         | "stallBody"
         | "discoveryStall"
+        | "discoveryRateLimit"
+        | "operationRateLimit"
         | "revokeRejected"
         | "revokeBody"
         | "connectionsMalformed"
@@ -56,6 +58,10 @@ async function fixture(
             return response.end(JSON.stringify({ error: "invalid_request" }))
         }
         if (request.url === "/.well-known/fluxer" && mode === "discoveryStall") return
+        if (request.url === "/.well-known/fluxer" && mode === "discoveryRateLimit") {
+            response.writeHead(429, { "retry-after": "2" })
+            return response.end("{}")
+        }
         if (request.url === "/.well-known/fluxer")
             return response.end(
                 JSON.stringify({
@@ -71,6 +77,13 @@ async function fixture(
                     features: { presigned_attachment_uploads: false },
                 }),
             )
+        if (
+            mode === "operationRateLimit" &&
+            (request.url === "/oauth2/token" || request.url === "/oauth2/token/revoke")
+        ) {
+            response.writeHead(429, { "retry-after": "2" })
+            return response.end("{}")
+        }
         if (request.url === "/oauth2/token" && mode === "stall") return
         if (request.url === "/oauth2/token" && mode === "rejected") {
             response.statusCode = 400
@@ -876,7 +889,7 @@ describe("oauth", () => {
         await second.value.shutdown()
     })
 
-    test("marks dispatched timeout unknown, aborts shutdown-owned in-flight work, and never retries refresh or revoke", async () => {
+    test("marks a dispatched code exchange timeout unknown without retrying", async () => {
         const { base, requests } = await fixture("stall")
         const made = defaultApi.create({
             clientId: "1",
@@ -938,50 +951,74 @@ describe("oauth", () => {
         }
     })
 
-    test("shutdown waits for active response cleanup and closes future OAuth work", async () => {
-        const { base } = await fixture()
-        const made = defaultApi.create({
-            clientId: "1",
-            clientSecret: "secret",
-            instance: { url: base, allowInsecure: true },
-        })
-        if (made.isErr()) throw made.error
-        await made.value.authorizationUrl({
-            redirectUri: "http://localhost/callback",
-            scopes: ["identify"],
-            state: "state",
-            codeChallenge: defaultApi.createPkce().challenge,
-        })
-        let entered!: () => void
-        const enteredRequest = new Promise<void>((resolve) => (entered = resolve))
-        let releaseCancel!: () => void
-        const cancelled = new Promise<void>((resolve) => (releaseCancel = resolve))
-        const originalFetch = globalThis.fetch
-        globalThis.fetch = async (input, init) => {
-            if (!String(input).endsWith("/oauth2/token")) return originalFetch(input, init)
-            entered()
-            return new Response(new ReadableStream({ cancel: () => cancelled }), { status: 200 })
-        }
-        try {
-            const operation = made.value.exchangeCode({
-                code: "code",
-                redirectUri: "http://localhost/callback",
-                codeVerifier: "a".repeat(43),
+    test.each([false, true])(
+        "shutdown waits for active response cleanup (defect: %s) and closes future OAuth work",
+        async (cleanupDefects) => {
+            const { base } = await fixture()
+            const made = defaultApi.create({
+                clientId: "1",
+                clientSecret: "secret",
+                instance: { url: base, allowInsecure: true },
             })
-            await enteredRequest
-            globalThis.fetch = originalFetch
-            const shutdown = made.value.shutdown()
-            await expect(
-                Promise.race([shutdown, new Promise((resolve) => setTimeout(resolve, 10, "pending"))]),
-            ).resolves.toBe("pending")
-            releaseCancel()
-            await shutdown
-            expect(await operation).toMatchObject({ error: { _tag: "OAuthOperationError" } })
-            expect(await made.value.fetchIdentity("access")).toMatchObject({ error: { _tag: "ClientClosedError" } })
-        } finally {
-            globalThis.fetch = originalFetch
-        }
-    })
+            if (made.isErr()) throw made.error
+            await made.value.authorizationUrl({
+                redirectUri: "http://localhost/callback",
+                scopes: ["identify"],
+                state: "state",
+                codeChallenge: defaultApi.createPkce().challenge,
+            })
+            let entered!: () => void
+            const enteredRequest = new Promise<void>((resolve) => (entered = resolve))
+            let releaseCancel!: () => void
+            const cancelled = new Promise<void>((resolve) => (releaseCancel = resolve))
+            const originalFetch = globalThis.fetch
+            globalThis.fetch = async (input, init) => {
+                if (!String(input).endsWith("/oauth2/token")) return originalFetch(input, init)
+                entered()
+                return new Response(
+                    new ReadableStream({
+                        cancel: async () => {
+                            await cancelled
+                            if (cleanupDefects) throw new Error("private OAuth shutdown cleanup marker")
+                        },
+                    }),
+                    { status: 200 },
+                )
+            }
+            try {
+                const operation = Promise.resolve(
+                    made.value.exchangeCode({
+                        code: "code",
+                        redirectUri: "http://localhost/callback",
+                        codeVerifier: "a".repeat(43),
+                    }),
+                ).catch((error) => error)
+                await enteredRequest
+                globalThis.fetch = originalFetch
+                const shutdown = made.value.shutdown()
+                await expect(
+                    Promise.race([shutdown, new Promise((resolve) => setTimeout(resolve, 10, "pending"))]),
+                ).resolves.toBe("pending")
+                releaseCancel()
+                expect((await shutdown).isOk()).toBe(true)
+                const result = await operation
+                if (cleanupDefects) {
+                    expect(result).toMatchObject({
+                        name: "SdkDefect",
+                        reasons: [{ kind: "Failure", failure: { _tag: "OAuthOperationError" } }, { kind: "Defect" }],
+                    })
+                    expect(JSON.stringify(result)).not.toContain("private OAuth shutdown cleanup marker")
+                } else {
+                    expect(result).toMatchObject({ error: { _tag: "OAuthOperationError" } })
+                }
+                expect(await made.value.fetchIdentity("access")).toMatchObject({ error: { _tag: "ClientClosedError" } })
+            } finally {
+                releaseCancel()
+                globalThis.fetch = originalFetch
+                await made.value.shutdown()
+            }
+        },
+    )
 
     test("native interruption waits for reader cancellation and preserves only a sanitized cleanup defect", async () => {
         const { base } = await fixture()
@@ -1054,6 +1091,179 @@ describe("oauth", () => {
         const closed = await Effect.runPromiseExit(client.fetchIdentity("access"))
         expect(closed).toMatchObject({ cause: { reasons: [{ _tag: "Fail", error: { _tag: "ClientClosedError" } }] } })
     })
+
+    test.each(
+        (["default", "native"] as const).flatMap((mode) =>
+            (["refresh", "revoke"] as const).flatMap((operation) =>
+                (["discovery", "operation"] as const).map((phase) => ({ mode, operation, phase })),
+            ),
+        ),
+    )("$mode $operation preserves $phase throttling without retry", async ({ mode, operation, phase }) => {
+        const { base, requests } = await fixture(phase === "discovery" ? "discoveryRateLimit" : "operationRateLimit")
+        const config = { clientId: "1", clientSecret: "secret", instance: { url: base, allowInsecure: true } }
+        const expected = {
+            _tag: "OAuthOperationError",
+            operation: `oauth.${operation}`,
+            reason: "rateLimit",
+            outcome: phase === "discovery" ? "notDispatched" : "rejected",
+            status: 429,
+            retryAfterMs: 2_000,
+        }
+        if (mode === "default") {
+            const made = defaultApi.create(config)
+            if (made.isErr()) throw made.error
+            try {
+                const result =
+                    operation === "refresh"
+                        ? await made.value.refresh("refresh")
+                        : await made.value.revoke({ token: "access" })
+                expect(result).toMatchObject({ error: expected })
+            } finally {
+                await made.value.shutdown()
+            }
+        } else {
+            const scope = Scope.makeUnsafe()
+            const client = await Effect.runPromise(native.create(config).pipe(Scope.provide(scope)))
+            try {
+                const exit =
+                    operation === "refresh"
+                        ? await Effect.runPromiseExit(client.refresh("refresh"))
+                        : await Effect.runPromiseExit(client.revoke({ token: "access" }))
+                expect(exit).toMatchObject({ cause: { reasons: [{ _tag: "Fail", error: expected }] } })
+            } finally {
+                await Effect.runPromise(Scope.close(scope, Exit.void))
+            }
+        }
+        expect(requests.map((request) => request.path)).toEqual([
+            "/.well-known/fluxer",
+            ...(phase === "discovery" ? [] : [operation === "refresh" ? "/oauth2/token" : "/oauth2/token/revoke"]),
+        ])
+    })
+
+    test.each(
+        (["default", "native"] as const).flatMap((mode) =>
+            (["refresh", "revoke"] as const).map((operation) => ({ mode, operation })),
+        ),
+    )("$mode $operation retains a lost response as unknown with exactly one dispatch", async ({ mode, operation }) => {
+        const { base, requests } = await fixture()
+        const config = { clientId: "1", clientSecret: "secret", instance: { url: base, allowInsecure: true } }
+        const path = operation === "refresh" ? "/oauth2/token" : "/oauth2/token/revoke"
+        const originalFetch = globalThis.fetch
+        globalThis.fetch = async (input, init) => {
+            const response = await originalFetch(input, init)
+            if (String(input) !== `${base}${path}`) return response
+            await response.arrayBuffer()
+            throw new Error("Fixture lost response")
+        }
+        const expected = { operation: `oauth.${operation}`, reason: "network", outcome: "unknown" }
+        try {
+            if (mode === "default") {
+                const made = defaultApi.create(config)
+                if (made.isErr()) throw made.error
+                try {
+                    const result =
+                        operation === "refresh"
+                            ? await made.value.refresh("refresh")
+                            : await made.value.revoke({ token: "access", tokenTypeHint: "access_token" })
+                    expect(result).toMatchObject({ error: expected })
+                } finally {
+                    await made.value.shutdown()
+                }
+            } else {
+                const scope = Scope.makeUnsafe()
+                const client = await Effect.runPromise(native.create(config).pipe(Scope.provide(scope)))
+                try {
+                    const exit =
+                        operation === "refresh"
+                            ? await Effect.runPromiseExit(client.refresh("refresh"))
+                            : await Effect.runPromiseExit(
+                                  client.revoke({ token: "access", tokenTypeHint: "access_token" }),
+                              )
+                    expect(exit).toMatchObject({ cause: { reasons: [{ _tag: "Fail", error: expected }] } })
+                } finally {
+                    await Effect.runPromise(Scope.close(scope, Exit.void))
+                }
+            }
+            expect(requests.map((request) => request.path)).toEqual(["/.well-known/fluxer", path])
+            const dispatched = requests.find((request) => request.path === path)
+            expect(
+                new URLSearchParams(dispatched?.body).get(operation === "refresh" ? "grant_type" : "token_type_hint"),
+            ).toBe(operation === "refresh" ? "refresh_token" : "access_token")
+        } finally {
+            globalThis.fetch = originalFetch
+        }
+    })
+
+    test.each(["default", "native"] as const)(
+        "%s retains discovery throttling alongside reader-cleanup defects",
+        async (mode) => {
+            const { base } = await fixture()
+            const config = { clientId: "1", clientSecret: "secret", instance: { url: base, allowInsecure: true } }
+            const originalFetch = globalThis.fetch
+            const paths: string[] = []
+            const cleanup = new Error("private discovery cleanup marker")
+            let cancellations = 0
+            globalThis.fetch = async (input) => {
+                paths.push(String(input))
+                return new Response(
+                    new ReadableStream({
+                        start(controller) {
+                            controller.enqueue(new Uint8Array(1_048_577))
+                        },
+                        cancel() {
+                            cancellations += 1
+                            throw cleanup
+                        },
+                    }),
+                    { status: 429, headers: { "retry-after": "2" } },
+                )
+            }
+            const expected = {
+                _tag: "OAuthOperationError",
+                operation: "oauth.refresh",
+                reason: "rateLimit",
+                outcome: "notDispatched",
+                status: 429,
+                retryAfterMs: 2_000,
+            }
+            try {
+                if (mode === "default") {
+                    const made = defaultApi.create(config)
+                    if (made.isErr()) throw made.error
+                    try {
+                        const error = await Promise.resolve(made.value.refresh("refresh")).catch((error) => error)
+                        expect(error).toMatchObject({
+                            name: "SdkDefect",
+                            reasons: [{ kind: "Failure", failure: expected }, { kind: "Defect" }],
+                        })
+                        expect(JSON.stringify(error)).not.toContain(cleanup.message)
+                    } finally {
+                        await made.value.shutdown()
+                    }
+                } else {
+                    const scope = Scope.makeUnsafe()
+                    const client = await Effect.runPromise(native.create(config).pipe(Scope.provide(scope)))
+                    try {
+                        const exit = await Effect.runPromiseExit(client.refresh("refresh"))
+                        expect(exit).toMatchObject({
+                            cause: {
+                                reasons: [
+                                    { _tag: "Fail", error: expected },
+                                    { _tag: "Die", defect: cleanup },
+                                ],
+                            },
+                        })
+                    } finally {
+                        await Effect.runPromise(Scope.close(scope, Exit.void))
+                    }
+                }
+                expect(paths).toEqual([`${base}/.well-known/fluxer`])
+                expect(cancellations).toBe(1)
+            } finally {
+                globalThis.fetch = originalFetch
+            }
+        },
+    )
 
     test("marks a discovery deadline notDispatched and never sends a token request", async () => {
         const { base, requests } = await fixture("discoveryStall")

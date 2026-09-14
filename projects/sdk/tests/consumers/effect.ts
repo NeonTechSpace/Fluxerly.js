@@ -235,7 +235,7 @@ export function shardingTypes(client: Client) {
     // @ts-expect-error Shard totals are numeric
     createClient({ token: "fixture-only", sharding: { totalShards: "2" } })
     client.messages.collect("20", { guildId: "40" })
-    client.messages.collectReactions({ id: "10", channelId: "20" }, { guildId: "40" })
+    client.messages.collectReactions({ id: "10", channelId: "20" }, { guildId: "40", idleMs: 1_000 })
     return { recovery, created: createClient({ token: "fixture-only", sharding: plan }) }
 }
 
@@ -578,6 +578,7 @@ export function collectReplies(client: Client) {
     const options: CollectorOptions = {
         maxMessages: 2,
         timeoutMs: 5_000,
+        idleMs: 1_000,
         maxBytes: 1_024,
         maxPendingMessages: 10,
         maxPendingBytes: 2_048,
@@ -588,7 +589,8 @@ export function collectReplies(client: Client) {
         const result: CollectorResult = yield* collector.waitForClose()
         // @ts-expect-error Successful collector results are immutable
         result.messages.push(result.messages[0]!)
-        return result.reason
+        const reason: "idle" | "limit" | "timeout" | "stopped" = result.reason
+        return reason
     })
 }
 

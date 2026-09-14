@@ -1,5 +1,8 @@
-/** Locally invalid client configuration or operation options, without the rejected input value */
+/** A client setting or operation option is invalid before the requested work starts.
+ * Use field to identify the setting without exposing its rejected value
+ */
 export class ConfigurationError extends Error {
+    /** Discriminator for narrowing a local configuration failure */
     readonly _tag = "ConfigurationError"
 
     constructor(
@@ -53,6 +56,8 @@ export class ConfigurationError extends Error {
             | "maxReactions"
             | "message"
             | "timeoutMs"
+            | "idleMs"
+            | "messageFields"
             | "commands"
             | "help"
             | "prefix"
@@ -74,6 +79,7 @@ export class ConfigurationError extends Error {
             | "childEnvironment"
             | "args"
             | "execArgv",
+        /** Explanation of the accepted setting, without its rejected value */
         message: string,
     ) {
         super(message)
@@ -81,7 +87,9 @@ export class ConfigurationError extends Error {
     }
 }
 
-/** Public operation identified by a default SdkDefect, not proof that a dispatched mutation was rolled back */
+/** Identifies the default API call during which an SdkDefect was observed.
+ * This attribution does not establish whether a dispatched server mutation took effect or was rolled back
+ */
 export type Operation =
     | "attachments.download"
     | "attachments.stream"
@@ -147,8 +155,11 @@ export type Operation =
     | "collectReactions"
     | "reactionCollector.waitForClose"
 
-/** Fluxer rejected the credential, so the connection owner does not retry it unchanged */
+/** Fluxer rejected the bot token during connection startup or recovery.
+ * Check the token before connecting again, since the SDK does not retry this rejection unchanged
+ */
 export class AuthenticationError extends Error {
+    /** Discriminator for identifying a rejected bot credential */
     readonly _tag = "AuthenticationError"
     constructor() {
         super("Fluxer rejected the bot credential")
@@ -188,11 +199,13 @@ function gatewayExplanation(status: number | null): string {
     }
 }
 
-/** Connection failure with safe phase and status metadata, without an upstream body or close-reason string.
- * message includes the observed status and a reviewed Fluxer close-code explanation when available.
- * Explanations do not change retry policy or establish whether a gateway session can resume
+/** Instance discovery or the gateway connection failed.
+ * Inspect phase, reason and status to distinguish network failure, invalid protocol data and gateway closure.
+ * The message includes a reviewed Fluxer close-code explanation when available, but no provider body or close-reason text.
+ * An explanation does not establish whether the session can resume or whether the SDK will retry
  */
 export class ConnectionError extends Error {
+    /** Discriminator for identifying an expected discovery or gateway connection failure */
     readonly _tag = "ConnectionError"
     constructor(
         /** The transport stage that failed */
@@ -217,8 +230,11 @@ export class ConnectionError extends Error {
     }
 }
 
-/** Gateway readiness or explicit instance discovery did not complete within its caller-owned budget, with cleanup still awaited */
+/** Gateway startup or explicit instance discovery exceeded its time budget.
+ * Required cleanup is still awaited, so completion can occur after timeoutMs has elapsed
+ */
 export class ConnectionTimeoutError extends Error {
+    /** Discriminator for identifying an expired connection or discovery deadline */
     readonly _tag = "ConnectionTimeoutError"
     constructor(
         /** Connection or discovery budget in milliseconds, not a guarantee of completion before cleanup finishes */
@@ -229,8 +245,11 @@ export class ConnectionTimeoutError extends Error {
     }
 }
 
-/** A connection rate limit, distinct from authentication rejection or an SDK defect */
+/** Discovery HTTP or the gateway imposed a connection rate limit.
+ * When retryAfterMs is available, wait at least that duration before another manual attempt
+ */
 export class RateLimitError extends Error {
+    /** Discriminator for identifying a connection rate limit */
     readonly _tag = "RateLimitError"
     constructor(
         /** Whether discovery HTTP or the gateway imposed the limit */
@@ -245,10 +264,13 @@ export class RateLimitError extends Error {
     }
 }
 
-/** A configured shard could not start or permanently lost its gateway lifetime.
- * The client awaits sibling cleanup before returning this failure. This does not roll back delivered events or HTTP work
+/** A configured gateway shard failed startup or permanently lost its established connection.
+ * Use shardId to identify the local connection and failure to inspect its expected cause.
+ * The client waits for its other shards to clean up before returning this failure.
+ * This does not undo delivered events or dispatched HTTP work
  */
 export class ShardConnectionError extends Error {
+    /** Discriminator for narrowing a failure attributed to one local shard */
     readonly _tag = "ShardConnectionError"
     constructor(
         /** The locally assigned shard whose connection failed */
@@ -261,8 +283,11 @@ export class ShardConnectionError extends Error {
     }
 }
 
-/** The operation was not admitted because existing connection work already owns the client */
+/** A competing connection operation already owns the client, so this call did not take ownership.
+ * The rejected call does not cancel or close the existing connection work
+ */
 export class ClientBusyError extends Error {
+    /** Discriminator for identifying competing connection ownership */
     readonly _tag = "ClientBusyError"
     constructor() {
         super("The client already has an active connection or connection operation")
@@ -272,6 +297,7 @@ export class ClientBusyError extends Error {
 
 /** The client is permanently closing or closed, so reconnecting requires a new client */
 export class ClientClosedError extends Error {
+    /** Discriminator for identifying permanent client closure */
     readonly _tag = "ClientClosedError"
     constructor() {
         super("The client is permanently closing or closed")
@@ -279,8 +305,12 @@ export class ClientClosedError extends Error {
     }
 }
 
-/** Default operation cancellation, returned only after cleanup required by that operation finishes */
+/** A default API operation was cancelled through its signal.
+ * The SDK returns this expected failure after required cleanup, not as proof that remote work was undone.
+ * Cancellation combined with an unexpected cleanup failure rejects with SdkDefect instead
+ */
 export class CancelledError extends Error {
+    /** Error tag for identifying cancellation in the default API */
     readonly _tag = "CancelledError"
     constructor() {
         super("The operation was cancelled")
@@ -291,13 +321,18 @@ export class CancelledError extends Error {
 /** Expected startup or terminal connection failures, excluding cancellation and SDK defects */
 export type ConnectionFailure =
     AuthenticationError | ConnectionError | ConnectionTimeoutError | RateLimitError | ShardConnectionError
-/** Expected connect and run failures, with default methods adding CancelledError to their result union */
+/** Expected connect and run failures, with default API methods adding CancelledError to their result union */
 export type ConnectError = ConnectionFailure | ClientBusyError | ClientClosedError
 
-/** Safe cause categories retain combined failure information without raw upstream defects */
+/** Safe details of what caused an SdkDefect in the default API.
+ * Failure retains a typed SDK error, Defect marks an unexpected fault, and Interruption marks cancellation.
+ * Multiple entries can describe a primary failure combined with a cleanup fault, without exposing the raw fault
+ */
 export type DefectReason =
     | {
+          /** This cause entry retains an expected SDK failure */
           readonly kind: "Failure"
+          /** Typed expected failure preserved alongside the unexpected fault */
           readonly failure:
               | ConnectError
               | ConfigurationError
@@ -322,18 +357,27 @@ export type DefectReason =
               | import("./supervisor.js").SupervisorChildError
               | CancelledError
       }
-    | { readonly kind: "Defect" }
-    | { readonly kind: "Interruption" }
+    | {
+          /** An unexpected fault occurred, with its raw value deliberately omitted */
+          readonly kind: "Defect"
+      }
+    | {
+          /** Cancellation interrupted work, possibly alongside another failure */
+          readonly kind: "Interruption"
+      }
 
 /**
- * Unexpected default SDK failure, kept outside typed Result and ResultAsync errors.
- * Creation throws synchronously, while asynchronous operations reject.
- * Reasons retain safe failure categories without copying raw upstream defects or private payloads.
- * Native consumers receive Effect causes instead of this default-boundary exception
+ * An unexpected fault thrown or rejected by the default API instead of returned as a typed error result.
+ * Client creation throws synchronously, while asynchronous operations reject.
+ * This includes expected failures or cancellation combined with an unexpected cleanup fault.
+ * Reasons retain safe failure categories without raw upstream faults or private payloads.
+ * The native entry point uses Effect causes rather than wrapping them in this exception
  */
 export class SdkDefect extends Error {
     constructor(
+        /** Public call during which the fault was observed, not proof that a server mutation was rolled back */
         readonly operation: Operation = "createClient",
+        /** Safe cause entries, which can include both the primary failure and cleanup failure categories */
         readonly reasons: readonly DefectReason[] = [],
     ) {
         super(`Unexpected SDK failure during ${operation}`)

@@ -48,7 +48,7 @@ async function cleanup() {
     assert.equal(journal.kind, "role-display-reset")
     assert.equal(journal.guildId, guildId)
     assert.equal(journal.botId, botId)
-    await cleanupGuildTestRole(api, journal)
+    await cleanupGuildTestRole(api, journal, save)
     unlinkSync(journalPath)
     journal = undefined
     report("test_roles_removed")

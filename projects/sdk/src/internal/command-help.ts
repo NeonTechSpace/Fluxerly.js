@@ -2,6 +2,7 @@ import type { CommandHelpOptions } from "#sdk/command-help"
 import type { PrefixCommandMetadata } from "#sdk/commands"
 import { ConfigurationError } from "#sdk/errors"
 import { text } from "#sdk/text"
+import { copyCommandGroupPath, sameCommandPath } from "./commands.js"
 
 /** Render only snapshotted metadata. Facades own immediate versus lazy execution and defect translation */
 export function commandHelp(
@@ -11,7 +12,7 @@ export function commandHelp(
     if (typeof options !== "object" || options === null || Array.isArray(options))
         throw new ConfigurationError("help", "Help options must be an object")
     for (const key of Reflect.ownKeys(options))
-        if (typeof key !== "string" || !["prefix", "maxLength", "include"].includes(key))
+        if (typeof key !== "string" || !["prefix", "maxLength", "include", "group"].includes(key))
             throw new ConfigurationError("help", "Help options contain an unsupported field")
     const { prefix, maxLength, include } = options
     if (typeof prefix !== "string" || prefix.length === 0 || !prefix.isWellFormed())
@@ -20,9 +21,26 @@ export function commandHelp(
         throw new ConfigurationError("help", "Help maxLength must be a positive safe integer in UTF-16 code units")
     if (include !== undefined && typeof include !== "function")
         throw new ConfigurationError("help", "Help include must be a synchronous boolean predicate")
+    const parent = options.group === undefined ? Object.freeze([]) : copyCommandGroupPath(options.group, "help")
+    const selected: PrefixCommandMetadata[] = []
+    for (let depth = 1; depth <= parent.length; depth += 1) {
+        const path = parent.slice(0, depth)
+        const group = commands.find(
+            (entry) => entry.kind === "group" && entry.path !== undefined && sameCommandPath(entry.path, path),
+        )
+        if (group === undefined) throw new ConfigurationError("help", "Help requires an existing canonical group path")
+        if (include !== undefined && !included(include, group)) return Object.freeze([])
+        if (depth === parent.length) selected.push(group)
+    }
+    for (const entry of commands) {
+        const path = entry.path ?? [entry.name]
+        if (!sameCommandPath(path.slice(0, -1), parent)) continue
+        if (include === undefined || included(include, entry)) selected.push(entry)
+    }
     const entries: string[] = []
-    for (const command of commands) {
-        if (include !== undefined && !included(include, command)) continue
+    for (const command of selected) {
+        const path = command.path ?? [command.name]
+        const namespace = path.slice(0, -1)
         const usage =
             command.usage ??
             command.arguments
@@ -33,11 +51,12 @@ export function commandHelp(
                 .join(" ") ??
             ""
         const aliases = command.aliases?.length
-            ? ` (Aliases: ${command.aliases.map((alias) => prefix + alias).join(", ")})`
+            ? ` (Aliases: ${command.aliases.map((alias) => prefix + [...namespace, alias].join(" ")).join(", ")})`
             : ""
         entries.push(
             prefix +
-                command.name +
+                path.join(" ") +
+                (command.kind === "group" ? " (Group)" : "") +
                 (usage ? " " + usage : "") +
                 aliases +
                 (command.description ? "\n" + command.description : ""),

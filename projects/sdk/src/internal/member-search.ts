@@ -30,6 +30,7 @@ interface EncodedMemberSearchQuery {
     readonly limit: number
     readonly offset: number
     readonly json: string
+    readonly query: MemberSearchQuery
 }
 
 const nonNegativeInteger = (value: unknown): value is number =>
@@ -41,30 +42,34 @@ const joinSourceType = (value: unknown): value is GuildMemberJoinSourceType =>
 const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
 
-function identifiers(value: unknown, maximum: number): value is readonly string[] {
-    if (!Array.isArray(value) || value.length > maximum) return false
+function identifiers(value: unknown, maximum: number): readonly string[] | undefined {
+    if (!Array.isArray(value) || value.length > maximum) return undefined
     const items = Array.from(value)
-    return items.every(identifier) && new Set(items).size === items.length
+    return items.every(identifier) && new Set(items).size === items.length ? Object.freeze(items) : undefined
 }
 
-function texts(value: unknown, maximum: number): value is readonly string[] {
-    if (!Array.isArray(value) || value.length > maximum) return false
+function texts(value: unknown, maximum: number): readonly string[] | undefined {
+    if (!Array.isArray(value) || value.length > maximum) return undefined
     const items = Array.from(value)
     return items.every((item) => typeof item === "string") && new Set(items).size === items.length
+        ? Object.freeze(items)
+        : undefined
 }
 
-function joinSourceTypes(value: unknown): value is readonly GuildMemberJoinSourceType[] {
-    if (!Array.isArray(value) || value.length > 10) return false
+function joinSourceTypes(value: unknown): readonly GuildMemberJoinSourceType[] | undefined {
+    if (!Array.isArray(value) || value.length > 10) return undefined
     const items = Array.from(value)
-    return items.every(joinSourceType) && new Set(items).size === items.length
+    return items.every(joinSourceType) && new Set(items).size === items.length ? Object.freeze(items) : undefined
 }
 
 /** Validates and encodes one provider page request, preserving provider defaults without retaining caller input */
 export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQuery | InputValidationFailure {
-    const input = query === undefined ? {} : query
-    if (!record(input)) return inputValidationFailure("query", "type", "Member search query must be an object")
-    if (Object.keys(input).some((key) => !queryKeys.has(key)))
+    const supplied = query === undefined ? {} : query
+    if (!record(supplied)) return inputValidationFailure("query", "type", "Member search query must be an object")
+    if (Object.keys(supplied).some((key) => !queryKeys.has(key)))
         return inputValidationFailure("query", "allowedFields", "Member search query contains an unsupported field")
+    // Read recognized properties once, regardless of ownership or enumerability
+    const input = Object.fromEntries(Array.from(queryKeys, (key) => [key, supplied[key]]))
     const limit = input.limit === undefined ? 25 : input.limit
     const offset = input.offset === undefined ? 0 : input.offset
     if (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 100))
@@ -85,12 +90,14 @@ export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQue
             "range",
             "Member search limit must be an integer from 1 through 100",
         )
-    if (input.roleIds !== undefined && !identifiers(input.roleIds, 10))
+    const roleIds = input.roleIds === undefined ? undefined : identifiers(input.roleIds, 10)
+    if (input.roleIds !== undefined && !roleIds)
         return inputValidationFailure(
             "query.roleIds[]",
             "format",
             "Member search role IDs must be an array of at most 10 unique decimal strings",
         )
+    input.roleIds = roleIds
     if (input.joinedAtAfterSeconds !== undefined && !nonNegativeInteger(input.joinedAtAfterSeconds))
         return inputValidationFailure(
             "query.joinedAtAfterSeconds",
@@ -115,31 +122,33 @@ export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQue
             "range",
             "User-created-before time must be a nonnegative safe integer",
         )
-    if (input.joinSourceTypes !== undefined && !joinSourceTypes(input.joinSourceTypes))
+    const sourceTypes = input.joinSourceTypes === undefined ? undefined : joinSourceTypes(input.joinSourceTypes)
+    if (input.joinSourceTypes !== undefined && !sourceTypes)
         return inputValidationFailure(
             "query.joinSourceTypes[]",
             "allowedValue",
             "Join source types must be an array of at most 10 unique supported values",
         )
-    if (input.sourceInviteCodes !== undefined && !texts(input.sourceInviteCodes, 10))
+    input.joinSourceTypes = sourceTypes
+    const inviteCodes = input.sourceInviteCodes === undefined ? undefined : texts(input.sourceInviteCodes, 10)
+    if (input.sourceInviteCodes !== undefined && !inviteCodes)
         return inputValidationFailure(
             "query.sourceInviteCodes[]",
             "unique",
             "Source invite codes must be an array of at most 10 unique strings",
         )
+    input.sourceInviteCodes = inviteCodes
     if (input.isBot !== undefined && typeof input.isBot !== "boolean")
         return inputValidationFailure("query.isBot", "type", "isBot must be a boolean")
     if (input.sortBy !== undefined && input.sortBy !== "joinedAt" && input.sortBy !== "relevance")
         return inputValidationFailure("query.sortBy", "allowedValue", "sortBy must be joinedAt or relevance")
     if (input.sortOrder !== undefined && input.sortOrder !== "asc" && input.sortOrder !== "desc")
         return inputValidationFailure("query.sortOrder", "allowedValue", "sortOrder must be asc or desc")
-    const sourceTypes = input.joinSourceTypes === undefined ? undefined : [...input.joinSourceTypes]
-    const inviteCodes = input.sourceInviteCodes === undefined ? undefined : [...input.sourceInviteCodes]
     const body = {
         ...(input.query === undefined ? {} : { query: input.query }),
         limit,
         offset,
-        ...(input.roleIds === undefined ? {} : { role_ids: [...input.roleIds] }),
+        ...(roleIds === undefined ? {} : { role_ids: roleIds }),
         ...(input.joinedAtAfterSeconds === undefined ? {} : { joined_at_gte: input.joinedAtAfterSeconds }),
         ...(input.joinedAtBeforeSeconds === undefined ? {} : { joined_at_lte: input.joinedAtBeforeSeconds }),
         ...(sourceTypes === undefined ? {} : { join_source_type: sourceTypes }),
@@ -158,10 +167,12 @@ export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQue
         limit,
         offset,
         json: JSON.stringify(body),
+        query: Object.freeze(input) as MemberSearchQuery,
     })
 }
 
 function hit(value: unknown, guildId: string): MemberSearchHit | undefined {
+    const roleIds = record(value) ? identifiers(value.role_ids, Number.MAX_SAFE_INTEGER) : undefined
     if (
         !record(value) ||
         !identifier(value.guild_id) ||
@@ -172,7 +183,7 @@ function hit(value: unknown, guildId: string): MemberSearchHit | undefined {
         !/^\d{4}$/.test(value.discriminator) ||
         !nullableText(value.global_name) ||
         !nullableText(value.nickname) ||
-        !identifiers(value.role_ids, Number.MAX_SAFE_INTEGER) ||
+        !roleIds ||
         !nonNegativeInteger(value.joined_at) ||
         typeof value.is_bot !== "boolean" ||
         !record(value.supplemental) ||
@@ -190,7 +201,7 @@ function hit(value: unknown, guildId: string): MemberSearchHit | undefined {
         discriminator: value.discriminator,
         globalName: value.global_name,
         nickname: value.nickname,
-        roleIds: Object.freeze([...value.role_ids]),
+        roleIds,
         joinedAtSeconds: value.joined_at,
         isBot: value.is_bot,
         joinSourceType: value.supplemental.join_source_type ?? null,

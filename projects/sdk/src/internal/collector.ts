@@ -8,13 +8,13 @@ import {
     type CollectorResult,
 } from "#sdk/collectors"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
-import type { Message } from "#sdk/messages"
+import type { Message, MessageCore } from "#sdk/messages"
 import type { ClientOwner } from "./client.js"
 import { identifier, record } from "./message.js"
+import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
 
-type Settings = Required<Omit<CollectorOptions, "filter" | "guildId">> &
-    Pick<CollectorOptions, "filter" | "guildId"> &
-    OperationOptions
+type Settings<M extends MessageCore> = Required<Omit<CollectorOptions<M>, "filter" | "guildId" | "idleMs">> &
+    Pick<CollectorOptions<M>, "filter" | "guildId"> & { readonly idleMs: number | undefined } & OperationOptions
 
 const maximumGuildId = "18446744073709551615"
 
@@ -26,21 +26,11 @@ function guildId(value: unknown): value is string {
     )
 }
 
-function consumeThenable(value: unknown) {
-    if (value === null || (typeof value !== "object" && typeof value !== "function")) return true
-    try {
-        if (value instanceof Promise) void Promise.prototype.then.call(value, undefined, () => undefined)
-        else
-            void Promise.resolve()
-                .then(() => value)
-                .catch(() => undefined)
-    } catch {
-        return false
-    }
-    return true
-}
-
-function settings(channelId: unknown, options: unknown, defaultApi: boolean): Settings | ConfigurationError {
+function settings<M extends MessageCore>(
+    channelId: unknown,
+    options: unknown,
+    defaultApi: boolean,
+): Settings<M> | ConfigurationError {
     if (!identifier(channelId)) return new ConfigurationError("channelId", "Channel ID must be a decimal string")
     const input = options === undefined ? {} : options
     if (!record(input)) return new ConfigurationError("collectorOptions", "Collector options must be an object")
@@ -48,6 +38,7 @@ function settings(channelId: unknown, options: unknown, defaultApi: boolean): Se
         maxMessages: 1,
         maxBytes: 4_194_304,
         timeoutMs: 30_000,
+        idleMs: undefined as number | undefined,
         maxPendingMessages: 256,
         maxPendingBytes: 4_194_304,
     }
@@ -69,7 +60,7 @@ function settings(channelId: unknown, options: unknown, defaultApi: boolean): Se
             typeof value !== "number" ||
             !Number.isSafeInteger(value) ||
             value <= 0 ||
-            (key === "timeoutMs" && value > 2_147_483_647)
+            ((key === "timeoutMs" || key === "idleMs") && value > 2_147_483_647)
         )
             return new ConfigurationError(
                 key,
@@ -95,43 +86,44 @@ function settings(channelId: unknown, options: unknown, defaultApi: boolean): Se
     return {
         ...result,
         ...(input.guildId === undefined ? {} : { guildId: input.guildId }),
-        ...(input.filter === undefined ? {} : { filter: input.filter as (message: Message) => boolean }),
+        ...(input.filter === undefined ? {} : { filter: input.filter as (message: M) => boolean }),
         ...(signal === undefined ? {} : { signal: signal as unknown as NonNullable<OperationOptions["signal"]> }),
     }
 }
 
 /** One collection owns its queue, snapshots and scheduled work. Completion releases its client registration */
-export class MessageCollector {
-    readonly closed = Deferred.makeUnsafe<CollectorResult, CollectorFailure>()
+export class MessageCollector<M extends MessageCore = Message> {
+    readonly closed = Deferred.makeUnsafe<CollectorResult<M>, CollectorFailure>()
     #active = true
-    #pending: { message: Message; bytes: number }[] = []
+    #pending: { message: M; bytes: number }[] = []
     #pendingBytes = 0
-    #messages: Message[] = []
+    #messages: M[] = []
     #ids = new Set<string>()
     #bytes = 0
     #timer: ReturnType<typeof setTimeout> | undefined
     #drain: ReturnType<typeof setImmediate> | undefined
     #release: (() => void) | undefined
-    #settings: Settings | undefined
+    #settings: Settings<M> | undefined
     readonly #deadline: number
+    #idleDeadline: number
     #busy = false
-    #next = Deferred.makeUnsafe<Message>()
+    #next = Deferred.makeUnsafe<M>()
     #worker: Fiber.Fiber<void> | undefined
-    #outcome: Exit.Exit<CollectorResult, CollectorFailure> | undefined
+    #outcome: Exit.Exit<CollectorResult<M>, CollectorFailure> | undefined
     #untrack: (() => void) | undefined
 
     owns(fiberId: number) {
         return this.#worker?.id === fiberId
     }
 
-    run<E, R>(owner: ClientOwner, handler: (message: Message) => Effect.Effect<unknown, E, R>) {
+    run<E, R>(owner: ClientOwner<M>, handler: (message: M) => Effect.Effect<unknown, E, R>) {
         const collector = this
         return Effect.gen(function* () {
             collector.#untrack = owner.trackMessageCollector(collector)
             const work = Effect.gen(function* () {
                 while (collector.#active) {
                     const message = yield* Deferred.await(collector.#next)
-                    collector.#next = Deferred.makeUnsafe<Message>()
+                    collector.#next = Deferred.makeUnsafe<M>()
                     yield* Effect.scoped(Effect.suspend(() => handler(message))).pipe(
                         Effect.catchCause((cause) =>
                             !collector.#active && Cause.hasDies(cause)
@@ -183,18 +175,20 @@ export class MessageCollector {
     }
 
     constructor(
-        settings: Settings,
+        settings: Settings<M>,
         private readonly clock: Clock.Clock,
     ) {
         this.#settings = settings
-        this.#deadline = this.#now() + settings.timeoutMs
+        const now = this.#now()
+        this.#deadline = now + settings.timeoutMs
+        this.#idleDeadline = settings.idleMs === undefined ? Infinity : now + settings.idleMs
     }
 
     #now() {
         return Number(this.clock.monotonicTimeNanosUnsafe()) / 1_000_000
     }
 
-    start(owner: ClientOwner, channelId: string) {
+    start(owner: ClientOwner<M>, channelId: string) {
         const settings = this.#settings!
         const signal = settings.signal
         const abort = () => this.#finish(Exit.interrupt())
@@ -234,13 +228,13 @@ export class MessageCollector {
                     if (!this.#expired()) this.#scheduleDeadline()
                 })
             },
-            Math.max(1, Math.ceil(this.#deadline - this.#now())),
+            Math.max(1, Math.ceil(Math.min(this.#deadline, this.#idleDeadline) - this.#now())),
         )
     }
 
     #expired() {
-        if (this.#now() < this.#deadline) return false
-        this.#succeed("timeout")
+        if (this.#now() < Math.min(this.#deadline, this.#idleDeadline)) return false
+        this.#succeed(this.#idleDeadline < this.#deadline ? "idle" : "timeout")
         return true
     }
 
@@ -253,7 +247,7 @@ export class MessageCollector {
         }
     }
 
-    #offer(message: Message, bytes: number) {
+    #offer(message: M, bytes: number) {
         if (!this.#active) return
         if (this.#busy && this.#messages.length === this.#settings!.maxMessages) return
         try {
@@ -297,17 +291,20 @@ export class MessageCollector {
             } catch {
                 return this.fail(new CollectorError("filter"))
             }
-            if (!consumeThenable(accepted)) return this.fail(new CollectorError("filter"))
+            discardInvalidCallbackReturn(accepted)
             if (!this.#active) return
             if (this.#expired()) return
             if (typeof accepted !== "boolean") return this.fail(new CollectorError("filter"))
             if (!accepted) continue
             const size = Buffer.byteLength(JSON.stringify(message))
+            if (this.#expired()) return
             if (size > this.#settings!.maxBytes - this.#bytes)
                 return this.fail(new CollectorError("overflow", "maxBytes", this.#settings!.maxBytes))
             this.#messages.push(message)
             this.#ids.add(message.id)
             this.#bytes += size
+            // Renewal only moves the quiet deadline later. The existing timer rechecks it before completing
+            if (this.#settings!.idleMs !== undefined) this.#idleDeadline = this.#now() + this.#settings!.idleMs
             if (this.#worker) {
                 this.#busy = true
                 Deferred.doneUnsafe(this.#next, Effect.succeed(message))
@@ -323,10 +320,10 @@ export class MessageCollector {
     fail(error: CollectorFailure) {
         this.#finish(Exit.fail(error))
     }
-    #succeed(reason: CollectorResult["reason"]) {
+    #succeed(reason: CollectorResult<M>["reason"]) {
         if (this.#active) this.#finish(Exit.succeed(Object.freeze({ messages: Object.freeze(this.#messages), reason })))
     }
-    #finish(outcome: Exit.Exit<CollectorResult, CollectorFailure>) {
+    #finish(outcome: Exit.Exit<CollectorResult<M>, CollectorFailure>) {
         if (!this.#active) return
         this.#active = false
         if (this.#timer !== undefined) clearTimeout(this.#timer)
@@ -354,21 +351,21 @@ export class MessageCollector {
     #complete() {
         this.#untrack?.()
         this.#untrack = undefined
-        this.#next = Deferred.makeUnsafe<Message>()
+        this.#next = Deferred.makeUnsafe<M>()
         if (this.#outcome) Deferred.doneUnsafe(this.closed, this.#outcome)
     }
 }
 
-export function collect<E = never, R = never>(
-    owner: ClientOwner,
+export function collect<E = never, R = never, M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
     channelId: string,
-    options?: CollectorOptions,
+    options?: CollectorOptions<M>,
     defaultApi = false,
-    handler?: (message: Message) => Effect.Effect<unknown, E, R>,
-): Effect.Effect<MessageCollector, CollectorRegistrationError, R> {
+    handler?: (message: M) => Effect.Effect<unknown, E, R>,
+): Effect.Effect<MessageCollector<M>, CollectorRegistrationError, R> {
     return Effect.gen(function* () {
         if (owner.state === "Closing" || owner.state === "Closed") return yield* Effect.fail(new ClientClosedError())
-        const config = settings(channelId, options, defaultApi)
+        const config = settings<M>(channelId, options, defaultApi)
         if (config instanceof ConfigurationError) return yield* Effect.fail(config)
         if (config.signal?.aborted) return yield* Effect.interrupt
         if (config.guildId === undefined) {
@@ -379,7 +376,7 @@ export function collect<E = never, R = never>(
         )
             return yield* Effect.fail(new CollectorError("notConnected"))
         const clock = yield* Clock.Clock
-        const collector = new MessageCollector(config, clock)
+        const collector = new MessageCollector<M>(config, clock)
         if (handler) yield* collector.run(owner, handler)
         collector.start(owner, channelId)
         return collector

@@ -1,26 +1,29 @@
 import { err, ok, type Result } from "neverthrow"
 import { HelperError } from "./helpers.js"
 
-/** Explicit local splitting limit, not a claim about the selected instance's current message allowance */
+/** Choose the largest piece `text.split` may return. Supply your own limit, this does not discover a server's message limit */
 export interface TextSplitOptions {
-    /** Positive safe integer UTF-16 code-unit ceiling per piece, matching JavaScript string.length. No default or remote limit lookup */
+    /** Maximum `string.length` of each piece, a positive safe integer with no default. Most emoji count as two or more units */
     readonly maxLength: number
 }
 
-/** Pure lossless text splitting without sending messages, changing mention intent or reconstructing Markdown */
-export const text = Object.freeze({
+/** Break long text into smaller strings before deciding how to send or display them. No message is sent */
+export const text: Readonly<{
     /**
-     * Split well-formed UTF-16 text into a frozen array with each piece at most maxLength code units
+     * Return a Result containing a frozen array of strings, each with `string.length` at most `options.maxLength`
      *
      * Prefer the last newline within a full piece, then the last whitespace, otherwise split a long word.
      * Whitespace stays in the preceding piece, so joining with an empty separator reconstructs the exact input
      *
-     * Empty text gives []. No trimming, prefix/suffix insertion, Markdown repair or remote request occurs.
-     * A surrogate pair is never split. Grapheme clusters such as combining sequences or joined emoji may be split
+     * Empty text gives []. No trimming, prefix/suffix insertion, Markdown repair or remote request occurs
+     *
+     * The two UTF-16 units of a single Unicode code point stay together. A visible character made of multiple code points, such as a joined emoji, may still be split
      *
      * Invalid text/options, lone surrogates, or a ceiling too small for a surrogate pair fail with HelperError.
      * Input and returned pieces are application-owned. Result size is proportional to the supplied text
      */
+    split(content: string, options: TextSplitOptions): Result<readonly string[], HelperError>
+}> = Object.freeze({
     split(content: string, options: TextSplitOptions): Result<readonly string[], HelperError> {
         if (
             typeof options !== "object" ||

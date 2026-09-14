@@ -726,6 +726,8 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         stage = "reaction_collector_timeout_and_stop"
         const timed = await collect({ timeoutMs: 50 })
         assert.deepEqual(await timed.wait(), { reason: "timeout", reactions: [] })
+        const emptyIdle = await collect({ idleMs: 100 })
+        assert.deepEqual(await emptyIdle.wait(), { reason: "idle", reactions: [] })
         const stopped = await collect({})
         await stopped.stop()
         assert.deepEqual(await stopped.wait(), { reason: "stopped", reactions: [] })
@@ -837,6 +839,27 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
             await wait("messageReactionRemove", (value) => value.emoji.name === "🔥")
         }
         assert.equal((await progress.wait()).reason, "limit")
+        report(stage, true)
+        stage = "reaction_progress_idle_cleanup"
+        const idleProgress = []
+        const quiet = await collect({
+            emoji: "🔥",
+            idleMs: 5_000,
+            maxReactions: 2,
+            progressWait: true,
+            onProgress: (state) => idleProgress.push(state),
+        })
+        await ops.add(message, "🔥")
+        await wait("messageReactionAdd", (value) => value.emoji.name === "🔥")
+        const quietResult = await quiet.wait()
+        assert.equal(quietResult.reason, "idle")
+        assert.equal(quietResult.reactions.length, 1)
+        assert.equal(quietResult.reactions[0].userId, botId)
+        assert.equal(quietResult.reactions[0].emoji.name, "🔥")
+        assert.deepEqual(idleProgress, ["started", "cleaned"])
+        assert.deepEqual(await reactors(encodeURIComponent("🔥")), [botId])
+        await ops.remove(message, "🔥")
+        await wait("messageReactionRemove", (value) => value.emoji.name === "🔥")
         report(stage, true)
         stage = "reaction_progress_failure"
         const failedProgress = await collect({ progressEdit: "SDK missing progress target", progressFailure: true })
@@ -1648,6 +1671,7 @@ async function cleanup() {
     if (!journal) return
     assert.equal(journal.guildId, guildId)
     assert.match(journal.name, /^fluxerly-sdk-test-[a-f0-9]{32}$/)
+    const save = () => writeFileSync(journalPath, JSON.stringify(journal))
     let moderationFailure
     try {
         await cleanupModeration(api, journal, moderationUserId)
@@ -1657,21 +1681,21 @@ async function cleanup() {
     }
     let emojiFailure
     try {
-        await cleanupReactionEmoji(api, journal)
+        await cleanupReactionEmoji(api, journal, save)
         if (journal.emojiName !== undefined) report("test_emoji_removed", true)
     } catch (error) {
         emojiFailure = error
     }
     let roleFailure
     try {
-        await cleanupGuildTestRole(api, journal)
+        await cleanupGuildTestRole(api, journal, save)
         if (journal.roleName !== undefined) report("test_role_removed", true)
     } catch (error) {
         roleFailure = error
     }
     let channelFixtureFailure
     try {
-        await cleanupGuildChannelFixtures(api, journal)
+        await cleanupGuildChannelFixtures(api, journal, save)
         if (journal.channelFixtures !== undefined) report("test_owned_channels_removed", true)
     } catch (error) {
         channelFixtureFailure = error
@@ -1698,6 +1722,8 @@ async function cleanup() {
         assert.equal(current.data?.id, channel.id)
         assert.equal(current.data?.name, journal.name)
         assert.equal(current.data?.guild_id, guildId)
+        journal.channelId = channel.id
+        save()
         await api("DELETE", `/channels/${channel.id}`)
         assert.equal((await api("GET", `/channels/${channel.id}`)).status, 404)
     }
@@ -2549,9 +2575,9 @@ async function verifyNonce(ops, channelId) {
 async function verifyCollectors(open, send, channelId, botId, interrupt) {
     const marker = `collector-${randomUUID()}`
     const filter = (message) => message.author.id === botId && message.content.startsWith(marker)
-    async function collectAndSend(maxMessages, count, timeoutMs, reason) {
+    async function collectAndSend(maxMessages, count, timeoutMs, reason, idleMs) {
         stage = `collector_${reason}`
-        const collector = await open({ filter, maxMessages, timeoutMs })
+        const collector = await open({ filter, maxMessages, timeoutMs, ...(idleMs === undefined ? {} : { idleMs }) })
         const sent = []
         try {
             // Intake is ready before sending. No retry of ambiguous mutations; the existing channel journal owns cleanup
@@ -2662,7 +2688,7 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
         assert.equal(started.length, 1, "Collector progress handler deadline")
     }
 
-    async function cancelProgress() {
+    async function cancelProgress(reason = "cancellation") {
         const progressMarker = `collector-cancel-${randomUUID()}`
         const started = []
         const cleanupStarted = []
@@ -2674,7 +2700,8 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
             maxMessages: 1,
             timeoutMs: 30_000,
             progressWait: true,
-            progressCancel: true,
+            progressCancel: reason === "cancellation",
+            ...(reason === "idle" ? { idleMs: 5_000 } : {}),
             progressCleanup: async () => {
                 await releaseCleanup.promise
             },
@@ -2696,14 +2723,14 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
         try {
             const sent = await send(channelId, { content: `${progressMarker}-source` })
             await waitForProgressStart(started)
-            stage = "collector_progress_cancellation"
-            assert.equal(typeof collector.cancel, "function")
+            stage = `collector_progress_${reason}`
+            if (reason === "cancellation") assert.equal(typeof collector.cancel, "function")
             const outcome = collector.wait()
             let outcomeSettled = false
             void outcome.then(() => {
                 outcomeSettled = true
             })
-            const cancellation = Promise.resolve(collector.cancel())
+            const cancellation = reason === "cancellation" ? Promise.resolve(collector.cancel()) : Promise.resolve()
             let cancellationSettled = false
             void cancellation.then(() => {
                 cancellationSettled = true
@@ -2720,7 +2747,11 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
                 assert.equal(result.error?._tag, "CancelledError")
             } else {
                 assert.equal(result.error, undefined)
-                assert.equal(result.value.reason, "stopped")
+                assert.equal(result.value.reason, reason === "idle" ? "idle" : "stopped")
+                assert.deepEqual(
+                    result.value.messages.map((message) => message.id),
+                    [sent.id],
+                )
             }
             assert.deepEqual(started, [sent.id])
             assert.deepEqual(cleanupStarted, [sent.id])
@@ -2779,8 +2810,10 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
 
     await collectAndSend(2, 2, 30_000, "limit")
     await collectAndSend(5, 1, 5_000, "timeout")
+    await collectAndSend(5, 0, 30_000, "idle", 100)
     await collectProgress("replies_readback", 2)
     await cancelProgress()
+    await cancelProgress("idle")
     await collectProgress("after_cancellation")
     await recoverProgress()
     await collectProgress("after_resume")
@@ -2909,52 +2942,53 @@ try {
         })
         assert.ok(created.isOk())
         client = created.value
-        const cacheGet = async (target) => {
-            if (!cache && !typing && !search) return undefined
-            const cached = client.messages.get(target)
-            assert.ok(cached.isOk())
-            return cached.value
-        }
-        const cacheSend = async (channelId, input) => {
-            const sent = await client.messages.send(channelId, input)
-            assert.ok(sent.isOk())
-            return sent.value
-        }
-        const cacheReply = async (target, input) => {
-            const sent = await client.messages.reply(target, input)
-            assert.ok(sent.isOk())
-            return sent.value
-        }
-        if (nonceOnly)
-            await verifyNonce(
-                {
-                    send: async (input) => cacheSend(channel.id, input),
-                    reply: async (target, input) => {
-                        const sent = await client.messages.reply(target, input)
-                        assert.ok(sent.isOk())
-                        return sent.value
-                    },
-                    forward: async (destination, input) => {
-                        const sent = await client.messages.forward(destination, input)
-                        assert.ok(sent.isOk())
-                        return sent.value
-                    },
-                    sendUnknown: async (input) => {
-                        const result = await client.messages.send(channel.id, input)
-                        assert.ok(result.isErr())
-                        return result.error
-                    },
-                },
-                channel.id,
-            )
-        const done = Promise.withResolvers()
-        const stopState = forceRecovery
-            ? client.observeState((state) => {
-                  states.push(state)
-              })
-            : undefined
+        let stopState
         let timer
         try {
+            const cacheGet = async (target) => {
+                if (!cache && !typing && !search) return undefined
+                const cached = client.messages.get(target)
+                assert.ok(cached.isOk())
+                return cached.value
+            }
+            const cacheSend = async (channelId, input) => {
+                const sent = await client.messages.send(channelId, input)
+                assert.ok(sent.isOk())
+                return sent.value
+            }
+            const cacheReply = async (target, input) => {
+                const sent = await client.messages.reply(target, input)
+                assert.ok(sent.isOk())
+                return sent.value
+            }
+            if (nonceOnly)
+                await verifyNonce(
+                    {
+                        send: async (input) => cacheSend(channel.id, input),
+                        reply: async (target, input) => {
+                            const sent = await client.messages.reply(target, input)
+                            assert.ok(sent.isOk())
+                            return sent.value
+                        },
+                        forward: async (destination, input) => {
+                            const sent = await client.messages.forward(destination, input)
+                            assert.ok(sent.isOk())
+                            return sent.value
+                        },
+                        sendUnknown: async (input) => {
+                            const result = await client.messages.send(channel.id, input)
+                            assert.ok(result.isErr())
+                            return result.error
+                        },
+                    },
+                    channel.id,
+                )
+            const done = Promise.withResolvers()
+            stopState = forceRecovery
+                ? client.observeState((state) => {
+                      states.push(state)
+                  })
+                : undefined
             if (typing) {
                 stage = "typing_one_shot"
                 const oneShot = await client.messages.typing(channel.id)

@@ -1,4 +1,6 @@
-/** Invite creation settings. Omission creates a separate code that expires after one day
+/** Control the lifetime and reuse of an invitation to an existing channel.
+ * Creating an invite does not join the recipient or create the destination. Omission requests a new code with
+ * unlimited uses that expires after one day. Fluxer enforces destination access, invite permissions and capacity
  * @example
  * ```ts
  * import type { Client } from "@neontechspace/fluxerly"
@@ -11,9 +13,9 @@
  * ```
  */
 export interface InviteCreate {
-    /** Lifetime in seconds, integer 0–604800; default 86400. Zero requests no expiry */
+    /** Lifetime in seconds, integer 0–604800. Default 86400. Zero requests no expiry */
     readonly maxAgeSeconds?: number
-    /** Maximum uses, integer 0–100; default zero means unlimited uses until expiry */
+    /** Maximum uses, integer 0–100. Default zero means unlimited uses until expiry */
     readonly maxUses?: number
     /** Default true requests a new code. False permits Fluxer to reuse a matching existing invite */
     readonly unique?: boolean
@@ -21,8 +23,9 @@ export interface InviteCreate {
     readonly temporary?: boolean
 }
 
-/** Frozen invite observation, without acceptance, membership changes or SDK retention.
- * Codes grant access to the destination and should only be shared with intended recipients.
+/** An invitation link and the destination details Fluxer allowed this caller to inspect.
+ * Fetching this frozen snapshot does not accept the invitation or change membership, and the SDK does not retain it.
+ * Codes can grant access to the destination and should only be shared with intended recipients.
  * Counts and expiry are observations, not a guarantee that a later join will succeed
  */
 export interface Invite {
@@ -36,25 +39,36 @@ export interface Invite {
     readonly type: "guild" | "group"
     /** Minimal destination channel identity, not a full channel snapshot */
     readonly channel: {
+        /** Decimal destination channel ID, not the invitation code */
         readonly id: string
+        /** Destination channel name. Null means no name, omission means Fluxer did not supply it */
         readonly name?: string | null
+        /** Numeric Fluxer channel type. This can describe a guild channel or a private group conversation */
         readonly type: number
     }
-    /** Present for guild invites only; not a full guild snapshot */
-    readonly guild?: { readonly id: string; readonly name: string }
-    /** Creator ID; null means no creator, omission means unavailable */
+    /** Present for guild invites only. Not a full guild snapshot */
+    readonly guild?: {
+        /** Decimal ID of the guild this invitation leads to */
+        readonly id: string
+        /** Guild name returned with this invitation */
+        readonly name: string
+    }
+    /** Creator ID. Null means no creator, omission means unavailable */
     readonly inviterId?: string | null
     /** Observed destination member count */
     readonly memberCount: number
     /** Observed presence count, available for guild invites */
     readonly presenceCount?: number
-    /** ISO 8601 expiry; null means no expiry, omission means unavailable */
+    /** ISO 8601 expiry. Null means no expiry, omission means unavailable */
     readonly expiresAt?: string | null
-    /** Whether Fluxer applies temporary membership semantics */
+    /** Whether Fluxer treats membership gained through this invite as temporary */
     readonly temporary: boolean
 }
 
-/** Management observation returned by create/list, without a client-owned cache */
+/** Invite details returned by creation and management lists, including creation time and use limits.
+ * Use these observations to inspect or reconcile created codes, not to predict whether a future join succeeds.
+ * The SDK does not cache invite codes or track later uses
+ */
 export interface InviteMetadata extends Invite {
     /** ISO 8601 creation time */
     readonly createdAt: string
@@ -62,6 +76,6 @@ export interface InviteMetadata extends Invite {
     readonly uses: number
     /** Zero means unlimited uses until expiry */
     readonly maxUses: number
-    /** Configured lifetime in seconds; zero means no expiry. Fluxer omits this for group invites */
+    /** Configured lifetime in seconds. Zero means no expiry. Fluxer omits this for group invites */
     readonly maxAgeSeconds?: number
 }

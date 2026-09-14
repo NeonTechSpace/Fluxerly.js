@@ -1,7 +1,7 @@
 # SDK contracts
 
 This document defines cross-cutting implementation constraints for SDK contributors.
-These requirements do not imply that every planned API is implemented.
+These contracts define implementation requirements, not an API inventory.
 Member signatures, defaults and caller-visible behavior belong in public source comments and the website reference.
 See [technology choices](/docs/TECHNOLOGY.md) for tooling and [the repository guide](/docs/REPOSITORY.md) for code and checks
 
@@ -20,7 +20,7 @@ Add conveniences only for concrete use cases, with explicit ownership and propor
 Share expected-error definitions across both entry points, using one readonly `_tag` classification rather than a duplicate error code.
 Keep expected failures and cancellation distinct from SDK defects at the default boundary.
 An operation failure or interruption must remain observable when cleanup also defects.
-Do not overwrite either failure, downgrade a cleanup defect to a default expected error, or only log it.
+Do not overwrite either failure, downgrade a cleanup defect to an expected error, or only log it.
 Preserve native Effect cause information, but expose only allowlisted, SDK-owned diagnostic details through the default boundary.
 Never include credentials, private payloads or arbitrary upstream errors in default diagnostic output
 

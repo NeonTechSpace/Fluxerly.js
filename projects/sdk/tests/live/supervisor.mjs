@@ -265,7 +265,11 @@ async function verifyExited(pids) {
 }
 
 async function shutdown(Effect) {
-    if (!supervisor || supervisorClosed) return
+    if (!supervisor) {
+        supervisorClosed = true
+        return
+    }
+    if (supervisorClosed) return
     const terminal = callSupervisor(() => supervisor.waitForClose(), Effect).then(
         () => true,
         () => false,

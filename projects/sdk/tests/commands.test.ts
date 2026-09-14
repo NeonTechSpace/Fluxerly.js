@@ -2,10 +2,18 @@ import { once } from "node:events"
 import { createServer } from "node:http"
 import { Context, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { commands, createClient, SdkDefect, type Client, type DefaultPrefixCommand } from "../src/index.js"
+import {
+    commands,
+    createClient,
+    SdkDefect,
+    type Client,
+    type CommandArgumentDescriptor,
+    type DefaultPrefixCommand,
+} from "../src/index.js"
 import { commands as nativeCommands, createClient as createNative } from "../src/effect.js"
 import { WebSocketServer } from "ws"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
+import * as argumentConversion from "../src/internal/command-arguments.js"
 
 const transport = vi.hoisted(() => ({ url: "", socket: undefined as import("ws").WebSocket | undefined }))
 vi.mock("ws", async (original) => {
@@ -782,6 +790,64 @@ test("command snapshots copy metadata while retaining only registered callback a
     await vi.waitFor(() => expect(received).toEqual(["initial"]))
 })
 
+test.each(["default", "native"] as const)("%s registration snapshots its argument schema once", async (mode) => {
+    const snapshot = vi.spyOn(argumentConversion, "snapshotCommandArguments")
+    const argumentsSchema = { target: { type: "user" as const, candidates: [{ id: "1", username: "initial" }] } }
+    let metadata: readonly unknown[]
+    if (mode === "default") {
+        const router = value(commands.create({ prefix: "!" }))
+        metadata = value(
+            router.register({ name: "target", arguments: argumentsSchema, execute: () => undefined }),
+        ).commands
+    } else {
+        const router = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+        metadata = (
+            await Effect.runPromise(
+                router.register({ name: "target", arguments: argumentsSchema, execute: () => Effect.void }),
+            )
+        ).commands
+    }
+    expect(snapshot).toHaveBeenCalledTimes(1)
+    expect(metadata).toEqual([
+        { name: "target", arguments: [{ name: "target", type: "user", optional: false, rest: false }] },
+    ])
+    expect(Object.isFrozen(metadata)).toBe(true)
+    expect(Object.isFrozen(metadata[0])).toBe(true)
+})
+
+test.each(["default", "native"] as const)(
+    "%s registration still validates resource candidate shape and bounds",
+    async (mode) => {
+        const sparse = Array<{ id: string; username: string }>(2)
+        sparse[1] = { id: "1", username: "name" }
+        const invalidCandidates = [
+            [],
+            sparse,
+            [{ id: "01", username: "name" }],
+            [{ id: "1", username: "" }],
+            Array.from({ length: 101 }, (_, index) => ({ id: `${index}`, username: "name" })),
+        ]
+        for (const candidates of invalidCandidates) {
+            const argumentsSchema = { target: { type: "user" as const, candidates } }
+            if (mode === "default") {
+                const router = value(commands.create({ prefix: "!" }))
+                const result = router.register({ name: "target", arguments: argumentsSchema, execute: () => undefined })
+                expect(result.isErr() && result.error.field).toBe("command")
+                expect(router.commands).toEqual([])
+            } else {
+                const router = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+                const result = await Effect.runPromise(
+                    router
+                        .register({ name: "target", arguments: argumentsSchema, execute: () => Effect.void })
+                        .pipe(Effect.result),
+                )
+                expect(result).toMatchObject({ _tag: "Failure", failure: { field: "command" } })
+                expect(router.commands).toEqual([])
+            }
+        }
+    },
+)
+
 test("sparse command arrays reject configuration and the default parser ignores unknown or invalid command-shaped chat", async () => {
     const sparsePrefix: string[] = []
     sparsePrefix[1] = "!"
@@ -1192,6 +1258,80 @@ test("typed channel and role arguments accept anchored mentions and reject unmat
     expect(rejected).toEqual([{ _tag: "CommandArgumentRejected", argument: "channel", reason: "Invalid" }])
 })
 
+test.each(["default", "native"] as const)(
+    "%s numeric candidate names use ID precedence without mention fallback",
+    async (mode) => {
+        const remote = await fixture()
+        const selected: string[] = []
+        const rejected: unknown[] = []
+        const defaultApi = mode === "default" ? await defaultClient() : undefined
+        const native = mode === "native" ? await nativeClient() : undefined
+        for (const type of ["user", "channel", "role"] as const) {
+            const mention = type === "user" ? "<@20>" : type === "channel" ? "<#20>" : "<@&20>"
+            const candidates = [
+                { id: "10", name: "identified", username: "identified" },
+                { id: "1", name: "10", username: "10" },
+                { id: "2", name: "20", username: "20" },
+                { id: "3", name: "30", username: "30" },
+                { id: "4", name: "30", username: "30" },
+                { id: "5", name: mention, username: mention },
+            ]
+            const descriptor: Extract<CommandArgumentDescriptor, { readonly type: "user" | "channel" | "role" }> = {
+                type,
+                candidates,
+            }
+            const argumentsSchema = { target: descriptor }
+            if (defaultApi !== undefined) {
+                const router = value(commands.create({ prefix: "!" }))
+                const registered = value(
+                    router.register({
+                        name: type,
+                        arguments: argumentsSchema,
+                        execute: ({ values }) => {
+                            selected.push(`${type}:${values.target.id}`)
+                        },
+                        onReject: (_context, rejection) => {
+                            rejected.push({ type, rejection })
+                        },
+                    }),
+                )
+                value(registered.attach(defaultApi))
+            } else {
+                const router = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+                const registered = await Effect.runPromise(
+                    router.register({
+                        name: type,
+                        arguments: argumentsSchema,
+                        execute: ({ values }) =>
+                            Effect.sync(() => {
+                                selected.push(`${type}:${values.target.id}`)
+                            }),
+                        onReject: (_context, rejection) =>
+                            Effect.sync(() => {
+                                rejected.push({ type, rejection })
+                            }),
+                    }),
+                )
+                await Effect.runPromise(registered.attach(native!.client).pipe(Scope.provide(native!.registration)))
+            }
+            remote.deliver(`!${type} 10`)
+            remote.deliver(`!${type} 20`)
+            remote.deliver(`!${type} 30`)
+            remote.deliver(`!${type} ${mention}`)
+        }
+        await vi.waitFor(() => expect(rejected).toHaveLength(6))
+        expect(selected.sort()).toEqual(["user:10", "user:2", "channel:10", "channel:2", "role:10", "role:2"].sort())
+        expect(rejected).toEqual(
+            expect.arrayContaining(
+                ["user", "channel", "role"].flatMap((type) => [
+                    { type, rejection: { _tag: "CommandArgumentRejected", argument: "target", reason: "Ambiguous" } },
+                    { type, rejection: { _tag: "CommandArgumentRejected", argument: "target", reason: "Invalid" } },
+                ]),
+            ),
+        )
+    },
+)
+
 test("typed arguments distinguish an omitted optional token from a supplied empty token", async () => {
     const remote = await fixture()
     const client = await defaultClient()
@@ -1333,4 +1473,390 @@ test("native typed arguments preserve native execution and reject malformed inpu
     await vi.waitFor(() => expect(values).toEqual([4]))
     expect(rejected).toEqual([{ _tag: "CommandArgumentRejected", argument: "count", reason: "Invalid" }])
     expect(cooldowns).toBe(1)
+})
+
+test("group aliases route exact quoted leaf suffixes while earlier attachments and flat metadata remain unchanged", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const parsed: unknown[] = []
+    const executed: unknown[] = []
+    const unmatched: unknown[] = []
+    const root = value(
+        commands.create({
+            prefix: "!",
+            parse: (input) => {
+                parsed.push({
+                    source: input.source,
+                    ...(input.path === undefined ? {} : { path: input.path }),
+                    frozen: Object.isFrozen(input.path),
+                })
+                return commands.parseQuoted(input)
+            },
+            onUnmatched: (_context, outcome) => {
+                unmatched.push(outcome)
+            },
+        }),
+    )
+    const grouped = value(
+        value(root.registerGroup({ name: "admin", aliases: ["a"] })).registerGroup(
+            { name: "users", aliases: ["u"] },
+            { group: ["admin"] },
+        ),
+    )
+    value(grouped.attach(client))
+    const registered = value(
+        grouped.register(
+            {
+                name: "inspect",
+                aliases: ["i"],
+                arguments: { word: { type: "text" }, count: { type: "integer" } },
+                execute: ({ name, path, args, rawArgs, values }) => {
+                    executed.push({ name, path, args, rawArgs, values, frozen: Object.isFrozen(path) })
+                },
+            },
+            { group: ["admin", "users"] },
+        ),
+    )
+    const flat = value(
+        registered.register({
+            name: "ping",
+            execute: (context) => {
+                executed.push({ name: context.name, hasPath: Object.hasOwn(context, "path") })
+            },
+        }),
+    )
+    value(flat.attach(client))
+    remote.deliver('!A\tU   I "two words" 2  ')
+    await vi.waitFor(() => expect(executed).toHaveLength(1))
+    expect(executed[0]).toEqual({
+        name: "inspect",
+        path: ["admin", "users", "inspect"],
+        args: ["two words", "2"],
+        rawArgs: '"two words" 2  ',
+        values: { word: "two words", count: 2 },
+        frozen: true,
+    })
+    expect(parsed).toEqual([
+        { source: 'I "two words" 2  ', path: ["admin", "users"], frozen: true },
+        { source: 'I "two words" 2  ', path: ["admin", "users"], frozen: true },
+    ])
+    expect(unmatched).toEqual([{ _tag: "CommandUnknownName", name: "I", path: ["admin", "users"] }])
+    remote.deliver("!ping")
+    await vi.waitFor(() => expect(executed).toHaveLength(2))
+    expect(executed[1]).toEqual({ name: "ping", hasPath: false })
+    expect(flat.commands[1]).toEqual({ name: "ping" })
+    expect(grouped.commands).toEqual([])
+    expect(root.groups).toEqual([])
+})
+
+test("custom parsers retain flat grammar and receive grouped leaf grammar once without owning group separators", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const inputs: unknown[] = []
+    const executed: unknown[] = []
+    const unmatched: unknown[] = []
+    let router = value(
+        commands.create({
+            prefix: "!",
+            parse: (input) => {
+                inputs.push({ source: input.source, ...(input.path === undefined ? {} : { path: input.path }) })
+                const [name = "", ...args] = input.source.trimStart().split("|")
+                return { name, args, rawArgs: args.join("|") }
+            },
+            onUnmatched: (_context, outcome) => {
+                unmatched.push(outcome)
+            },
+        }),
+    )
+    router = value(router.registerGroup({ name: "admin", aliases: ["a"] }))
+    router = value(
+        router.register(
+            {
+                name: "inspect",
+                execute: ({ args, rawArgs, path }) => {
+                    executed.push({ args, rawArgs, path })
+                },
+            },
+            { group: ["admin"] },
+        ),
+    )
+    router = value(
+        router.register({
+            name: "flat",
+            execute: ({ args, rawArgs }) => {
+                executed.push({ args, rawArgs })
+            },
+        }),
+    )
+    value(router.attach(client, { onError: () => undefined }))
+    remote.deliver("!a inspect|123|two words")
+    remote.deliver("!flat|123|two words")
+    remote.deliver("!a")
+    remote.deliver("!admin|inspect|123")
+    await vi.waitFor(() => expect(executed).toHaveLength(2))
+    await vi.waitFor(() => expect(unmatched).toHaveLength(2))
+    expect(inputs).toEqual([
+        { source: "inspect|123|two words", path: ["admin"] },
+        { source: "flat|123|two words" },
+        { source: "admin|inspect|123" },
+    ])
+    expect(executed).toEqual([
+        { args: ["123", "two words"], rawArgs: "123|two words", path: ["admin", "inspect"] },
+        { args: ["123", "two words"], rawArgs: "123|two words" },
+    ])
+    expect(unmatched).toEqual([
+        { _tag: "CommandMissingSubcommand", path: ["admin"] },
+        { _tag: "CommandUnknownName", name: "admin" },
+    ])
+})
+
+test("case-sensitive group lookup respects each segment and child aliases without changing canonical paths", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const executed: unknown[] = []
+    const unmatched: unknown[] = []
+    const router = value(
+        value(
+            value(
+                commands.create({
+                    prefix: "!",
+                    caseSensitive: true,
+                    onUnmatched: (_context, outcome) => {
+                        unmatched.push(outcome)
+                    },
+                }),
+            ).registerGroup({ name: "Admin", aliases: ["A"] }),
+        ).register(
+            {
+                name: "Inspect",
+                aliases: ["i"],
+                execute: ({ path }) => {
+                    executed.push(path)
+                },
+            },
+            { group: ["Admin"] },
+        ),
+    )
+    value(router.attach(client))
+    remote.deliver("!A i")
+    remote.deliver("!a i")
+    remote.deliver("!Admin inspect")
+    remote.deliver("!Admin Inspect")
+    await vi.waitFor(() => expect(executed).toHaveLength(2))
+    await vi.waitFor(() => expect(unmatched).toHaveLength(2))
+    expect(executed).toEqual([
+        ["Admin", "Inspect"],
+        ["Admin", "Inspect"],
+    ])
+    expect(unmatched).toEqual([
+        { _tag: "CommandUnknownName", name: "a" },
+        { _tag: "CommandUnknownName", name: "inspect", path: ["Admin"] },
+    ])
+})
+
+test("default grouped cancellation prevents admission and late callbacks after a leaf guard settles", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const store = value(commands.memoryCooldowns())
+    const callbacks: string[] = []
+    let entered = false
+    let signal: { readonly aborted: boolean } | undefined
+    let release!: (allowed: boolean) => void
+    const gate = new Promise<boolean>((resolve) => {
+        release = resolve
+    })
+    const router = value(
+        value(value(commands.create({ prefix: "!" })).registerGroup({ name: "admin" })).register(
+            {
+                name: "inspect",
+                guard: (context) => {
+                    signal = context.signal
+                    entered = true
+                    return gate
+                },
+                cooldown: { store, durationMs: 60_000 },
+                onReject: () => {
+                    callbacks.push("reject")
+                },
+                execute: () => {
+                    callbacks.push("execute")
+                },
+            },
+            { group: ["admin"] },
+        ),
+    )
+    const subscription = value(router.attach(client))
+    remote.deliver("!admin inspect")
+    await vi.waitFor(() => expect(entered).toBe(true))
+    subscription.unsubscribe()
+    expect(signal?.aborted).toBe(true)
+    release(true)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(store.size).toBe(0)
+    expect(callbacks).toEqual([])
+})
+
+test("grouped leaves own guards and cooldowns with safe missing-child feedback and invalid-input recovery", async () => {
+    const remote = await fixture()
+    const client = await defaultClient()
+    const executed: unknown[] = []
+    const rejected: unknown[] = []
+    const unmatched: unknown[] = []
+    const store = value(commands.memoryCooldowns({ maxEntries: 2 }))
+    let router = value(
+        commands.create({
+            prefix: "!",
+            onUnmatched: (_context, outcome) => {
+                unmatched.push(outcome)
+            },
+        }),
+    )
+    router = value(router.registerGroup({ name: "admin", aliases: ["a"] }))
+    router = value(router.registerGroup({ name: "users" }, { group: ["admin"] }))
+    router = value(router.registerGroup({ name: "public" }))
+    for (const group of ["admin", "public"])
+        router = value(
+            router.register(
+                {
+                    name: "inspect",
+                    aliases: ["i"],
+                    arguments: { count: { type: "integer" } },
+                    cooldown: { store, durationMs: 60_000 },
+                    onReject: ({ path }, outcome) => {
+                        rejected.push({ path, outcome })
+                    },
+                    execute: ({ path, values }) => {
+                        const count: number = values.count
+                        executed.push({ path, count })
+                    },
+                },
+                { group: [group] },
+            ),
+        )
+    router = value(
+        router.register(
+            {
+                name: "blocked",
+                guard: () => false,
+                cooldown: { store, durationMs: 60_000 },
+                onReject: ({ path }, outcome) => {
+                    rejected.push({ path, outcome })
+                },
+                execute: () => {
+                    executed.push("blocked")
+                },
+            },
+            { group: ["admin"] },
+        ),
+    )
+    value(router.attach(client))
+    remote.deliver("!a users \t")
+    remote.deliver("!admin users unknown")
+    remote.deliver("!admin invalid!")
+    remote.deliver("!admin blocked")
+    remote.deliver("!admin inspect no")
+    await vi.waitFor(() => expect(unmatched).toHaveLength(3))
+    await vi.waitFor(() => expect(rejected).toHaveLength(2))
+    expect(store.size).toBe(0)
+    expect(executed).toEqual([])
+    expect(unmatched).toEqual([
+        { _tag: "CommandMissingSubcommand", path: ["admin", "users"] },
+        { _tag: "CommandUnknownName", name: "unknown", path: ["admin", "users"] },
+        { _tag: "CommandParserRejected", path: ["admin"] },
+    ])
+    for (const outcome of unmatched) expect(Object.isFrozen(outcome)).toBe(true)
+    remote.deliver("!admin i 1")
+    remote.deliver("!a inspect 2")
+    remote.deliver("!public inspect 3")
+    await vi.waitFor(() => expect(executed).toHaveLength(2))
+    await vi.waitFor(() => expect(rejected).toHaveLength(3))
+    expect(executed).toEqual([
+        { path: ["admin", "inspect"], count: 1 },
+        { path: ["public", "inspect"], count: 3 },
+    ])
+    expect(rejected[0]).toEqual({ path: ["admin", "blocked"], outcome: { _tag: "CommandGuardRejected" } })
+    expect(rejected[1]).toEqual({
+        path: ["admin", "inspect"],
+        outcome: { _tag: "CommandArgumentRejected", argument: "count", reason: "Invalid" },
+    })
+    expect(rejected[2]).toMatchObject({ path: ["admin", "inspect"], outcome: { _tag: "CommandCooldownActive" } })
+    expect(store.size).toBe(2)
+})
+
+test("native nested routing preserves handler and feedback services and stops callbacks after scope closure", async () => {
+    const remote = await fixture()
+    const { client, registration } = await nativeClient()
+    const Service = Context.Service<{ readonly label: string }>("group-command-service")
+    const executed: unknown[] = []
+    const feedback: unknown[] = []
+    const store = await Effect.runPromise(nativeCommands.memoryCooldowns())
+    const root = await Effect.runPromise(
+        nativeCommands.create({
+            prefix: "!",
+            parse: nativeCommands.parseQuoted,
+            onUnmatched: (_context, outcome) =>
+                Effect.service(Service).pipe(
+                    Effect.flatMap((service) =>
+                        Effect.sync(() => {
+                            feedback.push({ label: service.label, outcome })
+                        }),
+                    ),
+                ),
+        }),
+    )
+    const admin = await Effect.runPromise(root.registerGroup({ name: "admin", aliases: ["a"] }))
+    const users = await Effect.runPromise(admin.registerGroup({ name: "users", aliases: ["u"] }, { group: ["admin"] }))
+    const router = await Effect.runPromise(
+        users.register(
+            {
+                name: "inspect",
+                aliases: ["i"],
+                arguments: { count: { type: "integer" } },
+                guard: () => Effect.service(Service).pipe(Effect.map((service) => service.label === "enabled")),
+                cooldown: { store, durationMs: 60_000 },
+                onReject: ({ path }, outcome) =>
+                    Effect.service(Service).pipe(
+                        Effect.flatMap((service) =>
+                            Effect.sync(() => {
+                                feedback.push({ label: service.label, path, outcome })
+                            }),
+                        ),
+                    ),
+                execute: ({ path, values, rawArgs }) =>
+                    Effect.service(Service).pipe(
+                        Effect.flatMap((service) =>
+                            Effect.sync(() => {
+                                const count: number = values.count
+                                executed.push({ label: service.label, path, count, rawArgs })
+                            }),
+                        ),
+                    ),
+            },
+            { group: ["admin", "users"] },
+        ),
+    )
+    await Effect.runPromise(
+        router.attach(client).pipe(Effect.provideService(Service, { label: "enabled" }), Scope.provide(registration)),
+    )
+    remote.deliver("!A U")
+    remote.deliver("!A U inspect no")
+    await vi.waitFor(() => expect(feedback).toHaveLength(2))
+    expect(store.size).toBe(0)
+    remote.deliver("!A U I 4  ")
+    await vi.waitFor(() => expect(executed).toHaveLength(1))
+    remote.deliver("!admin users inspect 5")
+    await vi.waitFor(() => expect(feedback).toHaveLength(3))
+    expect(executed).toEqual([{ label: "enabled", path: ["admin", "users", "inspect"], count: 4, rawArgs: "4  " }])
+    expect(feedback[0]).toEqual({
+        label: "enabled",
+        outcome: { _tag: "CommandMissingSubcommand", path: ["admin", "users"] },
+    })
+    expect(feedback[1]).toMatchObject({ label: "enabled", outcome: { _tag: "CommandArgumentRejected" } })
+    expect(feedback[2]).toMatchObject({ label: "enabled", outcome: { _tag: "CommandCooldownActive" } })
+    await Effect.runPromise(Scope.close(registration, Exit.void))
+    remote.deliver("!admin users")
+    remote.deliver("!admin users inspect 6")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(feedback).toHaveLength(3)
+    expect(executed).toHaveLength(1)
 })

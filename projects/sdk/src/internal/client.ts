@@ -11,7 +11,7 @@ import type { ShardState } from "#sdk/sharding"
 import { guildShardId, type ShardPlan } from "./sharding.js"
 import type { CachePolicyErrorReport } from "#sdk/cache"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
-import { identifier, record, reference } from "./message.js"
+import { identifier, record, reference, replyInput } from "./message.js"
 import { MessageCache } from "./cache.js"
 import { GuildCache, type ResourceKind, type Resources } from "./guild-cache.js"
 import { ChannelCache } from "./channel-cache.js"
@@ -53,8 +53,8 @@ import { mapFailureCause, withDeadline } from "./effect-failures.js"
 import { CountOwner } from "./counts.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import { MemberChunkOwner } from "./member-chunks.js"
-import { AttemptFailure, runGateway, type Session } from "./gateway.js"
-import { EventBus } from "./events.js"
+import { AttemptFailure, runSelectedGateway, type Session } from "./gateway.js"
+import { EventBus, isMessageEvent } from "./events.js"
 import type { MessageCollector } from "./collector.js"
 import type { ReactionCollector } from "./reaction-collector.js"
 import {
@@ -75,6 +75,9 @@ import type { MessageSearchContext, MessageSearchQuery } from "#sdk/message-sear
 import type { ClientLogging } from "./logging.js"
 import type {
     Message,
+    MessageCore,
+    MessageFields,
+    SelectedMessage,
     EditMessageInput,
     ForwardMessageInput,
     MessageHistoryQuery,
@@ -142,7 +145,7 @@ export function attachIdentifyGate<T extends object>(options: T, gate: IdentifyG
     return options
 }
 
-export class ClientOwner {
+export class ClientOwner<M extends MessageCore = Message> {
     readonly presence: PresenceOwner
     readonly #gatewayRequests = new GatewayRequestBudget()
     readonly #identify = Semaphore.makeUnsafe(1)
@@ -169,8 +172,8 @@ export class ClientOwner {
             return Effect.fail(new PresenceError("input", failure.detail))
         })
     }
-    #messageCollectors = new Set<MessageCollector>()
-    trackMessageCollector(collector: MessageCollector) {
+    #messageCollectors = new Set<MessageCollector<M>>()
+    trackMessageCollector(collector: MessageCollector<M>) {
         this.#messageCollectors.add(collector)
         return () => this.#messageCollectors.delete(collector)
     }
@@ -180,15 +183,16 @@ export class ClientOwner {
         return () => this.#reactionCollectors.delete(collector)
     }
     readonly logging: ClientLogging
-    readonly events = new EventBus()
-    readonly rest: RestOwner
+    readonly events = new EventBus<M>()
+    readonly decodeMessage: Configuration<M>["decodeMessage"]
+    readonly rest: RestOwner<M>
     /** One owner-scoped immutable discovery result, independent of credentials and REST admission state */
     readonly instance: InstanceResolver
-    readonly cache: MessageCache | undefined
+    readonly cache: MessageCache<M> | undefined
     readonly resources: GuildCache | undefined
     readonly channelCache: ChannelCache | undefined
     readonly userCache: UserCache
-    #configuration: Configuration | undefined
+    #configuration: Configuration<M> | undefined
     #state: ConnectionState = "Disconnected"
     readonly #plan: ShardPlan
     readonly #shards = new Map<number, ShardRuntime>()
@@ -206,12 +210,13 @@ export class ClientOwner {
     #shutdownStarted = false
 
     constructor(
-        configuration: Configuration,
+        configuration: Configuration<M>,
         readonly scope: Scope.Scope,
         private readonly reports: CacheReports | undefined,
         now: () => number,
         private readonly identifyGate: IdentifyGate | undefined,
     ) {
+        this.decodeMessage = configuration.decodeMessage
         this.#configuration = configuration
         this.#plan = configuration.sharding
         for (const shardId of this.#plan.shardIds)
@@ -243,6 +248,7 @@ export class ClientOwner {
             this.channelCache,
             this.userCache,
             () => this.instance.resolve(),
+            configuration.decodeMessage,
         )
     }
     get state(): ConnectionState {
@@ -309,7 +315,7 @@ export class ClientOwner {
     cacheEntries<K extends CacheKind>(
         kind: K,
         options?: CacheEntriesOptions,
-    ): Effect.Effect<readonly CachedResources[K][], ConfigurationError> {
+    ): Effect.Effect<readonly CachedResources<M>[K][], ConfigurationError> {
         return Effect.suspend(() => {
             if (!cacheKinds.includes(kind))
                 return Effect.fail(new ConfigurationError("kind", "Cache entry kind must name a supported cache"))
@@ -335,21 +341,21 @@ export class ClientOwner {
         this.channelCache?.clear()
         this.userCache.clear()
     }
-    #cacheEntries<K extends CacheKind>(kind: K, limit: number): readonly CachedResources[K][] {
+    #cacheEntries<K extends CacheKind>(kind: K, limit: number): readonly CachedResources<M>[K][] {
         switch (kind) {
             case "messages":
-                return (this.cache?.entries(limit) ?? emptyEntries) as readonly CachedResources[K][]
+                return (this.cache?.entries(limit) ?? emptyEntries) as readonly CachedResources<M>[K][]
             case "guilds":
             case "members":
             case "roles":
             case "emojis":
             case "stickers":
-                return (this.resources?.entries(kind, limit) ?? emptyEntries) as readonly CachedResources[K][]
+                return (this.resources?.entries(kind, limit) ?? emptyEntries) as readonly CachedResources<M>[K][]
             case "channels":
-                return (this.channelCache?.entries(limit) ?? emptyEntries) as readonly CachedResources[K][]
+                return (this.channelCache?.entries(limit) ?? emptyEntries) as readonly CachedResources<M>[K][]
             case "users":
             case "directMessages":
-                return this.userCache.entries(kind, limit) as readonly CachedResources[K][]
+                return this.userCache.entries(kind, limit) as readonly CachedResources<M>[K][]
         }
     }
     shardIdForGuild(guildId: string): number | undefined {
@@ -723,6 +729,18 @@ export class ClientOwner {
         })
     }
 
+    reply(target: MessageReference, input: MessageInput, options?: SendOptions) {
+        return Effect.suspend(() => {
+            const body = replyInput(target, input)
+            if (body instanceof MessageError) return Effect.fail(body)
+            return this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? (this.reports?.start() ?? Effect.void).pipe(
+                      Effect.andThen(this.rest.reply(this.#configuration.token, target, body, options)),
+                  )
+                : Effect.fail(new ClientClosedError())
+        })
+    }
+
     send(channelId: string, input: MessageInput, options?: SendOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
@@ -764,7 +782,7 @@ export class ClientOwner {
     }
 
     sendDirectMessage(userId: string, input: MessageInput, options?: SendOptions) {
-        return Effect.suspend((): Effect.Effect<Message, SendError> => {
+        return Effect.suspend((): Effect.Effect<M, SendError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
             if (!identifier(userId))
@@ -1003,7 +1021,7 @@ export class ClientOwner {
     }
 
     get(target: MessageReference) {
-        return Effect.suspend((): Effect.Effect<Message | undefined, ClientClosedError | MessageOperationError> => {
+        return Effect.suspend((): Effect.Effect<M | undefined, ClientClosedError | MessageOperationError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
             if (!reference(target))
@@ -1088,7 +1106,7 @@ export class ClientOwner {
         )
     }
 
-    #supervise(configuration: Configuration, startup: Deferred.Deferred<void, ConnectError>) {
+    #supervise(configuration: Configuration<M>, startup: Deferred.Deferred<void, ConnectError>) {
         const owner = this
         return Effect.suspend(() => {
             const exits: Exit.Exit<unknown, ConnectionFailure>[] = []
@@ -1140,7 +1158,7 @@ export class ClientOwner {
     }
 
     #loop(
-        configuration: Configuration,
+        configuration: Configuration<M>,
         startup: Deferred.Deferred<void, ConnectError>,
         shard: ShardRuntime,
         deadline: number,
@@ -1191,7 +1209,8 @@ export class ClientOwner {
                         url = gatewayUrl(endpoint.gateway)
                         inviteBase = endpoint.invite
                     }
-                    return yield* runGateway(
+                    return yield* runSelectedGateway(
+                        configuration.decodeMessage,
                         url,
                         configuration.token,
                         shard.session,
@@ -1237,7 +1256,7 @@ export class ClientOwner {
                                 owner.cache?.deleteChannel(message.id)
                             if (event === "guildChannelDelete" && "id" in message)
                                 owner.cache?.deleteChannel(message.id)
-                            if ("author" in message) owner.cache?.observe(message)
+                            if (isMessageEvent<typeof event, M>(event, message)) owner.cache?.observe(message)
                             else if ("ids" in message) {
                                 for (const id of message.ids) owner.cache?.delete({ id, channelId: message.channelId })
                             } else if (event === "messageDelete" && "id" in message && "channelId" in message)
@@ -1526,15 +1545,15 @@ export class ClientOwner {
     }
 }
 
-export function makeClient(
+export function makeClient<F extends MessageFields | undefined = undefined>(
     options: unknown,
     scope: Scope.Scope,
     native = false,
-): Effect.Effect<ClientOwner, ConfigurationError> {
+): Effect.Effect<ClientOwner<SelectedMessage<F>>, ConfigurationError> {
     return Effect.gen(function* () {
         const identifyGate = typeof options === "object" && options !== null ? identifyGates.get(options) : undefined
         if (typeof options === "object" && options !== null) identifyGates.delete(options)
-        const configuration = yield* validateConfiguration(options, native)
+        const configuration = yield* validateConfiguration<F>(options, native)
         return yield* configuration.logging.provide(
             Effect.gen(function* () {
                 const callback = configuration.cache?.onError

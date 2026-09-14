@@ -2,12 +2,22 @@ import type { GuildChannel } from "./channels.js"
 import type { Guild, GuildMember, GuildRole, MemberReference } from "./guilds.js"
 
 /**
- * One complete local snapshot for Fluxer's raw permission-bit calculation
+ * Calculate a member's guild or channel permission bits from resource snapshots you already have
  *
  * `roles` must include the implicit everyone role whose ID equals `guild.id` and every role in `member.roleIds`.
- * Supplying `channel` selects that channel's explicit overwrite snapshot; omitting it calculates guild-level bits.
- * This is a local observation, not a visibility, timeout, role-hierarchy, MFA, age-gate, or action-authorisation
- * decision. The result can become stale immediately after the input was observed
+ * Supply `channel` with permissionOverwrites to include that channel's explicit permission overrides.
+ * Omit `channel` to calculate guild-level bits
+ *
+ * The calculation first combines everyone and assigned-role grants.
+ * It then applies channel overrides for everyone, the member's roles together, and finally the member.
+ * Allows win over denies within each stage.
+ * Owners and members with Administrator receive all 64 bits, including unknown bits
+ *
+ * Duplicate, incomplete or cross-guild resources fail with GuildOperationError reason input
+ *
+ * These bits do not establish whether an action is allowed.
+ * The calculation does not check visibility, timeouts, role hierarchy, multi-factor authentication (MFA) or age gates.
+ * The result can become stale immediately after the input was observed
  *
  * @example
  * ```ts
@@ -33,10 +43,11 @@ export interface PermissionInput {
 }
 
 /**
- * Remote snapshot target for a permission calculation
+ * Choose whose permission bits permissions.fetch should calculate from fresh REST reads
  *
- * `channelId` requests a separate target-channel read; omission calculates the guild-level bitfield. The client does
- * not read its optional caches first, and the independent remote reads are not a transaction or action guarantee
+ * Supply `channelId` to include a separate target-channel read, or omit it for guild-level bits.
+ * The client reads guild, member, roles and optional channel in that order under one total deadline, without consulting caches.
+ * Resources can change between these reads, so they are not a transaction or a guarantee that an action will be allowed
  */
 export interface PermissionTarget extends MemberReference {
     /** Decimal guild-channel ID for a channel-scoped calculation */

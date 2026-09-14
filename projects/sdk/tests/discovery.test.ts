@@ -140,6 +140,57 @@ test.each(modes)("%s rejects invalid directory queries and malformed page entrie
     expect(fetch).toHaveBeenCalledTimes(3)
 })
 
+test.each(modes)("%s reports directory UTF-16 limits and safe-integer offsets exactly", async (mode) => {
+    const client = await setup(mode)
+    const fetch = vi.fn(async () => Response.json({ guilds: [], total: 0, category_counts: [] }))
+    stubFetchWithHostedDiscovery(fetch)
+    for (const [query, detail] of [
+        [
+            { query: "😀".repeat(51) },
+            {
+                path: "query.query",
+                constraint: "length",
+                explanation: "Discovery query must contain at most 100 UTF-16 code units",
+            },
+        ],
+        [
+            { tag: "😀".repeat(16) },
+            {
+                path: "query.tag",
+                constraint: "length",
+                explanation: "Discovery tag must contain at most 30 UTF-16 code units",
+            },
+        ],
+        [
+            { primaryLanguage: "e" },
+            {
+                path: "query.primaryLanguage",
+                constraint: "format",
+                explanation: "Discovery primary language must be a 2 through 35 UTF-16 code unit language tag",
+            },
+        ],
+        [
+            { offset: Number.MAX_SAFE_INTEGER + 1 },
+            {
+                path: "query.offset",
+                constraint: "range",
+                explanation: "Discovery offset must be a nonnegative safe integer",
+            },
+        ],
+    ] as const)
+        await expect(settle(client.discovery.search(query))).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+            inputValidation: detail,
+        })
+    expect(fetch).not.toHaveBeenCalled()
+    const page = await settle(
+        client.discovery.search({ query: "😀".repeat(50), tag: "😀".repeat(15), offset: Number.MAX_SAFE_INTEGER }),
+    )
+    expect(page.offset).toBe(Number.MAX_SAFE_INTEGER)
+    expect(fetch).toHaveBeenCalledTimes(1)
+})
+
 test.each(modes)(
     "%s reports remote eligibility and permission rejection without replay or private bodies",
     async (mode) => {

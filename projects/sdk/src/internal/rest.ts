@@ -14,6 +14,7 @@ import type {
     EditMessageInput,
     ForwardMessageInput,
     Message,
+    MessageCore,
     MessageInput,
     MessageHistoryQuery,
     MessageOperationOptions,
@@ -22,19 +23,12 @@ import type {
 } from "#sdk/messages"
 import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "#sdk/attachments"
 import { AttachmentDownloadError } from "#sdk/attachments"
-import {
-    decodeMessage,
-    encodeEdit,
-    encodeForward,
-    encodeHistory,
-    encodeMessage,
-    identifier,
-    record,
-    reference,
-} from "./message.js"
-import type { MessageCache } from "./cache.js"
+import { encodeEdit, encodeForward, encodeHistory, encodeMessage, identifier, record, reference } from "./message.js"
+import type { MessageDecoder } from "./message-fields.js"
+import type { MessageCache, CacheRequest } from "./cache.js"
 import type { EncodedBody } from "./attachments.js"
-import { decodeUploadPlans, readUploadJson, type UploadPlan, UploadResponseCleanupError } from "./uploads.js"
+import { decodeUploadPlans, type UploadPlan } from "./uploads.js"
+import { readResponseJson, ResponseJsonCleanupError } from "./response-json.js"
 import {
     AttachmentTransferCleanupError,
     AttachmentTransferSource,
@@ -83,6 +77,8 @@ const queuedJsonMaxBytes = 4_194_304
 type Outcome = MessageOperationError["outcome"]
 type Request<A> = {
     directMessageUser?: string
+    decodeDirectMessage?: (response: Response, channel: string, signal: AbortSignal) => Promise<A>
+    observe?: (value: A, guard: CacheRequest) => void
     method: "POST" | "GET" | "PATCH" | "DELETE" | "PUT"
     channel: string
     webhookId?: string
@@ -101,7 +97,7 @@ type Request<A> = {
     path: string
     body: EncodedBody | undefined
     status?: number
-    decode: (response: Response, instance: InstanceEndpointContext) => Promise<A>
+    decode: (response: Response, instance: InstanceEndpointContext, signal: AbortSignal) => Promise<A>
     target?: string
     preparation?: boolean
     instance?: InstanceEndpointContext
@@ -510,6 +506,42 @@ async function readApiError(
     return { detail: result, retryAfterMs, global, cleanupDefect }
 }
 
+function downloadInput(attachment: Attachment, options: AttachmentDownloadOptions | undefined, streamed: boolean) {
+    const invalid = (path: string, constraint: InputValidationConstraint, explanation: string) =>
+        new AttachmentDownloadError("input", null, inputValidationFailure(path, constraint, explanation).detail)
+    if (!record(options)) return invalid("options", "type", "Attachment download options must be an object")
+    const maxBytes = options.maxBytes
+    const attachmentUrl = attachment?.url
+    if (Object.keys(options).some((key) => key !== "maxBytes" && key !== "timeoutMs" && key !== "signal"))
+        return invalid(
+            "options",
+            "allowedFields",
+            "Attachment download options may contain only maxBytes, timeoutMs, and signal",
+        )
+    if (streamed) {
+        // Buffered default calls validate cancellation at their operation adapter; a stream owns its idle signal
+        const signal = options.signal
+        if (
+            signal !== undefined &&
+            (!record(signal) ||
+                typeof signal.aborted !== "boolean" ||
+                typeof signal.addEventListener !== "function" ||
+                typeof signal.removeEventListener !== "function")
+        )
+            return invalid("options.signal", "type", "Attachment signal must be AbortSignal-compatible")
+    }
+    if (typeof maxBytes !== "number" || !Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > 52_428_800)
+        return invalid("options.maxBytes", "range", "Attachment maxBytes must be an integer from 1 through 52,428,800")
+    const timeout = options.timeoutMs === undefined ? 30_000 : options.timeoutMs
+    if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2_147_483_647)
+        return invalid(
+            "options.timeoutMs",
+            "range",
+            "Attachment timeoutMs must be an integer from 1 through 2,147,483,647 milliseconds",
+        )
+    return { maxBytes, timeout, attachmentUrl }
+}
+
 function attachmentDownloadUrl(value: unknown, instance: InstanceEndpointContext): string | undefined {
     if (typeof value !== "string" || value.length < 1 || value.length > 8192) return undefined
     try {
@@ -532,27 +564,35 @@ function attachmentDownloadUrl(value: unknown, instance: InstanceEndpointContext
     }
 }
 
-async function readMessage(response: Response, channel: string, id?: string): Promise<Message> {
-    const decoded = decodeMessage(await response.json().catch(() => null))
+async function readMessage<M extends MessageCore>(
+    response: Response,
+    channel: string,
+    id: string | undefined,
+    signal: AbortSignal | undefined,
+    decode: MessageDecoder<M>,
+): Promise<M> {
+    const decoded = decode(await readResponseJson(response, undefined, signal))
     if (!decoded || decoded.channelId !== channel || (id !== undefined && decoded.id !== id))
         throw new RestFailure("response", "unknown", response.status)
     return decoded
 }
 
-async function readHistory(
+async function readHistory<M extends MessageCore>(
     response: Response,
     channel: string,
     query: { readonly limit: number; readonly params: URLSearchParams },
+    signal: AbortSignal,
+    decode: MessageDecoder<M>,
 ) {
-    const body: unknown = await response.json().catch(() => null)
+    const body: unknown = await readResponseJson(response, undefined, signal)
     const invalid = () => new RestFailure("response", "unknown", response.status)
     if (!Array.isArray(body) || body.length > query.limit) throw invalid()
-    const messages: Message[] = []
+    const messages: M[] = []
     const before = query.params.get("before")
     const after = query.params.get("after")
     let previous: bigint | undefined
     for (const item of body) {
-        const message = decodeMessage(item)
+        const message = decode(item)
         if (!message || message.channelId !== channel) throw invalid()
         const id = BigInt(message.id)
         if (
@@ -568,14 +608,15 @@ async function readHistory(
 }
 
 /** One client's transient REST scheduler, without shared-token coordination or durable delivery */
-export class RestOwner {
+export class RestOwner<M extends MessageCore = Message> {
     constructor(
-        private readonly cache: MessageCache | undefined,
+        private readonly cache: MessageCache<M> | undefined,
         private readonly uploadMaxBytes: number,
         private readonly resources: GuildCache | undefined,
         private readonly channels: ChannelCache | undefined,
         private readonly users: UserCache | undefined,
         private readonly resolveInstance: () => Effect.Effect<InstanceEndpointContext, unknown>,
+        private readonly decodeMessage: MessageDecoder<M>,
     ) {}
     #uploadBytes = 0
     #closed = false
@@ -713,7 +754,7 @@ export class RestOwner {
                 state?.cleanupDefects.push(error.cleanup)
                 return new RestFailure("network", progress.outcome)
             }
-            if (error instanceof UploadResponseCleanupError) {
+            if (error instanceof ResponseJsonCleanupError) {
                 state?.cleanupDefects.push(error.cause)
                 const rejected = error.status >= 400
                 if (rejected && !request.preparation) progress.outcome = "rejected"
@@ -939,7 +980,11 @@ export class RestOwner {
                                     }
                                     if (request.status !== undefined && response.status !== request.status)
                                         throw new RestFailure("response", progress.outcome, response.status)
-                                    const value = await request.decode(response, request.instance!)
+                                    const value = await request.decode(
+                                        response,
+                                        request.instance!,
+                                        state.controller.signal,
+                                    )
                                     return { kind: "success" as const, value }
                                 })()
                                 state.settled = work.then(
@@ -973,11 +1018,7 @@ export class RestOwner {
                                         { id: request.target!, channelId: request.channel },
                                         state.guard,
                                     )
-                                else
-                                    owner.cache!.complete(
-                                        state.guard,
-                                        Array.isArray(result.value) ? result.value : [result.value as Message],
-                                    )
+                                else request.observe?.(result.value, state.guard)
                             }
                         }
                         return result
@@ -1043,83 +1084,9 @@ export class RestOwner {
         const owner = this
         return Effect.suspend((): Effect.Effect<AttachmentDownloadSource, AttachmentDownloadFailure> => {
             if (owner.#closed) return Effect.fail(new ClientClosedError())
-            if (!record(options))
-                return Effect.fail(
-                    new AttachmentDownloadError(
-                        "input",
-                        null,
-                        inputValidationFailure("options", "type", "Attachment download options must be an object")
-                            .detail,
-                    ),
-                )
-            const maxBytes = options.maxBytes
-            const attachmentUrl = attachment?.url
-            if (Object.keys(options).some((key) => key !== "maxBytes" && key !== "timeoutMs" && key !== "signal"))
-                return Effect.fail(
-                    new AttachmentDownloadError(
-                        "input",
-                        null,
-                        inputValidationFailure(
-                            "options",
-                            "allowedFields",
-                            "Attachment download options may contain only maxBytes, timeoutMs, and signal",
-                        ).detail,
-                    ),
-                )
-            const signal = (options as Record<string, unknown>).signal
-            if (
-                signal !== undefined &&
-                (!record(signal) ||
-                    typeof signal.aborted !== "boolean" ||
-                    typeof signal.addEventListener !== "function" ||
-                    typeof signal.removeEventListener !== "function")
-            )
-                return Effect.fail(
-                    new AttachmentDownloadError(
-                        "input",
-                        null,
-                        inputValidationFailure(
-                            "options.signal",
-                            "type",
-                            "Attachment signal must be AbortSignal-compatible",
-                        ).detail,
-                    ),
-                )
-            if (
-                typeof maxBytes !== "number" ||
-                !Number.isSafeInteger(maxBytes) ||
-                maxBytes <= 0 ||
-                maxBytes > 52_428_800
-            )
-                return Effect.fail(
-                    new AttachmentDownloadError(
-                        "input",
-                        null,
-                        inputValidationFailure(
-                            "options.maxBytes",
-                            "range",
-                            "Attachment maxBytes must be an integer from 1 through 52,428,800",
-                        ).detail,
-                    ),
-                )
-            const timeout = options.timeoutMs === undefined ? 30_000 : options.timeoutMs
-            if (
-                typeof timeout !== "number" ||
-                !Number.isSafeInteger(timeout) ||
-                timeout <= 0 ||
-                timeout > 2_147_483_647
-            )
-                return Effect.fail(
-                    new AttachmentDownloadError(
-                        "input",
-                        null,
-                        inputValidationFailure(
-                            "options.timeoutMs",
-                            "range",
-                            "Attachment timeoutMs must be an integer from 1 through 2,147,483,647 milliseconds",
-                        ).detail,
-                    ),
-                )
+            const input = downloadInput(attachment, options, true)
+            if (input instanceof AttachmentDownloadError) return Effect.fail(input)
+            const { maxBytes, timeout, attachmentUrl } = input
             const operation = Deferred.makeUnsafe<void>()
             owner.#operations.add(operation)
             const complete = () => {
@@ -1226,64 +1193,9 @@ export class RestOwner {
         const owner = this
         return Effect.suspend((): Effect.Effect<Uint8Array, AttachmentDownloadFailure> => {
             if (owner.#closed) return Effect.fail(new ClientClosedError())
-            if (!record(options))
-                return Effect.fail(
-                    new AttachmentDownloadError(
-                        "input",
-                        null,
-                        inputValidationFailure("options", "type", "Attachment download options must be an object")
-                            .detail,
-                    ),
-                )
-            const maxBytes = options.maxBytes
-            const attachmentUrl = attachment?.url
-            if (Object.keys(options).some((key) => key !== "maxBytes" && key !== "timeoutMs" && key !== "signal"))
-                return Effect.fail(
-                    new AttachmentDownloadError(
-                        "input",
-                        null,
-                        inputValidationFailure(
-                            "options",
-                            "allowedFields",
-                            "Attachment download options may contain only maxBytes, timeoutMs, and signal",
-                        ).detail,
-                    ),
-                )
-            if (
-                typeof maxBytes !== "number" ||
-                !Number.isSafeInteger(maxBytes) ||
-                maxBytes <= 0 ||
-                maxBytes > 52_428_800
-            )
-                return Effect.fail(
-                    new AttachmentDownloadError(
-                        "input",
-                        null,
-                        inputValidationFailure(
-                            "options.maxBytes",
-                            "range",
-                            "Attachment maxBytes must be an integer from 1 through 52,428,800",
-                        ).detail,
-                    ),
-                )
-            const timeout = options.timeoutMs === undefined ? 30_000 : options.timeoutMs
-            if (
-                typeof timeout !== "number" ||
-                !Number.isSafeInteger(timeout) ||
-                timeout <= 0 ||
-                timeout > 2_147_483_647
-            )
-                return Effect.fail(
-                    new AttachmentDownloadError(
-                        "input",
-                        null,
-                        inputValidationFailure(
-                            "options.timeoutMs",
-                            "range",
-                            "Attachment timeoutMs must be an integer from 1 through 2,147,483,647 milliseconds",
-                        ).detail,
-                    ),
-                )
+            const input = downloadInput(attachment, options, false)
+            if (input instanceof AttachmentDownloadError) return Effect.fail(input)
+            const { maxBytes, timeout, attachmentUrl } = input
             const operation = Deferred.makeUnsafe<void>()
             owner.#operations.add(operation)
             let controller: AbortController | undefined
@@ -1444,13 +1356,22 @@ export class RestOwner {
         })
     }
 
+    reply(token: Redacted.Redacted<string>, target: MessageReference, input: MessageInput, options?: SendOptions) {
+        return this.#send(
+            token,
+            target.channelId,
+            () => encodeMessage(target.channelId, input, randomUUID().replaceAll("-", ""), target),
+            options,
+        )
+    }
+
     send(
         token: Redacted.Redacted<string>,
         channel: string,
         input: MessageInput,
         options?: SendOptions,
         directMessageUser?: string,
-    ): Effect.Effect<Message, SendError> {
+    ): Effect.Effect<M, SendError> {
         return this.#send(
             token,
             channel,
@@ -1475,8 +1396,8 @@ export class RestOwner {
         encode: () => EncodedBody | MessageError,
         options?: SendOptions,
         directMessageUser?: string,
-    ): Effect.Effect<Message, SendError> {
-        return Effect.suspend((): Effect.Effect<Message, SendError> => {
+    ): Effect.Effect<M, SendError> {
+        return Effect.suspend((): Effect.Effect<M, SendError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const body = encode()
             if (body instanceof MessageError) return Effect.fail(body)
@@ -1488,7 +1409,11 @@ export class RestOwner {
                     body,
                     path: `/channels/${channel}/messages`,
                     ...(directMessageUser === undefined ? {} : { directMessageUser }),
-                    decode: (response) => readMessage(response, channel),
+                    decodeDirectMessage: (response, channelId, signal) =>
+                        readMessage(response, channelId, undefined, signal, this.decodeMessage),
+                    observe: (message, guard) => this.cache!.complete(guard, [message]),
+                    decode: (response, _instance, signal) =>
+                        readMessage(response, channel, undefined, signal, this.decodeMessage),
                 },
                 options,
             ).pipe(
@@ -1509,8 +1434,14 @@ export class RestOwner {
     }
 
     fetch(token: Redacted.Redacted<string>, target: MessageReference, options?: MessageOperationOptions) {
-        return this.#manage(token, "fetch", target, undefined, options, (response, ref) =>
-            readMessage(response, ref.channelId, ref.id),
+        return this.#manage(
+            token,
+            "fetch",
+            target,
+            undefined,
+            options,
+            (response, ref, signal) => readMessage(response, ref.channelId, ref.id, signal, this.decodeMessage),
+            (message, guard) => this.cache!.complete(guard, [message]),
         )
     }
 
@@ -1555,8 +1486,8 @@ export class RestOwner {
         channel: string,
         query?: MessageHistoryQuery,
         options?: MessageOperationOptions,
-    ): Effect.Effect<readonly Message[], MessageOperationFailure> {
-        return Effect.suspend((): Effect.Effect<readonly Message[], RestFailure | ClientClosedError> => {
+    ): Effect.Effect<readonly M[], MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<readonly M[], RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const encoded = encodeHistory(channel, query)
             if (encoded instanceof InputValidationFailure)
@@ -1570,7 +1501,9 @@ export class RestOwner {
                     path: `/channels/${channel}/messages?${encoded.params}`,
                     body: undefined,
                     status: 200,
-                    decode: (response) => readHistory(response, channel, encoded),
+                    decode: (response, _instance, signal) =>
+                        readHistory(response, channel, encoded, signal, this.decodeMessage),
+                    observe: (messages, guard) => this.cache!.complete(guard, messages),
                 },
                 options,
             )
@@ -1582,8 +1515,8 @@ export class RestOwner {
         context: MessageSearchContext,
         query?: MessageSearchQuery,
         options?: MessageOperationOptions,
-    ): Effect.Effect<MessageSearchPage, MessageOperationFailure> {
-        return Effect.suspend((): Effect.Effect<MessageSearchPage, RestFailure | ClientClosedError> => {
+    ): Effect.Effect<MessageSearchPage<M>, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<MessageSearchPage<M>, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const encoded = encodeMessageSearch(context, query)
             if (encoded instanceof InputValidationFailure)
@@ -1598,8 +1531,11 @@ export class RestOwner {
                     path: "/search/messages",
                     body: { json: encoded.json, files: [] },
                     status: 200,
-                    decode: async (response) => {
-                        const decoded = decodeMessageSearchPage(await response.json().catch(() => null))
+                    decode: async (response, _instance, signal) => {
+                        const decoded = decodeMessageSearchPage(
+                            await readResponseJson(response, undefined, signal),
+                            this.decodeMessage,
+                        )
                         if (!decoded) throw new RestFailure("response", "unknown", response.status)
                         return decoded
                     },
@@ -1615,8 +1551,14 @@ export class RestOwner {
         input: EditMessageInput,
         options?: MessageOperationOptions,
     ) {
-        return this.#manage(token, "edit", target, input, options, (response, ref) =>
-            readMessage(response, ref.channelId, ref.id),
+        return this.#manage(
+            token,
+            "edit",
+            target,
+            input,
+            options,
+            (response, ref, signal) => readMessage(response, ref.channelId, ref.id, signal, this.decodeMessage),
+            (message, guard) => this.cache!.complete(guard, [message]),
         )
     }
 
@@ -1777,8 +1719,11 @@ export class RestOwner {
                     path: `/channels/${target.channelId}/messages/${target.id}/reactions/${encoded}/users?${page.params}`,
                     body: undefined,
                     status: 200,
-                    decode: async (response) => {
-                        const decoded = decodeReactionUsersPage(await response.json().catch(() => null), page)
+                    decode: async (response, _instance, signal) => {
+                        const decoded = decodeReactionUsersPage(
+                            await readResponseJson(response, undefined, signal),
+                            page,
+                        )
                         if (!decoded) throw new RestFailure("response", "unknown", response.status)
                         return decoded
                     },
@@ -1793,8 +1738,8 @@ export class RestOwner {
         channel: string,
         query?: MessagePinsQuery,
         options?: MessageOperationOptions,
-    ): Effect.Effect<MessagePinsPage, MessageOperationFailure> {
-        return Effect.suspend((): Effect.Effect<MessagePinsPage, RestFailure | ClientClosedError> => {
+    ): Effect.Effect<MessagePinsPage<M>, MessageOperationFailure> {
+        return Effect.suspend((): Effect.Effect<MessagePinsPage<M>, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const page = encodePinsQuery(channel, query)
             if (page instanceof InputValidationFailure)
@@ -1808,8 +1753,13 @@ export class RestOwner {
                     path: `/channels/${channel}/messages/pins?${page.params}`,
                     body: undefined,
                     status: 200,
-                    decode: async (response) => {
-                        const decoded = decodePinsPage(await response.json().catch(() => null), channel, page)
+                    decode: async (response, _instance, signal) => {
+                        const decoded = decodePinsPage(
+                            await readResponseJson(response, undefined, signal),
+                            channel,
+                            page,
+                            this.decodeMessage,
+                        )
                         if (!decoded) throw new RestFailure("response", "unknown", response.status)
                         return decoded
                     },
@@ -1901,7 +1851,8 @@ export class RestOwner {
         target: MessageReference,
         input: EditMessageInput | undefined,
         options: MessageOperationOptions | undefined,
-        decode: (response: Response, ref: MessageReference) => Promise<A>,
+        decode: (response: Response, ref: MessageReference, signal: AbortSignal) => Promise<A>,
+        observe?: (value: A, guard: CacheRequest) => void,
     ): Effect.Effect<A, MessageOperationFailure> {
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
@@ -1922,7 +1873,8 @@ export class RestOwner {
                     path: `/channels/${ref.channelId}/messages/${ref.id}`,
                     body,
                     status: operation === "delete" ? 204 : 200,
-                    decode: (response) => decode(response, ref),
+                    decode: (response, _instance, signal) => decode(response, ref, signal),
+                    ...(observe === undefined ? {} : { observe }),
                 },
                 options,
             )
@@ -2055,9 +2007,9 @@ export class RestOwner {
                     instance,
                     path: `/channels/${channel}/attachments`,
                     body: { json: JSON.stringify({ attachments }), files: [] },
-                    decode: async (response): Promise<{ kind: "plans"; plans: UploadPlan[] }> => {
+                    decode: async (response, _instance, signal): Promise<{ kind: "plans"; plans: UploadPlan[] }> => {
                         const plans = decodeUploadPlans(
-                            await readUploadJson(response),
+                            await readResponseJson(response, 1_048_576, signal),
                             body.files,
                             instance.allowInsecure,
                         )
@@ -2117,8 +2069,8 @@ export class RestOwner {
                         instance,
                         path: `/channels/${channel}/attachments/complete`,
                         body: { json: JSON.stringify({ uploads }), files: [] },
-                        decode: async (response) => {
-                            const value = await readUploadJson(response)
+                        decode: async (response, _instance, signal) => {
+                            const value = await readResponseJson(response, 1_048_576, signal)
                             if (
                                 !record(value) ||
                                 !Array.isArray(value.uploads) ||
@@ -2206,9 +2158,9 @@ export class RestOwner {
                     method: input.method,
                     status: input.status,
                     body: input.json === undefined ? undefined : { json: input.json, files: [] },
-                    decode: async (response, instance) => {
+                    decode: async (response, instance, signal) => {
                         if (input.status === 202 || input.status === 204) return undefined as A
-                        const value = input.decode(await response.json().catch(() => null), instance)
+                        const value = input.decode(await readResponseJson(response, undefined, signal), instance)
                         if (value === undefined) throw new RestFailure("response", "unknown", response.status)
                         return value
                     },
@@ -2251,9 +2203,9 @@ export class RestOwner {
                     method: input.method,
                     status: input.status,
                     body: input.json === undefined ? undefined : { json: input.json, files: [] },
-                    decode: async (response) => {
+                    decode: async (response, _instance, signal) => {
                         if (input.status === 204) return undefined as A
-                        const value = input.decode(await response.json().catch(() => null))
+                        const value = input.decode(await readResponseJson(response, undefined, signal))
                         if (value === undefined) throw new RestFailure("response", "unknown", response.status)
                         return value
                     },
@@ -2294,9 +2246,9 @@ export class RestOwner {
                     method: input.method,
                     status: input.status,
                     body: input.json === undefined ? undefined : { json: input.json, files: [] },
-                    decode: async (response) => {
+                    decode: async (response, _instance, signal) => {
                         if (input.status === 204) return undefined as A
-                        const value = input.decode(await readUploadJson(response))
+                        const value = input.decode(await readResponseJson(response, undefined, signal))
                         if (value === undefined) throw new RestFailure("response", "unknown", response.status)
                         return value
                     },
@@ -2335,8 +2287,8 @@ export class RestOwner {
                     method: input.method,
                     status: input.status,
                     body: undefined,
-                    decode: async (response) => {
-                        const value = input.decode(await readUploadJson(response))
+                    decode: async (response, _instance, signal) => {
+                        const value = input.decode(await readResponseJson(response, undefined, signal))
                         if (value === undefined) throw new RestFailure("response", "unknown", response.status)
                         return value
                     },
@@ -2383,9 +2335,9 @@ export class RestOwner {
                     method: input.method,
                     status: input.status,
                     body: input.body,
-                    decode: async (response) => {
+                    decode: async (response, _instance, signal) => {
                         if (input.status === 204) return undefined as A
-                        const value = input.decode(await readUploadJson(response))
+                        const value = input.decode(await readResponseJson(response, undefined, signal))
                         if (value === undefined) throw new RestFailure("response", "unknown", response.status)
                         return value
                     },
@@ -2490,8 +2442,8 @@ export class RestOwner {
                                 body: { json: open.json!, files: [] },
                                 status: 200,
                                 preparation: true,
-                                decode: async (response) => {
-                                    const channel = open.decode(await readUploadJson(response))
+                                decode: async (response, _instance, signal) => {
+                                    const channel = open.decode(await readResponseJson(response, undefined, signal))
                                     if (!channel) throw new RestFailure("response", "notDispatched", response.status)
                                     return channel
                                 },
@@ -2521,7 +2473,8 @@ export class RestOwner {
                         ...request,
                         channel: channel.id,
                         path: `/channels/${channel.id}/messages`,
-                        decode: (response) => readMessage(response, channel.id) as Promise<A>,
+                        decode: (response, _instance, signal) =>
+                            request.decodeDirectMessage!(response, channel.id, signal),
                     }
                 }
                 if (request.body?.files.length && !request.webhookId) {

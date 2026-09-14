@@ -4,6 +4,7 @@ import { once } from "node:events"
 import { createServer } from "node:http"
 import { setTimeout as sleep } from "node:timers/promises"
 import { installPing } from "./out/optional-tools-example.js"
+import { commandGroupExample } from "./out/commandGroupExample.js"
 
 const kind = process.argv[2]
 assert.ok(kind === "default" || kind === "effect", "Select default or effect workflow")
@@ -262,7 +263,7 @@ async function defaultWorkflow(remote) {
         const eventsSeen = []
         const router = commands.create({ prefix: "!" })._unsafeUnwrap()
         assert.ok(router.register({ name: "", execute: () => undefined }).isErr())
-        installPing(client)._unsafeUnwrap()
+        const ping = installPing(client)._unsafeUnwrap()
         client.on("messageCreate", (event) => eventsSeen.push(event.content))._unsafeUnwrap()
         running = client.run()
         await waitFor(() => client.state === "Connected", "Default run did not become ready")
@@ -272,6 +273,12 @@ async function defaultWorkflow(remote) {
         await verifyReplies(remote, incoming, async (target) => (await client.messages.fetch(target))._unsafeUnwrap())
         await successfulWait(client, remote, async (operation) => (await operation)._unsafeUnwrap())
         await advancedDefault(client, remote)
+        ping.unsubscribe()
+        ;(await ping.waitForClose())._unsafeUnwrap()
+        const group = commandGroupExample(client)._unsafeUnwrap()
+        await groupedReply(client, remote, async (operation) => (await operation)._unsafeUnwrap())
+        group.unsubscribe()
+        ;(await group.waitForClose())._unsafeUnwrap()
         ;(await client.shutdown())._unsafeUnwrap()
         ;(await running)._unsafeUnwrap()
         assert.equal(client.state, "Closed")
@@ -311,6 +318,18 @@ async function successfulWait(client, remote, run) {
     assert.equal(result.value.channelId, sent.channel_id)
     assert.equal(result.value.content, sent.content)
     assert.equal(remote.requests.length, requests)
+}
+
+async function groupedReply(client, remote, run) {
+    const before = remote.replies.length
+    const incoming = remote.deliver("!t ping")
+    await waitFor(() => remote.replies.length === before + 1, "Packed group alias did not dispatch its leaf")
+    const reply = remote.replies[before]
+    assert.equal(reply.body.content, "Pong")
+    assert.equal(reply.body.message_reference.message_id, incoming.id)
+    const observed = await run(client.messages.fetch({ channelId: "20", id: reply.stored.id }))
+    assert.equal(observed.content, "Pong")
+    assert.equal(observed.messageReference.id, incoming.id)
 }
 
 async function advancedDefault(client, remote) {
@@ -360,7 +379,7 @@ async function effectWorkflow(remote) {
             Effect.result(router.register({ name: "", execute: () => Effect.void })),
         )
         assert.equal(invalidRegistration._tag, "Failure")
-        await Effect.runPromise(installPing(client).pipe(Scope.provide(registration)))
+        const ping = await Effect.runPromise(installPing(client).pipe(Scope.provide(registration)))
         await Effect.runPromise(
             client
                 .on("messageCreate", (event) => Effect.sync(() => eventsSeen.push(event.content)))
@@ -374,6 +393,12 @@ async function effectWorkflow(remote) {
         await verifyReplies(remote, incoming, (target) => Effect.runPromise(client.messages.fetch(target)))
         await successfulWait(client, remote, (operation) => Effect.runPromise(operation))
         await advancedEffect(client, remote, { Cause, Effect, Exit, Fiber, Stream })
+        await Effect.runPromise(ping.unsubscribe())
+        await Effect.runPromise(ping.waitForClose())
+        const group = await Effect.runPromise(commandGroupExample(client).pipe(Scope.provide(registration)))
+        await groupedReply(client, remote, (operation) => Effect.runPromise(operation))
+        await Effect.runPromise(group.unsubscribe())
+        await Effect.runPromise(group.waitForClose())
         await Effect.runPromise(client.shutdown())
         await Effect.runPromise(Fiber.join(running))
         assert.equal(client.state, "Closed")

@@ -1,0 +1,109 @@
+name: Release version PR
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Reviewed source branch for the version PR
+        required: true
+        type: string
+      channel:
+        description: Release readiness channel
+        required: true
+        type: choice
+        options: [canary, rc, stable]
+      epoch:
+        description: Optional explicit epoch boundary, such as 2000
+        type: string
+      line:
+        description: Optional expected major.minor release line
+        type: string
+      bootstrap:
+        description: Explicitly allow a channel with no published baseline
+        default: false
+        type: boolean
+permissions:
+  contents: write
+  pull-requests: write
+cache-mode: read
+concurrency:
+  # Version PR branch names are shared across source branches
+  group: release-version
+  cancel-in-progress: false
+  queue: max
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+      - name: Require supported registry contracts before source or release effects
+        id: support
+        working-directory: projects
+        run: pnpm release:check
+      - name: Build prospective publishable SDK content
+        id: build
+        working-directory: projects
+        run: pnpm --filter @neontechspace/fluxerly build
+      - name: Guard content and prepare the source version
+        id: version
+        working-directory: projects
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_EPOCH: ${{ inputs.epoch }}
+          RELEASE_LINE: ${{ inputs.line }}
+          RELEASE_BOOTSTRAP: ${{ inputs.bootstrap }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process'
+          import { appendFileSync, readFileSync } from 'node:fs'
+          const args = ['release:version', '--channel', process.env.RELEASE_CHANNEL]
+          for (const [name, value] of [['epoch', process.env.RELEASE_EPOCH], ['line', process.env.RELEASE_LINE]]) {
+            if (value) args.push(`--${name}`, value)
+          }
+          if (process.env.RELEASE_BOOTSTRAP === 'true') args.push('--bootstrap')
+          const output = execFileSync('pnpm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 600000 })
+          process.stdout.write(output)
+          const result = JSON.parse(output.trim().split('\n').at(-1))
+          appendFileSync(process.env.GITHUB_OUTPUT, `skipped=${result.skipped === true}\n`)
+          if (result.skipped === true) appendFileSync(process.env.GITHUB_OUTPUT, `reason_json=${JSON.stringify(result.reason ?? 'No content change')}\n`)
+          const { version } = JSON.parse(readFileSync('sdk/package.json', 'utf8'))
+          appendFileSync(process.env.GITHUB_ENV, `RELEASE_VERSION=${version}\n`)
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`)
+          NODE
+      - name: Open the version PR for review
+        id: pull_request
+        if: steps.version.outputs.skipped != 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          base: ${{ inputs.source_ref }}
+          branch: release/version-${{ env.RELEASE_VERSION }}
+          title: Release ${{ env.RELEASE_VERSION }}
+          commit-message: Prepare release ${{ env.RELEASE_VERSION }}
+          body: |
+            Review the SDK version, changelog and consumed Changesets
+            Select Approve workflows to run in the PR merge box and require passing checks before merging
+            PRs created or updated with GITHUB_TOKEN require approval before their pull-request workflows run
+            After merging, run Release prepare on the reviewed merged source
+          add-paths: |
+            projects/sdk/package.json
+            projects/sdk/CHANGELOG.md
+            projects/.changeset/**
+            projects/pnpm-lock.yaml
+      - name: Summarize version review
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_KIND: version
+          SUMMARY_STEPS: ${{ toJSON(steps) }}
+        run: |
+          if [ -f .github/scripts/workflow-summary.mjs ]; then
+            node .github/scripts/workflow-summary.mjs
+          else
+            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
+          fi

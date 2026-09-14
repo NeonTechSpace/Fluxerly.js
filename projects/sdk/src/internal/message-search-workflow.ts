@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import type { MessageOperationOptions } from "#sdk/messages"
+import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
 import type { MessageSearchContext, MessageSearchIterationLimits, MessageSearchQuery } from "#sdk/message-search"
 import { PaginationError } from "#sdk/pagination"
 import type { ClientOwner } from "./client.js"
@@ -12,8 +12,8 @@ const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
 
 /** Build one lazy, bounded search traversal. Search indexing remains a terminal caller-visible state, never a hidden poll */
-export function searchMessagePagination(
-    owner: ClientOwner,
+export function searchMessagePagination<M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
     context: MessageSearchContext,
     filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
     limits: MessageSearchIterationLimits,
@@ -78,7 +78,7 @@ export function searchMessagePagination(
                     "Message search timeout must be a positive safe integer no greater than 2,147,483,647",
                 ),
             )
-        const validated = encodeMessageSearch(context, { ...filters, limit: pageSize, page: 1 })
+        const validated = encodeMessageSearch(context, filters)
         if (validated instanceof InputValidationFailure) return invalid(validated)
         const encoded = JSON.parse(validated.json) as {
             readonly context_guild_id?: string
@@ -90,10 +90,7 @@ export function searchMessagePagination(
                     ? { guildId: encoded.context_guild_id }
                     : { guildId: encoded.context_guild_id, channelId: encoded.context_channel_id }
                 : { channelId: encoded.context_channel_id! }
-        const copiedFilters = JSON.parse(JSON.stringify(filters)) as Omit<
-            MessageSearchQuery,
-            "limit" | "page" | "cursor"
-        >
+        const copiedFilters = validated.query
         const requestOptions = options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }
         return Effect.succeed(
             new Pagination(
@@ -107,7 +104,7 @@ export function searchMessagePagination(
                     options: requestOptions,
                 },
                 {
-                    identity: (message: import("#sdk/messages").Message) => message.id,
+                    identity: (message: M) => message.id,
                     advances: (previous, next) => previous !== next,
                     load: (cursor, limit) =>
                         Effect.gen(function* () {

@@ -1,4 +1,6 @@
 import { platform } from "node:os"
+import type { Message, MessageCore } from "#sdk/messages"
+import type { MessageDecoder } from "./message-fields.js"
 import type { EventMap, EventName } from "#sdk/events"
 import { decodeMessage, decodeDeletion, decodeBulkDeletion, record, identifier } from "./message.js"
 import { decodeUser, decodeDirectMessage } from "./users.js"
@@ -113,7 +115,8 @@ function closeSocket(socket: WebSocket) {
 }
 
 /** One uncompressed protocol-v1 session, owned by the calling Effect scope */
-export const runGateway = (
+export const runSelectedGateway = <M extends MessageCore>(
+    messageDecoder: MessageDecoder<M>,
     url: string,
     token: Redacted.Redacted<string>,
     session: Session,
@@ -121,7 +124,7 @@ export const runGateway = (
     onReady: (mode: "identify" | "resume") => void,
     onLatency: (milliseconds: number | null) => void,
     onRecovering: () => void,
-    onDispatch: <K extends EventName>(event: K, message: EventMap[K], bytes: number) => void,
+    onDispatch: <K extends EventName>(event: K, message: EventMap<M>[K], bytes: number) => void,
     onGuild?: (event: string, value: unknown) => void,
     presence?: PresenceGatewayOwner,
     counts?: CountGatewayOwner,
@@ -427,7 +430,7 @@ export const runGateway = (
                                         Buffer.byteLength(data.toString()),
                                     )
                                 } else if (payload.t === "MESSAGE_CREATE" || payload.t === "MESSAGE_UPDATE") {
-                                    const message = decodeMessage(body)
+                                    const message = messageDecoder(body)
                                     if (!message) {
                                         protocolFailure()
                                         return
@@ -631,3 +634,8 @@ export const runGateway = (
             return yield* Deferred.await(ended)
         }),
     )
+
+/** Full-message gateway entry for independent internal protocol checks */
+export const runGateway = (
+    ...args: Parameters<typeof runSelectedGateway<Message>> extends [MessageDecoder<Message>, ...infer A] ? A : never
+) => runSelectedGateway(decodeMessage, ...args)

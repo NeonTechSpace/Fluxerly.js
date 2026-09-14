@@ -2,14 +2,16 @@
 
 Use this guide to locate implementation owners, configure the workspace and run contributor checks.
 The SDK is in development and is not released for supported public use.
-The documentation website remains a scaffold
+The documentation website builds locally with a handwritten quickstart and generated public API reference.
+Registry release commands enforce the [registry publication contract](/docs/RELEASING.md#registry-publication-contract)
 
 ## Project areas
 
 | Location | Purpose |
 | --- | --- |
 | [SDK](/projects/sdk/) | The Fluxer-native JavaScript SDK, with the package identity in its [manifest](/projects/sdk/package.json) |
-| [Website](/projects/web/) | The documentation website, with its own [manifest](/projects/web/package.json) |
+| Website (`projects/web/`) | The documentation website, with its own manifest (`projects/web/package.json`) |
+| [Release tooling](/projects/release/) | Changesets planning, immutable candidates, registry reconciliation and exact-source GitHub announcements |
 | [Documentation](/docs/) | Repository Markdown documents, including the public [README](/docs/README.md) and this guide |
 
 | Owner | Responsibility |
@@ -64,7 +66,8 @@ The documentation website remains a scaffold
 | [channels.ts](/projects/sdk/src/internal/channels.ts) | Guild channel request validation and REST/event projection, with scheduling owned by shared REST |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
 | [attachments.ts](/projects/sdk/src/internal/attachments.ts) | File validation and metadata projection |
-| [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation and bounded response reads, with REST owning scheduling, direct uploads, downloads and message completion |
+| [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation, with REST owning scheduling, direct uploads, downloads and message completion |
+| [response-json.ts](/projects/sdk/src/internal/response-json.ts) | Bounded REST success-JSON parsing and awaited reader cleanup, with REST selecting the general or upload-response budget |
 | [cache.ts](/projects/sdk/src/internal/cache.ts) | Cache retention and conflicting observations |
 | [guild-cache.ts](/projects/sdk/src/internal/guild-cache.ts) | Optional guild/member/role retention, related-resource invalidation and request conflicts |
 | [channel-cache.ts](/projects/sdk/src/internal/channel-cache.ts) | Optional guild channel retention, mutation/event invalidation and request conflicts |
@@ -100,7 +103,7 @@ Run shared pnpm commands from that directory
 | --- | --- |
 | [AGENTS.md](/AGENTS.md) | Repository-specific instructions for coding agents |
 | [projects/package.json](/projects/package.json) | Private workspace root and accepted pnpm major |
-| [projects/pnpm-workspace.yaml](/projects/pnpm-workspace.yaml) | Includes the SDK and website in one workspace |
+| [projects/pnpm-workspace.yaml](/projects/pnpm-workspace.yaml) | Includes the SDK, release tooling and website in one workspace |
 | [projects/pnpm-lock.yaml](/projects/pnpm-lock.yaml) | Shared, generated dependency lockfile for the workspace |
 | [projects/.node-version](/projects/.node-version) | Single development Node version source, populated from `fnm current` |
 | [.editorconfig](/.editorconfig) | Shared editor formatting defaults |
@@ -109,7 +112,8 @@ Run shared pnpm commands from that directory
 
 The development Node pin is separate from the SDK's consumer compatibility policy.
 The consumer minimum is Node.js 24.11.0, the first LTS release of the Node 24 line.
-The SDK manifest declares that floor independently of the development pin
+The SDK manifest declares that floor independently of the development pin.
+The current development pin is Node.js 24.21.0
 
 The workspace manifest selects pnpm 12 through `devEngines.packageManager`, with the exact resolved version recorded in the shared lockfile.
 See [technology choices](/docs/TECHNOLOGY.md#shared-development-tooling) for the update procedure
@@ -124,7 +128,7 @@ See [technology choices](/docs/TECHNOLOGY.md#shared-development-tooling) for the
 - Update this guide when project responsibilities or navigation change
 
 The workspace root and website are private packages.
-The SDK manifest also remains private to prevent npm publication before release setup is ready.
+The SDK manifest also remains private, with publication designed to use a separately staged candidate.
 This temporary safeguard does not change the intended public package identity
 
 ## Development checks
@@ -134,11 +138,15 @@ Run these commands from [projects/](/projects/) using the development Node versi
 | Command | Purpose |
 | --- | --- |
 | `pnpm install --frozen-lockfile` | Install the recorded dependency graph |
-| `pnpm build` | Compile the SDK with TypeScript 7 |
+| `pnpm build` | Compile the SDK with TypeScript 7 and build its documentation website |
 | `pnpm --filter @neontechspace/fluxerly format` | Format SDK source, tests and configuration with Prettier |
 | `pnpm --filter @neontechspace/fluxerly format:check` | Check SDK formatting without writing files |
-| `pnpm check` | Check SDK formatting, build, paired public-client surface, source/test types, Vitest and isolated packed JavaScript/TypeScript consumers |
+| `pnpm check` | Check SDK formatting, build, public-client surface, types, runtime and packed consumers, then release tooling tests and website build, types and tests |
 | `pnpm --filter @neontechspace/fluxerly test:public-contract` | Check paired public client namespace names, runtime keys and JSDoc presence |
+| `pnpm --filter @neontechspace/fluxerly test:npm` | Check npm installation of the packed SDK and required Effect peer |
+| `pnpm docs:dev` | Build the SDK, generate its public reference and start local Astro development |
+| `pnpm --filter fluxerly-docs test:browser` | Check the rendered development documentation in Chromium |
+| `pnpm --filter fluxerly-docs test:versions` | Check exact-version documentation using isolated release fixtures |
 | `pnpm --filter @neontechspace/fluxerly test:upstream:guild-features` | Opt-in current Fluxer toggle-set and cloning-guard source comparison, requiring authenticated `gh`; no provider requests or mutations |
 | `pnpm --filter @neontechspace/fluxerly test:experiment:effect-transport` | Run the rejected Effect unstable HTTP/socket transport characterization outside the default SDK check |
 
@@ -151,7 +159,9 @@ Local networking checks use owned loopback fixtures, not Fluxer credentials or l
 
 Run the packed-consumer check with Node.js 24.11.0 as well as the development runtime when changing runtime compatibility.
 Use `pnpm --filter @neontechspace/fluxerly test:package` after building with the development runtime.
-The check reports its actual Node version and uses that executable for its isolated consumers
+The check reports its actual Node version and uses that executable for its isolated consumers.
+The npm consumer check runs the exact SDK development-only npm CLI pin on that same Node executable.
+It does not depend on npm being bundled with the Node installation or install npm for SDK users
 
 The Effect unstable HTTP/socket transport characterization remains opt-in because it demonstrates an adapter cleanup limitation, not a production transport choice.
 The default SDK checks retain selected `ws` transport coverage and built SDK natural-exit checks
@@ -169,6 +179,18 @@ Both build first and use controlled responses, not Fluxer credentials or product
 Run `pnpm --filter @neontechspace/fluxerly test:rest:queue` to compare JSON queue-byte budgets through both built APIs.
 The benchmark uses isolated processes and controlled HTTP responses, changing only the loaded queue constant without editing source or build output.
 It reports rejection, timeout, latency and process-memory observations; it does not measure hosted service limits or select a default automatically
+
+### Package preparation
+
+Package and npm checks reuse pnpm's cache but may fetch missing public registry metadata or dependencies for their isolated consumers.
+A frozen workspace install does not guarantee the metadata needed to resolve a standalone consumer is cached.
+Dependency installation scripts are disabled for isolated SDK consumers, and the checks remove their own temporary packages after success or failure
+
+[Package preparation](/projects/sdk/scripts/packages.mjs) copies compiled JavaScript, declarations, maps, sources, license and consumer guidance into a new directory.
+It creates a public npm package directory and verifies the matching `sdk.tgz` inventory.
+The canonical SDK manifest remains `private`, while the staged npm manifest receives the reviewed release version.
+Read the [registry publication contract](/docs/RELEASING.md#registry-publication-contract) before any release operation.
+Do not run publication directly from the SDK checkout
 
 ### Opt-in live sandbox check
 
@@ -221,6 +243,8 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:event-waits` | Filtered single-event success, timeout, filter failure and cancellation through both built APIs | One journaled temporary channel and bot messages, with raw readback and verified channel removal |
 | `test:live:command-arguments` | Typed command execution and invalid-input recovery through both built APIs | One journaled temporary channel and bot messages, with raw reply readback and verified channel removal |
 | `test:live:command-help` | Generated help visibility, pagination and explicit page delivery through both built APIs | One journaled temporary channel and bot messages, with raw page readback and verified channel removal |
+| `test:live:command-groups` | Nested command routing and scoped help through both built APIs | One journaled temporary channel and bot messages/replies, with raw readback and verified channel removal |
+| `test:live:message-fields` | Selected message projections through both built APIs | One journaled temporary channel, bot messages and a small attachment, with reply/edit/pin operations, raw readback and verified channel removal |
 | `test:live:consumer-features` | Forward snapshots, attachment-backed embeds, retained file metadata, non-voice flags, bot profile reads and lost-response reconciliation through both APIs | Journaled temporary channel/messages and uploads, test-owned response loss; profile GET may trigger provider expired-premium cleanup |
 | `test:live:typing` | One-shot typing, scoped refresh and completion/cancellation cleanup through both APIs | Temporary channel/messages and ephemeral typing notices; does not prove inbound typing delivery |
 | `test:live:typing:interactive` | Human-visible outgoing typing and selected-member inbound events through both APIs | Temporary channel and typing notices, with awaited refresh shutdown and verified channel removal |
@@ -451,4 +475,9 @@ Keep the journal until test-owned cleanup is verified
 Use [live harness source](/projects/sdk/tests/live/) for assertions and bounded execution details.
 A passing run establishes only its checked scenarios, not complete replay, prolonged-outage recovery or production readiness
 
-Release and deployment commands are not configured yet
+## Release and documentation operations
+
+Use [releasing](/docs/RELEASING.md) for registry verification, manual workflow inputs and external setup.
+Use [documentation maintenance](/docs/DOCUMENTATION.md) for generated reference ownership, version archives and Preview delivery.
+The workflows share [.github/actions/setup](/.github/actions/setup/action.yml), which reads `projects/.node-version` and uses the pinned `Neonsy/setup` fork to install Node, pnpm and locked dependencies.
+There is no separate `setup-node` step or second authored Node version

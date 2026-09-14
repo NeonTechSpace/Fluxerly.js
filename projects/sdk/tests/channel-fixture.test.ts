@@ -11,6 +11,7 @@ type Fixture = {
     cleanupGuildChannelFixtures: (
         api: (method: string, path: string) => Promise<{ status: number; data: unknown }>,
         journal: Record<string, unknown>,
+        save: () => void,
     ) => Promise<void>
 }
 
@@ -64,7 +65,7 @@ test("channel fixture records intent before create and reconciles a lost respons
         }
         throw new Error(`${method} ${path}`)
     }
-    await fixture.cleanupGuildChannelFixtures(api, journal)
+    await fixture.cleanupGuildChannelFixtures(api, journal, () => saved.push(structuredClone(journal)))
     expect(deletes).toEqual(["45"])
     expect(exists).toBe(false)
 })
@@ -83,7 +84,7 @@ test("channel fixture never deletes a marker mismatch", async () => {
         if (method === "DELETE") deletes++
         return { status: 204, data: null }
     }
-    await expect(fixture.cleanupGuildChannelFixtures(api, journal)).rejects.toBeDefined()
+    await expect(fixture.cleanupGuildChannelFixtures(api, journal, () => undefined)).rejects.toBeDefined()
     expect(deletes).toBe(0)
 })
 
@@ -113,7 +114,7 @@ test("channel fixture removes journaled children before a category and rechecks 
         }
         throw new Error(`${method} ${path}`)
     }
-    await fixture.cleanupGuildChannelFixtures(api, journal)
+    await fixture.cleanupGuildChannelFixtures(api, journal, () => undefined)
     const childDelete = calls.indexOf("DELETE /channels/5")
     const categoryDelete = calls.indexOf("DELETE /channels/4")
     expect(childDelete).toBeGreaterThanOrEqual(0)
@@ -136,6 +137,6 @@ test("channel fixture fails closed when any child remains under a journaled cate
         if (method === "DELETE") deletes++
         return { status: 204, data: null }
     }
-    await expect(fixture.cleanupGuildChannelFixtures(api, journal)).rejects.toBeDefined()
+    await expect(fixture.cleanupGuildChannelFixtures(api, journal, () => undefined)).rejects.toBeDefined()
     expect(deletes).toBe(0)
 })

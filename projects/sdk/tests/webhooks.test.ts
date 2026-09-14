@@ -850,7 +850,7 @@ test.each(modes)("%s validates explicit null upload budgets and bounds response 
                 new Response(
                     new ReadableStream({
                         start(controller) {
-                            controller.enqueue(new Uint8Array(1_048_577))
+                            controller.enqueue(new Uint8Array(16_777_217))
                         },
                         cancel() {
                             cancelled = true

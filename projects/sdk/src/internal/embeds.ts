@@ -3,7 +3,7 @@ import { InputValidationFailure, inputValidationFailure, type InputValidationCon
 
 const object = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value)
-type Reader = (value: unknown) => unknown
+type Reader = (value: unknown, construct?: boolean) => unknown
 type Property = readonly [
     wire: string,
     read: Reader,
@@ -49,20 +49,20 @@ const timestamp: Reader = (value) =>
         : undefined
 
 // The tables own only response projection, which ignores unknown wire properties
-function project(value: unknown, shape: Shape): Record<string, unknown> | undefined {
+function project(value: unknown, shape: Shape, construct = true): Record<string, unknown> | true | undefined {
     if (!object(value)) return undefined
-    const result: Record<string, unknown> = {}
+    const result: Record<string, unknown> | undefined = construct ? {} : undefined
     for (const [key, [wire, read, required]] of Object.entries(shape)) {
         const item = value[wire]
         if (item === undefined || item === null) {
             if (required) return undefined
             continue
         }
-        const decoded = read(item)
+        const decoded = read(item, construct)
         if (decoded === undefined) return undefined
-        result[key] = decoded
+        if (result) result[key] = decoded
     }
-    return Object.freeze(result)
+    return result ? Object.freeze(result) : true
 }
 
 function projectInput(value: unknown, shape: Shape, path: string): Record<string, unknown> | InputValidationFailure {
@@ -94,15 +94,15 @@ function projectInput(value: unknown, shape: Shape, path: string): Record<string
     return Object.freeze(result)
 }
 
-function list(value: unknown, read: Reader, max = Infinity): readonly unknown[] | undefined {
+function list(value: unknown, read: Reader, max = Infinity, construct = true): readonly unknown[] | true | undefined {
     if (!Array.isArray(value) || value.length > max) return undefined
-    const result: unknown[] = []
+    const result: unknown[] | undefined = construct ? [] : undefined
     for (const item of value) {
-        const decoded = read(item)
+        const decoded = read(item, construct)
         if (decoded === undefined) return undefined
-        result.push(decoded)
+        result?.push(decoded)
     }
-    return Object.freeze(result)
+    return result ? Object.freeze(result) : true
 }
 
 function inputList(
@@ -219,14 +219,17 @@ const outputChild: Shape = {
     url: ["url", string],
     color: ["color", integer],
     timestamp: ["timestamp", timestamp],
-    author: ["author", (value) => project(value, outputAuthor)],
-    footer: ["footer", (value) => project(value, outputFooter)],
-    image: ["image", (value) => project(value, outputMedia)],
-    thumbnail: ["thumbnail", (value) => project(value, outputMedia)],
-    fields: ["fields", (value) => list(value, (field) => project(field, outputField))],
-    provider: ["provider", (value) => project(value, outputAuthor)],
-    video: ["video", (value) => project(value, outputMedia)],
-    audio: ["audio", (value) => project(value, outputMedia)],
+    author: ["author", (value, construct) => project(value, outputAuthor, construct)],
+    footer: ["footer", (value, construct) => project(value, outputFooter, construct)],
+    image: ["image", (value, construct) => project(value, outputMedia, construct)],
+    thumbnail: ["thumbnail", (value, construct) => project(value, outputMedia, construct)],
+    fields: [
+        "fields",
+        (value, construct) => list(value, (field, build) => project(field, outputField, build), Infinity, construct),
+    ],
+    provider: ["provider", (value, construct) => project(value, outputAuthor, construct)],
+    video: ["video", (value, construct) => project(value, outputMedia, construct)],
+    audio: ["audio", (value, construct) => project(value, outputMedia, construct)],
     html: ["html", string],
     htmlWidth: ["html_width", integer],
     htmlHeight: ["html_height", integer],
@@ -234,15 +237,22 @@ const outputChild: Shape = {
 }
 const outputEmbed: Shape = {
     ...outputChild,
-    children: ["children", (value) => list(value, (child) => project(child, outputChild), 1)],
+    children: [
+        "children",
+        (value, construct) => list(value, (child, build) => project(child, outputChild, build), 1, construct),
+    ],
 }
 
 /** attachment:// media targets need an unambiguous new upload in this request. Retained IDs never imply a filename lookup */
 export const encodeEmbeds = (value: unknown, uploadedFilenames?: readonly string[]) =>
     inputList(value, (embed) => projectInput(embed, inputEmbed(uploadedFilenames), "embeds[]"), Infinity, "embeds")
 
-export function decodeEmbeds(value: unknown): readonly Embed[] | undefined {
-    if (value === undefined || value === null) return Object.freeze([])
+export function decodeEmbeds(value: unknown): readonly Embed[] | undefined
+export function decodeEmbeds(value: unknown, construct: boolean): readonly Embed[] | true | undefined
+/** False validates the same response shape without constructing a projection. The value true is the validation-only success marker */
+export function decodeEmbeds(value: unknown, construct = true): readonly Embed[] | true | undefined {
+    if (value === undefined || value === null) return construct ? Object.freeze([]) : true
     // Each public property is checked and copied by the response tables, with no input objects retained
-    return list(value, (embed) => project(embed, outputEmbed)) as readonly Embed[] | undefined
+    return list(value, (embed, build) => project(embed, outputEmbed, build), Infinity, construct) as
+        readonly Embed[] | true | undefined
 }

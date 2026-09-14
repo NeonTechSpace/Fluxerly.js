@@ -16,55 +16,85 @@ import {
 } from "#sdk/supervisor"
 import type { Client } from "./index.js"
 
-/** Context passed to the default helper-owned child client before its managed run begins */
+/** Client and fixed shard assignment available to configure before the helper starts the gateway connection */
 export interface DefaultSupervisorChildContext {
-    /** The child client with the parent-provided immutable local shard assignment */
+    /** Client created and owned by child.run. Register application behavior here rather than starting or stopping this client */
     readonly client: Client
     /** Fixed assignment for this child process. It cannot be changed during this run */
     readonly assignment: SupervisorAssignment
-    /** Aborted when the parent requests stop or IPC disconnects. Configure work must cooperate; ignored promises cannot be forcibly preempted */
+    /** Stop signal aborted when the parent requests shutdown or its message channel disconnects.
+     * Make asynchronous configure work cooperate with this signal. The helper cannot forcibly cancel a JavaScript promise
+     */
     readonly signal: import("#sdk/client").OperationSignal
 }
 
-/** Default child settings. The callback registers application work but never starts or stops the client */
+/** Bot credentials, client settings and setup callback for a JavaScript module launched by a supervisor */
 export interface DefaultSupervisorChildOptions extends SupervisorChildOptions {
-    /** Register subscriptions and local application behavior before child.run owns client.run. Parent stop does not preempt an already-running promise */
+    /** Register subscriptions and local application behavior before the helper calls client.run.
+     * Return when setup is finished, not when the bot stops. Do not call client.run, connect or shutdown here.
+     * A thrown error or rejected promise is a defect and rejects child.run with SdkDefect.
+     * Parent stop can finish child.run without awaiting this promise, so setup must observe context.signal to avoid later work
+     */
     readonly configure: (context: DefaultSupervisorChildContext) => void | Promise<void>
 }
 
-/** One optional local process supervisor */
+/**
+ * Parent that starts and stops the child processes in one fixed local shard plan.
+ * Methods start their asynchronous work when called and return ResultAsync for expected failures.
+ * Unexpected defects reject with SdkDefect instead of returning Err.
+ * Creating this parent starts no child. Call shutdown to release its owned processes
+ */
 export interface DefaultSupervisor {
-    /** Start the configured children and await each assignment/configuration acknowledgement, not gateway READY.
-     * Concurrent calls share startup. Expected failure waits for owned process exit; start after shutdown fails with closed.
-     * Terminal child IPC loss fails any still-pending startup with closed only after all owned children exit
+    /** Start the configured children and return Ok when each child acknowledges its assignment and finishes configure.
+     * This is setup completion, not gateway readiness. Use waitForReady to observe connected gateway sessions.
+     * Concurrent calls share startup. Calling again does not create extra children or await replacement startup.
+     * Failure returns SupervisorError only after owned processes exit. Start during or after shutdown returns reason closed.
+     * If a child remains alive after losing its message channel for shutdownTimeoutMs, pending startup fails with closed after cleanup
      */
     start(): ResultAsync<void, SupervisorError>
-    /** Await the retained terminal local supervisor outcome after every owned child exits, including closed after a current child outlives its IPC-loss observation window */
+    /** Wait until the supervisor's lifetime ends and its owned child processes have exited.
+     * Returns Ok after normal shutdown or Err with the retained SupervisorError after failure, even on a later call.
+     * Does not start or stop the supervisor. Calling before start waits until a later shutdown or failure
+     */
     waitForClose(): ResultAsync<void, SupervisorError>
-    /** Observe all children becoming gateway-ready without starting or owning the supervisor. A current child IPC loss clears readiness immediately.
-     * A signal cancels only this observer; a never-started, closed or failed supervisor settles with its terminal error.
-     * A malformed signal returns ConfigurationError with field signal without starting observation
+    /** Return Ok when every current child has reported its aggregate gateway state as Connected.
+     * Start the supervisor first. This observes reports, not simultaneous cross-process health or lasting readiness.
+     * Losing a child's message channel clears its readiness immediately. A later call waits for current readiness again.
+     * A signal returns CancelledError only for this wait and never stops or restarts a child.
+     * An already-aborted signal takes precedence even when the children are ready.
+     * A malformed signal returns ConfigurationError with field signal without starting observation.
+     * An idle, stopping or closed supervisor returns SupervisorError with reason closed. A failed supervisor returns its retained failure
      */
     waitForReady(
         options?: SupervisorWaitOptions,
     ): ResultAsync<void, SupervisorError | CancelledError | ConfigurationError>
     /** Return one immutable safe local status snapshot without child output, environment, arguments or paths */
     status(): SupervisorStatus
-    /** Ask every owned child to stop, force-terminate only an unresponsive owned child after the configured grace period, then await verified exit.
-     * Explicit shutdown remains successful when a child has already lost IPC
+    /** Ask owned children to stop and return Ok only after their processes exit.
+     * After shutdownTimeoutMs, force-terminate an owned child that has not exited, then keep waiting for its exit.
+     * Concurrent and repeated calls share cleanup. Shutdown before start closes the parent without launching children.
+     * Returns Ok even after a supervisor failure or a child's message-channel loss. It does not erase waitForClose's retained failure
      */
     shutdown(): ResultAsync<void, never>
 }
 
-/** Default optional local-supervisor tools */
+/** Create a local parent supervisor or run its child module using the default API */
 export interface DefaultSupervisorTools {
-    /** Validate and snapshot a local process plan without starting child processes */
-    create(options: SupervisorOptions): Result<DefaultSupervisor, ConfigurationError>
-    /** Run one child configured by a parent supervisor. It owns client creation, managed execution and cleanup.
-     * Parent stop/disconnection closes the client and releases IPC listeners before settlement. Caller-owned configure promises cannot be preempted.
-     * Expected failures return Err. Defects reject with SdkDefect, retaining accompanying typed failures without private error text
+    /** Validate and copy options now, returning Ok with an idle supervisor or Err with ConfigurationError.
+     * Does not start a process or check whether the entry module can execute. Launch failures are reported by start
      */
+    create(options: SupervisorOptions): Result<DefaultSupervisor, ConfigurationError>
+    /** Child-module helper. Call run inside the module selected by the parent's entry option */
     readonly child: {
+        /** Receive the parent's assignment, create a client, finish configure, then run the client until stop or failure.
+         * Owns client shutdown and removal of parent-message listeners before returning its result.
+         * A normal parent stop returns Ok. Running outside a connected supervisor child returns SupervisorChildError with reason disconnected.
+         * Invalid client settings return ConfigurationError. Client execution can return ConnectError or CancelledError.
+         * Message-channel loss or invalid coordination data returns SupervisorChildError.
+         * A stop during configure never starts the client afterward.
+         * The helper cannot forcibly stop a configure promise that ignores cancellation and does not wait for it.
+         * Defects reject with SdkDefect, retaining accompanying typed failures without private error text
+         */
         run(
             options: DefaultSupervisorChildOptions,
         ): ResultAsync<void, ConfigurationError | ConnectError | CancelledError | SupervisorChildError>
@@ -153,7 +183,7 @@ function childClientOptions(
     )
 }
 
-/** Build default supervisor tools around this entry point's client creator */
+/** Build default-API supervisor tools around this entry point's client creator */
 export function makeDefaultSupervisor(
     createClient: (options: ClientOptions) => Result<Client, ConfigurationError>,
 ): DefaultSupervisorTools {

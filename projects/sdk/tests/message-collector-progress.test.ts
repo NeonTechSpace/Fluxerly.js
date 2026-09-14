@@ -265,18 +265,63 @@ test.each(modes)("%s maps active progress defects to a sanitized handler failure
     expect(calls).toBe(1)
 })
 
-test.each(modes)("%s rechecks the deadline after synchronous progress", async (mode) => {
+test.each(modes.flatMap((mode) => ["timeout", "idle"].map((reason) => ({ mode, reason }))))(
+    "$mode rechecks $reason after synchronous progress",
+    async ({ mode, reason }) => {
+        const server = await fixture()
+        const api = await setup(mode)
+        await api.connect()
+        let now = 0
+        vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(
+            () => BigInt(now) * 1_000_000n,
+        )
+        const advance = () => {
+            now = 100
+        }
+        const collector = await progress(
+            api,
+            advance,
+            () => Effect.sync(advance),
+            reason === "idle" ? { idleMs: 100 } : { timeoutMs: 100 },
+        )
+        server.deliver("10")
+        expect(await collector.wait()).toMatchObject({ reason, messages: [{ id: "10" }] })
+    },
+)
+
+test.each(modes)("%s queued messages do not postpone idle completion during a callback", async (mode) => {
     const server = await fixture()
     const api = await setup(mode)
     await api.connect()
     let now = 0
     vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
-    const advance = () => {
-        now = 100
+    const started = Promise.withResolvers<void>()
+    const calls: string[] = []
+    const accept = (message: import("../src/index.js").Message) => {
+        calls.push(message.id)
+        started.resolve()
     }
-    const collector = await progress(api, advance, () => Effect.sync(advance), { timeoutMs: 100 })
+    const collector = await progress(
+        api,
+        async (message, signal) => {
+            accept(message)
+            await new Promise<void>((resolve) => {
+                if (signal.aborted) resolve()
+                else signal.addEventListener("abort", () => resolve(), { once: true })
+            })
+        },
+        (message) => Effect.sync(() => accept(message)).pipe(Effect.andThen(Effect.never)),
+        { idleMs: 100, maxMessages: 5 },
+    )
     server.deliver("10")
-    expect(await collector.wait()).toMatchObject({ reason: "timeout", messages: [{ id: "10" }] })
+    await started.promise
+    now = 99
+    server.deliver("11")
+    await turn()
+    now = 100
+    server.deliver("12")
+    expect(await collector.wait()).toMatchObject({ reason: "idle", messages: [{ id: "10" }] })
+    expect(calls).toEqual(["10"])
 })
 
 test.each(modes)("%s rejects an invalid onMessage handler locally", async (mode) => {
@@ -302,8 +347,8 @@ test.each(modes)("%s rejects an invalid onMessage handler locally", async (mode)
 test.each(
     modes.flatMap((mode) =>
         (mode === "default"
-            ? ["cancel", "stop", "timeout", "recovery", "shutdown", "overflow"]
-            : ["scope", "stop", "timeout", "recovery", "shutdown", "overflow"]
+            ? ["cancel", "stop", "timeout", "idle", "recovery", "shutdown", "overflow"]
+            : ["scope", "stop", "timeout", "idle", "recovery", "shutdown", "overflow"]
         ).map((reason) => ({ mode, reason })),
     ),
 )("$mode $reason interrupts active progress and completion waits for cleanup", async ({ mode, reason }) => {
@@ -349,6 +394,7 @@ test.each(
                 maxMessages: 10,
                 maxPendingMessages: reason === "overflow" ? 1 : 256,
                 timeoutMs: reason === "timeout" ? 100 : 10_000,
+                idleMs: reason === "idle" ? 100 : 5_000,
                 ...(mode === "default" ? { signal: controller.signal } : {}),
             } as import("../src/collectors.js").CollectorOptions,
         )
@@ -402,7 +448,7 @@ test.each(
                           _tag: "CollectorError",
                           reason: reason === "recovery" ? "connectionLost" : "overflow",
                       }
-                    : { reason: reason === "timeout" ? "timeout" : "stopped" },
+                    : { reason: reason === "timeout" || reason === "idle" ? reason : "stopped" },
         )
     } finally {
         release()
@@ -451,6 +497,8 @@ test("native progress can request client shutdown without joining itself", async
     await vi.waitFor(() => expect(finalized).toBe(true), { interval: 5, timeout: 1_000 })
     const outcome = await Effect.runPromise(Effect.result(collector.waitForClose()))
     expect(outcome).toMatchObject({ _tag: "Failure", failure: { _tag: "ClientClosedError" } })
+    // Collector cleanup is not the client shutdown barrier, which also owns gateway and REST cleanup
+    await api.shutdown()
     expect(api.native!.state).toBe("Closed")
     expect(continuedAfterShutdown).toBe(false)
 })

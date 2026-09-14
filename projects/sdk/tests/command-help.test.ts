@@ -188,3 +188,190 @@ test("native help stays lazy and shares default rendering and validation", async
         "/config <file> [force] (Aliases: /cfg)",
     ])
 })
+
+test("nested help discovers immediate groups and leaves with descriptions and empty groups", () => {
+    let callbacks = 0
+    let router = value(
+        commands.create({
+            prefix: () => {
+                callbacks += 1
+                return "!"
+            },
+        }),
+    )
+    router = value(
+        router.register({
+            name: "ping",
+            description: "Checks connectivity",
+            execute: () => {
+                callbacks += 1
+            },
+        }),
+    )
+    router = value(router.registerGroup({ name: "admin", aliases: ["a"], description: "Administration tools" }))
+    router = value(
+        router.register(
+            {
+                name: "inspect",
+                aliases: ["i"],
+                description: "Inspects a user",
+                arguments: { user: { type: "id", mention: "user" } },
+                guard: () => {
+                    callbacks += 1
+                    return false
+                },
+                cooldown: {
+                    durationMs: 1_000,
+                    store: {
+                        claim: () => {
+                            callbacks += 1
+                            return { _tag: "CooldownAcquired", retryAtMs: 1 }
+                        },
+                    },
+                },
+                execute: () => {
+                    callbacks += 1
+                },
+            },
+            { group: ["admin"] },
+        ),
+    )
+    router = value(
+        router.registerGroup({ name: "users", aliases: ["u"], description: "User tools" }, { group: ["admin"] }),
+    )
+    router = value(
+        router.register(
+            {
+                name: "deep",
+                execute: () => {
+                    callbacks += 1
+                },
+            },
+            { group: ["admin", "users"] },
+        ),
+    )
+    router = value(router.registerGroup({ name: "empty", description: "Reserved tools" }))
+
+    expect(value(router.help({ prefix: "!", maxLength: 1_000 }))).toEqual([
+        "!ping\nChecks connectivity\n\n!admin (Group) (Aliases: !a)\nAdministration tools\n\n!empty (Group)\nReserved tools",
+    ])
+    expect(value(router.help({ prefix: "!", maxLength: 1_000, group: ["admin"] }))).toEqual([
+        "!admin (Group) (Aliases: !a)\nAdministration tools\n\n!admin inspect <user> (Aliases: !admin i)\nInspects a user\n\n!admin users (Group) (Aliases: !admin u)\nUser tools",
+    ])
+    expect(value(router.help({ prefix: "!", maxLength: 1_000, group: ["admin", "users"] }))).toEqual([
+        "!admin users (Group) (Aliases: !admin u)\nUser tools\n\n!admin users deep",
+    ])
+    expect(value(router.help({ prefix: "!", maxLength: 1_000, group: ["empty"] }))).toEqual([
+        "!empty (Group)\nReserved tools",
+    ])
+    expect(callbacks).toBe(0)
+})
+
+test("nested help checks visibility once for ancestors and immediate entries without exposing hidden paths", () => {
+    const router = value(
+        value(
+            value(value(commands.create({ prefix: "!" })).registerGroup({ name: "admin" })).registerGroup(
+                { name: "users" },
+                { group: ["admin"] },
+            ),
+        ).register({ name: "inspect", execute() {} }, { group: ["admin", "users"] }),
+    )
+    const seen: string[] = []
+    const visible = value(
+        router.help({
+            prefix: "!",
+            maxLength: 1_000,
+            group: ["admin", "users"],
+            include: (entry) => {
+                expect(Object.isFrozen(entry)).toBe(true)
+                expect(Object.isFrozen(entry.path)).toBe(true)
+                seen.push(`${entry.kind ?? "leaf"}:${entry.path!.join(" ")}`)
+                return true
+            },
+        }),
+    )
+    expect(visible).toEqual(["!admin users (Group)\n\n!admin users inspect"])
+    expect(seen).toEqual(["group:admin", "group:admin users", "leaf:admin users inspect"])
+    seen.length = 0
+    expect(
+        value(
+            router.help({
+                prefix: "!",
+                maxLength: 1_000,
+                group: ["admin", "users"],
+                include: (entry) => {
+                    seen.push(entry.name)
+                    return entry.name !== "admin"
+                },
+            }),
+        ),
+    ).toEqual([])
+    expect(seen).toEqual(["admin"])
+    expect(
+        value(
+            router.help({
+                prefix: "!",
+                maxLength: 1_000,
+                group: ["admin", "users"],
+                include: (entry) => entry.name !== "users",
+            }),
+        ),
+    ).toEqual([])
+    expect(
+        value(
+            router.help({
+                prefix: "!",
+                maxLength: 1_000,
+                group: ["admin", "users"],
+                include: (entry) => entry.kind === "group",
+            }),
+        ),
+    ).toEqual(["!admin users (Group)"])
+    expect(value(router.help({ prefix: "!", maxLength: 1_000, include: () => false }))).toEqual([])
+    expect(
+        value(
+            router.help({
+                prefix: "!",
+                maxLength: 1_000,
+                group: ["admin"],
+                include: (entry) => entry.name !== "users",
+            }),
+        ),
+    ).toEqual(["!admin (Group)"])
+})
+
+test("native nested help remains lazy with matching pagination and safe canonical selector failures", async () => {
+    const root = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+    const admin = await Effect.runPromise(
+        root.registerGroup({ name: "admin", aliases: ["a"], description: "😀 Tools" }),
+    )
+    const router = await Effect.runPromise(admin.registerGroup({ name: "users" }, { group: ["admin"] }))
+    let includeCalls = 0
+    const operation = router.help({
+        prefix: "!",
+        maxLength: 4,
+        group: ["admin"],
+        include: () => {
+            includeCalls += 1
+            return true
+        },
+    })
+    expect(includeCalls).toBe(0)
+    const pages = await Effect.runPromise(operation)
+    expect(includeCalls).toBe(2)
+    expect(pages.every((page) => page.length > 0 && page.length <= 4 && page.isWellFormed())).toBe(true)
+    expect(pages.join("")).toContain("😀")
+    expect(await Effect.runPromise(router.help({ prefix: "!", maxLength: 1_000, group: ["admin"] }))).toEqual([
+        "!admin (Group) (Aliases: !a)\n😀 Tools\n\n!admin users (Group)",
+    ])
+    for (const group of [["missing-private"], ["a"], new Array(1), "private", ["bad name"]]) {
+        const result = await Effect.runPromise(
+            Effect.result(router.help({ prefix: "!", maxLength: 100, group: group as never })),
+        )
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+            expect(result.failure.field).toBe("help")
+            expect(result.failure.message).not.toContain("private")
+        }
+    }
+})

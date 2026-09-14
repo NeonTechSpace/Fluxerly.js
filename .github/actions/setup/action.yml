@@ -1,0 +1,54 @@
+name: Workspace setup
+description: Install the locked workspace using the selected repository Node policy
+inputs:
+  runtime-policy:
+    description: development uses projects/.node-version, consumer-floor uses the SDK engines.node minimum
+    required: false
+    default: development
+runs:
+  using: composite
+  steps:
+    - name: Read the selected Node policy
+      id: node
+      shell: bash
+      env:
+        RUNTIME_POLICY: ${{ inputs.runtime-policy }}
+      run: |
+        node --input-type=module <<'NODE'
+        import { appendFileSync, readFileSync } from 'node:fs'
+        let version
+        switch (process.env.RUNTIME_POLICY) {
+          case 'development':
+            version = readFileSync('projects/.node-version', 'utf8').replace(/\r?\n$/, '')
+            break
+          case 'consumer-floor': {
+            const manifest = JSON.parse(readFileSync('projects/sdk/package.json', 'utf8'))
+            const range = manifest.engines?.node
+            if (typeof range !== 'string' || !range.startsWith('>=')) throw new Error('SDK engines.node must declare one exact >=x.y.z consumer floor')
+            version = range.slice(2)
+            break
+          }
+          default:
+            throw new Error('runtime-policy must be development or consumer-floor')
+        }
+        if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) || !version.split('.').every((part) => Number.isSafeInteger(Number(part)))) {
+          throw new Error('Selected Node policy must contain one exact numeric version')
+        }
+        appendFileSync(process.env.GITHUB_OUTPUT, `runtime=node@${version}\nversion=${version}\n`)
+        NODE
+    - name: Install pnpm, Node and locked dependencies
+      uses: Neonsy/setup@703c52620218391530e48b9e8870d5c0082e1b9b # Fork of pnpm/setup, no release
+      with:
+        working-directory: projects
+        require-lockfile: true
+        cache: true
+        runtime: ${{ steps.node.outputs.runtime }}
+    - name: Verify the selected Node runtime
+      shell: bash
+      env:
+        EXPECTED_NODE_VERSION: ${{ steps.node.outputs.version }}
+      run: |
+        node --input-type=module <<'NODE'
+        if (process.versions.node !== process.env.EXPECTED_NODE_VERSION) throw new Error('Installed Node does not match the selected repository policy')
+        console.log(`Verified Node ${process.versions.node}`)
+        NODE

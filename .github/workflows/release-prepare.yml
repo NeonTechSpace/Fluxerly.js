@@ -1,0 +1,114 @@
+name: Release prepare
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact reviewed merged source ref or commit
+        required: true
+        type: string
+      line:
+        description: Optional expected major.minor release line
+        type: string
+      bootstrap:
+        description: Explicitly allow a channel with no published baseline
+        default: false
+        type: boolean
+permissions:
+  contents: read
+cache-mode: read
+concurrency:
+  group: release-prepare-${{ inputs.source_ref }}-${{ inputs.line }}-${{ inputs.bootstrap }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+      - name: Require supported registry contracts before candidate preparation
+        id: support
+        working-directory: projects
+        run: pnpm release:check
+      - name: Run the aggregate workspace check
+        id: workspace
+        working-directory: projects
+        run: pnpm check
+      - name: Check npm consumer installation
+        id: npm
+        working-directory: projects
+        run: pnpm --filter @neontechspace/fluxerly test:npm
+      - name: Install the test browser
+        id: browser_install
+        working-directory: projects
+        run: pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
+      - name: Check the documentation in a browser
+        id: browser
+        working-directory: projects
+        run: |
+          pnpm --filter fluxerly-docs test:browser
+          pnpm --filter fluxerly-docs test:versions
+      - name: Snapshot the checked documentation and prepare an immutable candidate
+        id: candidate
+        working-directory: projects
+        env:
+          RELEASE_LINE: ${{ inputs.line }}
+          RELEASE_BOOTSTRAP: ${{ inputs.bootstrap }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process'
+          import { appendFileSync } from 'node:fs'
+          import { join } from 'node:path'
+          import { readCandidate } from './release/candidate.mjs'
+          const source = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+          if (!/^[a-f0-9]{40}$/.test(source)) throw new Error('Invalid selected source commit')
+          const docs = join(process.env.RUNNER_TEMP, 'docs-snapshot.json')
+          const directory = join(process.env.RUNNER_TEMP, 'release-candidate')
+          execFileSync(process.execPath, ['web/scripts/snapshot.mjs', '--out', docs], { stdio: 'inherit', timeout: 300000 })
+          const args = ['release:prepare', '--output', directory, '--docs', docs]
+          if (process.env.RELEASE_LINE) args.push('--line', process.env.RELEASE_LINE)
+          if (process.env.RELEASE_BOOTSTRAP === 'true') args.push('--bootstrap')
+          const output = execFileSync('pnpm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 600000 })
+          process.stdout.write(output)
+          const result = JSON.parse(output.trim().split('\n').at(-1))
+          appendFileSync(process.env.GITHUB_OUTPUT, `skipped=${result.skipped === true}\n`)
+          if (result.skipped === true) {
+            appendFileSync(process.env.GITHUB_OUTPUT, `reason_json=${JSON.stringify(result.reason ?? 'No content change')}\n`)
+            process.exit(0)
+          }
+          const candidate = await readCandidate(directory)
+          if (candidate.sourceCommit !== source || !candidate.docs) throw new Error('Candidate source snapshot mismatch')
+          const name = `release-candidate-${source}`
+          appendFileSync(process.env.GITHUB_OUTPUT, `name=${name}\n`)
+          for (const [key, value] of [['version', candidate.version], ['channel', candidate.channel], ['source', source], ['checksum', candidate.checksum]]) {
+            appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
+          }
+          NODE
+      - name: Retain the immutable candidate
+        id: artifact
+        if: steps.candidate.outputs.skipped != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.candidate.outputs.name }}
+          path: ${{ runner.temp }}/release-candidate/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+      - name: Summarize candidate preparation
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_KIND: prepare
+          SUMMARY_STEPS: ${{ toJSON(steps) }}
+        run: |
+          if [ -f .github/scripts/workflow-summary.mjs ]; then
+            node .github/scripts/workflow-summary.mjs
+          else
+            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -12,137 +12,182 @@ import type {
 } from "./messages.js"
 import type { EmbedInput } from "./embeds.js"
 
-/** Frozen remote webhook metadata, deliberately excluding the credential and creator's private fields */
+/**
+ * A webhook's name, avatar and destination when Fluxer last returned it.
+ * Webhooks let another application post messages to a channel without signing in as a bot.
+ * This read-only snapshot contains no token and does not update when someone edits the webhook
+ */
 export interface Webhook {
-    /** Decimal webhook ID */
+    /** Webhook identifier, kept as a decimal string to avoid JavaScript number rounding */
     readonly id: string
-    /** Decimal owning guild ID */
+    /** ID of the server that owns this webhook */
     readonly guildId: string
-    /** Decimal destination channel ID at the time of this observation */
+    /** ID of the channel that receives its messages, as last reported by Fluxer */
     readonly channelId: string
-    /** Display name returned by Fluxer */
+    /** Default sender name shown on webhook messages */
     readonly name: string
-    /** Avatar hash, or null when absent */
+    /** Identifier for the webhook's avatar image, not a complete URL. Null means no custom avatar */
     readonly avatar: string | null
 }
 
-/** Redacted creation credential, separate from metadata and never persisted by the SDK */
+/**
+ * The secret returned when you create a webhook, kept separate from its public details.
+ * Pass this object to createWebhookClient, or call revealToken to save the secret in your own secure storage.
+ * The SDK does not save it to disk. Anyone with the ID and token can use this webhook's token-authenticated operations
+ */
 export interface WebhookCredentials {
-    /** Decimal webhook ID */
+    /** ID of the webhook this secret belongs to */
     readonly id: string
-    /** Explicitly expose the secret for caller-owned secure storage. Never log the returned string */
+    /** Return the token as plain text so you can store or transfer it securely. Never log the returned string */
     revealToken(): string
 }
 
-/** Creation returns metadata plus a credential handle usable by createWebhookClient */
+/** Result of creating a webhook, including the secret needed to use it without a bot token */
 export interface CreatedWebhook {
-    /** Frozen remote snapshot */
+    /** Read-only details of the newly created webhook, without its token */
     readonly webhook: Webhook
-    /** Redacted handle, retained until the caller releases it independently of any client */
+    /** Secret-bearing object for createWebhookClient. Closing a client does not erase this separate object */
     readonly credentials: WebhookCredentials
 }
 
-/** Name and optional avatar for one incoming webhook */
+/** Settings for a webhook that will post messages to the channel selected in the create call */
 export interface WebhookCreate {
-    /** Nonblank name, 1–80 Unicode code points */
+    /** Default sender name, with 1–80 Unicode code points and at least one non-whitespace character */
     readonly name: string
-    /** Image data URI, or null for the default avatar. Fluxer validates image format and size */
+    /** Base64 image data URI, or null for the default avatar. Fluxer validates image format and size */
     readonly avatar?: string | null
 }
 
-/** Omitted settings stay unchanged. Only bot-authenticated management can move the destination */
+/**
+ * Changes to an existing webhook made through a bot client's webhooks.edit operation.
+ * Supply at least one setting. Omitted settings stay unchanged.
+ * Moving the destination channel requires bot authentication and cannot be done by a token-only webhook client
+ */
 export interface WebhookEdit {
-    /** New nonblank name, 1–80 Unicode code points */
+    /** New default sender name, with 1–80 Unicode code points and at least one non-whitespace character */
     readonly name?: string
-    /** Image data URI, or null to remove the avatar */
+    /** Base64 image data URI, or null to remove the avatar */
     readonly avatar?: string | null
-    /** Decimal destination channel ID in the same guild, subject to server permissions */
+    /** Move future messages to this channel in the same server, subject to Fluxer's permission checks */
     readonly channelId?: string
 }
 
-/** Explicit same-channel reply target for one webhook send */
+/** Attach a webhook message as a reply to an existing message in the webhook's destination channel */
 export interface WebhookReplyReference {
-    /** Distinguishes this reply from a forward without structural inference */
+    /** Select reply behavior rather than copying a message as a forward */
     readonly type: "reply"
-    /** Existing message in this webhook's current channel. Fluxer validates identity and replyable message type */
+    /** Message ID and channel ID to reply to. Fluxer checks that the message exists, is replyable and is in the destination channel */
     readonly target: MessageReference
 }
 
-/** Immutable same-channel source snapshot for one webhook forward */
+/** Ask Fluxer to copy an existing message into a forwarded webhook message in the same channel */
 export interface WebhookForwardReference {
-    /** Distinguishes this forward from a reply without structural inference */
+    /** Select forwarding rather than a reply with newly written content */
     readonly type: "forward"
-    /** Existing forward source and optional source-media selectors. Fluxer captures a snapshot without fetching it through the SDK */
+    /** Source message and optional attachment/embed selections. Fluxer copies the message without a separate SDK fetch */
     readonly source: ForwardMessageInput
 }
 
-/** Tagged webhook reference passed to send. A reply carries message content; a forward copies only the source snapshot */
+/** Choose a reply with your own content or a forward copied from an existing message when calling webhook.send */
 export type WebhookMessageReference = WebhookReplyReference | WebhookForwardReference
 
 type WebhookMessageOptions = {
-    /** Writable non-voice MessageFlags bits. Omit for Fluxer's default; voice flags and unknown bits are rejected */
+    /** Message behavior flags from MessageFlags. Only the supported non-voice flags are writable, and omission uses Fluxer's default */
     readonly flags?: number
-    /** Explicit notification permissions, default none */
+    /** Which mentions may notify people. By default, mention text does not enable notifications */
     readonly allowedMentions?: AllowedMentions
-    /** Per-message display name, 1–80 nonblank Unicode code points */
+    /** Override the sender name for this message only, using 1–80 Unicode code points with non-whitespace content */
     readonly username?: string
-    /** Per-message HTTP(S) avatar URL fetched by Fluxer, not by the SDK */
+    /** Override the avatar for this message only. Use an HTTP(S) URL without credentials, at most 8,192 characters, fetched by Fluxer */
     readonly avatarUrl?: string
 }
 
-/** Webhook delivery without requiring a known channel or bot token.
- * A reply can include default message content and uploads. A forward accepts no content, embeds, stickers or uploads, but can override
- * the webhook identity, flags or mention policy while Fluxer creates the source snapshot. Fluxer rejects a missing or cross-channel target
+/**
+ * A message to send through a webhook client, using the webhook's token rather than a bot token.
+ * For a new message, supply text, embeds, uploads or stickers and omit messageReference.
+ * For a reply, add a reply reference and write the content or attachments normally.
+ * For a forward, supply only a forward reference and optional sender, flags or mention overrides.
+ * Forwards cannot also contain new text, embeds, stickers or uploads.
+ * Fluxer rejects missing or cross-channel reply/forward targets. New messages do not require you to know the destination channel ID
  */
 export type WebhookMessageInput =
-    | (MessageBody & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference })
-    | (WebhookMessageOptions & { readonly messageReference: WebhookForwardReference })
+    | (MessageBody &
+          WebhookMessageOptions & {
+              /** Reply to this existing message, or omit the reference to send an independent message */
+              readonly messageReference?: WebhookReplyReference
+          })
+    | (WebhookMessageOptions & {
+          /** Copy this source message as a forward instead of supplying new message content */
+          readonly messageReference: WebhookForwardReference
+      })
 
-/** Token-authenticated webhook settings. Channel moves remain bot-management only */
+/**
+ * Change a webhook's default name or avatar through its token-only client.
+ * Supply at least one setting. Omitted settings stay unchanged, and moving channels requires a bot client instead
+ */
 export interface WebhookTokenEdit {
-    /** New nonblank name, 1–80 Unicode code points */
+    /** New default sender name, with 1–80 Unicode code points and at least one non-whitespace character */
     readonly name?: string
-    /** Image data URI, or null to remove the avatar */
+    /** Base64 image data URI, or null to remove the avatar */
     readonly avatar?: string | null
 }
 
-/** Supply content, embeds or flags. Fluxer's webhook edit route cannot replace or upload attachments */
+/**
+ * Changes to a message previously sent by this webhook.
+ * Supply content, embeds or flags. Omitted values stay unchanged, while empty text or an empty embed array clears that part.
+ * This operation cannot upload or replace attachments
+ */
 export interface WebhookMessageEdit {
-    /** Replace writable non-voice MessageFlags bits. Omit to preserve them; zero clears both supported bits */
+    /** Replace the supported non-voice MessageFlags bits. Omit to preserve them, or use zero to clear both supported bits */
     readonly flags?: number
-    /** Replacement text, including empty text to clear */
+    /** New message text, or an empty string to remove the existing text */
     readonly content?: string
-    /** Replacement embeds, including [] to clear */
+    /** New rich-message cards, or an empty array to remove the existing embeds */
     readonly embeds?: readonly EmbedInput[]
-    /** Notifications default off for this edit */
+    /** Which mentions in the edited message may notify people. Notifications are disabled by default for this edit */
     readonly allowedMentions?: AllowedMentions
 }
 
-/** Bot-authenticated webhook management settings */
+/** Request settings for a bot client's webhook management, including an optional audit-log explanation */
 export interface WebhookOperationOptions extends MessageOperationOptions {
-    /** Optional trimmed printable-ASCII audit header for create/edit/delete only, 1–512 characters after trimming, sent without URL escaping */
+    /** Explain a create, edit or delete in the server audit log. Use printable ASCII, 1–512 characters after trimming, sent without URL escaping */
     readonly auditReason?: string
 }
 
-/** Default management starts immediately and supports cancellation of this operation only */
+/** Request settings for webhook management in the default API. An AbortSignal cancels this request, not the bot client */
 export interface DefaultWebhookOperationOptions extends WebhookOperationOptions, OperationOptions {}
 
-/** Stored raw credentials are validated and copied locally without authenticating or sending requests */
-export type WebhookClientOptions = ({ readonly id: string; readonly token: string } | WebhookCredentials) & {
+/**
+ * Credentials and limits for createWebhookClient.
+ * Supply an ID/token pair from secure storage or the credentials object returned by webhook creation.
+ * Creating the client validates and copies these values locally. It does not send a request or prove the credentials work
+ */
+export type WebhookClientOptions = (
+    | {
+          /** Decimal ID of the webhook to use */
+          readonly id: string
+          /** Webhook secret, not a bot token. Keep it out of logs and public source code */
+          readonly token: string
+      }
+    | WebhookCredentials
+) & {
     /**
-     * Explicit hosted or self-hosted instance selection. Omit it for hosted Fluxer.
-     * Creation validates the root only. Requests and `instance.resolve` read the unauthenticated well-known document lazily and retain one immutable result for this webhook client's lifetime.
-     * HTTPS is required by default. `allowInsecure: true` is an explicit HTTP local/self-hosted opt-in
+     * Choose the Fluxer instance that hosts this webhook, not its destination guild. Omit this setting for hosted Fluxer.
+     * Creating the client validates only the root URL. The first request or instance.resolve call discovers the instance's endpoints.
+     * That discovery needs no credentials, and its result is kept for this client's lifetime.
+     * HTTPS is required unless you explicitly set allowInsecure for an HTTP local or self-hosted server
      */
     readonly instance?: InstanceOptions
-    /** Maximum reserved attachment transfer bytes across queued and active operations, positive safe integer, default 104,857,600.
-     * Reservations use byte-array length, file size or declared stream size and release after transport cleanup.
-     * Separate from the 4 MiB queued JSON budget, not a measure of retained heap or a process-memory ceiling
+    /**
+     * Limit the combined declared size of attachments waiting to upload or currently uploading, in bytes.
+     * Defaults to 104,857,600 bytes (100 MiB). Supply a positive safe integer.
+     * Each upload counts its byte-array length, file size or declared stream size until its connection and body are cleaned up.
+     * This is separate from the 4 MiB queued JSON budget and is not a limit on the application's total memory use
      */
     readonly uploadMaxBytes?: number
 }
 
-/** Webhook operation named by expected failures and default defects */
+/** Identifies the webhook action that failed, so an error can be associated with the request your application made */
 export type WebhookOperation =
     | "webhooks.create"
     | "webhooks.fetch"
@@ -158,24 +203,29 @@ export type WebhookOperation =
     | "webhooks.editMessage"
     | "webhooks.deleteMessage"
 
-/** Safe failure metadata, never credential-bearing URLs, response bodies or caller inputs */
+/**
+ * An expected failure while managing a webhook or one of its messages.
+ * Use reason to distinguish invalid input, an unavailable service or a rejected request, and outcome before deciding whether to retry a write.
+ * An unknown outcome means Fluxer may already have applied the change. Fetch the current state when possible instead of blindly repeating it.
+ * Error details exclude secret-bearing URLs, raw response bodies and the values you submitted
+ */
 export class WebhookOperationError extends Error {
-    /** Stable expected-failure discriminator */
+    /** Identifies this error in a switch or another tagged-error check */
     readonly _tag = "WebhookOperationError"
-    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    /** Explains a rejected local field without repeating its value, or null when no specific input detail is available */
     readonly inputValidation: InputValidationDetail | null
     constructor(
-        /** Requested operation */
+        /** Webhook action your application attempted */
         readonly operation: WebhookOperation,
-        /** notFound means HTTP 404, which can also mean an invalid webhook credential */
+        /** Failure category. notFound means HTTP 404 and may indicate an invalid token, not just a missing webhook */
         readonly reason: "input" | "busy" | "notFound" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
-        /** unknown writes may have applied. Rejection is not a rollback guarantee */
+        /** Whether the request was never sent, rejected by Fluxer, or may have taken effect. A rejection does not promise rollback */
         readonly outcome: "notDispatched" | "rejected" | "unknown",
-        /** Received HTTP status, or null */
+        /** HTTP response status when one was received, or null when it is unavailable */
         readonly status: number | null = null,
-        /** Server-required delay in milliseconds when available */
+        /** Delay requested by Fluxer before retrying, in milliseconds, or null when unavailable */
         readonly retryAfterMs: number | null = null,
-        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        /** Recognized explanation of Fluxer's rejection, without raw response data, or null when unavailable */
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
@@ -196,5 +246,9 @@ export class WebhookOperationError extends Error {
     }
 }
 
-/** Native interruption stays in the Effect cause, while default operations also return CancelledError */
+/**
+ * Expected failures shared by webhook operations, including requests made after the client closes.
+ * Default API methods additionally return CancelledError when their AbortSignal is aborted.
+ * Effect-native cancellation interrupts the running Effect rather than adding a cancellation value to this union
+ */
 export type WebhookOperationFailure = WebhookOperationError | ClientClosedError

@@ -3,25 +3,30 @@ import type { ClientClosedError } from "./errors.js"
 import { operationErrorMessage } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** One fresh gateway count request. A logical request can fan out to local shard commands but holds one client-wide admission slot and no count cache */
+/** The guild or channel count request named in an error.
+ * One call can send commands to several local shards but occupies one shared request slot and does not cache counts
+ */
 export type CountOperation = "guilds.fetchCounts" | "channels.fetchMemberCounts"
 
 /**
- * One frozen count observed through Fluxer's gateway. `onlineCount` is visibility-filtered by Fluxer and is not a
- * complete presence inventory
+ * Member totals returned for one requested guild by Fluxer's gateway.
+ * This frozen observation is not cached and can become outdated immediately.
+ * Fluxer filters onlineCount by visibility, so it is not a complete account-presence inventory
  */
 export interface GuildCount {
-    /** Requested canonical positive uint64 decimal guild ID */
+    /** Requested guild ID as a positive decimal string with no leading zeroes, within the unsigned 64-bit range */
     readonly guildId: string
-    /** Nonnegative members Fluxer reported for this guild */
+    /** Member count Fluxer reported for this guild, never negative */
     readonly memberCount: number
-    /** Nonnegative visible online members Fluxer reported for this guild */
+    /** Visible online-member count Fluxer reported for this guild, never negative */
     readonly onlineCount: number
 }
 
 /**
- * One fresh multi-guild gateway result. `omittedGuildIds` preserves requested IDs for which Fluxer sent no count.
- * Omission is not zero, absence, inaccessible membership, or a provider failure. An unowned or unready routed guild fails notConnected instead of appearing here
+ * Results from one explicit request for several guild counts, ordered to match your requested IDs.
+ * omittedGuildIds lists requested IDs for which Fluxer returned no count.
+ * Do not treat an omission as zero or infer missing membership, denied access or a provider failure.
+ * A guild assigned to an unowned or unready shard fails the call with notConnected instead
  */
 export interface GuildCountsResult {
     /** Frozen count entries in the caller's requested guild-ID order */
@@ -30,9 +35,11 @@ export interface GuildCountsResult {
     readonly omittedGuildIds: readonly string[]
 }
 
-/** One frozen channel visibility count returned with the gateway response's guild identity */
+/** Visible member totals for one requested channel, with the guild ID supplied by the gateway response.
+ * Counts concern this channel's visibility, not the full guild membership
+ */
 export interface ChannelMemberCount extends GuildCount {
-    /** Requested canonical positive uint64 decimal channel ID */
+    /** Requested channel ID as a positive decimal string with no leading zeroes, within the unsigned 64-bit range */
     readonly channelId: string
     /** Nonnegative visible members Fluxer reported for this channel, not the guild total */
     readonly memberCount: number
@@ -41,8 +48,9 @@ export interface ChannelMemberCount extends GuildCount {
 }
 
 /**
- * One fresh per-guild channel-member-count gateway result. `omittedChannelIds` preserves requested IDs for which Fluxer sent no count.
- * It never substitutes zero or infers why Fluxer omitted an entry. An unowned or unready routed guild fails notConnected instead
+ * Results from one guild's requested channel counts, ordered to match your requested channel IDs.
+ * omittedChannelIds lists requested IDs for which Fluxer returned no count, without substituting zero or inferring why.
+ * A guild assigned to an unowned or unready shard fails the call with notConnected instead
  */
 export interface ChannelMemberCountsResult {
     /** Frozen count entries in the caller's requested channel-ID order */
@@ -51,18 +59,25 @@ export interface ChannelMemberCountsResult {
     readonly omittedChannelIds: readonly string[]
 }
 
-/** Settings shared by fresh gateway-count requests. One deadline covers local registration, every routed shard command and all reply fragments */
+/** Set how long one fresh gateway-count call can wait for its complete response.
+ * One deadline covers local registration, every routed shard command and all reply fragments.
+ * These calls require ready routed shards and do not fetch counts over REST as a fallback
+ */
 export interface CountOperationOptions {
-    /** Total reply deadline in milliseconds, including local registration and gateway wait; integer 1–2,147,483,647, default 30,000 */
+    /** Total reply deadline in milliseconds, integer 1–2,147,483,647, default 30,000.
+     * Includes local registration and gateway waiting
+     */
     readonly timeoutMs?: number
 }
 
-/** Default fresh-count settings, with the same deadline plus cancellation of this local wait only */
+/** Fresh-count settings for the default API, with the same deadline plus cancellation of this local wait only */
 export interface DefaultCountOperationOptions extends CountOperationOptions, OperationOptions {}
 
 /**
- * Expected fresh-count failure with no credential, request IDs, or provider body. Cancellation is distinct, and a
- * dispatched request cannot cancel the provider's work or establish whether it continued after local release
+ * A fresh gateway-count call could not return its complete result.
+ * A failure releases this call's local wait and request slot without retrying or caching partial counts.
+ * It does not cancel provider work already dispatched or establish whether that work continued.
+ * Error metadata includes no credential, requested IDs, correlation nonce or provider body
  */
 export class CountOperationError extends Error {
     /** Stable expected-failure discriminator */
@@ -73,7 +88,10 @@ export class CountOperationError extends Error {
     constructor(
         /** Requested count operation */
         readonly operation: CountOperation,
-        /** Local validation, an absent or unready routed shard, client-wide capacity, deadline, gateway loss, or matched malformed reply */
+        /** input means local validation failed, and notConnected means a routed shard is absent or not ready.
+         * busy means shared request capacity is full, and timeout means the reply deadline expired.
+         * connectionLost means a participating shard lost its connection, and response means a matched reply was malformed
+         */
         readonly reason: "input" | "notConnected" | "busy" | "timeout" | "connectionLost" | "response",
         /** Safe local input detail. It never retains rejected values, caller keys, credentials, or provider data */
         inputValidation: InputValidationDetail | null = null,
@@ -94,5 +112,5 @@ export class CountOperationError extends Error {
     }
 }
 
-/** Expected fresh-count failure. Native interruption and default cancellation remain separate from this union */
+/** Expected fresh-count failure. Native interruption and cancellation in the default API remain separate from this union */
 export type CountOperationFailure = CountOperationError | ClientClosedError

@@ -5,9 +5,9 @@ import { PaginationError } from "#sdk/pagination"
 import type { ClientOwner } from "./client.js"
 import { guildFetch, memberSelf, roleList } from "./guilds.js"
 import { calculatePermissions } from "./permissions.js"
-import { memberSearch } from "./member-search.js"
+import { encodeMemberSearchQuery, memberSearch } from "./member-search.js"
 import { Pagination } from "./pagination.js"
-import { record } from "./message.js"
+import { identifier, record } from "./message.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 const positive = (value: unknown): value is number =>
@@ -15,7 +15,7 @@ const positive = (value: unknown): value is number =>
 
 /** Search may enqueue indexing, so the shared REST owner's POST retry policy remains unchanged */
 export function searchMembers(
-    owner: ClientOwner,
+    owner: Pick<ClientOwner, "guild">,
     guildId: string,
     query?: MemberSearchQuery,
     options?: GuildOperationOptions,
@@ -76,7 +76,7 @@ export function searchMembers(
 }
 
 export function searchMemberPagination(
-    owner: ClientOwner,
+    owner: Pick<ClientOwner, "guild" | "subscribe" | "state">,
     guildId: string,
     filters: Omit<MemberSearchQuery, "limit">,
     limits: MemberSearchIterationLimits,
@@ -141,9 +141,11 @@ export function searchMemberPagination(
                     "Member search timeout must be a positive safe integer no greater than 2,147,483,647",
                 ),
             )
-        const validated = memberSearch(guildId, { ...filters, limit: pageSize })
+        if (!identifier(guildId))
+            return invalid(inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings"))
+        const validated = encodeMemberSearchQuery(filters)
         if (validated instanceof InputValidationFailure) return invalid(validated)
-        const copied = JSON.parse(JSON.stringify(filters)) as Omit<MemberSearchQuery, "limit">
+        const copied = validated.query
         const requestOptions = options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }
         const source = {
             identity: (hit: import("#sdk/member-search").MemberSearchHit) => hit.userId,

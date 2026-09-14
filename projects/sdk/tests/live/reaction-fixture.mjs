@@ -37,7 +37,7 @@ export async function createReactionEmoji(api, journal, save, botId) {
 }
 
 /** Resolve only the journal's unique marker and uploader; retain unresolved intent rather than guessing absence */
-export async function cleanupReactionEmoji(api, journal) {
+export async function cleanupReactionEmoji(api, journal, save) {
     if (journal.emojiName === undefined) return
     assert.match(journal.guildId ?? "", /^\d+$/)
     // Accept the previous 33-character marker only to recover journals written before the length fix
@@ -53,6 +53,8 @@ export async function cleanupReactionEmoji(api, journal) {
         assert.match(item.id, /^\d+$/)
         assert.equal(item.user?.id, journal.emojiOwnerId)
         if (journal.emojiId !== undefined) assert.equal(item.id, journal.emojiId)
+        journal.emojiId = item.id
+        await save()
         await api("DELETE", `${path}/${item.id}`)
     }
     const after = await api("GET", path)

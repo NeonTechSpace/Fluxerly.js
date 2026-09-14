@@ -1,7 +1,13 @@
 packages:
   - sdk
   - web
+  - release
 allowBuilds:
+  esbuild: true
   msgpackr-extract: false
+  workerd: true
 minimumReleaseAgeExclude:
   - effect@4.0.0-rc.115
+  - fumadocs-core@16.15.10
+  - fumadocs-ui@16.15.10
+  - zod@4.6.4

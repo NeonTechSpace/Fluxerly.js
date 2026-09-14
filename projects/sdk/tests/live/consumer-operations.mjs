@@ -143,8 +143,8 @@ async function cleanup() {
     assert.equal(journal.guildId, guildId)
     assert.equal(journal.botId, botId)
     await restoreConsumerBotRoles(cleanupApi, journal, guildId, botId)
-    if (journal.roleName !== undefined) await cleanupGuildTestRole(cleanupApi, journal)
-    if (journal.channelFixtures !== undefined) await cleanupGuildChannelFixtures(cleanupApi, journal)
+    if (journal.roleName !== undefined) await cleanupGuildTestRole(cleanupApi, journal, save)
+    if (journal.channelFixtures !== undefined) await cleanupGuildChannelFixtures(cleanupApi, journal, save)
     unlinkSync(journalPath)
     journal = undefined
     report("test_resources_removed")
@@ -547,7 +547,7 @@ async function verifyCounts(channelId) {
         } else {
             const fiber = Effect.runFork(client.channels.fetchMemberCounts(guildId, [channelId]))
             let settled = false
-            const awaiting = Effect.runPromise(Fiber.await(fiber)).then((exit) => {
+            const awaiting = Effect.runPromise(Fiber["await"](fiber)).then((exit) => {
                 settled = true
                 return exit
             })

@@ -15,26 +15,34 @@ import {
     type EventReadError,
     type RegistrationError,
 } from "#sdk/message-errors"
-import type { Message } from "#sdk/messages"
+import type { Message, MessageCore } from "#sdk/messages"
 import type { MessageReference } from "#sdk/messages"
 import type { MessageReaction, MessageReactionBatch } from "#sdk/reactions"
 import { withDeadline } from "./effect-failures.js"
 import { record } from "./message.js"
+import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
 
 type Resume<A> = (value: Effect.Effect<A | null, EventOverflowError>) => void
 type Limits = Required<HandlerOptions>
-type EventWaitSettings<K extends EventName> = {
+/** Narrow the two message-bearing dispatch names without treating other events as messages */
+export function isMessageEvent<K extends EventName, M extends MessageCore>(
+    event: K,
+    _message: EventMap<M>[K],
+): _message is EventMap<M>[K] & M {
+    return event === "messageCreate" || event === "messageUpdate"
+}
+type EventWaitSettings<K extends EventName, M extends MessageCore = Message> = {
     readonly buffer: EventBufferOptions
-    readonly filter: ((event: EventMap[K]) => boolean) | undefined
+    readonly filter: ((event: EventMap<M>[K]) => boolean) | undefined
     readonly timeoutMs: number
 }
 
 const maximumTimerMs = 2_147_483_647
 
-function eventWaitSettings<K extends EventName>(
-    options: EventWaitOptions<K> | undefined,
+function eventWaitSettings<K extends EventName, M extends MessageCore = Message>(
+    options: EventWaitOptions<K, M> | undefined,
     allowSignal: boolean,
-): EventWaitSettings<K> | ConfigurationError {
+): EventWaitSettings<K, M> | ConfigurationError {
     const input = options === undefined ? {} : options
     if (!record(input)) return new ConfigurationError("eventOptions", "Event wait options must be an object")
     if (
@@ -66,61 +74,12 @@ function eventWaitSettings<K extends EventName>(
             ...(input.maxPendingMessages === undefined ? {} : { maxPendingMessages: input.maxPendingMessages }),
             ...(input.maxPendingBytes === undefined ? {} : { maxPendingBytes: input.maxPendingBytes }),
         } as EventBufferOptions,
-        filter: input.filter as ((event: EventMap[K]) => boolean) | undefined,
+        filter: input.filter as ((event: EventMap<M>[K]) => boolean) | undefined,
         timeoutMs,
     }
 }
 
-function limits(event: unknown, options: unknown): Limits | ConfigurationError {
-    if (
-        typeof event !== "string" ||
-        ![
-            "userUpdate",
-            "directMessageCreate",
-            "directMessageUpdate",
-            "directMessageDelete",
-            "directMessageRecipientAdd",
-            "directMessageRecipientRemove",
-            "guildCreate",
-            "guildUpdate",
-            "guildDelete",
-            "webhooksUpdate",
-            "inviteCreate",
-            "inviteDelete",
-            "guildAuditLogEntryCreate",
-            "guildEmojisUpdate",
-            "guildStickersUpdate",
-            "guildChannelCreate",
-            "guildChannelUpdate",
-            "guildChannelDelete",
-            "guildChannelUpdateBulk",
-            "guildMemberAdd",
-            "guildMemberUpdate",
-            "guildMemberRemove",
-            "presenceUpdate",
-            "presenceUpdateBulk",
-            "voiceStateSnapshot",
-            "voiceStateUpdate",
-            "guildBanAdd",
-            "guildBanRemove",
-            "guildRoleDelete",
-            "guildRoleCreate",
-            "guildRoleUpdate",
-            "guildRoleUpdateBulk",
-            "typingStart",
-            "messageCreate",
-            "channelPinsUpdate",
-            "messageUpdate",
-            "messageDelete",
-            "messageDeleteBulk",
-            "messageReactionAdd",
-            "messageReactionAddMany",
-            "messageReactionRemove",
-            "messageReactionRemoveAll",
-            "messageReactionRemoveEmoji",
-        ].includes(event)
-    )
-        return new ConfigurationError("event", "Unsupported event name")
+function limits(options: unknown): Limits | ConfigurationError {
     if (options === undefined) options = {}
     if (!record(options)) return new ConfigurationError("eventOptions", "Event options must be an object")
     const defaults = { concurrency: 1, maxPendingMessages: 256, maxPendingBytes: 4_194_304 }
@@ -256,18 +215,18 @@ export class EventSource<A = Message> {
 }
 
 /** One internal single-consumption event wait */
-interface EventWaitSource<K extends EventName> {
+interface EventWaitSource<K extends EventName, M extends MessageCore = Message> {
     stop(): void
-    wait(): Effect.Effect<EventMap[K], EventWaitError | EventOverflowError | ClientClosedError>
+    wait(): Effect.Effect<EventMap<M>[K], EventWaitError | EventOverflowError | ClientClosedError>
 }
 
-class EventWait<K extends EventName> implements EventWaitSource<K> {
+class EventWait<K extends EventName, M extends MessageCore = Message> implements EventWaitSource<K, M> {
     #stopped = false
-    #filter: ((event: EventMap[K]) => boolean) | undefined
+    #filter: ((event: EventMap<M>[K]) => boolean) | undefined
 
     constructor(
-        private readonly source: EventSource<EventMap[K]>,
-        filter: ((event: EventMap[K]) => boolean) | undefined,
+        private readonly source: EventSource<EventMap<M>[K]>,
+        filter: ((event: EventMap<M>[K]) => boolean) | undefined,
         private readonly deadline: number,
         private readonly clock: Clock.Clock,
     ) {
@@ -289,7 +248,7 @@ class EventWait<K extends EventName> implements EventWaitSource<K> {
         return this.#now() >= this.deadline
     }
 
-    #accept(event: EventMap[K]): boolean | EventWaitError {
+    #accept(event: EventMap<M>[K]): boolean | EventWaitError {
         if (!this.#filter) return true
         let accepted: unknown
         try {
@@ -297,20 +256,11 @@ class EventWait<K extends EventName> implements EventWaitSource<K> {
         } catch {
             return new EventWaitError("filter")
         }
-        try {
-            if (
-                accepted !== null &&
-                (typeof accepted === "object" || typeof accepted === "function") &&
-                typeof (accepted as { readonly then?: unknown }).then === "function"
-            )
-                void Promise.resolve(accepted).catch(() => undefined)
-        } catch {
-            return new EventWaitError("filter")
-        }
+        discardInvalidCallbackReturn(accepted)
         return typeof accepted === "boolean" ? accepted : new EventWaitError("filter")
     }
 
-    wait(): Effect.Effect<EventMap[K], EventWaitError | EventOverflowError | ClientClosedError> {
+    wait(): Effect.Effect<EventMap<M>[K], EventWaitError | EventOverflowError | ClientClosedError> {
         return Effect.suspend(() => {
             const remaining = this.deadline - this.#now()
             if (remaining <= 0) {
@@ -337,7 +287,7 @@ class EventWait<K extends EventName> implements EventWaitSource<K> {
     }
 }
 
-export class EventBus {
+export class EventBus<M extends MessageCore = Message> {
     #reactionCollectors = new Map<
         string,
         Set<(reaction: MessageReaction | MessageReactionBatch, bytes: number, shardId: number) => void>
@@ -361,13 +311,13 @@ export class EventBus {
             if (!listeners.size) this.#reactionCollectors.delete(key)
         }
     }
-    #collectors = new Map<string, Set<(message: Message, bytes: number, shardId: number) => void>>()
+    #collectors = new Map<string, Set<(message: M, bytes: number, shardId: number) => void>>()
 
     /** Channel selection precedes collector queue admission. These callbacks only enqueue, never run user filters */
-    listenMessages(channelId: string, listener: (message: Message, bytes: number) => void, shardId?: number) {
+    listenMessages(channelId: string, listener: (message: M, bytes: number) => void, shardId?: number) {
         let listeners = this.#collectors.get(channelId)
         if (!listeners) this.#collectors.set(channelId, (listeners = new Set()))
-        const offer = (message: Message, bytes: number, sourceShard: number) => {
+        const offer = (message: M, bytes: number, sourceShard: number) => {
             if (shardId === undefined || shardId === sourceShard) listener(message, bytes)
         }
         listeners.add(offer)
@@ -376,7 +326,7 @@ export class EventBus {
             if (!listeners.size) this.#collectors.delete(channelId)
         }
     }
-    #sources: { [K in EventName]: Set<EventSource<EventMap[K]>> } = {
+    #sources: { [K in EventName]: Set<EventSource<EventMap<M>[K]>> } = {
         userUpdate: new Set(),
         directMessageCreate: new Set(),
         directMessageUpdate: new Set(),
@@ -430,25 +380,27 @@ export class EventBus {
     open<K extends EventName>(
         event: K,
         options?: EventBufferOptions,
-    ): Effect.Effect<EventSource<EventMap[K]>, RegistrationError> {
-        return Effect.suspend((): Effect.Effect<EventSource<EventMap[K]>, RegistrationError> => {
+    ): Effect.Effect<EventSource<EventMap<M>[K]>, RegistrationError> {
+        return Effect.suspend((): Effect.Effect<EventSource<EventMap<M>[K]>, RegistrationError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            const settings = limits(event, options)
+            if (typeof event !== "string" || !Object.hasOwn(this.#sources, event))
+                return Effect.fail(new ConfigurationError("event", "Unsupported event name"))
+            const settings = limits(options)
             if (settings instanceof ConfigurationError) return Effect.fail(settings)
             const sources = this.#sources[event]
-            const source = new EventSource<EventMap[K]>(settings, () => sources.delete(source))
+            const source = new EventSource<EventMap<M>[K]>(settings, () => sources.delete(source))
             sources.add(source)
             return Effect.succeed(source)
         })
     }
-    offer<K extends EventName>(event: K, message: EventMap[K], bytes: number, shardId = 0) {
+    offer<K extends EventName>(event: K, message: EventMap<M>[K], bytes: number, shardId = 0) {
         if (event === "messageReactionAdd" || event === "messageReactionAddMany") {
             const reaction = message as MessageReaction | MessageReactionBatch
             for (const offer of this.#reactionCollectors.get(`${reaction.channelId}:${reaction.id}`) ?? [])
                 offer(reaction, bytes, shardId)
         }
-        if (event === "messageCreate") {
-            const created = message as Message
+        if (event === "messageCreate" && isMessageEvent<K, M>(event, message)) {
+            const created = message
             for (const offer of this.#collectors.get(created.channelId) ?? []) offer(created, bytes, shardId)
         }
         for (const source of this.#sources[event]) source.offer(message, bytes)
@@ -498,11 +450,11 @@ export class EventBus {
 
     on<K extends EventName, E, R, E2, R2>(
         event: K,
-        handler: (message: EventMap[K]) => Effect.Effect<unknown, E, R>,
+        handler: (message: EventMap<M>[K]) => Effect.Effect<unknown, E, R>,
         options: HandlerOptions | undefined,
         onError: ((report: HandlerErrorReport) => Effect.Effect<unknown, E2, R2>) | undefined,
         scope: Scope.Scope,
-    ): Effect.Effect<EventSource<EventMap[K]>, RegistrationError, R | R2> {
+    ): Effect.Effect<EventSource<EventMap<M>[K]>, RegistrationError, R | R2> {
         const bus = this
         return Effect.uninterruptible(
             Effect.gen(function* () {
@@ -528,7 +480,7 @@ export class EventBus {
                 }
                 let active = 0
                 let capacity = Deferred.makeUnsafe<void>()
-                const worker = (message: EventMap[K]) =>
+                const worker = (message: EventMap<M>[K]) =>
                     Effect.withFiber((fiber) =>
                         Effect.gen(function* () {
                             bus.#handlerFibers.add(fiber.id)
@@ -588,12 +540,12 @@ export class EventBus {
     }
 }
 
-function openEventWait<K extends EventName>(
-    bus: EventBus,
+function openEventWait<K extends EventName, M extends MessageCore = Message>(
+    bus: EventBus<M>,
     event: K,
-    options?: EventWaitOptions<K>,
+    options?: EventWaitOptions<K, M>,
     allowSignal = false,
-): Effect.Effect<EventWaitSource<K>, RegistrationError> {
+): Effect.Effect<EventWaitSource<K, M>, RegistrationError> {
     return Clock.clockWith((clock) =>
         Effect.gen(function* () {
             const settings = eventWaitSettings(options, allowSignal)
@@ -606,12 +558,12 @@ function openEventWait<K extends EventName>(
 }
 
 /** One lazy wait. Its internal scope releases intake on completion, timeout, interruption or client shutdown */
-export function waitForEvent<K extends EventName>(
-    bus: EventBus,
+export function waitForEvent<K extends EventName, M extends MessageCore = Message>(
+    bus: EventBus<M>,
     event: K,
-    options?: EventWaitOptions<K>,
+    options?: EventWaitOptions<K, M>,
     allowSignal = false,
-): Effect.Effect<EventMap[K], RegistrationError | EventWaitError | EventOverflowError> {
+): Effect.Effect<EventMap<M>[K], RegistrationError | EventWaitError | EventOverflowError> {
     return Effect.scoped(
         Effect.acquireRelease(openEventWait(bus, event, options, allowSignal), (source) =>
             Effect.sync(() => source.stop()),

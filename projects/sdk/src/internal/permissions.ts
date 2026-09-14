@@ -273,7 +273,7 @@ function remoteCalculationFailure(error: GuildOperationError): GuildOperationErr
  * resulting observations are not transactional and do not establish access, hierarchy, timeouts, or action success
  */
 export function fetchPermissions(
-    owner: ClientOwner,
+    owner: Pick<ClientOwner, "guild" | "channel">,
     target: PermissionTarget,
     options?: GuildOperationOptions,
 ): Effect.Effect<bigint, GuildOperationFailure | ChannelOperationFailure> {

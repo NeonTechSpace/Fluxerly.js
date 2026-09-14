@@ -1,56 +1,74 @@
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** Bounds for one demand-driven remote traversal, not a request to download a complete snapshot.
- * Each consumption starts independently and copies its inputs when consumption begins.
- * No background prefetch, persistence or cross-run deduplication. Existing page methods remain unchanged
+/** Read a remote list one page at a time through an iterator or Effect Stream, with explicit item and page limits.
+ * Supply maxItems to bound the number of delivered items. Pages are requested only when the current page has been consumed
+ *
+ * Each time you consume the iterator or Stream, it starts independently and copies the inputs then, not at creation
+ *
+ * Early exit, failure, interruption and client shutdown release that consumption's buffered page and tracking state.
+ * Already-delivered items remain yours
+ *
+ * The SDK does not fetch ahead, persist results or remove duplicates across separate consumptions
+ *
+ * Each page uses its own request deadline. The item and page caps do not provide a total elapsed-time deadline.
+ * Concurrent remote changes mean traversal is not a complete, consistent snapshot
  */
 export interface PaginationQuery {
-    /** Maximum emitted items, a required positive safe integer. Reaching it is normal completion, not remote exhaustion */
+    /** Maximum items to deliver, a required positive safe integer. Reaching this cap finishes normally, without proving remote exhaustion */
     readonly maxItems: number
-    /** Maximum items requested per page, reduced to the remaining item allowance.
-     * Defaults/ranges match the underlying endpoint: History 50/1–100, members 100/1–1000,
-     * reaction users 25/1–100, pins 50/1–50, audit logs 50/1–100 and member search 100/1–100
+    /** Maximum items to request per page, reduced when fewer items remain under maxItems.
+     * History defaults to 50 with a range of 1 through 100, members to 100 with 1 through 1,000.
+     * Guild memberships default to 200 with 1 through 200, reaction users to 25 with 1 through 100.
+     * Pins default to 50 with 1 through 50, audit logs to 50 with 1 through 100.
+     * Member search defaults to 100 with 1 through 100, message search to 25 with 1 through 25
      */
     readonly pageSize?: number
-    /** Maximum logical page requests, a positive safe integer, default 100.
-     * Retries within a page use the existing bounded REST policy and do not count as additional pages.
-     * Needing another page after this allowance fails with PaginationError pageLimit
+    /** Maximum page requests, a positive safe integer, default 100.
+     * A retry within one page does not count as another page. Duplicate-only pin pages do count.
+     * Needing a further page after this allowance fails with PaginationError reason pageLimit, preserving already-delivered items
      */
     readonly maxPages?: number
 }
 
-/** Newest-to-oldest message traversal. Use fetchHistory for after/around windows */
+/** Limits and starting point for messages.iterateHistory, reading newest messages first.
+ * For newer-than or centered windows, use messages.fetchHistory with after or around instead
+ */
 export interface HistoryIterationQuery extends PaginationQuery {
-    /** Exclusive decimal message-ID starting cursor. Omission starts with the latest visible messages */
+    /** Start with messages older than this decimal message ID, excluding it. Omit to start with the latest visible messages */
     readonly before?: string
 }
 
-/** Ascending user-ID traversal for members or reaction users */
+/** Limits and starting point for ascending member or reaction-user traversal.
+ * Ordering follows user IDs, not join dates or reaction times
+ */
 export interface UserIterationQuery extends PaginationQuery {
-    /** Exclusive decimal user-ID starting cursor, not a timestamp */
+    /** Start with decimal user IDs greater than this ID, excluding it. Omit to start from the first page */
     readonly after?: string
 }
 
-/** Ascending guild-ID traversal of the authenticated bot's memberships */
+/** Limits and starting point for guilds.iterate, reading the bot's server memberships in ascending server-ID order */
 export interface GuildIterationQuery extends PaginationQuery {
-    /** Exclusive starting guild ID. A removed cursor that causes repeated results fails with cursorStalled */
+    /** Start after this decimal server ID, excluding it. Omit for the first page.
+     * Repeated results caused by a removed cursor fail with PaginationError reason cursorStalled
+     */
     readonly after?: string
-    /** Request provider-supplied approximate member and presence counts for every page. Defaults to false.
-     * Fluxer can omit requested counts and permissions, so each omitted summary field remains unavailable
+    /** Ask Fluxer to include approximate member and presence counts on each page, default false.
+     * Counts and permissions can still be omitted. An omitted summary field remains unavailable, not zero
      */
     readonly withCounts?: boolean
 }
 
-/** Descending pin-time traversal, emitting each message ID at most once per consumption.
- * Timestamp ties and concurrent changes can prevent complete enumeration. A stalled cursor is an error.
- * The first observed pin for an ID wins, even if that message is repinned during traversal
+/** Limits and starting point for messages.iteratePins, reading newest pin times first.
+ * Each message ID is delivered at most once per consumption. Its first observed pin wins, even if it is later repinned.
+ * Timestamp ties or concurrent changes can prevent complete enumeration.
+ * If the next timestamp does not become older, traversal fails with cursorStalled after delivering newly observed IDs from that page
  */
 export interface PinIterationQuery extends PaginationQuery {
-    /** ISO 8601 timestamp with timezone, selecting older pin times. Omission uses the endpoint default */
+    /** Start with older pin times than this ISO 8601 timestamp with a timezone. Omit to use Fluxer's current-time default */
     readonly before?: string
 }
 
-/** Traversal identified by a pagination failure or a default SDK defect */
+/** Operation name included in a PaginationError or default-API SDK defect to identify the traversal */
 export type PaginationOperation =
     | "iterateHistory"
     | "messages.iterateSearch"
@@ -61,19 +79,27 @@ export type PaginationOperation =
     | "iteratePins"
     | "auditLogs.iterate"
 
-/** Local traversal failure without identifiers, response bodies or partial results.
- * Items already delivered remain caller-owned. Remote failures retain their underlying page-operation error
+/** Reading multiple pages failed because of invalid settings, a page limit, a stalled cursor or search readiness.
+ * Contains no resource IDs, response bodies or accumulated partial result.
+ * Items already delivered remain yours. A remote request failure keeps the underlying page-operation error instead of becoming PaginationError.
+ * Default-API cancellation uses CancelledError, while native interruption stays in Effect Cause. Unexpected defects remain separate
  */
 export class PaginationError extends Error {
-    /** Stable failure discriminator */
+    /** Literal error tag for identifying PaginationError */
     readonly _tag = "PaginationError"
-    /** Frozen SDK-owned validation facts for local input failures, otherwise null */
+    /** Frozen local validation detail for reason input, otherwise null */
     readonly inputValidation: InputValidationDetail | null
+    /** Identify the failed traversal and its local failure reason.
+     * Validation detail is copied and frozen when supplied, otherwise null. Construction does not start or resume traversal
+     */
     constructor(
-        /** The traversal that failed, not proof that a page request was dispatched */
+        /** Traversal that failed. Its presence does not establish that any page request was sent */
         readonly operation: PaginationOperation,
-        /** Invalid input, no forward cursor progress, a further page exceeding maxPages, or a search index not ready */
+        /** input means invalid settings, cursorStalled means no cursor progress, pageLimit means another page would exceed maxPages.
+         * indexing means message search is preparing an index and traversal will not poll it
+         */
         readonly reason: "input" | "cursorStalled" | "pageLimit" | "indexing",
+        /** Safe local validation detail copied into inputValidation, or null for other failure reasons */
         inputValidation: InputValidationDetail | null = null,
     ) {
         super(`Pagination failed (${operation}, ${reason})`)

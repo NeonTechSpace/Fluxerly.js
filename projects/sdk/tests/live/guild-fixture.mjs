@@ -22,11 +22,11 @@ export async function createGuildTestRole(api, journal, save, create) {
 }
 
 /** Delete only the journaled zero-permission test role; preserve an unresolved journal or externally changed role */
-export async function cleanupGuildTestRole(api, journal) {
+export async function cleanupGuildTestRole(api, journal, save) {
     if (journal.secondRole) {
         assert.equal(journal.secondRole.guildId, journal.guildId)
         assert.equal(journal.secondRole.secondRole, undefined)
-        await cleanupGuildTestRole(api, journal.secondRole)
+        await cleanupGuildTestRole(api, journal.secondRole, save)
     }
     if (journal.roleName === undefined) return
     assert.match(journal.roleName, /^fluxerly-sdk-role-[a-f0-9]{32}$/)
@@ -40,6 +40,8 @@ export async function cleanupGuildTestRole(api, journal) {
         assert.match(role.id, /^\d+$/)
         assert.equal(role.permissions, "0")
         if (journal.roleId !== undefined) assert.equal(role.id, journal.roleId)
+        journal.roleId = role.id
+        await save()
         assert.equal((await api("DELETE", `${path}/${role.id}`)).status, 204)
     }
     const after = await api("GET", path)

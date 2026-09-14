@@ -408,7 +408,15 @@ class WebhookOwner {
     ) {
         this.#token = Redacted.make(token)
         this.instance = new InstanceResolver(instance, this.#scope)
-        this.rest = new RestOwner(undefined, maxBytes, undefined, undefined, undefined, () => this.instance.resolve())
+        this.rest = new RestOwner<Message>(
+            undefined,
+            maxBytes,
+            undefined,
+            undefined,
+            undefined,
+            () => this.instance.resolve(),
+            decodeMessage,
+        )
     }
     run<A>(
         operation: WebhookOperation,

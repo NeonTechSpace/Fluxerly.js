@@ -1,14 +1,29 @@
 import assert from "node:assert/strict"
+import { createRequire, registerHooks } from "node:module"
 import { withHostedDiscovery } from "../hosted-discovery.mjs"
-import {
-    createWebhookClient,
-    oauth,
-    colors,
-    text,
-    permissionBits,
-    builders,
-    commands,
-} from "@neontechspace/fluxerly/effect"
+
+const guardedWebSocketUrl = `data:text/javascript,${encodeURIComponent(`
+    export let constructions = 0
+    export default class WebSocket {
+        constructor() {
+            constructions += 1
+            throw new Error("Creation must not open a WebSocket")
+        }
+    }
+`)}`
+let guardedWebSocketResolutions = 0
+registerHooks({
+    resolve(specifier, context, nextResolve) {
+        const resolved = nextResolve(specifier, context)
+        if (specifier !== "ws") return resolved
+        guardedWebSocketResolutions += 1
+        return { ...resolved, url: guardedWebSocketUrl }
+    },
+})
+const guardedWebSocket = await import(guardedWebSocketUrl)
+const { createWebhookClient, oauth, colors, text, permissionBits, builders, commands } =
+    await import("@neontechspace/fluxerly/effect")
+assert.ok(guardedWebSocketResolutions > 0, "The SDK must import the guarded ws dependency")
 
 assert.equal(await Effect.runPromise(colors.parse("#ff8800")), 0xff8800)
 assert.equal(await Effect.runPromise(colors.toHex(1)), "#000001")
@@ -59,10 +74,9 @@ await Effect.runPromise(
     ),
 )
 import { realpathSync } from "node:fs"
-import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { Context, Effect, Logger, References, Stream } from "effect"
-import {
+const {
     createClient,
     MessageOperationError,
     CollectorError,
@@ -73,16 +87,11 @@ import {
     MemberChunkError,
     ShardConnectionError,
     AuthenticationError,
-} from "@neontechspace/fluxerly/effect"
-import { createClient as createDefault } from "@neontechspace/fluxerly"
+} = await import("@neontechspace/fluxerly/effect")
+const { createClient: createDefault } = await import("@neontechspace/fluxerly")
 
 globalThis.fetch = () => {
     throw new Error("Creation must not make HTTP requests")
-}
-globalThis.WebSocket = class {
-    constructor() {
-        throw new Error("Creation must not open a WebSocket")
-    }
 }
 
 const messages = []
@@ -138,6 +147,7 @@ const client = await Effect.runPromise(
     Effect.scoped(
         Effect.gen(function* () {
             const client = yield* createClient({ token: "fixture-only-not-a-credential", cache: { messages: true } })
+            assert.equal(guardedWebSocket.constructions, 0)
             assert.equal(client.state, "Disconnected")
             const chunks = yield* Effect.flip(client.members.iterateChunks("20", { all: true }).pipe(Stream.runDrain))
             assert.ok(chunks instanceof MemberChunkError)

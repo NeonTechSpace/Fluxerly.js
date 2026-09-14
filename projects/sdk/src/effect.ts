@@ -1,3 +1,63 @@
+/**
+ * Build Fluxer bots, send webhook messages and use OAuth with Effect.
+ * Use this entry point when your application already uses Effect
+ *
+ * @remarks
+ * An Effect is a description of work, not a Promise that has already started.
+ * Calling an SDK method usually builds that description without making a request.
+ * Inside Effect.gen, `yield*` executes a description and gives you its successful result.
+ * Effect.runPromise executes a complete program and returns a JavaScript Promise.
+ * Executing the same description again repeats its work, including remote writes
+ *
+ * `Effect.Effect<A, E, R>` describes a successful value A, expected errors E and required services R.
+ * Expected errors, such as invalid input or an HTTP rejection, use Effect's error channel.
+ * Defects are unexpected faults, such as a throwing property getter or failed cleanup.
+ * Interruption is Effect's cancellation mechanism.
+ * Cause can represent errors, defects and interruption together.
+ * Cancellation waits for SDK-owned cleanup, but cannot undo a request already sent to Fluxer
+ *
+ * Scope is the cleanup lifetime required by client creation, subscriptions and collectors.
+ * Wrap a program in Effect.scoped to provide that lifetime and close its resources when the program ends.
+ * Keep a client and its listeners inside their scopes rather than returning handles after their scopes close.
+ * Other required services come from your Effect program, such as services used by a handler
+ *
+ * REST means the HTTP API used to read or change resources.
+ * HTTP 204 is success with no returned value.
+ * Role hierarchy is the ordering that limits which members and roles a bot can manage.
+ * MFA means the provider's multi-factor authentication requirements
+ *
+ * IDs stay decimal strings so large IDs do not lose precision through JavaScript Number.
+ * A canonical decimal ID has no sign, surrounding whitespace or leading zeroes.
+ * A guild is a Fluxer server.
+ * The gateway is the live connection that carries events.
+ * A shard is one gateway connection assigned a portion of guild event traffic.
+ * A gateway gap is a period when that connection may have missed events, including during recovery.
+ * Finalizers are cleanup actions that Effect waits for when work ends
+ *
+ * Stream values describe sequences. Requests and listeners start when you consume the Stream.
+ * Methods returning plain values, such as diagnostics, cache.clear and format.escapeMarkdown, act immediately
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { createClient } from "@neontechspace/fluxerly/effect"
+ *
+ * export function sendOnce(token: string, channelId: string) {
+ *     const program = Effect.scoped(
+ *         Effect.gen(function* () {
+ *             const client = yield* createClient({ token })
+ *             return yield* client.messages.send(channelId, { content: "Hello" })
+ *         }),
+ *     )
+ *     return Effect.runPromise(program)
+ * }
+ * ```
+ *
+ * This example sends through HTTP without connecting the gateway.
+ * The returned Promise settles after the scoped client finishes cleanup
+ *
+ * @packageDocumentation
+ */
 import type { PermissionInput, PermissionTarget } from "./permissions.js"
 import type { MemberChunk, MemberChunkQuery, MemberChunkFailure, MemberChunkOptions } from "./member-chunks.js"
 import { memberChunkStream } from "#sdk/internal/member-chunks"
@@ -85,8 +145,9 @@ function assetEffect<A>(create: () => Result<A, AssetUrlError>): Effect.Effect<A
 }
 
 /**
- * Pure Fluxer markup helpers with no client, network, cache, or notification-state ownership.
- * Fallible helpers are lazy Effects; `escapeMarkdown` returns text directly. Mention markup does not enable notifications
+ * Create and read Fluxer mention, timestamp and custom-emoji markup without a client or network requests.
+ * Methods that can fail return Effects and check inputs when executed.
+ * `escapeMarkdown` returns text immediately. Mention markup alone does not enable notifications
  *
  * @example
  * ```ts
@@ -101,80 +162,144 @@ function assetEffect<A>(create: () => Result<A, AssetUrlError>): Effect.Effect<A
  *     })
  * ```
  */
-export const format = Object.freeze({
-    /** Escape every character accepted after a Fluxer markup backslash. This returns text immediately and cannot change allowed mentions */
+export const format: Readonly<{
+    /** Escape Fluxer markup characters so text can be inserted as literal content.
+     * Returns the escaped string immediately. This does not change allowedMentions or enable notifications */
+    escapeMarkdown: (value: string) => string
+    /** Create a user mention such as `<@123>` from a decimal user ID.
+     * The Effect fails with HelperError for an invalid ID. Set allowedMentions separately if you want a notification */
+    userMention: (id: string) => Effect.Effect<string, HelperError, never>
+    /** Create a role mention such as `<@&123>` from a decimal role ID.
+     * The Effect fails with HelperError for an invalid ID. Set allowedMentions separately if you want notifications */
+    roleMention: (id: string) => Effect.Effect<string, HelperError, never>
+    /** Create a channel mention such as `<#123>` from a decimal channel ID.
+     * The Effect fails with HelperError for an invalid ID, without looking up the channel */
+    channelMention: (id: string) => Effect.Effect<string, HelperError, never>
+    /** Read the kind and ID from one complete user, role or channel mention.
+     * Extra surrounding text, malformed markup or an invalid decimal ID fails with HelperError */
+    parseMention: (value: string) => Effect.Effect<import("./helpers.js").Mention, HelperError, never>
+    /** Create timestamp markup that Fluxer displays in the reader's local time.
+     * Accepts a Date and optional style, defaulting to ShortDateTime. Whole Unix seconds must be 1 through 8_640_000_000_000.
+     * Invalid Dates, styles or nonpositive seconds fail with HelperError */
+    timestamp: (...args: Parameters<typeof sharedFormat.timestamp>) => Effect.Effect<string, HelperError, never>
+    /** Read a Date and style from one complete timestamp markup value.
+     * An omitted style becomes ShortDateTime. The Date has whole-second precision.
+     * Malformed markup, nonpositive seconds or seconds beyond JavaScript's Date range fail with HelperError */
+    parseTimestamp: (value: string) => Effect.Effect<import("./helpers.js").TimestampMarkup, HelperError, never>
+    /** Create custom-emoji markup from its name, decimal ID and optional animated flag.
+     * Produces `<:name:id>` or `<a:name:id>`. An invalid name or ID fails with HelperError */
+    customEmoji: (...args: Parameters<typeof sharedFormat.customEmoji>) => Effect.Effect<string, HelperError, never>
+    /** Read the name, ID and animated flag from one complete custom-emoji markup value.
+     * Invalid markup fails with HelperError. This does not parse Unicode emoji or resolve shortcodes such as :wave: */
+    parseCustomEmoji: (value: string) => Effect.Effect<import("./helpers.js").CustomEmojiMarkup, HelperError, never>
+}> = Object.freeze({
     escapeMarkdown: sharedFormat.escapeMarkdown,
-    /** Lazily format a canonical decimal user ID as `<@id>`. Execution fails with HelperError for an invalid ID and never enables notifications */
     userMention: (id: string) => helperEffect(() => sharedFormat.userMention(id)),
-    /** Lazily format a canonical decimal role ID as `<@&id>`. Execution fails with HelperError for an invalid ID and never enables notifications */
     roleMention: (id: string) => helperEffect(() => sharedFormat.roleMention(id)),
-    /** Lazily format a canonical decimal channel ID as `<#id>`. Execution fails with HelperError for an invalid ID and performs no lookup */
     channelMention: (id: string) => helperEffect(() => sharedFormat.channelMention(id)),
-    /** Lazily parse one complete user, role, or channel mention. Execution fails with HelperError for malformed markup or a noncanonical ID */
     parseMention: (value: string) => helperEffect(() => sharedFormat.parseMention(value)),
-    /** Lazily format a Date whose whole Unix second is 1 through 8_640_000_000_000. The default style is `ShortDateTime`; invalid Dates and nonpositive seconds fail */
     timestamp: (...args: Parameters<typeof sharedFormat.timestamp>) =>
         helperEffect(() => sharedFormat.timestamp(...args)),
-    /** Lazily parse one complete timestamp to a new whole-second UTC Date. Nonpositive seconds and seconds beyond JavaScript's representable Date range fail */
     parseTimestamp: (value: string) => helperEffect(() => sharedFormat.parseTimestamp(value)),
-    /** Lazily format explicit `<:name:id>` or `<a:name:id>` markup. Execution fails with HelperError unless the name and canonical decimal ID are valid */
     customEmoji: (...args: Parameters<typeof sharedFormat.customEmoji>) =>
         helperEffect(() => sharedFormat.customEmoji(...args)),
-    /** Lazily parse complete explicit custom-emoji markup. Unicode emoji and shortcode resolution are intentionally outside this helper */
     parseCustomEmoji: (value: string) => helperEffect(() => sharedFormat.parseCustomEmoji(value)),
 })
 
-/** Pure decimal-string snowflake helpers. Fallible conversions are lazy Effects and never pass IDs through Number */
-export const snowflakes = Object.freeze({
-    /** Check canonical decimal snowflake form in Fluxer's signed 64-bit range. This returns immediately and does not convert through Number */
+/** Validate Fluxer IDs, read their creation time or create pagination boundaries.
+ * A snowflake is Fluxer's time-based decimal-string ID. Conversions return Effects and use bigint to avoid Number precision loss */
+export const snowflakes: Readonly<{
+    /** Return whether the input is a valid decimal snowflake in Fluxer's signed 64-bit range.
+     * Returns a boolean immediately, without converting through Number */
+    isValid: (value: unknown) => value is string
+    /** Convert a valid decimal snowflake string to bigint without losing precision.
+     * The Effect fails with HelperError for invalid IDs */
+    parse: (value: string) => Effect.Effect<bigint, HelperError, never>
+    /** Read the UTC creation Date encoded in a snowflake's high 41 timestamp bits.
+     * The Effect fails with HelperError for an invalid ID, without looking up a resource */
+    createdAt: (value: string) => Effect.Effect<Date, HelperError, never>
+    /** Create the smallest decimal snowflake for a supplied Date's UTC millisecond, for use as a pagination boundary.
+     * Dates before Fluxer's epoch or beyond its timestamp range fail with HelperError. The endpoint determines cursor inclusion */
+    boundary: (...args: Parameters<typeof sharedSnowflakes.boundary>) => Effect.Effect<string, HelperError, never>
+}> = Object.freeze({
     isValid: sharedSnowflakes.isValid,
-    /** Lazily parse one canonical decimal snowflake to bigint without precision loss. Execution fails with HelperError for an invalid ID */
     parse: (value: string) => helperEffect(() => sharedSnowflakes.parse(value)),
-    /** Lazily derive a snowflake's UTC issuance time from its high 41 timestamp bits. Execution fails with HelperError for an invalid ID */
     createdAt: (value: string) => helperEffect(() => sharedSnowflakes.createdAt(value)),
-    /** Lazily create the smallest snowflake at a UTC millisecond for an endpoint-specific cursor boundary. Dates before Fluxer's epoch or beyond its range fail */
     boundary: (...args: Parameters<typeof sharedSnowflakes.boundary>) =>
         helperEffect(() => sharedSnowflakes.boundary(...args)),
 })
 
-/** Pure user/member display-name fallback with no remote or cache lookup */
+/** Choose a display name from user data and an optional guild member, without a request or cache lookup.
+ * display.name prefers the member nickname, then the user's displayName, then username.
+ * Only null or undefined trigger a fallback.
+ * Supply a member belonging to the same user, because this helper does not check identity */
 export const display: typeof sharedDisplay = sharedDisplay
 
-/** Pure raw-permission composition, membership, missing-name inspection and decimal serialization. Calls are lazy Effects, never authorization decisions */
-export const permissionBits = Object.freeze({
-    /** Lazily combine known names into raw bits without Administrator expansion. Empty input gives zero, duplicates collapse and unknown names fail with HelperError */
+/** Build and inspect permission bitfields from named Fluxer permissions.
+ * A bitfield stores permission flags in a bigint. Methods return Effects without fetching resources or deciding whether an action is allowed */
+export const permissionBits: Readonly<{
+    /** Combine permission names into a bigint bitfield, for role or overwrite inputs.
+     * Empty input returns 0n and duplicates have no extra effect. Unknown names fail with HelperError.
+     * Administrator remains one flag rather than expanding to all permissions */
+    from: (...args: Parameters<typeof sharedPermissionBits.from>) => Effect.Effect<bigint, HelperError, never>
+    /** Return whether a named permission flag is set in an unsigned 64-bit bigint.
+     * Invalid bits or an unknown name fail with HelperError. This does not calculate inherited permissions or authorize an action */
+    has: (...args: Parameters<typeof sharedPermissionBits.has>) => Effect.Effect<boolean, HelperError, never>
+    /** Return whether every requested permission flag is set. Empty input returns true.
+     * All names are validated, and unknown names or invalid bits fail with HelperError. Unknown bits are unchanged */
+    hasAll: (...args: Parameters<typeof sharedPermissionBits.hasAll>) => Effect.Effect<boolean, HelperError, never>
+    /** Return whether at least one requested permission flag is set. Empty input returns false.
+     * All names are validated even after a match. Unknown names or invalid bits fail with HelperError */
+    hasAny: (...args: Parameters<typeof sharedPermissionBits.hasAny>) => Effect.Effect<boolean, HelperError, never>
+    /** List requested permission flags that are not set, in first-requested order without duplicates.
+     * Returns a frozen array. Invalid bits or unknown names fail with HelperError */
+    missing: (
+        ...args: Parameters<typeof sharedPermissionBits.missing>
+    ) => Effect.Effect<readonly import("./helpers.js").PermissionName[], HelperError, never>
+    /** Separate a bigint bitfield into known permission names and unknownBits.
+     * Known names use Permissions declaration order. The result is frozen and preserves every bit without expanding Administrator.
+     * Invalid unsigned 64-bit bits fail with HelperError */
+    inspect: (bits: bigint) => Effect.Effect<import("./helpers.js").PermissionBitInspection, HelperError, never>
+    /** Convert an unsigned 64-bit bigint bitfield to the decimal string used in Fluxer JSON requests.
+     * Values outside that range fail with HelperError */
+    toDecimal: (bits: bigint) => Effect.Effect<string, HelperError, never>
+}> = Object.freeze({
     from: (...args: Parameters<typeof sharedPermissionBits.from>) =>
         helperEffect(() => sharedPermissionBits.from(...args)),
-    /** Lazily test a named Fluxer permission against an unsigned 64-bit raw bitfield. This is not effective-permission calculation or authorisation */
     has: (...args: Parameters<typeof sharedPermissionBits.has>) =>
         helperEffect(() => sharedPermissionBits.has(...args)),
-    /** Lazily test all requested names against valid raw bits. Empty input succeeds. Every name is validated and unknown bits remain untouched */
     hasAll: (...args: Parameters<typeof sharedPermissionBits.hasAll>) =>
         helperEffect(() => sharedPermissionBits.hasAll(...args)),
-    /** Lazily test any requested name against valid raw bits. Empty input is false. Every name is validated even after a match */
     hasAny: (...args: Parameters<typeof sharedPermissionBits.hasAny>) =>
         helperEffect(() => sharedPermissionBits.hasAny(...args)),
-    /** Lazily return a frozen missing-name list, deduplicated in first-requested order. Invalid bits or names fail with HelperError */
     missing: (...args: Parameters<typeof sharedPermissionBits.missing>) =>
         helperEffect(() => sharedPermissionBits.missing(...args)),
-    /** Lazily return frozen known names in Permissions declaration order and exact unknownBits. No raw grants are expanded or discarded */
     inspect: (bits: bigint) => helperEffect(() => sharedPermissionBits.inspect(bits)),
-    /** Lazily serialize an unsigned 64-bit raw bitfield as a canonical decimal wire value. Execution fails with HelperError outside that range */
     toDecimal: (bits: bigint) => helperEffect(() => sharedPermissionBits.toDecimal(bits)),
 })
 
-/** Pure validated RGB conversions through lazy Effects, without network work, coercion, clamping or a CSS parser */
-export const colors = Object.freeze({
-    /** Lazily convert an RGB integer, exact six-digit hex with optional #, or three integer channels in 0..255. Invalid inputs fail with HelperError */
+/** Convert RGB colors between integers, hex strings and channel tuples.
+ * Methods return Effects. Invalid values fail instead of being coerced or clamped, and CSS color names are not accepted */
+export const colors: Readonly<{
+    /** Convert an RGB integer, six-digit hex string with optional #, or three integer channels from 0 through 255 to an RGB integer.
+     * Invalid inputs fail with HelperError */
+    parse: (...args: Parameters<typeof sharedColors.parse>) => Effect.Effect<number, HelperError, never>
+    /** Format an RGB integer from 0 through 0xffffff as lowercase #rrggbb, including leading zeroes.
+     * Invalid numeric input fails with HelperError */
+    toHex: (value: number) => Effect.Effect<string, HelperError, never>
+    /** Convert an RGB integer from 0 through 0xffffff to a frozen [red, green, blue] tuple.
+     * Invalid numeric input fails with HelperError */
+    toRgb: (value: number) => Effect.Effect<import("./colors.js").RgbColor, HelperError, never>
+}> = Object.freeze({
     parse: (...args: Parameters<typeof sharedColors.parse>) => helperEffect(() => sharedColors.parse(...args)),
-    /** Lazily format an integer in 0..0xffffff as lowercase #rrggbb with leading zeroes. Invalid numeric input fails */
     toHex: (value: number) => helperEffect(() => sharedColors.toHex(value)),
-    /** Lazily create a frozen RGB tuple from an integer in 0..0xffffff. Invalid numeric input fails */
     toRgb: (value: number) => helperEffect(() => sharedColors.toRgb(value)),
 })
 
 /**
- * Pure lossless splitting into bounded UTF-16 pieces through lazy Effects. Sending and Markdown handling stay explicit
+ * Split long text into length-bounded pieces without losing its contents.
+ * You choose the length limit, how to send the pieces and any Markdown handling.
+ * split returns an Effect that produces text pieces, without sending them
  *
  * @example
  * ```ts
@@ -194,31 +319,48 @@ export const colors = Object.freeze({
  * }
  * ```
  */
-export const text = Object.freeze({
+export const text: Readonly<{
     /**
-     * Lazily split well-formed text into frozen pieces of at most maxLength UTF-16 units, preserving all whitespace.
+     * Split well-formed text into frozen pieces of at most maxLength UTF-16 units, preserving all whitespace.
      * Prefer the last newline, then whitespace, otherwise split a word. Joining with an empty separator is lossless.
      * Empty text gives []. Invalid inputs, lone surrogates or a limit too small for a surrogate pair fail with HelperError.
-     * Surrogate pairs stay intact, but combining/emoji grapheme sequences may split. No Markdown repair or limit lookup occurs
+     * Surrogate pairs stay intact, but a base character and its combining marks or the code points of a joined emoji may land in different pieces.
+     * This does not repair Markdown or look up message length limits
      */
+    split: (...args: Parameters<typeof sharedText.split>) => Effect.Effect<readonly string[], HelperError, never>
+}> = Object.freeze({
     split: (...args: Parameters<typeof sharedText.split>) => helperEffect(() => sharedText.split(...args)),
 })
 
-/** Pure hosted Fluxer guild-channel, direct-message, message, and bot-installation link helpers. Fallible route validation is lazy and retains HelperError */
-export const links = Object.freeze({
-    /** Lazily create an official hosted guild-channel or direct-message route from `{ id, guildId }` or `{ id }`. It never checks existence or access */
+/** Build hosted Fluxer channel, message and bot-installation links from supplied IDs.
+ * Methods return Effects and fail with HelperError for invalid input. Building a link does not visit it or check access */
+export const links: Readonly<{
+    /** Build a hosted channel URL from { id, guildId } for a guild channel or { id } for a private conversation.
+     * Invalid decimal IDs fail with HelperError. A URL does not prove the channel exists or the reader can open it */
+    channel: (...args: Parameters<typeof sharedLinks.channel>) => Effect.Effect<string, HelperError, never>
+    /** Build a hosted message URL from its reference and the channel containing it.
+     * Message and channel IDs must match or the Effect fails with HelperError. Channel context is not inferred, and access is not checked */
+    message: (...args: Parameters<typeof sharedLinks.message>) => Effect.Effect<string, HelperError, never>
+    /** Build Fluxer's hosted bot-installation URL from an application ID and optional unsigned 64-bit permission bits.
+     * Uses only the bot scope. Invalid IDs or options fail with HelperError, and alternate addresses or scopes are not accepted.
+     * This does not navigate, install the bot, check application existence or authorize permissions */
+    installation: (...args: Parameters<typeof sharedLinks.installation>) => Effect.Effect<string, HelperError, never>
+}> = Object.freeze({
     channel: (...args: Parameters<typeof sharedLinks.channel>) => helperEffect(() => sharedLinks.channel(...args)),
-    /** Lazily create an official hosted message route from a matching message and actual channel context. It never infers context, checks existence, or checks access */
     message: (...args: Parameters<typeof sharedLinks.message>) => helperEffect(() => sharedLinks.message(...args)),
-    /** Lazily create Fluxer's hosted bot-installation page with only the fixed `bot` scope and optional unsigned-64-bit permissions. It never navigates, authorizes, checks existence, or accepts an alternate origin/scope */
     installation: (...args: Parameters<typeof sharedLinks.installation>) =>
         helperEffect(() => sharedLinks.installation(...args)),
 })
 
 /**
- * Pure hosted Fluxer asset URL helpers. Every fallible call is a lazy Effect that constructs a URL using fixed hosted origins.
- * It never fetches profiles, mutates caches, downloads bytes, refreshes URLs, changes attachment/embed URLs, or accepts an origin.
- * Omitted optional source hashes become `undefined`; known absent hashes become `null`. A returned URL does not prove the asset exists
+ * Build image URLs for hosted Fluxer from user, member, guild, emoji or sticker data you already have.
+ * Methods return Effects and use fixed hosted addresses. Use client.instance.resolve for URLs on a selected self-hosted instance.
+ * Invalid targets, IDs, hashes or options fail with AssetUrlError when the Effect executes.
+ * Image format defaults to WebP. Omit size to leave pixel size selection to Fluxer.
+ * Options are validated even when the supplied asset is absent.
+ * These helpers do not fetch profiles, change caches, download bytes, refresh URLs or change attachment or embed URLs.
+ * Custom base addresses are not accepted by this hosted namespace.
+ * Omitted optional asset hashes become `undefined`. Known absent hashes become `null`. A returned URL does not prove the asset exists
  *
  * @example
  * ```ts
@@ -236,58 +378,92 @@ export const links = Object.freeze({
  *     })
  * ```
  */
-export const assets = Object.freeze({
-    /** Lazily build an account-banner URL from user.id and profile.banner of a users.fetchProfile observation.
+export const assets: Readonly<{
+    /** Build an account-banner URL from user.id and profile.banner of a users.fetchProfile snapshot.
      * Null stays null for absent or withheld profile data, without choosing a guild banner or fetching anything.
      * Uses AssetUrlOptions' WebP default and transform validation. A URL does not establish asset existence or access
      */
+    userBanner: (
+        ...args: Parameters<typeof sharedAssets.userBanner>
+    ) => Effect.Effect<string | null, AssetUrlError, never>
+    /** Build a user avatar URL, or `null` for a known missing avatar. It only reads the supplied `id` and `avatar` fields and performs no profile lookup */
+    avatar: (...args: Parameters<typeof sharedAssets.avatar>) => Effect.Effect<string | null, AssetUrlError, never>
+    /** Build Fluxer's static default-avatar URL from a canonical user ID. It has no media transform query and does not depend on profile availability */
+    defaultAvatar: (userId: string) => Effect.Effect<string, AssetUrlError, never>
+    /** Build a display avatar from the known user avatar or Fluxer's static default. It always resolves to a URL, never `null` */
+    displayAvatar: (
+        ...args: Parameters<typeof sharedAssets.displayAvatar>
+    ) => Effect.Effect<string, AssetUrlError, never>
+    /** Build a guild-member avatar URL from guildId, userId and avatar only. It resolves `undefined` for an omitted asset hash and `null` for a known absent hash. It does not choose a fallback */
+    memberAvatar: (
+        ...args: Parameters<typeof sharedAssets.memberAvatar>
+    ) => Effect.Effect<string | null | undefined, AssetUrlError, never>
+    /** Build a guild-member banner URL from guildId, userId and banner only. It resolves `undefined` for an omitted asset hash and `null` for a known absent hash */
+    memberBanner: (
+        ...args: Parameters<typeof sharedAssets.memberBanner>
+    ) => Effect.Effect<string | null | undefined, AssetUrlError, never>
+    /** Build the member display avatar when its profile state is known: Member avatar, then user avatar, then static default. Reads member guildId, userId, avatar and profileFlags, not banner. `AvatarUnset` selects the static default. Omitted profile flags or an omitted non-unset member avatar resolve `undefined` */
+    displayMemberAvatar: (
+        ...args: Parameters<typeof sharedAssets.displayMemberAvatar>
+    ) => Effect.Effect<string | undefined, AssetUrlError, never>
+    /** Build a guild icon URL. It resolves `undefined` for an omitted asset hash and `null` for a known absent hash */
+    guildIcon: (
+        ...args: Parameters<typeof sharedAssets.guildIcon>
+    ) => Effect.Effect<string | null | undefined, AssetUrlError, never>
+    /** Build a guild banner URL. It resolves `undefined` for an omitted asset hash and `null` for a known absent hash */
+    guildBanner: (
+        ...args: Parameters<typeof sharedAssets.guildBanner>
+    ) => Effect.Effect<string | null | undefined, AssetUrlError, never>
+    /** Build a guild invite-splash URL. It resolves `undefined` for an omitted asset hash and `null` for a known absent hash */
+    guildSplash: (
+        ...args: Parameters<typeof sharedAssets.guildSplash>
+    ) => Effect.Effect<string | null | undefined, AssetUrlError, never>
+    /** Build a guild embedded-invite-splash URL. It resolves `undefined` for an omitted asset hash and `null` for a known absent hash */
+    guildEmbedSplash: (
+        ...args: Parameters<typeof sharedAssets.guildEmbedSplash>
+    ) => Effect.Effect<string | null | undefined, AssetUrlError, never>
+    /** Build a custom-emoji URL from only its ID and animation metadata. Animated emoji require WebP, GIF, or APNG to retain animation */
+    emoji: (...args: Parameters<typeof sharedAssets.emoji>) => Effect.Effect<string, AssetUrlError, never>
+    /** Build a custom-sticker URL from only its ID and animation metadata. Stickers do not expose format because Fluxer returns WebP except an animated sticker's GIF source */
+    sticker: (...args: Parameters<typeof sharedAssets.sticker>) => Effect.Effect<string, AssetUrlError, never>
+}> = Object.freeze({
     userBanner: (...args: Parameters<typeof sharedAssets.userBanner>) =>
         assetEffect(() => sharedAssets.userBanner(...args)),
-    /** Lazily build a user avatar URL, or `null` for a known missing avatar. It only reads the supplied `id` and `avatar` fields and performs no profile lookup */
     avatar: (...args: Parameters<typeof sharedAssets.avatar>) => assetEffect(() => sharedAssets.avatar(...args)),
-    /** Lazily build Fluxer's static default-avatar URL from a canonical user ID. It has no media transform query and does not depend on profile availability */
     defaultAvatar: (userId: string) => assetEffect(() => sharedAssets.defaultAvatar(userId)),
-    /** Lazily build a display avatar from the known user avatar or Fluxer's static default. It always resolves to a URL, never `null` */
     displayAvatar: (...args: Parameters<typeof sharedAssets.displayAvatar>) =>
         assetEffect(() => sharedAssets.displayAvatar(...args)),
-    /** Lazily build a guild-member avatar URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash; it does not choose a fallback */
     memberAvatar: (...args: Parameters<typeof sharedAssets.memberAvatar>) =>
         assetEffect(() => sharedAssets.memberAvatar(...args)),
-    /** Lazily build a guild-member banner URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
     memberBanner: (...args: Parameters<typeof sharedAssets.memberBanner>) =>
         assetEffect(() => sharedAssets.memberBanner(...args)),
-    /** Lazily build the member display avatar when its profile state is known: member avatar, then user avatar, then static default. `AvatarUnset` selects the static default; omitted profile flags or an omitted non-unset member avatar resolve `undefined` */
     displayMemberAvatar: (...args: Parameters<typeof sharedAssets.displayMemberAvatar>) =>
         assetEffect(() => sharedAssets.displayMemberAvatar(...args)),
-    /** Lazily build a guild icon URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
     guildIcon: (...args: Parameters<typeof sharedAssets.guildIcon>) =>
         assetEffect(() => sharedAssets.guildIcon(...args)),
-    /** Lazily build a guild banner URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
     guildBanner: (...args: Parameters<typeof sharedAssets.guildBanner>) =>
         assetEffect(() => sharedAssets.guildBanner(...args)),
-    /** Lazily build a guild invite-splash URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
     guildSplash: (...args: Parameters<typeof sharedAssets.guildSplash>) =>
         assetEffect(() => sharedAssets.guildSplash(...args)),
-    /** Lazily build a guild embedded-invite-splash URL. It resolves `undefined` for an omitted source hash and `null` for a known absent hash */
     guildEmbedSplash: (...args: Parameters<typeof sharedAssets.guildEmbedSplash>) =>
         assetEffect(() => sharedAssets.guildEmbedSplash(...args)),
-    /** Lazily build a custom-emoji URL from only its ID and animation metadata. Animated emoji require WebP, GIF, or APNG to retain animation */
     emoji: (...args: Parameters<typeof sharedAssets.emoji>) => assetEffect(() => sharedAssets.emoji(...args)),
-    /** Lazily build a custom-sticker URL from only its ID and animation metadata. Stickers do not expose format because Fluxer returns WebP except an animated sticker's GIF source */
     sticker: (...args: Parameters<typeof sharedAssets.sticker>) => assetEffect(() => sharedAssets.sticker(...args)),
 })
 
-/** Native Effect projection of an immutable selected-instance document */
+/** The selected instance's service addresses and URL helpers, returned as a frozen result by instance.resolve */
 export interface ResolvedInstance {
-    /** Provider code-version indicator from discovery. It is not an API path version */
+    /** The provider's code version from discovery, not the version in an API path */
     readonly apiCodeVersion: number
-    /** Exact validated service bases selected by this client */
+    /** Validated base addresses for this client's selected instance */
     readonly endpoints: InstanceEndpoints
     /** Whether this instance advertises presigned attachment upload plans */
     readonly presignedAttachmentUploads: boolean
-    /** Pure instance-bound asset builders. Fallible calls are lazy Effects in the caller's context */
+    /** Asset URL helpers using this instance's addresses rather than hosted Fluxer's.
+     * Methods return Effects and follow the assets namespace's input-field and fallback rules */
     readonly assets: typeof assets
-    /** Pure instance-bound application-link builders. Fallible calls are lazy Effects in the caller's context */
+    /** Channel, message and installation link helpers using this instance's application address.
+     * Methods return Effects and perform no navigation or access check */
     readonly links: typeof links
 }
 
@@ -611,54 +787,82 @@ export type {
 } from "./oauth.js"
 
 /**
- * Standalone delegated OAuth client whose creating scope owns shutdown, not browser sessions, callbacks, token stores, consent, installation policy, or refresh coordination.
- * It copies the client secret until shutdown, admits at most eight concurrent operations with no queue, caps response bodies at 1 MiB, and never retries requests automatically.
- * Expected failures remain in the typed channel; interruption and sanitized cleanup defects remain in the Effect cause
+ * Use OAuth to access a user's Fluxer account with their consent and a server-held client secret.
+ * The scope that creates this client shuts it down
+ *
+ * Your application handles consent, browser callbacks, state checks, token storage and refresh coordination
+ *
+ * The client keeps a copy of the secret until shutdown and allows at most eight concurrent operations, without a queue.
+ * Response bodies are capped at 1 MiB. Requests never retry automatically.
+ * Discovery throttling fails with OAuthOperationError reason rateLimit, outcome notDispatched, status 429 and the server's retryAfterMs when available
+ *
+ * Expected failures use Effect's error channel. Interruption and cleanup defects remain in Cause.
+ * OAuth response cleanup faults use safe SDK diagnostics. Discovery cleanup faults preserve their original defect in Cause
  *
  * Operation input properties are read during execution, with throwing accessors retained as defects
  */
 export interface OAuthClient {
-    /** Lazily resolve discovery and build an S256 authorization URL from its web application base, including any advertised path. Bot target and permission parameters are consent hints, not installation or authorization proof. State and PKCE values remain caller-owned */
+    /** Build the selected instance's authorization-page URL using S256 PKCE, which binds the callback code to your private verifier.
+     * Input supplies the redirect URI, scopes, caller-generated state and code challenge. The advertised application path is preserved.
+     * Guild and permission parameters are consent hints, not installation or authorization proof.
+     * Your application stores and checks state and the PKCE verifier */
     authorizationUrl(
         input: OAuthAuthorizationInput,
         options?: OAuthOperationOptions,
     ): Effect.Effect<string, OAuthOperationFailure>
-    /** Exchange one callback code. Interruption after dispatch cannot establish whether Fluxer consumed the code, so do not retry it */
+    /** Exchange the callback code and its matching redirect URI and PKCE verifier for access and refresh tokens.
+     * Store the returned tokens in your application. A lost response or cancellation after the request is sent may have consumed the code, so do not retry it */
     exchangeCode(
         input: OAuthCodeExchangeInput,
         options?: OAuthOperationOptions,
     ): Effect.Effect<OAuthTokens, OAuthOperationFailure>
-    /** Exchange one rotated refresh token. The caller atomically replaces its stored pair only after success and never retries an unknown outcome */
+    /** Exchange a refresh token for a new access and refresh token pair.
+     * Coordinate concurrent refreshes and replace the stored pair atomically after success. Never retry an unknown outcome, which may have rotated the token */
     refresh(refreshToken: string, options?: OAuthOperationOptions): Effect.Effect<OAuthTokens, OAuthOperationFailure>
     /** Revoke one access or refresh token. A lost response can still mean the token was revoked */
     revoke(
-        input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
+        input: {
+            /** Access or refresh token to invalidate. Keep this secret out of logs */
+            readonly token: string
+            /** Identify the token as an access token or a refresh token. Omit when the kind is unknown */
+            readonly tokenTypeHint?: "access_token" | "refresh_token"
+        },
         options?: OAuthOperationOptions,
     ): Effect.Effect<void, OAuthOperationFailure>
-    /** Read the identify-scoped identity with a bearer token, without retaining that token */
+    /** Read the delegated user's identity using an access token with the identify scope.
+     * The SDK does not retain the token. Additional identity fields depend on the token's scopes */
     fetchIdentity(
         accessToken: string,
         options?: OAuthOperationOptions,
     ): Effect.Effect<OAuthIdentity, OAuthOperationFailure>
-    /** Read one bounded guild-membership page with a bearer token that has Fluxer's guilds scope, never bot authentication */
+    /** Read one page of the delegated user's guild memberships using an access token with the guilds scope.
+     * Limit defaults to 200, from 1 through 200. Before and after are mutually exclusive cursors.
+     * This uses the supplied access token, not a bot token */
     fetchGuilds(
         accessToken: string,
         query?: GuildListQuery,
         options?: OAuthOperationOptions,
     ): Effect.Effect<readonly GuildListSummary[], OAuthOperationFailure>
-    /** Lazily read the full delegated connections list with a bearer token that has Fluxer's connections scope. This creates, verifies, reorders, and retains no connections */
+    /** Read the user's full connections list with an access token that has Fluxer's connections scope.
+     * This does not create, verify, reorder or retain connections */
     fetchConnections(
         accessToken: string,
         options?: OAuthOperationOptions,
     ): Effect.Effect<readonly OAuthConnection[], OAuthOperationFailure>
-    /** Lazily inspect one access or refresh token using this client's Basic credentials. Inactive does not identify revocation, expiry, ownership, or token existence */
+    /** Check whether one access or refresh token is active using this client's Basic credentials.
+     * An inactive result does not explain revocation, expiry, ownership or whether the token exists */
     introspect(token: string, options?: OAuthOperationOptions): Effect.Effect<OAuthIntrospection, OAuthOperationFailure>
-    /** Clear copied confidential credentials, reject new work, abort active requests, and await their fetch and response-reader cleanup. Native callers retain any cleanup defect or interruption in the Effect cause */
+    /** Clear copied confidential credentials, reject new work, abort active requests, and await their fetch and response-reader cleanup.
+     * Active-operation response cleanup defects remain in that operation's Cause. Shutdown waits for its completion and may succeed.
+     * Defects encountered by shutdown's own discovery cleanup remain in shutdown's Cause
+     */
     shutdown(): Effect.Effect<void>
 }
 
 /**
- * Opt-in delegated OAuth construction. The creating scope owns shutdown, while state validation, callback correlation, consent, storage, installation policy, and refresh coordination remain application-owned
+ * Create a server-side OAuth client, or generate an S256 PKCE challenge for an authorization request.
+ * create returns an Effect that requires Scope. Invalid configuration fails with ConfigurationError.
+ * Your application owns consent, callback correlation, state validation, token storage, installation policy and coordinated refresh
  *
  * @example
  * ```ts
@@ -681,7 +885,16 @@ export interface OAuthClient {
  * )
  * ```
  */
-export const oauth = Object.freeze({
+export const oauth: Readonly<{
+    /** Create the OAuth client when this Effect executes, without making a request.
+     * ConfigurationError reports invalid client credentials or instance settings. Scope closure calls shutdown
+     */
+    create: (config: OAuthConfig) => Effect.Effect<OAuthClient, ConfigurationError, Scope.Scope>
+    /** Generate a random S256 PKCE verifier and challenge immediately.
+     * Keep the verifier private until exchangeCode, and put only the challenge in authorizationUrl
+     */
+    createPkce: typeof createPkce
+}> = Object.freeze({
     create: (config: OAuthConfig): Effect.Effect<OAuthClient, ConfigurationError, Scope.Scope> =>
         Effect.gen(function* () {
             const owner = yield* makeOAuthOwner(config, Scope.makeUnsafe())
@@ -738,6 +951,9 @@ export type {
     CommandCooldownRequest,
     MemoryCooldownOptions,
     PrefixCommandDefinition,
+    PrefixCommandGroupDefinition,
+    PrefixCommandGroupMetadata,
+    PrefixCommandRegistrationOptions,
     PrefixCommandMetadata,
     PrefixCommandParse,
     PrefixCommandParseInput,
@@ -782,9 +998,30 @@ export type {
 import { makeNativeSupervisor } from "./native-supervisor.js"
 
 /**
- * Optional builders and prefix-command routing above direct client primitives.
- * Builders return independent plain payload snapshots. Command routing is lazy, attaches one existing bounded messageCreate subscription in the caller’s scope and never connects the client or creates a detached runtime.
- * Guards, cooldown keys, unmatched feedback and handler Effects remain application-owned. The router does not fetch permissions, send replies or retry failures
+ * Define text commands, parse their arguments and attach them to an existing client.
+ * Commands listen through one bounded messageCreate subscription in your Scope when you execute attach.
+ * The router does not connect the client or create a separate SDK runtime.
+ * The separately exported builders help construct message inputs and return independent plain payload snapshots.
+ * Guards, cooldown keys, unmatched feedback and handler Effects remain application-owned. The router does not fetch permissions, send replies or retry failures.
+ * Groups optionally organize command paths and help pages.
+ * Flat commands remain independent, and each protected command still needs its own guard
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { commands, type Client } from "@neontechspace/fluxerly/effect"
+ * export function commandGroupExample(client: Client) {
+ *     return Effect.gen(function* () {
+ *         const root = yield* commands.create({ prefix: "!" })
+ *         const grouped = yield* root.registerGroup({ name: "tools", aliases: ["t"] })
+ *         const router = yield* grouped.register({
+ *             name: "ping",
+ *             execute: ({ client, message }) => client.messages.reply(message, { content: "Pong", allowedMentions: {} }),
+ *         }, { group: ["tools"] })
+ *         return yield* router.attach(client)
+ *     })
+ * }
+ * ```
  *
  * @example
  * ```ts
@@ -807,7 +1044,9 @@ import { makeNativeSupervisor } from "./native-supervisor.js"
  *     return yield* registered.attach(client)
  * })
  * ```
- * Argument schemas are opt-in. Guards see raw input first, conversion failures call onReject without consuming a cooldown, and execute receives inferred frozen values alongside unchanged args
+ * Argument schemas are optional definitions of the values a command expects.
+ * Guards see raw input first. Conversion failures call onReject without consuming a cooldown.
+ * execute receives inferred frozen values alongside unchanged args
  *
  * @example
  * ```ts
@@ -859,17 +1098,27 @@ import { makeNativeSupervisor } from "./native-supervisor.js"
 export const commands = nativeCommands
 
 /**
- * Optional local Node process supervision above independently usable clients.
- * create is lazy and starts no child. start starts the configured children once and waits for their assignment and configuration acknowledgements, not gateway READY. waitForReady observes a later all-child READY state without starting or owning the supervisor. waitForClose observes the terminal local lifetime after every owned child exits, can be interrupted without stopping it and status returns a frozen safe snapshot, including each child’s last received current-generation gateway state, not atomic cross-process health
+ * Run bot workers in separate Node processes on this machine.
+ * create validates the process plan when executed but starts no children.
+ * start launches those children once and waits for their assignment and configuration acknowledgements, not gateway READY.
+ * waitForReady waits for a later all-child READY state without starting or stopping the supervisor.
+ * waitForClose waits until every owned child exits. Cancelling that wait does not stop the children.
+ * status returns a frozen snapshot of each child's latest reported gateway state for its current process generation.
+ * The snapshot is local, not a simultaneous health check across processes
  *
- * Each child module must run supervisor.child.run. The helper owns a nested client and IPC scope, preserves the caller environment and Cause, and obtains a parent permit immediately before every fresh gateway Identify. Resumes bypass the permit
+ * Each child module must execute supervisor.child.run, which owns a nested client and an inter-process communication (IPC) cleanup scope.
+ * The helper preserves your Effect services and Cause. It asks the parent for a permit immediately before each fresh gateway Identify.
+ * Identify authenticates a new gateway session. Resuming an existing session needs no permit.
+ * Only one parent permit can be outstanding. The child confirms its synchronous Identify send or cancels before sending.
+ * The parent spaces fresh sends by at least one second.
+ * A stalled child must stop and exit before another permit is issued, followed by a full spacing interval
  *
- * One parent permit remains outstanding until the child confirms its synchronous Identify send or cancels before sending. The parent then spaces fresh sends by at least one second. A stalled child is stopped and must exit before another permit, after a full interval
- *
- * It does not discover shard counts, coordinate another process or host, preserve sessions across replacement, or manage distributed REST limits. The helper installs no signal handlers or process termination. After its graceful deadline, the parent may terminate only its own unresponsive child and still waits for its exit
- *
- * restart is opt-in, with bounded exponential replacement when supplied. childEnvironment, args and execArgv select the owned child process but never appear in status or failures. stdout and stderr are ignored and never retained
- *
+ * The supervisor does not discover shard counts, coordinate other hosts or processes, retain sessions across replacements, or share REST limits across children.
+ * It installs no signal handlers and does not terminate your process.
+ * After the configured graceful deadline, the parent can terminate only its own unresponsive child and still waits for its exit.
+ * Replacement after failure is opt-in through restart, with bounded exponential delays.
+ * childEnvironment, args and execArgv configure children but never appear in status or failures.
+ * Child stdout and stderr are ignored and not retained
  * @example
  * ```ts
  * import { Effect } from "effect"
@@ -892,7 +1141,7 @@ export const commands = nativeCommands
  * })
  * ```
  */
-export const supervisor = makeNativeSupervisor(createClient)
+export const supervisor: import("./native-supervisor.js").NativeSupervisorTools = makeNativeSupervisor(createClient)
 import type { PaginationError, HistoryIterationQuery, UserIterationQuery, PinIterationQuery } from "./pagination.js"
 export { PaginationError } from "./pagination.js"
 export type {
@@ -963,11 +1212,12 @@ import { adaptLogger } from "#sdk/internal/logging"
 export type { LoggingOptions, DefaultLogger } from "./logging.js"
 
 /**
- * Adapt an Effect logger for the default API without exposing Effect types to default consumers.
- * Pass the returned value as logging.logger to default createClient.
+ * Use an Effect logger with the JavaScript & TypeScript API without adding Effect types to that API.
+ * Pass the returned value as logging.logger to createClient from the default entry point.
  * Delivery is synchronous. Thrown logger failures are swallowed without retry, while a blocking logger can delay SDK work.
- * No queue, sink flushing or persistence guarantee is added. Native callers use their own Effect logger directly.
- * The SDK supplies safe messages and empty causes, but caller-owned context and sink behavior remain the caller's responsibility
+ * No queue, sink flushing or persistence guarantee is added. Effect callers use their own Effect logger directly.
+ * The SDK supplies safe messages and empty causes.
+ * You remain responsible for any context you add and for what the logger's output destination does
  * @throws ConfigurationError with field logger when the value is not an Effect logger
  * @example
  * ```ts
@@ -1103,12 +1353,12 @@ const hierarchyInputFailure = (operation: HierarchyOperation, path: string, expl
     )
 
 /**
- * Lazily compares two role snapshots in Fluxer's local hierarchy order
+ * Compare two supplied roles to decide which is higher in Fluxer's role hierarchy
  *
- * `1` means left is higher, `-1` means right is higher, and `0` means the same role. A larger position is higher;
- * tied positions use the smaller numeric role ID as higher. Malformed or cross-guild snapshots fail with
- * GuildOperationError hierarchy.compare/input without retaining the input. This reports local ordering only; it does
- * not evaluate permissions, MFA, membership visibility, or whether a provider endpoint accepts an action
+ * The Effect returns 1 when left is higher, -1 when right is higher, or 0 for the same role.
+ * Larger positions rank higher. At tied positions, the smaller numeric role ID ranks higher.
+ * Malformed roles or roles from different guilds fail with GuildOperationError operation hierarchy.compare and reason input.
+ * Inputs are not retained. This does not fetch data or check permissions, MFA, membership visibility or whether an action is allowed
  */
 export function compareHierarchy(left: GuildRole, right: GuildRole): Effect.Effect<-1 | 0 | 1, GuildOperationError> {
     return Effect.suspend(() => {
@@ -1126,10 +1376,10 @@ export function compareHierarchy(left: GuildRole, right: GuildRole): Effect.Effe
 }
 
 /**
- * Lazily reports whether left is strictly higher than right in supplied role snapshots
+ * Test whether the supplied left role is strictly higher than right, using compareHierarchy's ordering
  *
  * Malformed or cross-guild snapshots fail with GuildOperationError hierarchy.isAbove/input without retaining the input.
- * This is a local ordering helper, not a permission or endpoint-authorization check
+ * This compares role order locally, without checking permissions or whether a remote action is allowed
  */
 export function isAboveInHierarchy(left: GuildRole, right: GuildRole): Effect.Effect<boolean, GuildOperationError> {
     return Effect.suspend(() => {
@@ -1147,15 +1397,16 @@ export function isAboveInHierarchy(left: GuildRole, right: GuildRole): Effect.Ef
 }
 
 /**
- * Lazily evaluates Fluxer's local member-target hierarchy rule from explicit snapshots without fetching or retaining anything
+ * Test whether an actor member passes Fluxer's hierarchy rule for managing a target member.
+ * Supply the guild, both members and their roles. The Effect performs no reads and retains no inputs
  *
- * The guild owner and a member targeting itself pass. A non-owner cannot manage the owner. Other members need a
- * strictly higher explicit role; no explicit roles rank below any supplied explicit role. `roles` must include one
- * same-guild observation for every actor and target role ID. `roles.fetchAll` output may include the implicit everyone
- * role; it is ignored for rank comparison. Members must not list everyone as an explicit role. Malformed, incomplete,
- * duplicate, cross-guild, or inconsistent snapshots fail with GuildOperationError hierarchy.canManage/input without retaining the input. This
- * deliberately excludes permissions, MFA, endpoint-specific checks, provider membership state, and concurrent remote
- * changes, so a successful true result is not action authorization
+ * The guild owner and a member targeting itself pass. A non-owner cannot manage the owner.
+ * Other actors need a strictly higher assigned role. Members with no assigned roles rank below any supplied assigned role.
+ * roles must contain one same-guild snapshot for every actor and target role ID.
+ * roles.fetchAll may include the implicit everyone role, which is ignored for rank comparison.
+ * Members must not list everyone as an assigned role.
+ * Malformed, incomplete, duplicate, cross-guild or inconsistent inputs fail with GuildOperationError operation hierarchy.canManage and reason input.
+ * A true result does not authorize an action. Permissions, MFA, endpoint checks, current membership and concurrent changes are not evaluated
  * @example
  * ```ts
  * import { Effect } from "effect"
@@ -1188,39 +1439,59 @@ export function canManageHierarchy(input: RoleHierarchyInput): Effect.Effect<boo
     })
 }
 
-/** Native cache controls, with a scoped reporter in the client's creation context */
-export interface MessageCacheOptions<E = never, R = never> extends MessageCacheSettings {
+/** Configure optional in-memory message caching and its error callback.
+ * The callback uses the services available when client creation executes and stops when the client closes */
+export interface MessageCacheOptions<
+    E = never,
+    R = never,
+    M extends MessageCore = Message,
+> extends MessageCacheSettings<M> {
     /**
-     * Safe policy reporting in the creation context, independent of REST/event delivery.
-     * One custom report at a time. Further failures while busy use the shared operational logger.
-     * Reporter failure attempts one safe fallback log. No recursive hook invocation or policy retry.
+     * Report failures from the policy that decides which messages to cache, using the services available when client creation executes.
+     * This callback is independent of HTTP results and event delivery.
+     * Only one custom report runs at a time. Further failures while busy use the shared operational logger.
+     * If the reporter fails, the SDK attempts one safe fallback log, without calling the hook again or retrying the policy.
      * Shutdown interrupts report work and awaits finalizers. Uninterruptible user work can delay closure
      */
     readonly onError?: (report: CachePolicyErrorReport) => Effect.Effect<unknown, E, R>
 }
 
 /**
- * Creation-time native settings. Reporting services are captured when creation executes.
- * Sharding uses the shared immutable local assignment, including shard zero for direct-message traffic. Client-wide REST and cache budgets are not multiplied by local shard count
+ * Choose the client's connection, logging, message fields and optional caches.
+ * createClient reads these options when its Effect executes, not when you build the Effect.
+ * Required services for cache-error callbacks are captured at that time.
+ * sharding fixes which gateway shards this client owns. Shard zero receives direct-message traffic.
+ * HTTP and cache budgets apply to the whole client, not separately to each shard.
+ * messageFields chooses which optional message fields are returned, including nested results, callbacks and cached messages.
+ * Omission returns full Message objects. The selection cannot change after client creation.
+ * TypeScript usually infers the type parameters from these options.
+ * If you explicitly supply the error and service types E and R with messageFields, also supply its selected-field tuple as F
  */
-export interface ClientOptions<E = never, R = never> extends Omit<SharedClientOptions, "cache" | "logging"> {
+export interface ClientOptions<E = never, R = never, F extends MessageFields | undefined = undefined> extends Omit<
+    SharedClientOptions<F>,
+    "cache" | "logging"
+> {
     /**
-     * Explicit SDK development-log opt-in. Logger, level and tracing remain owned by the executing Effect context.
-     * Connection work inherits connect/run context, handler work inherits registration context and cache reports inherit creation context.
-     * Shutdown diagnostics use shutdown's execution context. No detached native runtime or logger replacement is installed.
-     * Default-only logger/minimumLevel settings are rejected. A throwing logger cannot fail connection diagnostics
+     * Set development to true to enable SDK development logs. Omission disables them.
+     * Logger, level and tracing come from your executing Effect program.
+     * Connection logs use connect or run's services, handler logs use registration services and cache reports use creation services.
+     * Shutdown logs use shutdown's services. The SDK installs no separate runtime or replacement logger.
+     * logger and minimumLevel belong to the default API and are rejected here.
+     * A throwing logger cannot fail connection diagnostics
      */
     readonly logging?: LoggingOptions
-    /** Optional resource retention. Omission retains no resource snapshots. Every configured budget is client-wide across locally owned shards.
-     * A gateway gap invalidates known-scope observations from its affected shard. Unknown guild scope invalidates conservatively because the SDK keeps no channel-to-guild index
+    /** Optionally keep resource snapshots in memory. Omission keeps none.
+     * Every configured budget applies across this client's locally owned shards.
+     * A gateway gap invalidates known-scope snapshots from its affected shard. Unknown guild scope invalidates conservatively because the SDK keeps no channel-to-guild index
      */
-    readonly cache?: Omit<NonNullable<SharedClientOptions["cache"]>, "messages"> & {
+    readonly cache?: Omit<NonNullable<SharedClientOptions<F>["cache"]>, "messages"> & {
         /**
-         * Omitted/false disables caching. True or an options object enables global bounded memory-only message snapshots.
-         * Eligible REST/events populate, deletes/uncertain writes evict, and gateway gaps clear even after successful resume.
+         * Omit or pass false to disable caching. Pass true or an options object to keep bounded message snapshots in memory across the client.
+         * Eligible HTTP responses and gateway events populate the cache.
+         * Deletes and writes with unknown outcomes evict affected messages. Gateway gaps clear it even after successful resume.
          * Conflicts can produce misses. No automatic history retrieval. Shutdown releases cached references
          */
-        readonly messages?: boolean | MessageCacheOptions<E, R>
+        readonly messages?: boolean | MessageCacheOptions<E, R, NoInfer<SelectedMessage<F>>>
     }
 }
 import type { ConfigurationError, ConnectError, ConnectionFailure } from "./errors.js"
@@ -1242,13 +1513,14 @@ import type {
 } from "./collectors.js"
 export type { ReactionCollectorResult } from "./collectors.js"
 
-/** Bounded native reaction collection with progress work in the registration context */
+/** Choose reaction collection limits and an optional callback for each accepted addition.
+ * The callback executes with the services available when collection is registered */
 export interface ReactionCollectorOptions<E = never, R = never> extends SharedReactionCollectorOptions {
     /** Run once per accepted addition, sequentially, before continuing collection.
      * Failures and defects while active fail collection with CollectorError handler, without exposing the original cause.
-     * Stop, timeout, scope closure, recovery and shutdown interrupt active work and await its finalizers.
+     * Stop, timeout, idle completion, scope closure, recovery and shutdown interrupt active work and await its finalizers.
      * Uninterruptible work can delay closure. Do not await this collector's completion inside its handler.
-     * Already-dispatched effects are not rolled back; callbacks are never retried
+     * Already-dispatched effects are not rolled back. Callbacks are never retried
      */
     readonly onReaction?: (reaction: import("./reactions.js").MessageReaction) => Effect.Effect<unknown, E, R>
 }
@@ -1261,21 +1533,24 @@ import type {
 export { CollectorError } from "./collectors.js"
 export type { CollectorResult, CollectorFailure, CollectorRegistrationError } from "./collectors.js"
 
-/** Bounded native message collection with progress work in the registration context */
-export interface CollectorOptions<E = never, R = never> extends SharedCollectorOptions {
-    /** Run once per accepted message ID, sequentially, after filtering and retained-byte admission.
+/** Choose message collection limits and an optional callback for each accepted message.
+ * The callback executes with the services available when collection is registered */
+export interface CollectorOptions<
+    E = never,
+    R = never,
+    M extends MessageCore = Message,
+> extends SharedCollectorOptions<M> {
+    /** Run once per accepted message ID, sequentially, after filtering and stored-byte limit checks.
      * Failures and defects while active fail collection with CollectorError handler, without exposing the original cause.
-     * Stop, timeout, scope closure, recovery and shutdown interrupt active work and await its finalizers.
+     * Stop, timeout, idle completion, scope closure, recovery and shutdown interrupt active work and await its finalizers.
      * Uninterruptible work can delay closure. Do not await this collector's completion or client shutdown inside its handler.
      * Already-dispatched effects are not rolled back. Callbacks are never retried
      */
-    readonly onMessage?: (message: Message) => Effect.Effect<unknown, E, R>
+    readonly onMessage?: (message: M) => Effect.Effect<unknown, E, R>
 }
-import { replyInput } from "#sdk/internal/message"
 import type { EventSource } from "#sdk/internal/events"
 import { waitForEvent } from "#sdk/internal/events"
 import {
-    MessageError,
     type MessageOperationFailure,
     type EventOverflowError,
     type RegistrationError,
@@ -1294,6 +1569,9 @@ import type {
     ForwardMessageInput,
     MessageHistoryQuery,
     Message,
+    MessageCore,
+    MessageFields,
+    SelectedMessage,
     MessageReference,
     MessageInput,
     MessageOperationOptions,
@@ -1336,6 +1614,10 @@ export type {
 } from "./message-cleanup.js"
 export type {
     Message,
+    MessageCore,
+    MessageField,
+    MessageFields,
+    SelectedMessage,
     ForwardMessageInput,
     MessageSnapshot,
     MessageFlag,
@@ -1370,39 +1652,49 @@ export type {
     VoiceStateSnapshot,
 } from "./events.js"
 
-/** Scoped subscription controls, separate from client ownership */
+/**
+ * An event subscription registered in a Scope, independent of the client's connection.
+ * Use unsubscribe to request a stop and waitForClose to wait for handler cleanup
+ */
 export interface Subscription {
-    /** Lazy stop request: Discard pending events and interrupt owned handlers without waiting on the invoking handler */
+    /**
+     * Stop this subscription when the Effect executes.
+     * Discard queued events and interrupt its handlers without waiting for the handler that called unsubscribe to finish
+     */
     unsubscribe(): Effect.Effect<void>
     /**
-     * Observe retained closure/overflow after native handler cleanup. Interruption cancels only this wait.
-     * Defects retain native Cause. Uninterruptible handlers/finalizers can delay closure.
-     * Do not await your own completed closure inside a handler
+     * Wait for this subscription's retained closure or overflow result after handler cleanup.
+     * Cancelling this wait does not unsubscribe or affect other waiters. Unexpected faults remain in Cause.
+     * Handlers or finalizers that disable interruption can delay completion.
+     * Do not await this subscription's own closure from inside its handler
      */
     waitForClose(): Effect.Effect<void, EventOverflowError>
 }
 
-/** Native reporting runs in the registration caller's context, not an SDK-owned runtime */
+/** Set event-handler queue limits, concurrency and an optional safe error callback.
+ * Reporting uses the services available when the handler is registered */
 export interface EventHandlerOptions<E = never, R = never> extends HandlerOptions {
-    /** Safe handler/overflow reporting. Failure invokes one safe fallback log without retrying the handler.
+    /** Report handler failures or queue overflow with safe metadata.
+     * If reporting fails, the SDK attempts one safe fallback log without retrying the handler.
      * Receives event/kind only, not the original Cause. Inspect application failures inside the handler, as shown on Client.on
      */
     readonly onError?: (report: HandlerErrorReport) => Effect.Effect<unknown, E, R>
 }
 
-/** Lazy bounded remote attachment retrieval without gateway, cache, proxy URL or credential-bearing request */
+/** Download attachment bytes in one result or consume them as chunks.
+ * Methods return Effects or Streams and require a byte limit. They do not need a gateway connection or use cached bytes */
 export interface Attachments {
     /** Download attachment.url after matching it against this instance's discovered media `/attachments/` base path.
      * maxBytes is required and caps returned bytes at 50 MiB. Packing can briefly retain response chunks beside that result, so it is not a total heap limit. The SDK sends no Authorization header, follows no redirect, caches nothing and never falls back to proxyUrl.
-     * timeoutMs defaults to 30,000 across endpoint resolution, four-slot media admission and GET. Media slots are separate from the four REST/upload slots and do not wait for bot API rate limits. Interruption awaits response-reader cleanup and cannot undo already received bytes.
+     * timeoutMs defaults to 30,000 across endpoint resolution, four-slot media concurrency limits and GET. Media slots are separate from the four REST/upload slots and do not wait for bot API rate limits. Interruption awaits response-reader cleanup and cannot undo already received bytes.
      * URL expiry metadata is not an availability check. Failures contain a safe reason/status, including local busy, without a URL or response body
      */
     download(
         attachment: Attachment,
         options: AttachmentDownloadOptions,
     ): Effect.Effect<Uint8Array, AttachmentDownloadFailure>
-    /** Lazily read attachment.url as one-use chunks after matching this instance's media `/attachments/` base path.
-     * The first pull starts discovery, four-slot media admission and GET, independently of the four REST/upload slots. Each later pull reads at most one response chunk, with no SDK byte packing, spooling, retry or durable storage
+    /** Read attachment.url as one-use chunks after matching this instance's media `/attachments/` base path.
+     * The first pull starts discovery, four-slot media concurrency limits and GET, independently of the four REST/upload slots. Each later pull reads at most one response chunk, with no SDK byte packing, spooling, retry or durable storage
      *
      * maxBytes is required and bounds bytes delivered across this consumption at 50 MiB. A declared Content-Length above it fails before the first chunk, while runtime counting remains authoritative
      *
@@ -1429,32 +1721,42 @@ export interface Attachments {
 }
 
 /**
- * Lazy message operations preserving caller context and interruption. REST/local lookup work without a gateway.
- * Collection with guildId requires its locally owned shard to be ready; channel-only collection requires aggregate Connected. Closing/Closed reject new work
+ * Send, read, edit or delete messages, collect future replies and reactions, or inspect indexed search results.
+ * Methods return Effects or Streams. HTTP requests and local lookups do not require a gateway connection
+ *
+ * Message results use this client's immutable messageFields selection, defaulting to full Message. The same selection reaches nested results, callbacks and retained cache snapshots
+ *
+ * Collection with guildId requires its locally owned shard to be ready. Channel-only collection requires aggregate Connected. Closing/Closed reject new work
  *
  * Remote calls share four REST/upload slots, with four separate attachment-download slots, client-wide across locally owned shards. Both pools share a maximum of 256 queued requests or 4 MiB of queued JSON bodies.
- * Each remote call defaults to a 30,000 ms total deadline, including admission, retry and rate waits, with cleanup awaited afterward
+ * Each remote call defaults to a 30,000 ms total deadline, including queue waits, retries and rate-limit waits, with cleanup awaited afterward
  *
  * fetch, fetchHistory, fetchReactionUsers and fetchPins retry fetch transport failures and HTTP 500/502/503/504 at most twice.
  * Retry delays are jittered 125–250 ms then 250–500 ms, or a valid longer Retry-After. Retries never reset the deadline.
  * Reads retry the same target/query through the bounded queue, without snapshot isolation. Other rejections and malformed successes never retry.
- * Confirmed 429 retries retain their existing route/global waits and do not consume the two transient-read retries.
- * Mutations retry only confirmed rate-limit rejections, never uncertain writes.
- * Typed failures, defects and interruption retain native channels, including combined cleanup causes.
- * Interruption or client closure awaits owned cleanup but cannot undo a dispatched mutation
+ * Confirmed 429 retries retain their existing per-route and client-wide rate-limit waits and do not consume the two transient-read retries
+ *
+ * Mutations retry only confirmed rate-limit rejections, never writes whose outcome is unknown
+ *
+ * Successful REST JSON bodies are capped at 16 MiB before parsing, not as a total heap limit. Oversized or malformed successes fail with reason response and never retry.
+ * A response failure after a mutation request is sent has an unknown outcome. It does not establish rollback
+ *
+ * Typed failures, defects and interruption retain Effect's error channel and Cause, including combined cleanup causes.
+ * Interruption or client closure awaits owned cleanup but cannot undo a mutation request already sent
  */
 
-export interface Messages {
-    /** Traverse remote history newest-to-oldest as a lazy Stream, without connecting or prefetching another page.
-     * Each execution copies inputs and owns independent progress in the caller's context, without a detached runtime
+export interface Messages<M extends MessageCore = Message> {
+    /** Traverse remote history newest-to-oldest as a Stream that starts when consumed, without connecting or prefetching another page.
+     * Each execution copies inputs and owns independent progress using your program's services, without a separate SDK runtime
      *
-     * maxItems is required. pageSize/maxPages follow PaginationQuery. timeoutMs applies separately to each remote page
+     * maxItems is required. `pageSize`/maxPages follow PaginationQuery. `timeoutMs` applies separately to each remote page
      *
-     * Emits frozen snapshots. PaginationError covers input, cursorStalled and pageLimit; remote failures keep fetchHistory's operation.
-     * Interruption and defects retain native causes, including cleanup failures. Termination awaits in-flight request finalizers.
+     * Emits frozen snapshots. PaginationError covers input, cursorStalled and pageLimit. Remote failures keep fetchHistory's operation
+     *
+     * Interruption and defects retain Cause, including cleanup failures. Termination awaits in-flight request finalizers.
      * Stream early termination releases buffered items. Closing/Closed also releases the page and fails the next pull
      *
-     * Retains one bounded page, not all results. Enabled message caching follows fetchHistory's normal admission.
+     * Retains one bounded page, not all results. Enabled message caching follows fetchHistory's normal cache-storage rules.
      * Stops at maxItems or an empty remote page, not a short page. Separate pages are not a consistent snapshot.
      * Delivered items remain caller-owned after a later error. Caller processing is not retried or rolled back
      * @example
@@ -1471,12 +1773,14 @@ export interface Messages {
         channelId: string,
         query: HistoryIterationQuery,
         options?: MessageOperationOptions,
-    ): Stream.Stream<Message, MessageOperationFailure | PaginationError>
-    /** Lazily search one current-scope indexed page in an explicit guild or channel context, without gateway readiness, cache lookup or cache admission.
-     * Fluxerly always sends scope current. Completion is either an immutable indexing state or an immutable observed result page.
-     * Indexing never polls: the caller chooses whether to run another explicit search. Cursor is opaque and only belongs in a later search call.
+    ): Stream.Stream<M, MessageOperationFailure | PaginationError>
+    /** Search one page of indexed messages in the guild or channel you specify, without gateway readiness or cache use.
+     * Fluxerly always sends the search scope named current. Completion is either an immutable indexing state or an immutable observed result page.
+     * Reads recognized query fields, including inherited and nonenumerable properties, and copies their arrays when the Effect executes.
+     * An indexing result never starts polling. You choose whether to run another explicit search.
+     * A cursor is a provider-issued continuation value. Pass it unchanged to a later search call.
      * Invalid input, malformed success and POST failure use MessageOperationError operation search. This POST has no transient-read retry.
-     * Confirmed rate limits retain shared REST handling. Interruption retains the native Cause and releases only this request
+     * Confirmed rate limits retain shared REST handling. Interruption retains the Cause and releases only this request
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -1490,9 +1794,10 @@ export interface Messages {
         context: MessageSearchContext,
         query?: MessageSearchQuery,
         options?: MessageOperationOptions,
-    ): Effect.Effect<MessageSearchPage, MessageOperationFailure>
-    /** Lazily traverse current-scope indexed messages through opaque provider cursors, without polling, prefetching or cache hydration.
-     * maxItems is required. pageSize is 1–25 and maxPages defaults to 100. Each execution owns input copies and one bounded page.
+    ): Effect.Effect<MessageSearchPage<M>, MessageOperationFailure>
+    /** Read indexed messages from the guild or channel you specify, following provider cursors without polling, prefetching or automatic cache population.
+     * maxItems is required. `pageSize` is 1–25 and maxPages defaults to 100. Each execution owns input copies and one bounded page.
+     * Recognized filter fields, including inherited and nonenumerable properties, are read and their arrays copied per stream consumption.
      * An indexing page ends with PaginationError indexing. Repeated opaque cursors end with cursorStalled rather than snowflake comparison.
      * Delivered snapshots remain caller-owned after a later failure. Interruption and stream-scope closure await owned request cleanup
      * @example
@@ -1507,11 +1812,11 @@ export interface Messages {
         filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
         limits: MessageSearchIterationLimits,
         options?: MessageOperationOptions,
-    ): Stream.Stream<Message, MessageOperationFailure | PaginationError>
+    ): Stream.Stream<M, MessageOperationFailure | PaginationError>
     /** Traverse ascending remote user IDs for one message and the selected literal Unicode or custom emoji.
-     * Shares iterateHistory's lazy Stream, per-page deadlines, caller context, interruption and release behavior.
+     * Shares iterateHistory's Stream that starts when consumed, per-page deadlines, your program's services, interruption and release behavior.
      * Stops at maxItems or hasMore=false. Remote errors retain fetchReactionUsers's operation.
-     * No reactor cache or automatic member lookup. Concurrent removals can invalidate earlier observations
+     * No reactor cache or automatic member lookup. Concurrent removals can invalidate earlier snapshots
      * @example
      * ```ts
      * import { Stream } from "effect"
@@ -1530,7 +1835,7 @@ export interface Messages {
         options?: MessageOperationOptions,
     ): Stream.Stream<import("./reactions.js").ReactionUser, MessageOperationFailure | PaginationError>
     /** Traverse remote pins in descending timestamp order without populating the message cache.
-     * Shares iterateHistory's lazy Stream, per-page deadlines, caller context, interruption and release behavior.
+     * Shares iterateHistory's Stream that starts when consumed, per-page deadlines, your program's services, interruption and release behavior.
      * PinIterationQuery defines per-run deduplication and completeness limits. Retains at most maxItems deduplication IDs.
      * Remote errors retain fetchPins's operation. Valid stalled-page items may emit before cursorStalled on the next pull.
      * Stops at maxItems or hasMore=false. Timestamp ties can prevent enumerating every pin even without concurrent edits
@@ -1548,13 +1853,15 @@ export interface Messages {
         channelId: string,
         query: PinIterationQuery,
         options?: MessageOperationOptions,
-    ): Stream.Stream<import("./pins.js").MessagePin, MessageOperationFailure | PaginationError>
+    ): Stream.Stream<import("./pins.js").MessagePin<M>, MessageOperationFailure | PaginationError>
     /**
      * Pin one message identified by decimal id and channelId, without requiring gateway readiness.
-     * Lazy execution preserves caller context, interruption and native defects.
-     * Complete on HTTP 204, not event delivery. Fluxer enforces channel access and PIN_MESSAGES for guild pins.
-     * A new pin creates a system message and gateway notifications. Already-pinned targets are unchanged.
-     * Share bounded REST admission and the per-channel pins rate bucket with unpin/fetchPins.
+     * Execution preserves your program's services, interruption and unexpected faults
+     *
+     * Completes on HTTP 204, not event delivery. Fluxer enforces channel access and PIN_MESSAGES for guild pins.
+     * A new pin creates a system message and gateway notifications. Already-pinned targets are unchanged
+     *
+     * Share HTTP concurrency and queue limits and the per-channel pins rate bucket with unpin/fetchPins.
      * Default deadline is 30,000 ms. Only confirmed 429 rejection permits automatic retry within that deadline
      *
      * Expected failures use MessageOperationError operation pin, or ClientClosedError after shutdown.
@@ -1579,9 +1886,9 @@ export interface Messages {
      */
     pin(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
     /**
-     * Unpin one explicit message using pin's admission, deadline, retry, cancellation and cache-invalidation rules.
-     * Lazy execution preserves caller context, interruption and native defects.
-     * Complete on HTTP 204, including an already-unpinned message. Expected failures identify operation unpin.
+     * Unpin one explicit message using pin's request concurrency and queue limits, deadline, retry, cancellation and cache-invalidation rules.
+     * Execution preserves your program's services, interruption and unexpected faults.
+     * Completes on HTTP 204, including an already-unpinned message. Expected failures identify operation unpin.
      * Fluxer enforces the same permissions as pin. Closing/Closed clients fail with ClientClosedError.
      * Unpinning does not delete the message or the system message created by pinning, and does not reset the last-pin timestamp.
      * No gateway readiness, automatic rollback, event synthesis or confirmation fetch
@@ -1589,36 +1896,41 @@ export interface Messages {
     unpin(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
     /**
      * Fetch one frozen pin page for a decimal channel ID, without gateway readiness, cache reads or cache population.
-     * Lazy execution preserves caller context, interruption and native defects
+     * Execution preserves your program's services, interruption and unexpected faults
      *
      * Query defaults to limit 50 and the server's current time. Limit is 1 through 50 and before is an ISO timestamp
      *
      * Results use descending pin-time order with preserved pinnedAt values and an explicit nextBefore cursor.
      * Timestamp ties may repeat messages across pages. Deduplicate IDs and stop on a non-advancing cursor.
-     * No automatic traversal, complete-list guarantee, pin acknowledgement or snapshot isolation.
-     * Share pin's admission, 30,000 ms default deadline and per-channel rate bucket, using Messages' bounded read-retry policy
+     * No automatic traversal, complete-list guarantee, pin acknowledgement or snapshot isolation
+     *
+     * Share pin's request concurrency and queue limits, 30,000 ms default deadline and per-channel rate bucket, using Messages' bounded read-retry policy
      *
      * Invalid input and malformed responses use MessageOperationError operation fetchPins without partial pages.
      * Visibility/history permissions can limit results. An empty page does not prove the channel has no pins.
-     * Closing/Closed uses ClientClosedError. Returned messages are observations, not live state
+     * Closing/Closed uses ClientClosedError. Returned messages are snapshots, not live state
      */
     fetchPins(
         channelId: string,
         query?: MessagePinsQuery,
         options?: MessageOperationOptions,
-    ): Effect.Effect<MessagePinsPage, MessageOperationFailure>
+    ): Effect.Effect<MessagePinsPage<M>, MessageOperationFailure>
     /**
      * Remove one named user's reaction, leaving other users and emoji groups untouched.
-     * userId is a required decimal ID; naming the bot removes its own reaction.
-     * Uses addReaction's emoji inputs, REST admission, 30,000 ms default deadline, retry and interruption rules.
-     * No gateway readiness is required. Complete on HTTP 204, without waiting for or synthesizing events.
-     * Fluxer enforces visibility and history access; for another user, the bot must author the message or have MANAGE_MESSAGES in its guild
+     * `userId` is a required decimal ID. Naming the bot removes its own reaction
+     *
+     * Uses addReaction's emoji inputs, HTTP concurrency and queue limits, 30,000 ms default deadline, retry and interruption rules.
+     * No gateway readiness is required. Completes on HTTP 204, without waiting for or synthesizing events
+     *
+     * Fluxer enforces visibility and history access. For another user, the bot must author the message or have MANAGE_MESSAGES in its guild
      *
      * Expected failures use MessageOperationError with operation removeUserReaction, or ClientClosedError.
-     * Lazy execution preserves caller context and native defects.
-     * Cleanup is awaited, but cannot undo a dispatched deletion. Only confirmed 429 rejections retry.
-     * Success means absent or removed, not proof the reaction existed. Unknown outcomes are not replayed.
-     * No cache mutation, automatic restoration or per-user state is retained; the bot cannot restore another user's reaction as them
+     * Execution preserves your program's services and unexpected faults
+     *
+     * Cleanup is awaited, but cannot undo a deletion request already sent. Only confirmed 429 rejections retry.
+     * Success means absent or removed, not proof the reaction existed. Unknown outcomes are not replayed
+     *
+     * No cache mutation, automatic restoration or per-user state is retained. The bot cannot restore another user's reaction as them
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -1641,7 +1953,7 @@ export interface Messages {
      * Delete every user's reaction for one emoji, preserving other emoji groups.
      * Uses removeUserReaction's execution, permission, deadline, failure and cleanup rules, with operation clearReaction.
      * Complete on HTTP 204. Success does not prove reactions existed or that this call removed them.
-     * Fluxer emits a clear-emoji event, not individual removal events; the SDK does not synthesize or await it.
+     * Fluxer emits a clear-emoji event, not individual removal events. The SDK does not synthesize or await it.
      * Destructive: Other users' reactions cannot be restored by the bot as those users
      */
     clearReaction(
@@ -1653,7 +1965,7 @@ export interface Messages {
      * Delete every user's reactions for every emoji on this message, without deleting the message.
      * Uses clearReaction's execution, permission, deadline, failure and cleanup rules, with operation clearReactions.
      * Takes no emoji selector. Complete on HTTP 204, whether reactions were present or absent.
-     * Fluxer emits one clear-all event, not per-emoji or per-user events; the SDK does not synthesize or await it.
+     * Fluxer emits one clear-all event, not per-emoji or per-user events. The SDK does not synthesize or await it.
      * Destructive: Other users' reactions cannot be restored by the bot as those users
      */
     clearReactions(
@@ -1662,18 +1974,20 @@ export interface Messages {
     ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Fetch one frozen page of users who currently hold the specified reaction, without requiring gateway readiness.
-     * Accept the same literal Unicode or custom emoji input as addReaction.
-     * limit defaults to 25 (1–100); after is an exclusive user-ID cursor in ascending order, not reaction time.
+     * Accept the same literal Unicode or custom emoji input as addReaction
+     *
+     * Limit defaults to 25 (1–100). After is an exclusive user-ID cursor in ascending order, not reaction time.
      * Empty reactions return an empty terminal page. No automatic pagination, user cache or message-cache changes.
-     * Pages are separate observations: Reactions may change between requests; no complete or atomic snapshot is promised
+     * Pages are separate snapshots: Reactions may change between requests. No complete or atomic snapshot is promised
      *
      * Use the shared 30,000 ms deadline by default, overridden by options.timeoutMs.
-     * Share bounded REST admission, global limits and the channel bucket used by reaction mutations.
+     * Share HTTP concurrency and queue limits, global limits and the channel bucket used by reaction mutations.
      * Uses Messages' bounded read-retry policy within the original deadline, including separate confirmed-429 waits
      *
      * Invalid inputs, malformed pages, HTTP rejections, transport and deadlines use MessageOperationError with operation fetchReactionUsers.
-     * HTTP 404 means notFound; permission/history visibility is enforced by Fluxer. Closed clients use ClientClosedError.
-     * Lazy execution preserves caller context; interruption awaits owned request cleanup. Unexpected defects retain native causes
+     * HTTP 404 means notFound. Permission/history visibility is enforced by Fluxer. Closed clients use ClientClosedError
+     *
+     * Execution preserves your program's services. Interruption awaits owned request cleanup. Unexpected defects retain Cause
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -1695,17 +2009,19 @@ export interface Messages {
     ): Effect.Effect<ReactionUsersPage, MessageOperationFailure>
     /**
      * Add the bot's own reaction and complete after HTTP 204, without waiting for or synthesizing a gateway event.
-     * Accept literal Unicode or a custom { name, id }; Fluxer owns emoji availability and permission checks
+     * Accept literal Unicode or a custom { name, id }. Fluxer owns emoji availability and permission checks
      *
-     * No gateway readiness is required. Use the shared 30,000 ms deadline by default; timeoutMs overrides it.
-     * Share bounded REST admission and global rate limits, with a channel reaction bucket separate from message operations.
-     * Only confirmed rate-limit rejections retry within the original deadline; uncertain outcomes are never retried
+     * No gateway readiness is required. Use the shared 30,000 ms deadline by default. `timeoutMs` overrides it.
+     * Share HTTP concurrency and queue limits and global rate limits, with a channel reaction bucket separate from message operations.
+     * Only confirmed rate-limit rejections retry within the original deadline. Unknown outcomes are never retried
      *
-     * Input, admission, rejection, transport and timeout failures use MessageOperationError; closed clients use ClientClosedError.
-     * Lazy execution preserves caller context. Interruption awaits owned cleanup but cannot undo a dispatched reaction.
-     * Unexpected defects retain native causes
+     * Input, queue, rejection, transport and timeout failures use MessageOperationError. Closed clients use ClientClosedError
      *
-     * Existing own reactions are idempotent server-side. No local reaction state, counts or reactor lists are retained
+     * Execution preserves your program's services. Interruption awaits owned cleanup but cannot undo a reaction request already sent.
+     * Unexpected defects retain Cause
+     *
+     * Adding the bot's existing reaction again leaves it unchanged on the server.
+     * No local reaction state, counts or reactor lists are retained
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -1724,7 +2040,7 @@ export interface Messages {
     ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Remove only the bot's own reaction and complete after HTTP 204.
-     * Uses addReaction's input, admission, timeout, retry, failure and interruption rules.
+     * Uses addReaction's input, queue limits, timeout, retry, failure and interruption rules.
      * Success does not prove the reaction previously existed or that this call removed it.
      * Other users' reactions are untouched. Neither this operation nor gateway reaction events alter the message cache
      */
@@ -1734,27 +2050,32 @@ export interface Messages {
         options?: MessageOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure>
     /**
-     * Lazily register future messageCreate collection in one decimal channel ID within the execution caller's scope.
-     * Each execution returns a ready handle before subsequent sends. No history, cache reads, implicit connect or prompt correlation
+     * Collect future messages from one decimal channel ID within your executing program's scope.
+     * Each execution returns a ready handle before subsequent sends.
+     * Collection does not read history or caches, connect the client or match replies to a prompt automatically
      *
      * With options.guildId, the caller supplies the channel's owning guild and intake accepts only that locally owned ready shard. Known conflicting event guilds are discarded without a channel lookup.
-     * Without guildId, channel-only collection retains conservative aggregate recovery: any gateway gap ends it because its guild scope is unknown
+     * Without guildId, channel-only collection retains conservative aggregate recovery: Any gateway gap ends it because its guild scope is unknown
      *
-     * Defaults: One accepted message, 30,000 ms total lifetime, 4 MiB retained Message JSON.
-     * Pending intake separately allows 256 payloads or 4 MiB source JSON after channel selection, before synchronous filtering.
-     * Options are copied when executed. Budgets are positive safe integers. The timeoutMs maximum is 2,147,483,647
+     * Defaults: One accepted message, 30,000 ms total lifetime, 4 MiB retained selected-message JSON.
+     * Pending intake separately allows 256 payloads or 4 MiB incoming JSON after channel selection, before synchronous filtering.
+     * Options are copied when executed. Budgets are positive safe integers. The timeoutMs and idleMs maximum is 2,147,483,647
      *
      * The deadline starts when registered, never resets, and excludes messages processed at or after it, including slow filter returns.
-     * Count accepted IDs once and retain frozen received snapshots, unaffected by later edits/deletions
+     * Optional idleMs starts at registration and resets only after each accepted ID, before its callback. Omitted means disabled.
+     * Queued, rejected and duplicate messages do not renew idleMs. Callback time counts. The earlier deadline wins, with timeout winning ties
+     *
+     * Counts each accepted ID once and keeps frozen received snapshots, unaffected by later edits or deletions
      *
      * Filter/overflow failures return no partial messages. Recovery fails with CollectorError connectionLost, without auto restart or resend.
      * Require Connected or fail with CollectorError notConnected. Closing/Closed use ClientClosedError. Invalid settings use ConfigurationError
      *
      * The registration scope stops its collector with partial replies. Client shutdown fails it with ClientClosedError.
-     * Interrupting a waiter does not stop collection. Closing its registration scope does. No AbortSignal option or detached runtime.
-     * Defects retain native Cause. Slow synchronous filters block JavaScript and cannot be preempted or have their side effects undone.
-     * Optional onMessage runs sequentially in registration context after filtering, ID deduplication and retained-byte admission.
-     * Limit completion waits for the final callback. Timeout/stop may retain a message whose callback was interrupted.
+     * Interrupting a waiter does not stop collection. Closing its registration scope does. No AbortSignal option or separate SDK runtime.
+     * Defects retain Cause. Slow synchronous filters block JavaScript and cannot be preempted or have their side effects undone
+     *
+     * Optional onMessage runs sequentially in Effect services available at registration after filtering, ID deduplication and stored-byte limit checks.
+     * Limit completion waits for the final callback. Idle/timeout/stop may retain a message whose callback was interrupted.
      * Once the accepted count is reached, later messages are ignored while the final callback finishes
      *
      * Handler failure ends collection with CollectorError handler. Terminal cleanup defects remain in Cause.
@@ -1786,49 +2107,53 @@ export interface Messages {
      *         const collector = yield* client.messages.collect(channelId, {
      *             filter: message => message.author.id === userId,
      *             maxMessages: 3,
+     *             idleMs: 5_000,
      *             onMessage: message => client.messages.reply(message, { content: "Received your reply" }),
      *         })
      *         return yield* collector.waitForClose()
      *     }),
      * )
      * ```
-     * The author filter must exclude the bot itself to avoid collecting its acknowledgements
+     * The author filter must exclude the bot itself to avoid collecting its acknowledgements. Five quiet seconds end intake with reason idle, then await callback cleanup
      */
     collect<E = never, R = never>(
         channelId: string,
-        options?: CollectorOptions<E, R>,
-    ): Effect.Effect<Collector, CollectorRegistrationError, Scope.Scope | R>
+        options?: CollectorOptions<E, R, M>,
+    ): Effect.Effect<Collector<M>, CollectorRegistrationError, Scope.Scope | R>
     /**
-     * Lazily register future reaction additions for one message with decimal id and channelId in the caller's scope.
+     * Collect future reaction additions for one message with decimal id and channelId in your scope.
      * Execute before the expected reaction. No REST request, existing-reactor lookup, implicit connect or cache reads
      *
      * With options.guildId, the caller supplies the target channel's owning guild and intake accepts only that locally owned ready shard. Known conflicting event guilds are discarded without a membership lookup.
-     * Without guildId, target-only collection retains conservative aggregate recovery: any gateway gap ends it because its guild scope is unknown
+     * Without guildId, target-only collection retains conservative aggregate recovery: Any gateway gap ends it because its guild scope is unknown
      *
      * Defaults: One accepted addition, 30,000 ms total lifetime and 4 MiB retained MessageReaction JSON.
-     * Copy target IDs/options when executed. Pending intake allows 256 payloads or 4 MiB full source JSON.
-     * Message selection precedes buffering; synchronous user/emoji filtering follows it
+     * Copy target IDs/options when executed. Pending intake allows 256 payloads or 4 MiB full incoming JSON.
+     * Message selection precedes buffering. Synchronous user/emoji filtering follows it
      *
-     * Optional emoji uses addReaction's input shape and is copied when executed; matching precedes filter but follows queue admission.
-     * Unicode requires exact text and no custom ID; custom emoji match by ID, ignoring renames. Invalid selectors use ConfigurationError emoji
+     * Optional emoji uses addReaction's input shape and is copied when executed. Matching precedes filter but follows queue-limit checks.
+     * Unicode requires exact text and no custom ID. Custom emoji match by ID, ignoring renames. Invalid selectors use ConfigurationError emoji
      *
-     * Single additions and received batches share receive order; batch entries retain their order and count individually.
+     * Single additions and received batches share receive order. Batch entries retain their order and count individually.
      * A batch occupies one pending slot. Repeated user/emoji pairs count again. No batching flag is enabled.
-     * Removals, clears and message deletion neither undo observations nor stop collection. This is not a vote tally
+     * Removals, clears and message deletion neither undo snapshots nor stop collection. This is not a vote tally
      *
-     * The deadline never resets and excludes observations processed at or after it, including slow filter returns
+     * The deadline never resets and excludes snapshots processed at or after it, including slow filter returns.
+     * Optional idleMs starts at registration and resets after each accepted addition, before its callback. Omitted means disabled.
+     * Excluded, rejected, queued and unprocessed batch entries do not renew it. Callback time counts. The earlier deadline wins, with timeout winning ties.
+     * timeoutMs and idleMs require integers from 1 through 2,147,483,647
      *
      * Filter/overflow failures use CollectorError without partial results. Recovery fails with connectionLost, without restart.
      * Require Connected or fail with CollectorError notConnected. Closing/Closed use ClientClosedError.
      * Invalid target/options use ConfigurationError. Registration does not verify remote message existence or access
      *
-     * Registration scope closure stops collection with partial results; client shutdown fails it with ClientClosedError.
-     * Waiter interruption does not stop collection. No AbortSignal option or detached runtime; defects retain native Cause
+     * Registration scope closure stops collection with partial results. Client shutdown fails it with ClientClosedError.
+     * Waiter interruption does not stop collection. No AbortSignal option or separate SDK runtime. Defects retain Cause
      *
-     * Optional onReaction runs after acceptance and byte admission, sequentially, in the registration context.
-     * Limit completion waits for the final callback. Timeout/stop may retain an addition whose callback was interrupted.
+     * Optional onReaction runs after acceptance and byte-limit checks, sequentially, in the Effect services available at registration.
+     * Limit completion waits for the final callback. Idle/timeout/stop may retain an addition whose callback was interrupted.
      * Pending budgets exclude the active payload, including its unprocessed batch entries. No callback retries or vote reconstruction.
-     * Handler failure ends this collector with CollectorError handler; defects during terminal cleanup remain in Cause
+     * Handler failure ends this collector with CollectorError handler. Defects during terminal cleanup remain in Cause
      *
      * @example
      * ```ts
@@ -1839,6 +2164,7 @@ export interface Messages {
      *     Effect.gen(function* () {
      *         const collector = yield* client.messages.collectReactions(message, {
      *             maxReactions: 3,
+     *             idleMs: 5_000,
      *             emoji: "✅",
      *             filter: reaction => reaction.userId === userId,
      *             onReaction: reaction => client.messages.edit(message, { content: `Accepted addition by ${reaction.userId}` }),
@@ -1847,56 +2173,67 @@ export interface Messages {
      *     }),
      * )
      * ```
-     * The caller supplies a connected client and an existing message; timeout may return no reactions
+     * The caller supplies a connected client and an existing message. Idle or timeout may return no reactions
      */
     collectReactions<E = never, R = never>(
         message: MessageReference,
         options?: ReactionCollectorOptions<E, R>,
     ): Effect.Effect<ReactionCollector, CollectorRegistrationError, Scope.Scope | R>
     /**
-     * Lazily read a frozen local observation when executed, never making a request.
+     * Read a frozen local snapshot when executed, never making a request.
      * Disabled, absent, evicted, expired or wrong-channel entries yield undefined, not proof of server absence.
-     * Hits update LRU recency without renewing age and do not guarantee current server state.
+     * Hits update eviction recency without renewing age and do not guarantee current server state.
      * Invalid references fail with MessageOperationError operation get, reason input, outcome notDispatched.
-     * Closing/Closed fail with ClientClosedError. Defects and interruption retain native channels
+     * Closing/Closed fail with ClientClosedError. Defects and interruption retain Effect's error channel and Cause
      */
-    get(message: MessageReference): Effect.Effect<Message | undefined, MessageOperationFailure>
+    get(message: MessageReference): Effect.Effect<M | undefined, MessageOperationFailure>
     /**
-     * Send text, embeds, files and/or stickers without requiring a connected gateway. Closing/Closed reject new work
+     * Send text, embeds, files or stickers without requiring a connected gateway. Closing/Closed reject new work
      *
      * Embed images/thumbnails may use attachment://filename for a matching new image upload in this execution.
-     * Optional flags accept only MessageFlags' non-voice bits; suppressing previews is distinct from omitting embeds.
-     * Each execution snapshots file bytes before waiting, up to 50 MiB per file and the separate uploads.maxBytes budget.
-     * Full upload admission fails with busy before copying. No path access or downloads; servers may impose lower limits.
-     * Cleanup releases owned bytes; failed uploads may leave temporary server data, with no physical-erasure guarantee
+     * Optional flags accept only MessageFlags' non-voice bits. Suppressing previews is distinct from omitting embeds
+     *
+     * Each attachment uses exactly one source: Bytes in `data`, a sized Blob/File-compatible source, or a finite stream with its exact size.
+     * Sources are limited to 50 MiB per file and the separate uploads.maxBytes budget. Servers may impose lower limits
+     *
+     * Each execution copies data bytes before any wait. Full upload or queue capacity fails with busy before copying.
+     * File and stream sources are not copied or spooled. Their supplied references are captured at execution, and readers are acquired when uploading starts.
+     * Keep file data stable while it is read. A stream is consumed at most once and must deliver exactly its declared byte count.
+     * The SDK accepts no path strings or implicit URL downloads. It owns acquired readers, not caller paths or FileHandles
+     *
+     * Uploads use presigned planning or an inline multipart fallback. Cleanup cancels unfinished readers and awaits lock release.
+     * Failed uploads may leave temporary server data, with no physical-erasure guarantee
      *
      * Returns the created snapshot after an API response, not gateway delivery or recipient acknowledgement.
-     * Mention notifications default off. Deadline defaults to 30,000 ms across admission, rate waits and HTTP.
+     * Mention notifications default off. Deadline defaults to 30,000 ms across queue waits, rate-limit waits and HTTP.
      * Enabled caching retains eligible created snapshots without changing send completion or delivery
      *
-     * One client admits four REST/upload requests plus four independent attachment downloads. Both pools share at most 256 pending requests or 4 MiB of pending JSON.
-     * Only confirmed rate-limit rejections retry within the deadline. Ambiguous sends never retry automatically
+     * One client admits four REST/upload requests plus four independent attachment downloads. Both pools share at most 256 pending requests or 4 MiB of pending JSON
+     *
+     * Only confirmed rate-limit rejections can retry within the deadline. Ambiguous sends never retry automatically.
+     * An inline multipart HTTP 429 retries copied data only. Any file or stream source instead fails with rateLimit without reopening or rereading it
      *
      * Input nonce accepts a 1-32 character string or nonnegative safe integer. Omission creates one SDK nonce per execution, while an explicit nonce is retained through confirmed rate-limit retries.
      * Fluxer duplicate suppression is best effort for five minutes after persistence. It is not durable idempotency, exactly-once delivery or a concurrent atomicity guarantee
      *
      * Interruption awaits owned HTTP cleanup but cannot undo a server-side creation.
-     * Typed failures, defects and interruption retain native channels, including cleanup causes
+     * Typed failures, defects and interruption retain Effect's error channel and Cause, including cleanup causes
      */
-    send(channelId: string, input: MessageInput, options?: SendOptions): Effect.Effect<Message, SendError>
-    /** Lazily forward an accessible source message into an explicit destination, without fetching or caching the source.
-     * Each execution starts a separate send. No gateway connection is required; Closing/Closed fail with ClientClosedError
+    send(channelId: string, input: MessageInput, options?: SendOptions): Effect.Effect<M, SendError>
+    /** Forward an accessible source message into an explicit destination, without fetching or caching the source.
+     * Each execution starts a separate send. No gateway connection is required. Closing/Closed fail with ClientClosedError
      *
      * Optional media selections belong to the source. Extra content, files, mentions and flags are rejected
      *
      * Returns the created message after HTTP, with frozen messageSnapshots rather than live views of later source edits.
-     * Uses send's shared admission, optional destination-message caching and 30,000 ms default total deadline
+     * Uses send's shared request concurrency and queue limits, optional destination-message caching and 30,000 ms default total deadline
      *
      * Fluxer checks source access and destination permissions. Only confirmed rate-limit rejection retries
      *
      * Input nonce follows send's 1-32 character string/nonnegative-safe-integer contract, SDK-generated default and retry preservation. Fluxer's five-minute suppression is best effort, not durable idempotency or exactly-once delivery.
-     * A lost response or interruption after dispatch may leave a created forward. No rollback or exactly-once guarantee.
-     * Expected failures use MessageError or ClientClosedError. Defects and interruption retain native causes and await cleanup
+     * A lost response or interruption after the request is sent may leave a created forward. No rollback or exactly-once guarantee
+     *
+     * Expected failures use MessageError or ClientClosedError. Defects and interruption retain Cause and await cleanup
      * @example
      * ```ts
      * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
@@ -1905,24 +2242,26 @@ export interface Messages {
      * }
      * ```
      */
-    forward(channelId: string, input: ForwardMessageInput, options?: SendOptions): Effect.Effect<Message, SendError>
+    forward(channelId: string, input: ForwardMessageInput, options?: SendOptions): Effect.Effect<M, SendError>
     /**
-     * Lazily tell Fluxer that this bot is typing in one decimal channel ID, completing only after HTTP 204.
+     * Tell Fluxer that this bot is typing in one decimal channel ID, completing only after HTTP 204.
      * No gateway connection, event confirmation, cache change or local typing state is required or created.
      * Fluxer can restrict delivery to other clients and expires its own ephemeral indicator independently.
-     * Uses shared REST admission and a dedicated per-channel typing bucket. The default request deadline is 30,000 ms.
-     * Only confirmed rate-limit rejections retry; a lost response or interruption cannot prove whether Fluxer showed the notice.
-     * Input, admission and HTTP failures use MessageOperationError operation typing. Closing/Closed uses ClientClosedError.
-     * Each execution preserves caller context and interruption, awaiting HTTP cleanup. Defects retain their native Cause
+     * Uses shared HTTP concurrency and queue limits and a dedicated per-channel typing bucket. The default request deadline is 30,000 ms.
+     * Only confirmed rate-limit rejections retry. A lost response or interruption cannot prove whether Fluxer showed the notice.
+     * Input, queue and HTTP failures use MessageOperationError operation typing. Closing/Closed uses ClientClosedError.
+     * Each execution preserves your program's services and interruption, awaiting HTTP cleanup. Defects retain their Cause
      */
     typing(channelId: string, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
     /**
-     * Lazily send one typing notice, run task in this caller's context, then stop the helper and await its refresh cleanup.
+     * Send one typing notice, run task using your program's services, then stop the helper and await its refresh cleanup.
      * While task is running, refreshes no sooner than every 8,000 ms, below Fluxer's documented 20 requests per 10 seconds per channel limit
      *
-     * The first typing request completes before task starts. Its failure prevents task execution. There is no detached repeating work.
-     * A later typing or client-close failure stops refreshing but does not interrupt task; after task settles, the retained failure combines with its Cause.
-     * Interruption stops and awaits the helper; task's scope, services and errors remain owned by this Effect caller.
+     * The first typing request completes before task starts. Its failure prevents task execution. There is no detached repeating work
+     *
+     * A later typing or client-close failure stops refreshing but does not interrupt task. After task settles, the retained failure combines with its Cause
+     *
+     * Interruption stops and awaits the helper. Task's scope, services and errors remain owned by this Effect caller.
      * Client shutdown stops and awaits refresh work, but cannot forcibly cancel arbitrary caller task work. No cache, presence or gateway state is changed
      * @example
      * ```ts
@@ -1938,19 +2277,22 @@ export interface Messages {
         options?: MessageOperationOptions,
     ): Effect.Effect<A, E | MessageOperationFailure, R>
     /**
-     * Lazy reply helper over send. Missing references fail, without unreferenced fallback or default author notification.
+     * Reply to a message using send's request behavior.
+     * Missing references fail instead of sending an unreferenced message. Author notifications are off by default.
+     * Target and caller-supplied reference checks run first. Body validation follows send's order, after client-closure checks.
      * Input nonce follows send's caller correlation and retry contract. A lost response remains unknown and the SDK does not replay it.
      * The returned reply is eligible for the same cache intake as send.
-     * File inputs use send's per-execution snapshot, size, budget and cleanup rules
+     * Attachment sources follow send's per-execution byte copying, file/stream consumption, size, budget and cleanup rules.
+     * Inline multipart 429 responses do not replay file or stream sources
      */
-    reply(message: MessageReference, input: ReplyInput, options?: SendOptions): Effect.Effect<Message, SendError>
+    reply(message: MessageReference, input: ReplyInput, options?: SendOptions): Effect.Effect<M, SendError>
     /**
      * Fetch a frozen message snapshot from Fluxer, never from a cache. Accepts a reference or an existing Message.
      * Returns after decoding the API response and checking its message/channel IDs against the requested target.
      * Missing targets fail with MessageOperationError reason notFound rather than returning an empty value.
-     * Enabled caching retains eligible responses, but the returned result does not depend on cache admission.
+     * Enabled caching retains eligible responses, but the returned result does not depend on cache storage.
      * Interrupting the Effect releases only this request and awaits its cleanup.
-     * Uses Messages' bounded read-retry policy; callers need no retry loop for its eligible transient failures
+     * Uses Messages' bounded read-retry policy. Callers need no retry loop for its eligible transient failures
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -1961,9 +2303,9 @@ export interface Messages {
      * })
      * ```
      */
-    fetch(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<Message, MessageOperationFailure>
+    fetch(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<M, MessageOperationFailure>
     /**
-     * Lazily fetch one remote history page for a decimal channel ID without a gateway connection or cache lookup.
+     * Fetch one remote history page for a decimal channel ID without a gateway connection or cache lookup.
      * Defaults to the latest 50 messages. Query limit is 1 through 100 with at most one before, after or around cursor
      *
      * Each execution returns after HTTP 200 and whole-page validation as a frozen array of frozen Message snapshots, newest first.
@@ -1973,35 +2315,38 @@ export interface Messages {
      * Enabled caching admits eligible page members oldest first, so tight limits retain the newest members
      *
      * Invalid input, malformed pages and HTTP rejections are typed MessageOperationError failures with operation fetchHistory. HTTP 404 remains notFound.
-     * Shares REST admission and the 30,000 ms default total deadline, using Messages' bounded read-retry policy.
-     * Runs in caller context. Interruption releases only this call and awaits cleanup. Closing/Closed fail with ClientClosedError.
-     * Defects and interruption retain native causes rather than becoming typed message-operation failures
+     * Shares HTTP concurrency and queue limits and the 30,000 ms default total deadline, using Messages' bounded read-retry policy
+     *
+     * Runs using your program's services. Interruption releases only this call and awaits cleanup. Closing/Closed fail with ClientClosedError.
+     * Defects and interruption retain Cause rather than becoming typed message-operation failures
      */
     fetchHistory(
         channelId: string,
         query?: MessageHistoryQuery,
         options?: MessageOperationOptions,
-    ): Effect.Effect<readonly Message[], MessageOperationFailure>
-    /** Lazily preview one bounded exact cleanup selection without deleting, rereading cache, or requiring a gateway connection.
+    ): Effect.Effect<readonly M[], MessageOperationFailure>
+    /** Preview one bounded exact cleanup selection without deleting, rereading cache, or requiring a gateway connection.
      * maxScanned and maxSelected are each required integers from 1 through 10,000. Supply authorId, a synchronous filter, or both as combined criteria
      *
      * History is read newest first without prefetch until an empty page, scan bound, or selection bound. A short page is not exhaustion.
-     * Underlying history reads can populate an enabled message cache.
-     * The in-memory plan owns frozen selected snapshots and can only be consumed once by its producing client. JSON reconstruction and another client fail before dispatch
+     * Underlying history reads can populate an enabled message cache
      *
-     * A filter throw, non-boolean result, or thenable fails with MessageCleanupError before deletion. A blocking synchronous filter cannot be preempted.
-     * One 30,000 ms default deadline covers history reads. Native interruption remains interruption and no cleanup request is submitted
+     * The in-memory plan owns frozen selected snapshots and can only be consumed once by its producing client. JSON reconstruction and another client fail before the request is sent
+     *
+     * A filter throw, non-boolean result, or thenable fails with MessageCleanupError before deletion. A blocking synchronous filter cannot be preempted
+     *
+     * One 30,000 ms default deadline covers history reads. Interruption remains interruption and no cleanup request is submitted
      */
     previewCleanup(
         channelId: string,
-        selection: MessageCleanupSelection,
+        selection: MessageCleanupSelection<M>,
         options?: MessageOperationOptions,
-    ): Effect.Effect<MessageCleanupPlan, MessageCleanupFailure>
-    /** Lazily submit one prior plan's exact IDs in sequential batches of at most 100, without rereading history or rerunning selection criteria.
+    ): Effect.Effect<MessageCleanupPlan<M>, MessageCleanupFailure>
+    /** Submit one prior plan's exact IDs in sequential batches of at most 100, without rereading history or rerunning selection criteria.
      * A plan is single-use even after an error or interruption, preventing accidental replay. Preview again or use explicit deleteMany for journaled reconciliation.
-     * One 30,000 ms default deadline covers all batch submissions. submittedBatches records only earlier HTTP-success submissions.
+     * One 30,000 ms default deadline covers all batch submissions. SubmittedBatches records only earlier HTTP-success submissions.
      * A terminal rejected or unknown batch is reported separately. No report proves individual deletion, a deletion count, atomicity, or safe retry.
-     * onProgress is synchronous best effort. Callback throws and thenable rejections are ignored. Native interruption retains its cause and can leave a submitting batch unknown.
+     * onProgress is synchronous best effort. Callback throws and thenable rejections are ignored. Interruption retains its cause and can leave a submitting batch unknown.
      * Batches use deleteMany's confirmed rate-limit rejection retries, never automatic replay after an unknown outcome
      * @example
      * ```ts
@@ -2019,52 +2364,57 @@ export interface Messages {
      * ```
      */
     cleanup(
-        plan: MessageCleanupPlan,
+        plan: MessageCleanupPlan<M>,
         options?: MessageCleanupOptions,
     ): Effect.Effect<MessageCleanupReport, MessageCleanupFailure>
     /**
      * Replace text/embeds/files and return the frozen updated snapshot after the API response, without waiting for a gateway event.
-     * Existing stickers are preserved; sticker replacement is not supported by this edit operation.
-     * Supplied values replace those fields; omitted values are not sent. No hidden fetch or cache merge
+     * Existing stickers are preserved. Sticker replacement is not supported by this edit operation.
+     * Supplied values replace those fields. Omitted values are not sent. No hidden fetch or cache merge
      *
-     * List retained attachment IDs alongside new uploads; retained title/description may be changed or cleared with null.
+     * List retained attachment IDs alongside new uploads. Retained title/description may be changed or cleared with null.
      * The supplied attachment list replaces the old list. Unknown IDs may be ignored and a stale list may remove concurrent additions.
      * attachment:// embed images/thumbnails must match a new image upload in this execution, not a retained ID
      *
-     * A flags-only edit is supported. Omitted flags preserve them; flags replaces writable bits and 0 clears both non-voice bits
+     * A flags-only edit is supported. Omitted flags preserve them. Flags replaces writable bits and 0 clears both non-voice bits
      *
-     * Clear files with attachments: [] and nonempty text or embeds. Uploads use send's per-execution snapshot and budget.
-     * Interruption awaits upload cleanup; failed edits may leave temporary server data, without physical-erasure guarantees
+     * Clear files with attachments: [] and nonempty text or embeds.
+     * New uploads follow send's per-execution byte copying, file/stream consumption, size, budget and cleanup rules.
+     * Inline multipart 429 responses do not replay file or stream sources.
+     * Interruption awaits upload cleanup. Failed edits may leave temporary server data, without physical-erasure guarantees
      *
-     * To remove embeds, send nonempty content alongside embeds: []; an empty edit alone is rejected by Fluxer.
+     * To remove embeds, send nonempty content alongside embeds: []. An empty edit alone is rejected by Fluxer.
      * Empty content requests clearing text, subject to Fluxer validation. Mentions default off.
      * Omitted rich embeds are preserved, but Fluxer may regenerate text-derived link previews
      *
-     * Enabled caching retains eligible responses. An uncertain dispatched edit evicts the old local copy.
-     * Missing targets are typed notFound failures. A lost response or timeout after dispatch may leave the edit applied.
-     * Uncertain edits never retry automatically. Native interruption cannot undo a dispatched edit
+     * Enabled caching retains eligible responses. An uncertain dispatched edit evicts the old local copy
+     *
+     * Missing targets are typed notFound failures. A lost response or timeout after the request is sent may leave the edit applied.
+     * Uncertain edits never retry automatically. Interruption cannot undo a dispatched edit
      */
     edit(
         message: MessageReference,
         input: EditMessageInput,
         options?: MessageOperationOptions,
-    ): Effect.Effect<Message, MessageOperationFailure>
+    ): Effect.Effect<M, MessageOperationFailure>
     /**
      * Delete the target and complete without a value after HTTP 204, without waiting for a gateway event.
      * Missing targets fail with MessageOperationError reason notFound, including a repeated delete.
-     * Confirmed deletion and uncertain dispatched deletion evict the local cached copy.
-     * A lost response or timeout after dispatch may leave the target deleted. Uncertain deletes never retry automatically.
-     * Native interruption awaits owned cleanup but cannot undo a dispatched deletion
+     * Confirmed deletions and deletions with unknown outcomes evict the local cached copy.
+     * A lost response or timeout after the request is sent may leave the target deleted. Uncertain deletes never retry automatically.
+     * Interruption awaits owned cleanup but cannot undo a deletion request already sent
      */
     delete(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
-    /** Lazily delete one attachment by decimal ID from a message authored by this bot, without fetching or rewriting the retained attachment list.
-     * Copies the target when run, using message REST deadlines/failures in caller context; no gateway connection is required
+    /** Delete one attachment by decimal ID from a message authored by this bot, without fetching or rewriting the retained attachment list.
+     * Copies the target when run, using message HTTP deadlines and failures with your program's services. No gateway connection is required
      *
      * HTTP 204 returns no value, not event acknowledgement. Deleting the last attachment can delete the whole message if Fluxer considers it otherwise empty.
-     * Confirmed or uncertain deletion evicts this message's cached copy. No optimistic events are emitted.
-     * A notFound failure can mean only that the attachment is missing; it does not prove the message is absent.
-     * Only confirmed 429 rejections retry. Storage removal and message updates are not atomic; lost responses can leave either applied.
-     * Interruption awaits cleanup but cannot undo deletion or guarantee physical erasure; defects retain their Cause
+     * Confirmed or uncertain deletion evicts this message's cached copy. No optimistic events are emitted
+     *
+     * A notFound failure can mean only that the attachment is missing. It does not prove the message is absent
+     *
+     * Only confirmed 429 rejections retry. Storage removal and message updates are not atomic. Lost responses can leave either applied.
+     * Interruption awaits cleanup but cannot undo deletion or guarantee physical erasure. Defects retain their Cause
      * @example
      * ```ts
      * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
@@ -2079,12 +2429,12 @@ export interface Messages {
         options?: MessageOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure>
     /**
-     * Lazily delete 1–100 distinct decimal message IDs from one guild channel, requiring ManageMessages permission.
+     * Delete 1–100 distinct decimal message IDs from one guild channel, requiring ManageMessages permission.
      * No gateway connection, hidden selection, chunking, age filter or audit reason. Each run copies the current IDs.
      * HTTP 204 completes with no value, not a deletion count or proof that each ID existed. Missing messages are ignored.
      * Dispatched requests evict selected cached messages even on rejection, since partial deletion is possible.
      * Only confirmed rate-limit rejections retry. Timeout, lost response, interruption or closure cannot undo deletion.
-     * Input/admission/HTTP failures use MessageOperationError. Interruption awaits owned cleanup and defects retain Cause
+     * Input/queue/HTTP failures use MessageOperationError. Interruption awaits owned cleanup and defects retain Cause
      *
      * @example
      * ```ts
@@ -2098,42 +2448,49 @@ export interface Messages {
         messageIds: readonly string[],
         options?: MessageOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure>
-    /** Lazily and irreversibly delete this bot's whole authored history in one decimal channel ID, without selecting IDs or requiring a gateway connection
+    /** Permanently delete this bot's message history in one decimal channel ID, without selecting IDs or requiring a gateway connection
      *
      * Each execution completes only after Fluxer returns empty HTTP 202, not a job, count, gateway event or proof that the channel is empty.
      * Other authors' messages are preserved. Fluxer can leave new or concurrent messages. Deletion is not atomic, may be partial, and has no recovery token or automatic reconciliation
      *
-     * Bot credentials satisfy Fluxer's sudo checks, with no caller-supplied sudo fields. Fluxer controls attachment removal, without a physical provider-storage or CDN-erasure guarantee.
-     * The 30,000 ms default total deadline includes admission and rate-limit waits. Only confirmed 429 rejection retries. 5xx, transport loss and other uncertain writes never replay
+     * Bot credentials satisfy Fluxer's sudo checks, with no caller-supplied sudo fields. Fluxer controls attachment removal, without a physical provider-storage or CDN-erasure guarantee
      *
-     * After dispatch, the optional whole message cache is cleared and older pending reads cannot restore it. The SDK creates no synthetic gateway events.
-     * Interruption or closure awaits owned cleanup but cannot undo a dispatched deletion. Input/admission/HTTP failures use MessageOperationError operation deleteMine.
-     * Defects retain their native Cause. This does not leave a guild or alter roles
+     * The 30,000 ms default total deadline includes queue waits and rate-limit waits. Only confirmed 429 rejection retries. 5xx, transport loss and other writes whose outcome is unknown never replay
+     *
+     * After dispatch, the optional whole message cache is cleared and older pending reads cannot restore it. The SDK creates no synthetic gateway events
+     *
+     * Interruption or closure awaits owned cleanup but cannot undo a deletion request already sent. Input/queue/HTTP failures use MessageOperationError operation deleteMine.
+     * Defects retain their Cause. This does not leave a guild or alter roles
      */
     deleteMine(channelId: string, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
 }
 
-/** A scoped native collection, separate from each caller observing it */
-export interface Collector {
-    /** Lazily request idempotent stop with accepted partial replies. Use waitForClose to await callback cleanup */
+/** A running message collector registered in a Scope.
+ * Use stop to end collection and waitForClose to receive its result after cleanup */
+export interface Collector<M extends MessageCore = Message> {
+    /** Request idempotent stop with accepted partial replies. Use waitForClose to await callback cleanup */
     stop(): Effect.Effect<void>
     /**
-     * Lazily observe the retained frozen result/error after queue, timer, filter, listener and callback cleanup.
-     * Multiple/late callers share the first outcome. Interruption affects only this waiter and defects retain Cause.
-     * Timeout and stop can return empty/partial replies. Failures carry no partial message bodies.
-     * Application-held handles/results retain successful snapshots until released
+     * Receive the retained frozen result or error after queue, timer, filter, listener and callback cleanup.
+     * Multiple callers, including later callers, share the first outcome.
+     * Interruption affects only this waiter and defects retain Cause.
+     * Idle, timeout and stop can return empty or partial replies. Failures carry no partial message bodies.
+     * Handles and results held by your application keep successful snapshots until you release them
      */
-    waitForClose(): Effect.Effect<CollectorResult, CollectorFailure>
+    waitForClose(): Effect.Effect<CollectorResult<M>, CollectorFailure>
 }
 
-/** A scoped native reaction collection, separate from each result observer */
+/** A running reaction collector registered in a Scope.
+ * Use stop to end collection and waitForClose to receive its result after cleanup */
 export interface ReactionCollector {
-    /** Lazily request idempotent stop with accepted partial observations. Use waitForClose to await callback cleanup */
+    /** Request idempotent stop with accepted partial snapshots. Use waitForClose to await callback cleanup */
     stop(): Effect.Effect<void>
     /**
-     * Lazily observe the frozen result after queue, timer, filter, listener and callback cleanup; late/multiple observers share the outcome.
-     * Interruption affects only this waiter; defects retain Cause. Timeout/stop may return empty or partial observations.
-     * Failures carry no partial observations. Application-held handles/results retain successful snapshots until released
+     * Receive the frozen result after queue, timer, filter, listener and callback cleanup.
+     * Multiple callers, including later callers, share the outcome.
+     * Interruption affects only this waiter. Defects retain Cause.
+     * Idle, timeout and stop may return empty or partial snapshots.
+     * Failures carry no partial snapshots. Handles and results held by your application keep successful snapshots until you release them
      */
     waitForClose(): Effect.Effect<ReactionCollectorResult, CollectorFailure>
 }
@@ -2160,11 +2517,12 @@ export {
 export type { ConnectError, ConnectionFailure } from "./errors.js"
 export type { ShardingOptions, ShardRecoveryDiagnostic, ShardState } from "./sharding.js"
 
-/** Remote audit observations requiring ViewAuditLog, without SDK retention or gateway startup.
+/** Read a guild's audit log as a page or a bounded sequence of entries.
+ * Fluxer requires ViewAuditLog. The SDK does not cache audit entries or connect the gateway.
  * Eligible reads retry transient failures at most twice under the shared guild REST policy.
  * Permission, malformed-response and input failures are typed GuildOperationError values.
- * Effects are lazy and preserve native defects, caller context and interruption cleanup.
- * Closing clients fail with ClientClosedError. Audit records can change independently; this is not an archival snapshot
+ * Effects start when executed and preserve unexpected faults, your program's services and interruption cleanup.
+ * Closing clients fail with ClientClosedError. Audit records can change independently. This is not an archival snapshot
  */
 export interface AuditLogs {
     /** Read one filtered page, including referenced users and token-free webhook metadata.
@@ -2176,11 +2534,11 @@ export interface AuditLogs {
         options?: GuildOperationOptions,
     ): Effect.Effect<AuditLogPage, GuildOperationFailure>
     /** Traverse filtered records newest-to-oldest on demand, buffering one page and never prefetching.
-     * maxItems is required; pageSize defaults to 50 (1–100), maxPages to 100. timeoutMs applies to each page.
+     * maxItems is required. `pageSize` defaults to 50 (1–100), maxPages to 100. `timeoutMs` applies to each page.
      * Stops at maxItems or an empty page, not merely a short page. Concurrent changes can prevent complete enumeration.
      * Invalid traversal input, a stalled cursor or reaching the page budget fails with PaginationError.
      * Remote failures retain auditLogs.fetchPage's typed errors. Already-delivered entries remain caller-owned.
-     * Interruption awaits request cleanup; termination releases the buffered page.
+     * Interruption awaits request cleanup. Termination releases the buffered page.
      * Closing/Closed releases the page and fails the next pull. Use fetchPage when referenced-user/webhook snapshots are needed
      */
     iterate(
@@ -2190,11 +2548,12 @@ export interface AuditLogs {
     ): Stream.Stream<AuditLogEntry, GuildOperationFailure | PaginationError>
 }
 
-/** Remote invite operations, without invite retention or gateway readiness requirements.
- * Reads retry eligible transient failures at most twice; writes retry only confirmed 429 rejections.
+/** Inspect, create, list or revoke invite codes without joining their destinations.
+ * Methods return Effects and do not connect the gateway or cache invites.
+ * Reads retry eligible transient failures at most twice. Writes retry only confirmed 429 rejections.
  * Fluxer checks destination visibility, invite permissions and capacity. Failures use GuildOperationError.
- * Effects are lazy; interruption waits for owned cleanup and defects remain native causes.
- * Closing clients fail with ClientClosedError. Lost responses can leave mutations applied; do not replay them blindly
+ * Effects start when executed. Interruption waits for owned cleanup and defects remain in Cause.
+ * Closing clients fail with ClientClosedError. Lost responses can leave mutations applied. Do not replay them blindly
  */
 export interface Invites {
     /** Inspect a code without consuming it or joining its destination. Supply the code, not a URL.
@@ -2211,12 +2570,13 @@ export interface Invites {
         input?: InviteCreate,
         options?: ModerationOptions,
     ): Effect.Effect<InviteMetadata, GuildOperationFailure>
-    /** Remote management list in provider order, subject to channel permissions; not a stable snapshot */
+    /** List a channel's invites remotely in provider order, subject to channel permissions.
+     * Results are not a stable snapshot */
     fetchChannel(
         channelId: string,
         options?: GuildOperationOptions,
     ): Effect.Effect<readonly InviteMetadata[], GuildOperationFailure>
-    /** Remote guild management list, requiring ManageGuild and excluding the guild vanity invite */
+    /** List a guild's invites remotely, requiring ManageGuild and excluding the guild vanity invite */
     fetchGuild(
         guildId: string,
         options?: GuildOperationOptions,
@@ -2227,28 +2587,30 @@ export interface Invites {
     delete(code: string, options?: ModerationOptions): Effect.Effect<void, GuildOperationFailure>
 }
 
-/** Emojis share guild REST admission, deadlines and typed GuildOperationError failures.
- * Reads retry eligible transient failures at most twice; writes retry only confirmed 429 rejections.
+/** Read, upload, rename, clone or delete custom emoji.
+ * Methods return Effects and share guild HTTP concurrency limits, deadlines and GuildOperationError failures.
+ * Reads retry eligible transient failures at most twice. Writes retry only confirmed 429 rejections.
  * Input, permission, 404 and malformed responses do not retry. Unknown outcomes may leave writes applied.
- * Effects are lazy, preserve caller context and await cleanup on interruption; defects remain in the cause.
+ * Effects start when executed, preserve your program's services and await cleanup on interruption. Defects remain in the cause.
  * Closing clients fail with ClientClosedError. Snapshots are frozen and HTTP success is not gateway acknowledgement
  */
 export interface Emojis {
-    /** Local metadata lookup, never HTTP. Disabled, absent, expired or conflicting entries return undefined.
-     * Decimal IDs are required; lookup updates LRU order but not expiry. Lazy in the caller's context
+    /** Read cached metadata without an HTTP request. Disabled, absent, expired or conflicting entries return undefined.
+     * Decimal IDs are required. Lookup updates least-recently-used eviction order but not expiry
      */
     get(target: ExpressionReference): Effect.Effect<GuildEmoji | undefined, GuildOperationFailure>
-    /** Remote full guild list in provider order, without pagination or an enduring completeness guarantee.
-     * Populates optional bounded metadata retention, excluding image bytes and creator accounts
+    /** Fetch the guild's full emoji list in provider order, without pagination or a lasting completeness guarantee.
+     * Updates the optional bounded metadata cache, excluding image bytes and creator accounts
      */
     fetchAll(
         guildId: string,
         options?: GuildOperationOptions,
     ): Effect.Effect<readonly GuildEmoji[], GuildOperationFailure>
-    /** Remote minimal metadata by decimal ID without source-guild membership. Does not populate the cache */
+    /** Fetch minimal emoji metadata by decimal ID without requiring membership in its source guild.
+     * Does not populate the cache */
     fetchMetadata(id: string, options?: GuildOperationOptions): Effect.Effect<ExpressionMetadata, GuildOperationFailure>
-    /** Upload one expression. Fluxer enforces format, dimensions, permissions and capacity.
-     * Copies input at execution start, without implicit URL fetching or replay of uncertain writes
+    /** Upload one custom emoji. Fluxer enforces format, dimensions, permissions and capacity.
+     * Copies input at execution start, without implicit URL fetching or replay of writes whose outcome is unknown
      */
     create(
         guildId: string,
@@ -2257,14 +2619,15 @@ export interface Emojis {
     ): Effect.Effect<GuildEmoji, GuildOperationFailure>
     /** Submit 1–50 uploads in one batch, with separate successes and failures and no rollback.
      * Duplicate names cannot map failures to input positions. No automatic chunking or replay.
-     * Unknown outcomes require fresh remote observations and caller reconciliation
+     * Unknown outcomes require fresh remote snapshots and caller reconciliation
      */
     createMany(
         guildId: string,
         input: readonly EmojiCreate[],
         options?: ModerationOptions,
     ): Effect.Effect<ExpressionBatch<GuildEmoji>, GuildOperationFailure>
-    /** Server-side copy by source ID, preserving source metadata. Fluxer enforces source cloning restrictions */
+    /** Copy an emoji on the server by source ID, preserving its metadata.
+     * Fluxer enforces the source's cloning restrictions */
     clone(
         guildId: string,
         sourceId: string,
@@ -2276,43 +2639,45 @@ export interface Emojis {
         input: EmojiEdit,
         options?: ModerationOptions,
     ): Effect.Effect<GuildEmoji, GuildOperationFailure>
-    /** Remove after HTTP 204, invalidating retained observations. A missing target is an error, not proof of prior deletion.
-     * Purging defaults false; explicit true also queues irreversible media removal subject to provider restrictions
+    /** Remove after HTTP 204, invalidating retained snapshots. A missing target is an error, not proof of prior deletion.
+     * Purging defaults false. Explicit true also queues irreversible media removal subject to provider restrictions
      */
     delete(target: ExpressionReference, options?: ExpressionDeleteOptions): Effect.Effect<void, GuildOperationFailure>
 }
 
-/** Stickers share guild REST admission, deadlines and typed GuildOperationError failures.
- * Reads retry eligible transient failures at most twice; writes retry only confirmed 429 rejections.
+/** Read, upload, edit, clone or delete custom stickers.
+ * Methods return Effects and share guild HTTP concurrency limits, deadlines and GuildOperationError failures.
+ * Reads retry eligible transient failures at most twice. Writes retry only confirmed 429 rejections.
  * Input, permission, 404 and malformed responses do not retry. Unknown outcomes may leave writes applied.
- * Effects are lazy, preserve caller context and await cleanup on interruption; defects remain in the cause.
+ * Effects start when executed, preserve your program's services and await cleanup on interruption. Defects remain in the cause.
  * Closing clients fail with ClientClosedError. Snapshots are frozen and HTTP success is not gateway acknowledgement
  */
 export interface Stickers {
     /** Replace name, description and tags explicitly, without an implicit fetch or image replacement.
-     * A fetched sticker may be spread into the input. Its identity must match the target; unknown fields fail locally.
-     * Empty/null description clears it; [] clears tags. Uses this group's mutation, failure and cancellation rules
+     * A fetched sticker may be spread into the input. Its identity must match the target. Unknown fields fail locally.
+     * Empty/null description clears it. [] clears tags. Uses this group's mutation, failure and cancellation rules
      */
     edit(
         target: ExpressionReference,
         input: StickerEdit,
         options?: ModerationOptions,
     ): Effect.Effect<GuildSticker, GuildOperationFailure>
-    /** Local metadata lookup, never HTTP. Disabled, absent, expired or conflicting entries return undefined.
-     * Decimal IDs are required; lookup updates LRU order but not expiry. Lazy in the caller's context
+    /** Read cached metadata without an HTTP request. Disabled, absent, expired or conflicting entries return undefined.
+     * Decimal IDs are required. Lookup updates least-recently-used eviction order but not expiry
      */
     get(target: ExpressionReference): Effect.Effect<GuildSticker | undefined, GuildOperationFailure>
-    /** Remote full guild list in provider order, without pagination or an enduring completeness guarantee.
-     * Populates optional bounded metadata retention, excluding image bytes and creator accounts
+    /** Fetch the guild's full sticker list in provider order, without pagination or a lasting completeness guarantee.
+     * Updates the optional bounded metadata cache, excluding image bytes and creator accounts
      */
     fetchAll(
         guildId: string,
         options?: GuildOperationOptions,
     ): Effect.Effect<readonly GuildSticker[], GuildOperationFailure>
-    /** Remote minimal metadata by decimal ID without source-guild membership. Does not populate the cache */
+    /** Fetch minimal sticker metadata by decimal ID without requiring membership in its source guild.
+     * Does not populate the cache */
     fetchMetadata(id: string, options?: GuildOperationOptions): Effect.Effect<ExpressionMetadata, GuildOperationFailure>
-    /** Upload one expression. Fluxer enforces format, dimensions, permissions and capacity.
-     * Copies input at execution start, without implicit URL fetching or replay of uncertain writes
+    /** Upload one custom sticker. Fluxer enforces format, dimensions, permissions and capacity.
+     * Copies input at execution start, without implicit URL fetching or replay of writes whose outcome is unknown
      */
     create(
         guildId: string,
@@ -2321,35 +2686,37 @@ export interface Stickers {
     ): Effect.Effect<GuildSticker, GuildOperationFailure>
     /** Submit 1–50 uploads in one batch, with separate successes and failures and no rollback.
      * Duplicate names cannot map failures to input positions. No automatic chunking or replay.
-     * Unknown outcomes require fresh remote observations and caller reconciliation
+     * Unknown outcomes require fresh remote snapshots and caller reconciliation
      */
     createMany(
         guildId: string,
         input: readonly StickerCreate[],
         options?: ModerationOptions,
     ): Effect.Effect<ExpressionBatch<GuildSticker>, GuildOperationFailure>
-    /** Server-side copy by source ID, preserving source metadata. Fluxer enforces source cloning restrictions */
+    /** Copy a sticker on the server by source ID, preserving its metadata.
+     * Fluxer enforces the source's cloning restrictions */
     clone(
         guildId: string,
         sourceId: string,
         options?: ModerationOptions,
     ): Effect.Effect<GuildSticker, GuildOperationFailure>
-    /** Remove after HTTP 204, invalidating retained observations. A missing target is an error, not proof of prior deletion.
-     * Purging defaults false; explicit true also queues irreversible media removal subject to provider restrictions
+    /** Remove after HTTP 204, invalidating retained snapshots. A missing target is an error, not proof of prior deletion.
+     * Purging defaults false. Explicit true also queues irreversible media removal subject to provider restrictions
      */
     delete(target: ExpressionReference, options?: ExpressionDeleteOptions): Effect.Effect<void, GuildOperationFailure>
 }
 
-/** Public server-directory management through the shared guild REST owner, without a discovery cache.
- * Effects are lazy and repeatable in caller context, independent of gateway readiness. Default total deadline is 30,000 ms.
+/** Search Fluxer's public server directory or manage a guild's listing application.
+ * This is separate from instance endpoint discovery. HTTP requests share guild limits and directory data is not cached.
+ * Effects are executed on demand and repeatable using your program's services, independent of gateway readiness. Default total deadline is 30,000 ms.
  * Reads retry transient transport and HTTP 500/502/503/504 failures at most twice. Writes retry only confirmed 429 rejections.
- * Input, HTTP and malformed-response failures use GuildOperationError; closing clients use ClientClosedError.
- * Interruption waits for owned cleanup. Defects retain native causes.
- * Application writes may publish or unpublish a listing, invalidate guild observations and cannot promise rollback.
+ * Input, HTTP and malformed-response failures use GuildOperationError. Closing clients use ClientClosedError.
+ * Interruption waits for owned cleanup. Defects retain Cause.
+ * Application writes may publish or unpublish a listing, invalidate guild snapshots and cannot promise rollback.
  * There is no hidden eligibility read, automatic resubmission, review approval or directory-joining operation
  */
 export interface Discovery {
-    /** Lazily search one current public directory page without a cache, gateway readiness, join operation or stable snapshot.
+    /** Search one current public directory page without a cache, gateway readiness, join operation or stable snapshot.
      * Defaults to limit 24 and offset 0. Each page can change while later offset pages are fetched, so callers must not infer a stable traversal.
      * The shared REST owner retries eligible GET failures. Input, HTTP and malformed-response failures use GuildOperationError
      */
@@ -2357,28 +2724,29 @@ export interface Discovery {
         query?: DiscoverySearchQuery,
         options?: GuildOperationOptions,
     ): Effect.Effect<DiscoverySearchPage, GuildOperationFailure>
-    /** Remote eligibility and application state for a decimal guild ID, requiring ManageGuild.
+    /** Check a guild's directory eligibility and listing application state remotely, requiring ManageGuild and a decimal guild ID.
      * Returns eligible false when discovery is disabled or the member threshold is unmet, not a diagnosis distinguishing them.
      * Eligibility can change before submission. Reviewed/removed applications include available reasons
      */
     fetchStatus(guildId: string, options?: GuildOperationOptions): Effect.Effect<DiscoveryStatus, GuildOperationFailure>
-    /** Remote category IDs and provider labels in provider order, without a retained copy.
+    /** Fetch directory category IDs and labels in provider order, without keeping a copy.
      * Requires an authenticated client, not membership of a particular guild or ManageGuild
      */
     fetchCategories(options?: GuildOperationOptions): Effect.Effect<readonly DiscoveryCategory[], GuildOperationFailure>
     /** Submit a guild application, requiring ManageGuild, enabled discovery and current provider eligibility.
      * Pending/approved existing applications fail remotely. Eligible verified/partnered guilds can be approved immediately.
-     * Success is the stored application observation, not a guarantee of approval or search-index visibility.
-     * An unknown outcome may already have submitted or published the listing; inspect fetchStatus before deciding what to do
+     * Success is the stored application snapshot, not a guarantee of approval or search-index visibility.
+     * An unknown outcome may already have submitted or published the listing. Inspect fetchStatus before deciding what to do
      */
     apply(
         guildId: string,
         input: DiscoveryApplicationInput,
         options?: GuildOperationOptions,
     ): Effect.Effect<DiscoveryApplication, GuildOperationFailure>
-    /** Nonempty patch of a pending or approved application, requiring ManageGuild and enabled discovery.
+    /** Update a pending or approved listing application with a nonempty patch, requiring ManageGuild and enabled discovery.
      * Omitted fields remain unchanged. Uses the input's documented tag normalization and replacement semantics.
-     * No hidden fetch/merge. Approved listing updates can become public, and search-index changes may lag or partially fail
+     * This does not fetch or merge existing data. Approved listing updates can become public.
+     * Search-index changes may lag or partially fail
      */
     edit(
         guildId: string,
@@ -2394,33 +2762,40 @@ export interface Discovery {
     withdraw(guildId: string, options?: GuildOperationOptions): Effect.Effect<void, GuildOperationFailure>
 }
 
-/** Lazy guild REST operations, gateway counts and optional local lookup in caller context.
+/** Read or change guilds, manage bans and obtain gateway counts.
+ * A guild is a Fluxer server. HTTP methods return Effects and do not require a gateway connection.
  * The REST rules below exclude fetchCounts, which requires gateway readiness and has its own documented contract
  *
- * Shares the client's four REST/upload slots with message/member/role operations, client-wide across locally owned shards. Four attachment-download slots are separate; both pools share 256 pending requests and 4 MiB pending JSON
+ * Shares the client's four REST/upload slots with message/member/role operations, client-wide across locally owned shards. Four attachment-download slots are separate. Both pools share 256 pending requests and 4 MiB pending JSON
  *
  * Total deadline defaults to 30,000 ms including waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Backoff is 125–250 ms then 250–500 ms, honoring longer Retry-After. Confirmed 429 waits are separate and never reset the deadline
  *
- * Input, 404, permission failures and malformed successes do not retry. Expected failures use GuildOperationError.
- * Interruption awaits owned cleanup; closing clients use ClientClosedError. Defects retain native causes, including cleanup failures
+ * Input, 404, permission failures and malformed successes do not retry. Expected failures use GuildOperationError
+ *
+ * Successful REST JSON bodies are capped at 16 MiB before parsing, not as a total heap limit. Oversized successes fail with reason response and never retry.
+ * A response failure after a mutation request is sent has an unknown outcome. It does not establish rollback
+ *
+ * Interruption awaits owned cleanup. Closing clients use ClientClosedError. Defects retain Cause, including cleanup failures
  */
 export interface Guilds {
-    /** Lazily fetch fresh, visibility-filtered counts for 1–100 distinct canonical positive uint64 decimal guild IDs over the connected gateway.
-     * Copies IDs when run, in the caller's Effect context. No implicit connection, REST read, cache, polling or retries
+    /** Fetch fresh counts for 1–100 guilds over the connected gateway, filtered by what the bot can see
+     *
+     * Supply distinct canonical positive decimal IDs in the unsigned 64-bit range.
+     * Copies IDs when run, using your Effect program's services. No implicit connection, REST read, cache, polling or retries
      *
      * Every requested guild must route to a locally owned ready shard. An unowned or unready guild fails notConnected instead of appearing in omittedGuildIds
      *
      * Returns frozen counts plus omittedGuildIds in input order. Missing entries are not zero and do not explain access or timeout.
      * Observations are not a consistent snapshot across guilds. A missing whole reply fails with timeout instead
      *
-     * One logical call holds one client-wide slot across every routed shard command and reply fragment. It shares four slots with channels.fetchMemberCounts and members.iterateChunks, without a queue; additional calls fail busy.
+     * One logical call holds one client-wide slot across every routed shard command and reply fragment. It shares four slots with channels.fetchMemberCounts and members.iterateChunks, without a queue. Additional calls fail busy.
      * The default 30,000 ms overall deadline covers local registration, all commands and all fragments.
-     * Fluxer also shares provider capacity with member/presence requests, so local admission cannot guarantee a reply
+     * Fluxer also shares provider capacity with member/presence requests, so local concurrency limits cannot guarantee a reply
      *
-     * Only a gap on a participating shard fails this request with connectionLost; late replies are ignored.
-     * CountOperationError covers input/readiness/admission/timeout/response failures; closure uses ClientClosedError.
-     * Interruption awaits local cleanup but cannot cancel dispatched provider work; defects retain their Cause
+     * Only a gap on a participating shard fails this request with connectionLost. Late replies are ignored.
+     * CountOperationError covers input/readiness/queue/timeout/response failures. Closure uses ClientClosedError.
+     * Interruption awaits local cleanup but cannot cancel work already sent to Fluxer. Defects retain their Cause
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -2438,12 +2813,12 @@ export interface Guilds {
         guildIds: readonly string[],
         options?: CountOperationOptions,
     ): Effect.Effect<GuildCountsResult, CountOperationFailure>
-    /** Lazily fetch one fresh remote membership page for this bot, ordered by ascending guild ID.
-     * limit defaults to 200 (1–200); before/after are mutually exclusive existing-membership cursors.
+    /** Fetch one fresh remote membership page for this bot, ordered by ascending guild ID.
+     * Limit defaults to 200 (1–200). Before/after are mutually exclusive existing-membership cursors.
      * withCounts defaults to false. Fluxer can omit permission bits or requested approximate counts. Missing means unavailable, not zero.
      * A removed cursor can cause Fluxer to restart the page. Returns frozen summaries without populating or reading the guild cache.
-     * Summaries are REST-only observations and do not claim a complete membership inventory or gateway consistency.
-     * Uses this group's deadlines, retries and failures; no gateway connection or background traversal required
+     * Summaries are REST-only snapshots and do not claim a complete membership inventory or gateway consistency.
+     * Uses this group's deadlines, retries and failures. No gateway connection or background traversal required
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -2458,16 +2833,17 @@ export interface Guilds {
         query?: GuildListQuery,
         options?: GuildOperationOptions,
     ): Effect.Effect<readonly GuildListSummary[], GuildOperationFailure>
-    /** Lazily traverse ascending guild IDs, retaining one page and never prefetching.
-     * maxItems is required; pageSize defaults to 200 and maxPages to 100. Stop at maxItems or an empty page, not a short page
+    /** Traverse ascending guild IDs, retaining one page and never prefetching.
+     * maxItems is required. `pageSize` defaults to 200 and maxPages to 100. Stop at maxItems or an empty page, not a short page
      *
      * Repeated/backward IDs after a removed cursor fail with PaginationError cursorStalled before that page is delivered.
-     * Other pagination failures are input/pageLimit; remote failures preserve fetchPage's error and per-page timeout.
-     * Each stream consumption copies inputs in the caller's scope; interruption and scope closure await request cleanup.
+     * Other pagination failures are input/pageLimit. Remote failures preserve fetchPage's error and per-page timeout
+     *
+     * Each stream consumption copies inputs in the caller's scope. Interruption and scope closure await request cleanup.
      * Scope cleanup releases the buffered page. Client closure releases the page and fails the next pull
      *
      * withCounts applies to every page. Fluxer can omit permission bits or requested counts. Missing means unavailable, not zero.
-     * No cache hydration, gateway requirement or consistent-inventory guarantee. Previously delivered values remain caller-owned
+     * No automatic cache population, gateway requirement or consistent-inventory guarantee. Previously delivered values remain caller-owned
      * @example
      * ```ts
      * import type { Client } from "@neontechspace/fluxerly/effect"
@@ -2480,27 +2856,29 @@ export interface Guilds {
         query: GuildIterationQuery,
         options?: GuildOperationOptions,
     ): Stream.Stream<GuildListSummary, GuildOperationFailure | PaginationError>
-    /** Lazily leave the named guild as the authenticated bot, explicitly preserving authored messages.
+    /** Leave the named guild as the authenticated bot, explicitly preserving authored messages.
      * HTTP 204 completes membership removal, not gateway delivery. The client stays usable for other guilds.
-     * Fluxer rejects owners and restricted memberships. Only confirmed 429 rejection is retried; cancellation or a lost
-     * response can leave membership removed. Refetch/list to reconcile; rejoining requires external authorization.
-     * Successful or uncertain writes invalidate this guild's resource observations and pending reads.
-     * A confirmed successful leave also forgets this client's member-presence selection; an uncertain result preserves it.
+     * Fluxer rejects owners and restricted memberships. Only confirmed 429 rejection is retried. Cancellation or a lost
+     * response can leave membership removed. Refetch/list to reconcile. Rejoining requires external authorization.
+     * Successful writes or writes with unknown outcomes invalidate this guild's resource snapshots and pending reads.
+     * A confirmed successful leave also forgets this client's member-presence selection. An uncertain result preserves it.
      * Any dispatched attempt conservatively clears channel/message caches because messages need not carry guild IDs.
      * Existing caller-held snapshots remain unchanged. This operation never deletes the guild or shuts down the client
      */
     leave(guildId: string, options?: GuildOperationOptions): Effect.Effect<void, GuildOperationFailure>
-    /** Lazily and irreversibly delete this bot's whole authored history across one decimal guild ID, without leaving the guild or changing roles
+    /** Permanently delete this bot's message history across one decimal guild ID, without leaving the guild or changing roles
      *
      * Each execution completes only after Fluxer returns empty HTTP 202, not a job, count, gateway event or proof that the guild is empty.
      * Other authors' messages are preserved. Fluxer can leave new or concurrent messages. Deletion is not atomic, may be partial, and has no recovery token or automatic reconciliation
      *
-     * Bot credentials satisfy Fluxer's sudo checks, with no caller-supplied sudo fields or audit reason. Fluxer controls attachment removal, without a physical provider-storage or CDN-erasure guarantee.
-     * The 30,000 ms default total deadline includes admission and rate-limit waits. Only confirmed 429 rejection retries. 5xx, transport loss and other uncertain writes never replay
+     * Bot credentials satisfy Fluxer's sudo checks, with no caller-supplied sudo fields or audit reason. Fluxer controls attachment removal, without a physical provider-storage or CDN-erasure guarantee
      *
-     * After dispatch, the optional whole message cache is cleared and older pending reads cannot restore it. The SDK creates no synthetic gateway events.
-     * Interruption or closure awaits owned cleanup but cannot undo a dispatched deletion. Input/admission/HTTP failures use GuildOperationError operation guilds.deleteMine.
-     * Defects retain their native Cause. This operation never removes guild membership or changes roles
+     * The 30,000 ms default total deadline includes queue waits and rate-limit waits. Only confirmed 429 rejection retries. 5xx, transport loss and other writes whose outcome is unknown never replay
+     *
+     * After dispatch, the optional whole message cache is cleared and older pending reads cannot restore it. The SDK creates no synthetic gateway events
+     *
+     * Interruption or closure awaits owned cleanup but cannot undo a deletion request already sent. Input/queue/HTTP failures use GuildOperationError operation guilds.deleteMine.
+     * Defects retain their Cause. This operation never removes guild membership or changes roles
      * @example
      * ```ts
      * import type { Client } from "@neontechspace/fluxerly/effect"
@@ -2511,7 +2889,7 @@ export interface Guilds {
     deleteMine(guildId: string, options?: GuildOperationOptions): Effect.Effect<void, GuildOperationFailure>
     /** Read a decimal guild's custom invite and use count, requiring ManageGuild.
      * Always remote, without a vanity cache or gateway requirement. Null code/url means no custom invite.
-     * Lazy and repeatable, using this group's read retries, deadline, interruption and typed failure rules
+     * Each execution uses this group's read retries, deadline, interruption and typed failure rules
      */
     fetchVanityUrl(
         guildId: string,
@@ -2522,21 +2900,24 @@ export interface Guilds {
      * Requires ManageGuild and, when setting a code, the server's VANITY_URL feature. Reserved/taken codes fail remotely
      *
      * Changing the code releases the old one and starts a new use count. Neither reclaiming it nor provider rollback is guaranteed.
-     * Returns only code/url after HTTP success, without a hidden read, joinability check or event acknowledgement.
-     * Lazy in caller context with the shared deadline and interruption cleanup. Only confirmed 429 rejections may retry writes.
-     * Dispatched writes invalidate guild observations. Unknown outcomes require fetchVanityUrl and caller reconciliation,
-     * not blind replay; provider-side partial changes can require operator recovery.
-     * Uses this group's GuildOperationError and ClientClosedError behavior; defects retain native causes
+     * Returns only code/url after HTTP success, without a hidden read, joinability check or event acknowledgement
+     *
+     * Uses your program's services with the shared deadline and interruption cleanup. Only confirmed 429 rejections may retry writes.
+     * Dispatched writes invalidate guild snapshots
+     *
+     * If the outcome is unknown, use fetchVanityUrl to check the result instead of blindly replaying the write.
+     * Partial provider-side changes can require operator recovery.
+     * Uses this group's GuildOperationError and ClientClosedError behavior. Defects retain Cause
      */
     editVanityUrl(
         guildId: string,
         code: string | null,
         options?: ModerationOptions,
     ): Effect.Effect<GuildVanityUrl, GuildOperationFailure>
-    /** Patch bot-permitted server settings without a hidden read or merge; omitted fields remain unchanged.
+    /** Patch bot-permitted server settings without a hidden read or merge. Omitted fields remain unchanged.
      * Requires ManageGuild. Fluxer owns feature restrictions and validation beyond GuildEdit's local checks.
-     * Dispatched mutations invalidate guild-cache observations even when the outcome is unknown.
-     * Lazy in caller context, using guild REST deadlines and interruption cleanup.
+     * Dispatched mutations invalidate guild-cache snapshots even when the outcome is unknown.
+     * Uses your program's services, guild HTTP deadlines and interruption cleanup.
      * Success returns the server's observed configuration, not gateway acknowledgement or rollback guarantees.
      * Uncertain writes must be reconciled with fetch rather than blindly replayed
      */
@@ -2545,14 +2926,15 @@ export interface Guilds {
      * Requires BanMembers and provider hierarchy/MFA rules. Defaults to permanent with no message deletion
      *
      * HTTP 204 returns no value, not event acknowledgement. Writes retry only confirmed 429 rejections.
-     * Failure after dispatch may leave a ban and separately queued message deletion applied
+     * Failure after the request is sent may leave a ban and separately queued message deletion applied
      *
      * Dispatched actions invalidate this member's retained snapshot even on rejection.
      * Requested message cleanup deliberately evicts this author's cached messages across all guilds, including known unrelated scope, because messages need not carry guild IDs.
      * The cleanup job can finish later. A later cache hit does not establish that its message survived the job
      *
-     * Bans may also block rejoining through provider-side IP/email checks. Unban restores neither messages nor membership.
-     * Lazy, repeatable and caller-owned. Interruption awaits cleanup and defects retain Cause.
+     * Bans may also block rejoining through provider-side IP/email checks. Unban restores neither messages nor membership
+     *
+     * Repeatable and executed using your program's services. Interruption awaits cleanup and defects retain Cause.
      * Invalid input and HTTP failures use GuildOperationError, while a closed client uses ClientClosedError
      */
     ban(
@@ -2565,73 +2947,82 @@ export interface Guilds {
      * Uses ban's execution, failure, cleanup and member-cache invalidation rules
      */
     unban(target: MemberReference, options?: ModerationOptions): Effect.Effect<void, GuildOperationFailure>
-    /** Fetch the provider's full ban list as frozen observations, requiring BanMembers.
+    /** Fetch the provider's full ban list as frozen snapshots, requiring BanMembers.
      * Always remote, without a ban cache, pagination or guaranteed order. Separate reads are not a consistent snapshot.
-     * Lazy and repeatable. Uses shared guild read deadline/retry rules, rejecting malformed responses as a whole
+     * Each execution uses shared guild read deadlines and retries, rejecting malformed responses as a whole
      */
     fetchBans(
         guildId: string,
         options?: GuildOperationOptions,
     ): Effect.Effect<readonly GuildBan[], GuildOperationFailure>
-    /** Lazy local-only guild lookup, evaluated when run, without HTTP or requiring a connection.
-     * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote observation.
+    /** Read the optional guild cache when executed, without HTTP or requiring a connection.
+     * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote snapshot.
      * Invalid decimal IDs fail with GuildOperationError(input). Closing/closed clients fail with ClientClosedError.
-     * Defects retain native causes. Lookup updates LRU order but never extends expiry
+     * Defects retain Cause. Lookup updates least-recently-used eviction order but never extends expiry
      */
     get(guildId: string): Effect.Effect<Guild | undefined, GuildOperationFailure>
-    /** Fetch a frozen identity/configuration projection for a decimal guild ID. Fluxer requires guild membership.
+    /** Fetch a frozen guild snapshot containing selected identity and configuration fields by decimal ID.
+     * Fluxer requires guild membership.
      * No embedded member/role/channel state is retained and no counts or completeness guarantee are inferred
      */
     fetch(guildId: string, options?: GuildOperationOptions): Effect.Effect<Guild, GuildOperationFailure>
 }
 
-/** Lazy guild-channel REST operations, gateway member counts and optional local lookup in caller context.
+/** Read or change guild channels and permission overrides, or request gateway member counts.
+ * HTTP methods return Effects and do not connect the gateway.
  * The REST rules below exclude fetchMemberCounts, which requires gateway readiness and has its own documented contract
  *
- * DM operations are outside this API contract. Supply decimal guild-channel IDs. ID-targeted writes do not prefetch or verify their guild type.
- * Shares the client's four REST/upload slots with guild/member/role/message operations, client-wide across locally owned shards. Four attachment-download slots are separate; both pools share 256 pending requests and 4 MiB pending JSON.
- * Total deadline defaults to 30,000 ms, including admission, retry and rate waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
+ * DM operations are outside this API contract. Supply decimal guild-channel IDs. ID-targeted writes do not prefetch or verify their guild type
+ *
+ * Shares the client's four REST/upload slots with guild/member/role/message operations, client-wide across locally owned shards. Four attachment-download slots are separate. Both pools share 256 pending requests and 4 MiB pending JSON
+ *
+ * Total deadline defaults to 30,000 ms, including queue waits, retries and rate-limit waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Writes retry only confirmed 429 responses. Permission, input, 404 and malformed-response failures do not retry
  *
  * All dispatched channel mutations invalidate the whole enabled channel cache. Pre-dispatch input failures preserve it, and this API never follows a write with an implicit fetch
  *
  * Operation inputs are copied when the Effect executes and later caller mutations are not observed. Permission bits are bigint values encoded as decimal JSON strings.
- * Fluxer enforces channel permissions and grant restrictions. Targeted overwrite operations require ManageRoles for role and member targets.
- * Expected failures use ChannelOperationError or ClientClosedError. Interruption and defects retain native causes after owned cleanup
+ * Fluxer enforces channel permissions and grant restrictions. Targeted overwrite operations require ManageRoles for role and member targets
+ *
+ * Expected failures use ChannelOperationError or ClientClosedError. Interruption and defects retain Cause after owned cleanup
  */
 export interface Channels {
-    /** Lazily fetch fresh counts for 1–25 distinct channel IDs in one guild, using canonical positive uint64 decimal IDs over the connected gateway.
-     * Copies IDs when run. Requires the guild's locally owned shard to be ready plus ViewChannel and ViewChannelMembers; no hidden connect or REST reads.
+    /** Fetch fresh counts for 1–25 channels in one guild over the connected gateway
+     *
+     * Supply distinct canonical positive decimal IDs in the unsigned 64-bit range
+     *
+     * Copies IDs when run. Requires the guild's locally owned shard to be ready plus ViewChannel and ViewChannelMembers. No hidden connect or REST reads.
      * The guild must route to a locally owned ready shard. An unowned or unready guild fails notConnected instead of appearing in omittedChannelIds
      *
      * Returns frozen counts plus omittedChannelIds in input order. Omission never becomes zero or identifies its cause.
-     * Counts are visibility-filtered observations, not a subscription or guaranteed cross-channel snapshot.
-     * Uses guilds.fetchCounts' one-logical-slot four-call admission, default 30,000 ms overall deadline, no-retry, participant-shard recovery and failure/cleanup rules.
-     * No channel/member cache writes. Native interruption cannot stop dispatched provider work
+     * Counts are visibility-filtered snapshots, not a subscription or guaranteed cross-channel snapshot
+     *
+     * Uses guilds.fetchCounts' one-logical-slot four-call concurrency limit, default 30,000 ms overall deadline, no-retry, participant-shard recovery and failure/cleanup rules.
+     * No channel/member cache writes. Interruption cannot stop work already sent to Fluxer
      */
     fetchMemberCounts(
         guildId: string,
         channelIds: readonly string[],
         options?: CountOperationOptions,
     ): Effect.Effect<ChannelMemberCountsResult, CountOperationFailure>
-    /** Lazily read the enabled channel cache without HTTP or requiring a connection.
-     * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote observation.
+    /** Read the enabled channel cache without HTTP or requiring a connection.
+     * Returns undefined when disabled, absent, expired or evicted. Snapshots may be stale. Use fetch for a remote snapshot.
      * Invalid decimal IDs fail with ChannelOperationError(input). Closing/closed clients fail with ClientClosedError.
-     * Defects retain their native cause. Lookup updates LRU order but never extends expiry
+     * Defects retain their Cause. Lookup updates least-recently-used eviction order but never extends expiry
      */
     get(channelId: string): Effect.Effect<GuildChannel | undefined, ChannelOperationFailure>
-    /** Fetch one frozen guild-channel observation by decimal ID, without connecting or populating a complete guild list.
+    /** Fetch one frozen guild-channel snapshot by decimal ID, without connecting or populating a complete guild list.
      * A non-guild response is a typed response failure. The result has explicit overwrites only, not inherited or effective permissions
      */
     fetch(channelId: string, options?: ChannelOperationOptions): Effect.Effect<GuildChannel, ChannelOperationFailure>
     /** Fetch Fluxer's visible guild-channel list for one decimal guild ID, without pagination or a completeness guarantee.
-     * The response is a point-in-time observation, not a subscription. It does not fetch members, roles, DMs or missing permission-overwrite targets
+     * The response is a point-in-time snapshot, not a subscription. It does not fetch members, roles, DMs or missing permission-overwrite targets
      */
     fetchAll(
         guildId: string,
         options?: ChannelOperationOptions,
     ): Effect.Effect<readonly GuildChannel[], ChannelOperationFailure>
-    /** Create one supported guild channel and return Fluxer's frozen observation. Fluxer chooses its initial position.
+    /** Create one supported guild channel and return Fluxer's frozen snapshot. Fluxer chooses its initial position.
      * Omitted permissionOverwrites inherits the selected parent category's overrides. [] creates no explicit overrides, not private visibility.
      * Explicit overwrite bits include ViewChannelMembers through Fluxer's required feature opt-in
      * @example
@@ -2654,7 +3045,7 @@ export interface Channels {
         input: ChannelCreate,
         options?: ChannelOperationOptions,
     ): Effect.Effect<GuildChannel, ChannelOperationFailure>
-    /** Patch only supplied channel settings and return Fluxer's frozen observation. Empty/unknown-field patches are input errors.
+    /** Patch only supplied channel settings and return Fluxer's frozen snapshot. Empty/unknown-field patches are input errors.
      * Channel type and parent are intentionally not editable here. Move a channel with reorder. Omitted permissionOverwrites preserves them, while [] clears them.
      * Explicit overwrite replacements opt into Fluxer's ViewChannelMembers permission handling, including clearing that bit
      */
@@ -2664,7 +3055,7 @@ export interface Channels {
         options?: ChannelOperationOptions,
     ): Effect.Effect<GuildChannel, ChannelOperationFailure>
     /** Delete a guild channel and complete after HTTP 204, without waiting for a gateway event or proving a prior channel existed.
-     * The SDK does not prefetch to verify the ID. A lost response or timeout after dispatch may leave deletion applied
+     * The SDK does not prefetch to verify the ID. A lost response or timeout after the request is sent may leave deletion applied
      */
     delete(channelId: string, options?: ChannelOperationOptions): Effect.Effect<void, ChannelOperationFailure>
     /** Apply submitted guild-channel moves sequentially and complete after HTTP 204, without fabricating a reordered snapshot.
@@ -2676,7 +3067,8 @@ export interface Channels {
         positions: readonly ChannelPosition[],
         options?: ChannelOperationOptions,
     ): Effect.Effect<void, ChannelOperationFailure>
-    /** Replace one explicit role/member overwrite with its supplied raw bigint allow and deny bits, then complete after HTTP 204.
+    /** Replace one explicit role or member permission overwrite with the supplied raw bigint allow and deny bits.
+     * Completes after HTTP 204.
      * Sets and clears ViewChannelMembers through Fluxer's required feature opt-in, alongside the other raw bits.
      * Fluxer enforces ManageRoles. This does not calculate inherited/effective permissions or prefetch the target
      */
@@ -2685,7 +3077,7 @@ export interface Channels {
         input: PermissionOverwrite,
         options?: ChannelOperationOptions,
     ): Effect.Effect<void, ChannelOperationFailure>
-    /** Remove one explicit role/member overwrite by decimal target ID and complete after HTTP 204.
+    /** Remove one explicit role or member permission overwrite by decimal target ID and complete after HTTP 204.
      * Fluxer enforces ManageChannels and ManageRoles. Other overwrites remain unchanged, and an unknown outcome requires an explicit follow-up read
      */
     removePermissionOverwrite(
@@ -2695,33 +3087,36 @@ export interface Channels {
     ): Effect.Effect<void, ChannelOperationFailure>
 }
 
-/** Lazy membership reads, moderation and targeted role writes with Guilds' REST admission, deadlines and failure rules.
- * iterateChunks uses the gateway and its own documented stream rules instead.
- * Returned members are frozen observations. Optional retention follows ClientOptions.cache.members, without permission prediction or automatic guild download.
- * Writes retry only confirmed 429 rejections, never uncertain outcomes. Interruption cannot undo a dispatched write
+/** Read guild members, change their roles and nicknames, or perform moderation actions.
+ * HTTP methods return Effects and follow Guilds' concurrency limits, deadlines and error rules.
+ * iterateChunks uses the gateway and its own documented stream rules instead
+ *
+ * Returned members are frozen snapshots. Optional retention follows ClientOptions.cache.members, without permission prediction or automatic guild download
+ *
+ * Writes retry only confirmed 429 rejections, never unknown outcomes. Interruption cannot undo a write request already sent
  */
 export interface Members {
-    /** Lazily request one guild's gateway members, streaming frozen batches in the consuming Effect scope without accumulating a roster.
-     * Each consumption copies inputs and sends one request. Select explicit userIds, a query prefix, or all: true
+    /** Request one guild's gateway members, streaming frozen batches in the consuming Effect scope without accumulating a roster.
+     * Each consumption copies inputs and sends one request. Select explicit userIds, a query prefix, or `all: true`
      *
-     * Requires the guild's locally owned shard to be ready. Full-list mode is provider-capped at 100,000 members; its 30-second per-bot/guild limit depends on server enforcement.
-     * One member stream is admitted at a time per client, not per gateway connection. It holds one of four client-wide slots shared with gateway counts until consumed or released
+     * Requires the guild's locally owned shard to be ready. Full-list mode is provider-capped at 100,000 members. Its 30-second per-bot/guild limit depends on server enforcement.
+     * One member stream is admitted at a time per client, not per gateway connection. It holds one of four client-wide slots shared with gateway counts until consumed or released.
+     * The guild must route to a locally owned ready shard. An unowned or unready guild fails notConnected. Only its owning-shard gap fails this stream. Healthy-shard work continues
      *
-     * The guild must route to a locally owned ready shard. An unowned or unready guild fails notConnected. Only its owning-shard gap fails this stream; healthy-shard work continues.
-     * No implicit connection, REST fallback, cache writes, presence subscription, raw-event forwarding or automatic retries
+     * No implicit connection, HTTP fallback, cache writes, presence subscription, raw-event forwarding or automatic retries
      *
      * Delivers provider chunk order, checking indices, advertised count, member uniqueness and presence association.
      * Success means every advertised batch arrived, not a complete or atomic guild snapshot. Missing selected IDs are explicit on the final batch.
-     * Optional presences omit unavailable/offline/invisible observations. Missing presence never proves offline status
+     * Optional presences omit unavailable/offline/invisible snapshots. Missing presence never proves offline status
      *
-     * timeoutMs defaults to 30,000 for the whole reply. maxPendingBytes defaults to 4 MiB of accounted unread wire bytes.
-     * Fluxer pushes batches without backpressure; slow readers can overflow. Pausing consumption does not pause intake or its deadline
+     * timeoutMs defaults to 30,000 for the whole reply. `maxPendingBytes` defaults to 4 MiB of accounted unread wire bytes.
+     * Fluxer pushes batches without backpressure. Slow readers can overflow. Pausing consumption does not pause intake or its deadline
      *
      * A gap, timeout, malformed reply or overflow discards unread batches and fails with MemberChunkError, never a silent partial success.
      * Previously emitted batches stay caller-owned. Client closure fails with ClientClosedError and releases local buffers
      *
      * Interruption, early stream termination and scope closure release intake, timers and buffers without cancelling Fluxer's dispatched work.
-     * Late/unmatched chunks are ignored and chunks are not replayed on Resume. Defects and interruption retain native causes and caller context
+     * Late/unmatched chunks are ignored and chunks are not replayed on Resume. Defects and interruption retain Cause and your program's services
      * @example
      * ```ts
      * import { Effect, Stream } from "effect"
@@ -2738,15 +3133,16 @@ export interface Members {
         query: MemberChunkQuery,
         options?: MemberChunkOptions,
     ): Stream.Stream<MemberChunk, MemberChunkFailure>
-    /** Lazily replace the member's entire explicit role set with 0–250 distinct positive decimal role IDs in one PATCH.
-     * Copies IDs when run in the caller's Effect context, with no prefetch or merge. [] clears assigned roles; the implicit everyone role is rejected as input
+    /** Replace the member's entire explicit role set with 0–250 distinct positive decimal role IDs in one PATCH.
+     * Copies IDs when run using your Effect program's services, with no prefetch or merge. [] clears assigned roles. The implicit everyone role is rejected as input
      *
      * Requires provider ManageRoles and hierarchy permission for changes. This may overwrite concurrent role changes.
      * Fluxer can silently omit nonexistent or foreign role IDs. Returns its frozen actual member, not a promise that every requested role was accepted
      *
      * Uses shared guild write deadlines/failures and only confirmed 429 retries. No gateway readiness or event acknowledgement is required.
-     * Eligible responses update member caching; uncertain dispatched writes evict it and need explicit fetch reconciliation.
-     * Interruption awaits cleanup but cannot undo the replacement; defects retain their Cause
+     * Eligible responses update member caching. Writes with unknown outcomes evict it and need explicit fetch reconciliation
+     *
+     * Interruption awaits cleanup but cannot undo the replacement. Defects retain their Cause
      * @example
      * ```ts
      * import type { Client, MemberReference } from "@neontechspace/fluxerly/effect"
@@ -2760,13 +3156,15 @@ export interface Members {
         roleIds: readonly string[],
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
-    /** Lazy remote search of indexed snapshots, not the local member cache or full hydrated members.
-     * Default page size 25, offset 0, join-time descending. Results can lag membership changes.
-     * indexing=true is not completed emptiness; empty/indexing=false can also mean an unavailable provider search service
+    /** Search indexed member snapshots remotely, without using the local cache or returning complete member objects.
+     * Defaults to page size 25 and offset 0, ordered by descending join time. Results can lag membership changes.
+     * indexing=true is not completed emptiness. Empty/indexing=false can also mean an unavailable provider search service
      *
      * Invite-sensitive filters fetch and require the bot's ManageGuild permission first. This is not atomic with search.
      * Other filters add no reads. No search hit enters the member cache. Inputs are copied on execution.
-     * timeoutMs defaults to 30,000 for the full call. Preflight GETs use shared read retries; the search POST only retries
+     * Includes recognized inherited and nonenumerable filter fields and copies their arrays when the Effect executes
+     *
+     * timeoutMs defaults to 30,000 for the full call. Preflight GETs use shared read retries. The search POST only retries
      * confirmed 429 rejection because it may enqueue indexing. Interruption awaits owned cleanup in the caller's scope
      *
      * GuildOperationError/ClientClosedError remain typed, defects stay in the Cause.
@@ -2777,13 +3175,14 @@ export interface Members {
         filters?: MemberSearchQuery,
         options?: GuildOperationOptions,
     ): Effect.Effect<MemberSearchPage, GuildOperationFailure>
-    /** Lazy bounded Stream of unique indexed hits, with independent state and copied filters per consumption.
+    /** Read a bounded Stream of unique indexed member hits, with independent state and copied filters per consumption.
+     * Includes recognized inherited and nonenumerable filter fields and copies their arrays per stream consumption.
      * maxItems required, pageSize defaults to 100 (1–100), maxPages to 100. No prefetch or implicit full-member fetch.
-     * Offset advances by received count; retains at most maxItems user IDs. Changing indexes may skip users despite dedupe.
+     * Offset advances by received count. Retains at most maxItems user IDs. Changing indexes may skip users despite dedupe.
      * indexing=true fails with PaginationError indexing. An empty page before observed total fails cursorStalled.
      * Reaching maxItems is normal completion, not exhaustion. Input/pageLimit/cursorStalled are other PaginationError reasons.
      * Each page uses search's deadline/preflight/retry rules. Interruption, stream scope closure and client closure release
-     * retained state and await owned request cleanup. Delivered snapshots remain caller-owned; defects remain in the Cause
+     * retained state and await owned request cleanup. Delivered snapshots remain caller-owned. Defects remain in the Cause
      */
     iterateSearch(
         guildId: string,
@@ -2795,18 +3194,18 @@ export interface Members {
      * Omitted fields remain unchanged and null clears an override. Fluxer enforces permissions and field-specific rate limits.
      * Empty or unknown-key input fails locally.
      * Avatar, banner, bio and accentColor may be silently ignored without the provider's per-guild-profile entitlement.
-     * The returned member omits bio and pronouns; success is not proof those fields were stored.
-     * Uncertain dispatched writes and interruption evict affected member retention; definite rejection preserves prior snapshots
+     * The returned member omits bio and pronouns. Success is not proof those fields were stored.
+     * Writes with unknown outcomes and interruption evict affected member retention. Definite rejection preserves prior snapshots
      */
     editSelf(
         guildId: string,
         input: MemberProfileEdit,
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
-    /** Lazily set or clear one member nickname without replacing that member's roles or profile fields.
-     * nickname is 1–32 Unicode code points; null clears it. Fluxer decides ManageNicknames, hierarchy and self rules.
+    /** Set or clear one member nickname without replacing that member's roles or profile fields.
+     * nickname is 1–32 Unicode code points. Null clears it. Fluxer decides ManageNicknames, hierarchy and self rules.
      * The frozen HTTP response is not an event acknowledgement. Interruption awaits request cleanup but cannot undo dispatch.
-     * An uncertain result evicts the targeted member cache; a definite rejection preserves its prior snapshot
+     * An uncertain result evicts the targeted member cache. A definite rejection preserves its prior snapshot
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -2824,12 +3223,12 @@ export interface Members {
         nickname: string | null,
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
-    /** Lazily move an already-connected member to one positive decimal voice-channel ID.
+    /** Move an already-connected member to one positive decimal voice-channel ID.
      * Requires MoveMembers plus Fluxer's hierarchy and destination visibility/connect checks. Supplying target.connectionId
-     * targets only that observed connection; omission targets every active connection for the member.
-     * HTTP 200 returns a frozen member projection after Fluxer accepts the move, not proof that the participant reconnected.
+     * targets only that observed connection. Omission targets every active connection for the member.
+     * HTTP 200 returns a frozen member object containing selected fields after Fluxer accepts the move, not proof that the participant reconnected.
      * A visible move can emit voiceStateUpdate first with channelId null, then with a new connection ID in the destination.
-     * Do not repeat an interrupted or unknown write; interruption awaits cleanup but cannot undo dispatch.
+     * Do not repeat an interrupted or unknown write. Interruption awaits cleanup but cannot undo dispatch.
      * Shared moderation deadlines, auditReason validation, confirmed-429 retries and member-cache invalidation apply
      * @example
      * ```ts
@@ -2843,17 +3242,17 @@ export interface Members {
         channelId: string,
         options?: ModerationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
-    /** Lazily disconnect one observed connection, or every active connection when target.connectionId is omitted.
-     * Requires MoveMembers and returns the HTTP member projection without waiting for voiceStateUpdate.
+    /** Disconnect one observed connection, or every active connection when target.connectionId is omitted.
+     * Requires MoveMembers and returns the HTTP member object containing selected fields without waiting for voiceStateUpdate.
      * Repeating after completion can fail because the target is no longer connected. Reconcile an unknown outcome from later
-     * observations instead of repeating it. Uses move's execution, audit, permission and cache-invalidation rules
+     * snapshots instead of repeating it. Uses move's execution, audit, permission and cache-invalidation rules
      */
     disconnect(
         target: VoiceConnectionReference,
         options?: ModerationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
-    /** Lazily set or clear Fluxer's server mute flag for one currently connected member.
-     * Requires MuteMembers and provider hierarchy rules. Returns an HTTP member projection with isMuted, without waiting for
+    /** Set or clear Fluxer's server mute flag for one currently connected member.
+     * Requires MuteMembers and provider hierarchy rules. Returns an HTTP member object containing selected fields with isMuted, without waiting for
      * a voice-state event. This does not control the participant's self-mute state or join a voice channel.
      * Uses move's context, interruption, deadline, audit, retry and member-cache invalidation rules
      */
@@ -2862,8 +3261,8 @@ export interface Members {
         muted: boolean,
         options?: ModerationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
-    /** Lazily set or clear Fluxer's server deafen flag for one currently connected member.
-     * Requires DeafenMembers and provider hierarchy rules. Returns an HTTP member projection with isDeafened, without waiting
+    /** Set or clear Fluxer's server deafen flag for one currently connected member.
+     * Requires DeafenMembers and provider hierarchy rules. Returns an HTTP member object containing selected fields with isDeafened, without waiting
      * for a voice-state event. This does not control the participant's self-deafen state or join a voice channel.
      * Uses move's context, interruption, deadline, audit, retry and member-cache invalidation rules
      */
@@ -2879,9 +3278,10 @@ export interface Members {
      * Queue/network time consumes this duration. An expiry already past at processing time can clear the timeout
      *
      * Returns the frozen HTTP 200 member with communicationDisabledUntil, without waiting for an event.
-     * Uses shared guild deadlines and failures. Writes retry only confirmed 429 rejections.
-     * Lazy, repeatable effects preserve caller context and defects.
-     * Interruption and closure await owned cleanup but cannot undo a dispatched timeout
+     * Uses shared guild deadlines and failures. Writes retry only confirmed 429 rejections
+     *
+     * Repeatable Effects preserve your program's services and defects.
+     * Interruption and closure await owned cleanup but cannot undo a timeout request already sent
      *
      * Eligible responses update enabled member caching. Dispatched failures evict the member even on rejection
      * @example
@@ -2906,15 +3306,18 @@ export interface Members {
      * Uses timeout's execution/deadline/failure rules, with no automatic retry after an uncertain result
      */
     kick(target: MemberReference, options?: ModerationOptions): Effect.Effect<void, GuildOperationFailure>
-    /** Traverse ascending remote user IDs as a lazy Stream, without connecting or eagerly downloading the guild.
-     * Each execution copies inputs and owns independent progress in the caller's context.
-     * maxItems is required, pageSize defaults to 100 and maxPages to 100. timeoutMs applies separately to each page.
+    /** Traverse ascending remote user IDs as a Stream that starts when consumed, without connecting or eagerly downloading the guild.
+     * Each execution copies inputs and owns independent progress using your program's services
+     *
+     * maxItems is required, pageSize defaults to 100 and maxPages to 100. `timeoutMs` applies separately to each page.
      * Emits frozen members until maxItems or an empty page, not a short page. Pages are not a consistent snapshot
      *
-     * PaginationError covers input, cursorStalled and pageLimit. Remote errors retain members.fetchPage's operation/retry policy.
-     * Interruption and defects retain native causes. Termination awaits request cleanup and releases the buffered page.
-     * Closing/Closed releases the page and fails the next pull. Delivered items remain caller-owned after later failure.
-     * Enabled member caching follows fetchPage admission. No role preloading, permission prediction or full-result retention
+     * PaginationError covers input, cursorStalled and pageLimit. Remote errors retain members.fetchPage's operation/retry policy
+     *
+     * Interruption and defects retain Cause. Termination awaits request cleanup and releases the buffered page.
+     * Closing/Closed releases the page and fails the next pull. Delivered items remain caller-owned after later failure
+     *
+     * Enabled member caching follows fetchPage's cache-storage rules. No role preloading, permission prediction or full-result retention
      * @example
      * ```ts
      * import { Stream } from "effect"
@@ -2930,7 +3333,7 @@ export interface Members {
         query: UserIterationQuery,
         options?: GuildOperationOptions,
     ): Stream.Stream<GuildMember, GuildOperationFailure | PaginationError>
-    /** Lazy local-only lookup by decimal guild/user IDs, with Guilds.get's miss, freshness, failure and LRU rules.
+    /** Read the optional member cache by decimal guild and user IDs, following Guilds.get's miss, freshness, failure and least-recently-used eviction rules.
      * Enable cache.members and cache.roles when creating the client. Explicit fetches or subsequent events populate them
      * @example
      * ```ts
@@ -2947,11 +3350,11 @@ export interface Members {
      * This displays observed names, not effective permissions or a completeness guarantee
      */
     get(member: MemberReference): Effect.Effect<GuildMember | undefined, GuildOperationFailure>
-    /** Fetch one member by decimal guild/user IDs; HTTP 404 uses notFound rather than an empty result */
+    /** Fetch one member by decimal guild/user IDs. HTTP 404 uses notFound rather than an empty result */
     fetch(member: MemberReference, options?: GuildOperationOptions): Effect.Effect<GuildMember, GuildOperationFailure>
     /** Fetch the authenticated bot's membership directly, without requiring READY or a known bot ID */
     fetchSelf(guildId: string, options?: GuildOperationOptions): Effect.Effect<GuildMember, GuildOperationFailure>
-    /** Lazily fetch fresh guild, authenticated-bot member, target member and role observations in parallel, then evaluate canManageHierarchy.
+    /** Fetch fresh guild, authenticated-bot member, target member and role snapshots in parallel, then evaluate canManageHierarchy.
      * One 30,000 ms default deadline covers the whole composition. Sibling cleanup is awaited on failure or interruption.
      * This never reads a guild cache, retains no helper snapshot, evaluates no permissions or MFA, and does not authorize or perform an action.
      * Like its underlying explicit fetches, enabled guild-resource caches can receive these fresh responses.
@@ -2967,8 +3370,8 @@ export interface Members {
         target: MemberReference,
         options?: GuildOperationOptions,
     ): Effect.Effect<boolean, GuildOperationFailure>
-    /** Fetch an ascending user-ID page; default limit 100, range 1–1000.
-     * Use the last userId as after. An empty page ends traversal; separate pages are not a consistent snapshot.
+    /** Fetch an ascending user-ID page. Default limit 100, range 1–1000.
+     * Use the last userId as after. An empty page ends traversal. Separate pages are not a consistent snapshot.
      * No hasMore guarantee, automatic traversal or partial malformed page. Inputs are copied on execution, not Effect construction
      */
     fetchPage(
@@ -3001,7 +3404,7 @@ export interface Members {
         options?: GuildOperationOptions,
     ): Effect.Effect<void, GuildOperationFailure>
     /** Revoke one role with addRole's permission/completion rules. Other roles remain untouched.
-     * No local snapshot suppresses the request; success does not prove a previously assigned role was removed
+     * No local snapshot suppresses the request. Success does not prove a previously assigned role was removed
      */
     removeRole(
         member: MemberReference,
@@ -3010,18 +3413,19 @@ export interface Members {
     ): Effect.Effect<void, GuildOperationFailure>
 }
 
-/** Permission-bit calculations only, not timeout, hierarchy, channel visibility or action-success decisions */
+/** Calculate permission bits from supplied snapshots or freshly fetched resources.
+ * These results do not account for timeouts or role hierarchy and do not prove an action will succeed */
 export interface PermissionHelpers {
-    /** Lazy local calculation from supplied snapshots, no requests or cache reads.
+    /** Calculate permissions from the snapshots you supply, without requests or cache reads.
      * Connection state is irrelevant, including after shutdown. Missing/inconsistent required data fails with
      * GuildOperationError permissions.calculate/input. Owner/base Administrator grants all unsigned 64 bits.
      * Otherwise applies everyone, aggregated role and member overwrites, preserving unknown bits.
      * Uses the target channel's stored overrides, not its parent category. Inputs read on execution, defects stay in Cause
      */
     calculate(input: PermissionInput): Effect.Effect<bigint, GuildOperationError>
-    /** Lazy composition of fresh guild/member/role and optional target-channel reads, then local calculation.
+    /** Fetch fresh guild, member, role and optional channel data, then calculate permission bits.
      * No gateway or cache-first lookup. Existing caches may admit fetched resources, but permission results are not retained.
-     * Sequential reads are not atomic or an authorization guarantee. timeoutMs defaults to 30,000 across the workflow.
+     * Sequential reads are not atomic or an authorization guarantee. `timeoutMs` defaults to 30,000 across the workflow.
      * Shared read retries apply. Interruption awaits owned cleanup in the caller's scope.
      * Invalid inputs use permissions.fetch/input, resource failures retain their GuildOperationError/ChannelOperationError,
      * client closure uses ClientClosedError and defects remain in Cause. Cross-guild channel snapshots fail
@@ -3032,14 +3436,16 @@ export interface PermissionHelpers {
     ): Effect.Effect<bigint, GuildOperationFailure | ChannelOperationFailure>
 }
 
-/** Lazy caller-context role operations sharing Guilds' admission, deadlines and read retries.
- * Writes retry only confirmed 429 rejections. Server permissions/hierarchy apply; no local permission prediction.
- * Interruption waits for owned cleanup but cannot undo dispatched writes. Success is not a gateway acknowledgement.
- * Expected failures use GuildOperationError or ClientClosedError; defects and interruption retain native causes.
- * Inputs are copied on execution, not Effect construction; returned roles contain bigint permissions and require explicit JSON conversion
+/** Read or change guild roles, their permission bits and their ordering.
+ * Methods return Effects and share Guilds' HTTP concurrency limits, deadlines and read retries.
+ * Writes retry only confirmed 429 rejections. Server permissions/hierarchy apply. No local permission prediction.
+ * Interruption waits for owned cleanup but cannot undo write requests already sent. Success is not a gateway acknowledgement.
+ * Expected failures use GuildOperationError or ClientClosedError. Defects and interruption retain Cause.
+ * Inputs are copied on execution, not Effect construction. Returned roles contain bigint permissions and require explicit JSON conversion
  */
 export interface Roles {
-    /** Lazy local-only lookup by decimal guild/role IDs, including everyone, with Guilds.get's miss, freshness, failure and LRU rules */
+    /** Read the optional role cache by decimal guild and role IDs, including everyone.
+     * Follows Guilds.get's miss, freshness, failure and least-recently-used eviction rules */
     get(role: RoleReference): Effect.Effect<GuildRole | undefined, GuildOperationFailure>
     /** Fetch the current role list, including everyone, in server order. Always remote, without pagination or automatic refresh */
     fetchAll(
@@ -3065,8 +3471,8 @@ export interface Roles {
         input: RoleCreate,
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildRole, GuildOperationFailure>
-    /** Patch only defined fields and return the server's observation. Empty/unknown-field patches are input errors.
-     * permissions replaces the raw grants, including setting or clearing ViewChannelMembers; it is not an additive grant.
+    /** Patch only defined fields and return the server's snapshot. Empty/unknown-field patches are input errors.
+     * permissions replaces the raw grants, including setting or clearing ViewChannelMembers. It is not an additive grant.
      * The default/everyone role accepts only color and permissions. Other defined fields fail locally, including mixed patches */
     edit(
         role: RoleReference,
@@ -3074,11 +3480,11 @@ export interface Roles {
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildRole, GuildOperationFailure>
     /** Delete a role, also removing its assignments upstream. Everyone cannot be deleted.
-     * HTTP 204 is completion, not proof of member-event delivery; old member/role observations remain unchanged */
+     * HTTP 204 is completion, not proof of member-event delivery. Old member/role snapshots remain unchanged */
     delete(role: RoleReference, options?: GuildOperationOptions): Effect.Effect<void, GuildOperationFailure>
-    /** Reorder distinct role IDs using nonnegative safe-integer positions; everyone cannot move.
+    /** Reorder distinct role IDs using nonnegative safe-integer positions. Everyone cannot move.
      * Fluxer normalizes manageable positions, so fetchAll afterward when final order matters. HTTP 204 carries no list.
-     * This operation and multi-step workflows are not transactions: Failures can leave partial state; refetch before reconciliation */
+     * This operation and multi-step workflows are not transactions: Failures can leave partial state. Refetch before reconciliation */
     reorder(
         guildId: string,
         positions: readonly RolePosition[],
@@ -3086,8 +3492,8 @@ export interface Roles {
     ): Effect.Effect<void, GuildOperationFailure>
     /** Set display positions for distinct roles without changing permission hierarchy or enabling hoist.
      * Requires a nonempty list of signed 32-bit positions, excluding everyone. Fluxer enforces ManageRoles and hierarchy.
-     * HTTP 204 returns no roles. Successful or uncertain writes invalidate retained guild roles, including pending reads.
-     * Failures or cancellation can leave partial changes; refetch before reconciliation rather than replaying blindly
+     * HTTP 204 returns no roles. Successful writes or writes with unknown outcomes invalidate retained guild roles, including pending reads.
+     * Failures or cancellation can leave partial changes. Refetch before reconciliation rather than replaying blindly
      * @example
      * ```ts
      * import { type Client } from "@neontechspace/fluxerly/effect"
@@ -3103,18 +3509,19 @@ export interface Roles {
     ): Effect.Effect<void, GuildOperationFailure>
     /** Clear display-position assignments for every role in the guild, not just roles below the bot.
      * Fluxer enforces ManageRoles. Permission hierarchy and hoist flags remain unchanged.
-     * HTTP 204 has no role list. This is not transactional; a failure can leave partial changes.
-     * Successful or uncertain writes invalidate retained guild roles. Refetch to reconcile an unknown outcome
+     * HTTP 204 has no role list. This is not transactional. A failure can leave partial changes.
+     * Successful writes or writes with unknown outcomes invalidate retained guild roles. Refetch to reconcile an unknown outcome
      */
     resetHoistPositions(guildId: string, options?: GuildOperationOptions): Effect.Effect<void, GuildOperationFailure>
 }
 
-/** Bot-authenticated remote webhook management, available before connect.
+/** Create and manage webhooks with the bot token, without a gateway connection.
  * No webhook cache, hidden credential persistence or synthesized events.
- * JSON responses are bounded to 1 MiB and malformed or larger responses fail with reason response.
- * Each Effect is lazy, with native interruption and defects.
+ * Successful JSON response-body bytes are bounded to 16 MiB before parsing, not as a total heap limit. Malformed or larger responses fail with reason response.
+ * A response failure after a mutation request is sent has an unknown outcome and never retries automatically.
+ * Each Effect starts when executed, with Effect interruption and defects.
  * Requests default to a 30-second total deadline, allow bounded read retries and retry writes only after confirmed rate-limit rejection.
- * Shutdown rejects new work and awaits admitted request cleanup. Separate clients do not coordinate rate limits
+ * Shutdown rejects new work and awaits accepted request cleanup. Separate clients do not coordinate rate limits
  */
 export interface Webhooks {
     /** Create one webhook using bot permissions. Returns redacted credentials separately from metadata. An uncertain result may have created it */
@@ -3145,38 +3552,57 @@ export interface Webhooks {
     delete(id: string, options?: WebhookOperationOptions): Effect.Effect<void, WebhookOperationFailure>
 }
 
-/** Token-only HTTP client, without a bot token, gateway, caches or persistent storage.
- * Operations are lazy and preserve native defects/interruption.
- * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause.
- * Requests default to a 30-second total deadline across admission, rate waits, retries and HTTP.
+/** Send and manage one webhook's messages using its webhook token.
+ * This client does not use a bot token, connect the gateway, cache resources or store tokens persistently
+ *
+ * Operations start when executed and preserve unexpected faults/interruption.
+ * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause
+ *
+ * Requests default to a 30-second total deadline across queue waits, rate-limit waits, retries and HTTP.
  * Cancellation interrupts only that operation and awaits request/body cleanup, without rolling back remote effects
  *
- * Errors contain only safe categories and status, never credential-bearing paths or upstream bodies.
- * JSON responses exceeding 1 MiB fail with reason response. Other client caches are not updated by this token-only client
+ * Errors contain only safe categories and status, never credential-bearing paths or upstream bodies
+ *
+ * Successful JSON bodies are capped at 16 MiB of response-body bytes before parsing, not total heap usage. Oversized successes fail with reason response.
+ * A response failure after a mutation request was sent leaves an unknown outcome and never retries automatically
+ *
+ * Other client caches are not updated by this token-only client
  */
 export interface WebhookClient {
-    /** Credential identity, never a token-bearing URL */
+    /** This webhook's decimal ID, without its token or a token-bearing URL */
     readonly id: string
     /** Immutable endpoint discovery and pure URL helpers for this webhook client's selected instance */
     readonly instance: Instance
-    /** Lazily fetch this credential's current remote metadata without bot authentication or retaining creator/private fields */
+    /** Fetch this credential's current remote metadata without bot authentication or retaining creator/private fields */
     fetch(options?: MessageOperationOptions): Effect.Effect<Webhook, WebhookOperationFailure>
-    /** Lazily update only this webhook's name or avatar through its credential. Channel moves require bot webhooks.edit.
+    /** Update only this webhook's name or avatar through its credential. Channel moves require bot webhooks.edit.
      * A failed or interrupted write can have applied and does not close this client
      */
     edit(input: WebhookTokenEdit, options?: MessageOperationOptions): Effect.Effect<Webhook, WebhookOperationFailure>
-    /** Lazily delete this remote webhook through its credential. HTTP 204 does not close this client or erase its local credential reference.
+    /** Delete this remote webhook through its credential. HTTP 204 does not close this client or erase its local credential reference.
      * Later remote operations normally fail notFound after revocation. Use shutdown separately to release local resources
      */
     delete(options?: MessageOperationOptions): Effect.Effect<void, WebhookOperationFailure>
-    /** Send with wait=true and return the created message. Mentions default off. Reply references can include files; forwarded references preserve only their source snapshot and reject new content/uploads.
-     * Files use bounded multipart streaming, with 50 MiB maximum per file. Image/thumbnail attachment URLs match a new upload in this execution. flags accepts only the two non-voice MessageFlags bits.
-     * Snapshot inputs at execution, including admitted file bytes. Never retry an uncertain send, which may already have posted */
+    /** Send through this webhook and return the created message using wait=true. Mentions default off.
+     * Reply references can include files. Forwarded references preserve only their source snapshot and reject new content/uploads
+     *
+     * Attachments use inline multipart streaming with a 50 MiB maximum per file and the configured upload-byte budget.
+     * Each attachment supplies data bytes, a sized Blob/File-compatible source, or a finite stream with its exact size
+     *
+     * Inputs are prepared when the Effect executes. data bytes are copied before waiting, while file and stream sources are not copied or spooled.
+     * Readers are acquired when multipart upload begins. Keep file data stable and supply a fresh stream for a new operation.
+     * Streams are consumed at most once and must deliver exactly their declared size. Cleanup cancels unfinished readers and awaits lock release, without closing caller paths or FileHandles
+     *
+     * A confirmed HTTP 429 can retry copied data only. File and stream sources fail with rateLimit instead of being reopened or reread
+     *
+     * Image/thumbnail attachment URLs must match a new upload in this execution. flags accepts only the two non-voice MessageFlags bits.
+     * Never retry an unknown send outcome, which may already have posted
+     */
     send(input: WebhookMessageInput, options?: MessageOperationOptions): Effect.Effect<Message, WebhookOperationFailure>
     /** Fetch a decimal message ID authored by this webhook in its current channel, with bounded transient read retries */
     fetchMessage(messageId: string, options?: MessageOperationOptions): Effect.Effect<Message, WebhookOperationFailure>
     /** Edit this webhook's message and return its snapshot. Omitted fields remain unchanged, mentions default off, and attachments cannot be replaced.
-     * flags-only edits replace the two writable non-voice bits; zero clears them. Existing file references are not resolved for embed inputs
+     * flags-only edits replace the two writable non-voice bits. Zero clears them. Existing file references are not resolved for embed inputs
      */
     editMessage(
         messageId: string,
@@ -3185,21 +3611,24 @@ export interface WebhookClient {
     ): Effect.Effect<Message, WebhookOperationFailure>
     /** Delete this webhook's message. 204 is success without proving earlier existence, and uncertain failures may follow deletion */
     deleteMessage(messageId: string, options?: MessageOperationOptions): Effect.Effect<void, WebhookOperationFailure>
-    /** Permanently reject new work, cancel admitted work, await transport cleanup and release the owned token reference.
+    /** Permanently reject new work, cancel accepted work, await transport cleanup and release the owned token reference.
      * Does not delete the remote webhook or invalidate caller-held credentials. Concurrent calls share the same pending cleanup
      */
     shutdown(): Effect.Effect<void>
 }
 
-/** Native local cache controls. They never fetch, refresh, mutate remote resources, or capture a service context */
-export interface ClientCache {
+/** Inspect or clear this client's optional in-memory caches.
+ * These controls do not request fresh data, change remote resources or retain Effect services */
+export interface ClientCache<M extends MessageCore = Message> {
     /**
-     * Lazily return up to limit already-observed frozen projections from one configured cache category in current eviction order.
+     * List up to limit frozen snapshots containing selected fields from one configured cache category.
+     * Results contain only data already observed by this client, in current eviction order.
      * Entries use least-to-most-recent order. Local lookups promote recency, while enumeration does not
      *
      * Omit limit for 100 entries. A positive safe integer from 1 through 1,000 is required.
-     * Execution releases expired entries before the snapshot and does not refresh data or change the eviction order.
-     * The frozen array can be partial because retention, expiry, conflicts, gaps, clear and shutdown discard observations.
+     * Execution releases expired entries before the snapshot and does not refresh data or change the eviction order
+     *
+     * The frozen array can be partial because retention, expiry, conflicts, gaps, clear and shutdown discard snapshots.
      * Entries contain the requested cached data, unlike client.diagnostics. No network request or remote completeness claim is made
      *
      * A closed client succeeds with an empty array. Invalid kind or limit fails with ConfigurationError without exposing the rejected value.
@@ -3208,10 +3637,11 @@ export interface ClientCache {
     entries<K extends CacheKind>(
         kind: K,
         options?: CacheEntriesOptions,
-    ): Effect.Effect<readonly CachedResources[K][], ConfigurationError>
+    ): Effect.Effect<readonly CachedResources<M>[K][], ConfigurationError>
     /**
-     * Synchronously release every SDK-held cache observation without changing configuration, caller-held frozen projections, requests or remote resources.
-     * In-flight reads that began before this call cannot repopulate cleared observations. Later reads can cache normally.
+     * Synchronously release every SDK-held cache snapshot without changing configuration, requests or remote resources.
+     * Frozen snapshots held by your application remain unchanged.
+     * In-flight reads that began before this call cannot repopulate cleared snapshots. Later reads can cache normally.
      * Existing mutation guards retain their conservative invalidation behavior. Safe to repeat, including after closure.
      * It takes no cancellation signal and completes synchronously
      */
@@ -3219,55 +3649,59 @@ export interface ClientCache {
 }
 
 /**
- * Native client with lazy operations in the caller's Effect context.
+ * A bot client whose asynchronous methods return descriptions of work as Effects or Streams.
+ * Execute Effects with yield* inside Effect.gen or with an Effect runner. Consume Streams to start their work.
+ * Each operation uses your program's Effect services and cancellation.
  * The scope that creates the client owns its connection work and permanent cleanup.
- * Expected errors use the typed failure channel, while defects and interruption remain in the native cause.
- * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause
+ * Expected errors use Effect's error channel. Unexpected faults and cancellation remain in Cause.
+ * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause.
+ * Shared REST success JSON is limited to 16 MiB of response-body bytes before parsing, not total heap usage. Upload-plan/completion responses retain their separate 1 MiB limit
  */
-export interface Client extends ClientState {
+export interface Client<M extends MessageCore = Message> extends ClientState {
     /** Immutable endpoint discovery and pure URL helpers for this client's selected instance */
     readonly instance: Instance
-    /** Public server-directory management, not gateway service discovery or directory joining */
+    /** Public server-directory management, not instance endpoint discovery or directory joining */
     readonly discovery: Discovery
     /** Process-local requested presence, restored after gateway reconnects and never stored across process restarts */
     readonly presence: Presence
-    /** Current authenticated bot application allowlist, without owner or application-management operations */
+    /** Read documented fields for this bot token's application, without owner details or application-management operations */
     readonly application: CurrentBotApplication
-    /** Public account reads and optional local lookup */
+    /** Read public account information or look up an optionally cached account */
     readonly users: Users
-    /** One-to-one and group conversations, composed with messages for content operations */
-    readonly directMessages: DirectMessages
+    /** Open private conversations, send messages or manage existing groups */
+    readonly directMessages: DirectMessages<M>
     /** Bot-authenticated webhook management with token-free metadata */
     readonly webhooks: Webhooks
-    /** Remote role management and explicitly enabled local role lookup */
+    /** Manage roles remotely or look up optionally cached roles */
     readonly roles: Roles
     /** Explicit local and remote permission-bit helpers, without cached decisions */
     readonly permissions: PermissionHelpers
-    /** Remote guild reads and ban management, with explicitly enabled local guild lookup */
+    /** Read guilds and manage bans remotely, or look up optionally cached guilds */
     readonly guilds: Guilds
-    /** Remote invite inspection and management, without accepting invites or retaining codes */
+    /** Inspect and manage invites remotely, without accepting them or retaining codes */
     readonly invites: Invites
-    /** Remote filtered audit pages and bounded traversal; no audit cache */
+    /** Read filtered audit-log pages or a bounded sequence of entries, without an audit cache */
     readonly auditLogs: AuditLogs
-    /** Custom emoji lifecycle and optional local metadata lookup */
+    /** Create, read or change custom emoji, with optional metadata caching */
     readonly emojis: Emojis
-    /** Custom sticker lifecycle and optional local metadata lookup */
+    /** Create, read or change custom stickers, with optional metadata caching */
     readonly stickers: Stickers
-    /** Remote guild-channel reads, mutations and explicitly enabled local lookup */
+    /** Read or change guild channels remotely, or look up optionally cached channels */
     readonly channels: Channels
-    /** Remote member reads, moderation and targeted role assignment */
+    /** Read members, moderate them or assign specific roles */
     readonly members: Members
     /** Bounded attachment downloads from this instance's discovered media base path */
     readonly attachments: Attachments
-    /** REST, local lookup and live collection owned by this client */
-    readonly messages: Messages
+    /** Send, read or change messages, use the optional message cache, or collect future gateway messages and reactions */
+    readonly messages: Messages<M>
     /** Local cache enumeration and release controls. Caching remains opt-in through ClientOptions.cache */
-    readonly cache: ClientCache
+    readonly cache: ClientCache<M>
     /**
-     * Lazily register one EventMap event in the caller's scope and context, before or after connect.
+     * Register one EventMap event in the caller's scope and context, before or after connect.
      * No cache or REST-generated events. Bulk deletions do not also invoke messageDelete handlers.
-     * Enabled cache changes happen before user dispatch, independently of subscriptions and their overflow.
-     * Defaults: One active invocation, 256 queued payloads, 4 MiB queued source JSON per registration.
+     * Enabled cache changes happen before user dispatch, independently of subscriptions and their overflow
+     *
+     * Defaults: One active invocation, 256 queued payloads, 4 MiB queued incoming JSON per registration.
      * A bulk payload counts once, including its full bytes. Ordering is per subscription, not across event types.
      * Explicit concurrency permits out-of-order completion. No history or exactly-once delivery is promised
      *
@@ -3277,8 +3711,8 @@ export interface Client extends ClientState {
      * Keep credentials, payloads and arbitrary Cause text out of logs. An application inspector must not fail or throw
      *
      * Overflow stops only this subscription and remains observable through the returned handle.
-     * Client or registration-scope closure interrupts handlers and awaits native cleanup.
-     * Observe subscription failure alongside client.run/waitForClose. No detached native runtime is created
+     * Client or registration-scope closure interrupts handlers and awaits handler cleanup.
+     * Observe subscription failure alongside client.run/waitForClose. No separate SDK runtime is created
      * @example
      * ```ts
      * import { Cause, Effect } from "effect"
@@ -3299,11 +3733,12 @@ export interface Client extends ClientState {
      */
     on<E, R, E2 = never, R2 = never, K extends EventName = "messageCreate">(
         event: K,
-        handler: (message: EventMap[K]) => Effect.Effect<unknown, E, R>,
+        handler: (message: EventMap<M>[K]) => Effect.Effect<unknown, E, R>,
         options?: EventHandlerOptions<E2, R2>,
     ): Effect.Effect<Subscription, RegistrationError, R | R2 | Scope.Scope>
     /**
-     * Lazy bounded stream for one event type in receive order. Each execution owns a subscription without history or bulk fan-out.
+     * Receive one event type as a bounded Stream in receive order.
+     * Each execution owns a subscription without history or splitting bulk events into individual events.
      * Enabled cache changes happen before delivery, independently of this subscription and its overflow.
      * Stream scope releases its subscription. Overflow fails this stream rather than silently dropping events.
      * Consumers choose stream concurrency and supervision. Options govern source buffers only
@@ -3311,10 +3746,10 @@ export interface Client extends ClientState {
     events<K extends EventName>(
         event: K,
         options?: EventBufferOptions,
-    ): Stream.Stream<EventMap[K], RegistrationError | EventOverflowError>
+    ): Stream.Stream<EventMap<M>[K], RegistrationError | EventOverflowError>
     /**
-     * Lazily observe one event type and return the first future payload accepted by a synchronous filter.
-     * Each execution owns a separate bounded subscription in its executing fiber, with no detached runtime, connection or remote request.
+     * Observe one event type and return the first future payload accepted by a synchronous filter.
+     * Each execution owns a separate bounded subscription in its executing fiber, with no separate SDK runtime, connection or remote request.
      * No history or cache lookup occurs. Recovery can miss events, and reconnecting does not restart the deadline
      *
      * The default deadline is 30,000 ms from registration. Timeout or an invalid/throwing filter fails with EventWaitError without raw input or exception text.
@@ -3334,41 +3769,46 @@ export interface Client extends ClientState {
      * }
      * ```
      */
-    waitFor<K extends EventName>(event: K, options?: EventWaitOptions<K>): Effect.Effect<EventMap[K], EventWaitFailure>
+    waitFor<K extends EventName>(
+        event: K,
+        options?: EventWaitOptions<K, M>,
+    ): Effect.Effect<EventMap<M>[K], EventWaitFailure>
     /**
-     * Read an immutable point-in-time local occupancy snapshot without network work, telemetry, persistence, tokens, remote routes, resource IDs or payloads.
-     * Counts cover this client's owned shards and admitted local work only. Accounted bytes are cache/queue budgets, not heap, process memory or remote storage.
+     * Read a frozen snapshot of this client's local resource usage.
+     * This performs no network work, telemetry or persistence and includes no tokens, remote routes, resource IDs or payloads.
+     * Counts cover this client's owned shards and accepted local work only. Accounted bytes are cache/queue budgets, not heap, process memory or remote storage.
      * Configured cache bounds remain visible after closure, while retained counts report actual owner release progress. This does not establish remote completeness or readiness.
      * It takes no cancellation signal and completes synchronously
      */
     diagnostics(): ClientDiagnostics
     /**
-     * Connect when this Effect executes and complete after every locally assigned shard authenticates and completes READY.
-     * Readiness does not wait for GUILD_CREATE, a guild roster, or every resource to load
+     * Open the gateway when this Effect executes, and return after every locally assigned shard authenticates and receives READY.
+     * READY does not mean that every GUILD_CREATE event, member roster or resource has arrived
      *
-     * Owns startup only, using the client's connection settings.
-     * Interruption or an expected failure before initial group readiness waits for assigned-shard cleanup and permits reuse while the owning scope stays open.
-     * After success the connection and recovery remain owned by that scope, not by this completed operation.
-     * After all assigned shards are ready, a permanent required-shard failure in a multi-shard plan closes the client. waitForClose retains `ShardConnectionError { shardId, failure }`
+     * Use connect when you want startup to finish separately from the client's lifetime.
+     * Connection and recovery continue in the client's creation Scope after connect succeeds.
+     * Before initial readiness, cancellation or an expected startup failure waits for assigned-shard cleanup.
+     * You can then try connect again while that Scope remains open.
+     * After initial readiness, a permanent required-shard failure in a multi-shard plan closes the client.
+     * waitForClose retains that failure as ShardConnectionError with the shardId and underlying failure
      *
-     * @returns A lazy Effect with connection, busy or closed failures.
-     * An already connected unmanaged client succeeds without opening another socket.
-     * Competing calls fail without taking ownership, and defects retain the native cause
+     * An already-connected client succeeds without opening another socket unless run owns its lifetime.
+     * Competing startup or run work fails with ClientBusyError without taking ownership.
+     * Closing or Closed clients fail with ClientClosedError. Other expected startup failures use ConnectError.
+     * Unexpected faults and interruption remain in Cause
      */
     connect(): Effect.Effect<void, ConnectError>
     /**
-     * Own startup, lifetime observation and permanent cleanup in one lazy Effect.
-     * Remains pending through established operation and transient recovery.
-     * An accepted run leaves the client Closed when it ends, including failure or interruption.
-     * After all assigned shards are ready, a permanent required-shard failure in a multi-shard plan closes the client and reports `ShardConnectionError { shardId, failure }`
+     * Start the gateway and keep this Effect pending for the client's lifetime, including transient recovery.
+     * Use run for a program that should own startup, lifetime observation and permanent cleanup together.
+     * Once accepted, run leaves the client Closed when it ends, including on failure or cancellation
      *
-     * Accepts only a Disconnected client without competing work.
-     * Rejection before admission leaves existing work untouched.
-     * Interruption controls the accepted run's whole lifetime and waits for cleanup
-     *
-     * @returns Success after normal shutdown, with connection, busy or closed typed failures.
-     * Interruption and defects remain native, including combined operation and cleanup causes
-     *
+     * Only a Disconnected client without competing work accepts run.
+     * A busy or closed rejection leaves existing work untouched.
+     * Cancelling an accepted run stops its whole lifetime and waits for cleanup.
+     * After initial readiness, a permanent required-shard failure in a multi-shard plan closes the client and reports ShardConnectionError.
+     * Success means normal shutdown. Expected connection, busy or closed errors use ConnectError.
+     * Unexpected faults and interruption remain in Cause, alongside any cleanup faults
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -3381,56 +3821,54 @@ export interface Client extends ClientState {
      *     }),
      * )
      * ```
-     * The application executes this Effect and handles its typed failures and native cause
+     * The application executes this Effect and handles its typed failures and Cause
      */
     run(): Effect.Effect<void, ConnectError>
     /**
-     * Observe the retained terminal outcome without starting or owning the connection.
-     * Transient recovery keeps the Effect pending, and late observers receive the retained outcome.
-     * Interrupting this wait releases only its observation, not the client or other waiters.
-     * Closing the client's owning scope still shuts down the connection.
-     * After all assigned shards are ready, a permanent required-shard failure in a multi-shard plan closes the client and is retained as `ShardConnectionError { shardId, failure }`.
-     * Background and cleanup defects remain in the native Cause alongside a retained typed failure
+     * Wait for this client's terminal result without starting or owning its connection.
+     * Transient recovery keeps the wait pending. Multiple and late waiters receive the retained result.
+     * An expected connect failure before initial readiness also leaves this wait pending, because you can try connecting again.
+     * Cancelling this wait removes only that waiter, not the connection or other waiters.
+     * Closing the client's creation Scope still shuts down the client
      *
-     * @returns Success after normal shutdown or the retained permanent connection failure.
-     * Unexpected background and cleanup defects retain their native cause
+     * Success means normal shutdown. Permanent connection failure uses ConnectionFailure.
+     * After initial readiness, a permanent required-shard failure in a multi-shard plan is retained as ShardConnectionError.
+     * Background and cleanup faults remain in Cause, alongside any expected failure
      */
     waitForClose(): Effect.Effect<void, ConnectionFailure>
     /**
-     * Permanently stop startup and recovery and await owned-resource cleanup.
-     * This lazy Effect is uninterruptible once shutdown starts, so callers cannot abandon cleanup.
-     * Release cached references and expiry timers, interrupt the cache reporter and await its finalizers.
-     * Interrupt message/reaction collector callbacks and await their finalizers. Uninterruptible work can delay shutdown.
-     * Uninterruptible reporter work can delay closure.
-     * Inside an owned event handler, collector callback or cache reporter, the client scope performs shutdown and interrupts that invocation.
-     * Such an invocation does not resume after shutdown. This avoids waiting on its own cleanup.
-     * Repeated and concurrent calls observe the same shutdown outcome.
-     * Explicit shutdown makes pending connect fail with ClientClosedError rather than interruption
+     * Permanently stop this client and wait for its owned resources to finish cleanup.
+     * Once shutdown starts, it disables interruption so the caller cannot abandon cleanup.
+     * Repeated or concurrent calls share the same shutdown result. A Closed client cannot restart
      *
-     * Established sockets get up to 5,000 ms for graceful closure, then termination and an awaited close event.
-     * Pending handshakes terminate immediately, and forced termination may discard unsent data.
-     * Credentials are released, the client cannot restart, and the consumer process is not terminated
+     * Stop startup and recovery, release cached references and timers, and interrupt handlers, collectors and cache-error callbacks.
+     * Their finalizers must finish before closure. User work that disables interruption can delay shutdown.
+     * If an owned handler, collector callback or cache-error callback calls shutdown, the client Scope performs shutdown and interrupts that invocation.
+     * That invocation does not resume afterward, avoiding a wait on its own cleanup.
+     * Explicit shutdown makes a pending connect fail with ClientClosedError rather than interruption
      *
-     * @returns An Effect without expected failures, while cleanup defects remain native defects
+     * An established socket gets up to 5,000 ms to close gracefully.
+     * Afterward it is force-terminated, and shutdown still waits for the close event.
+     * Pending handshakes terminate immediately. Forced termination may discard unsent data.
+     * The SDK releases its credential reference but does not terminate your process or undo remote writes.
+     * No expected error is returned. Cleanup faults remain defects in Cause
      */
     shutdown(): Effect.Effect<void>
     /**
-     * Stream the current state first, then retain only the newest pending update.
-     * Subscription setup and its initial snapshot are coordinated, with bounded buffering per subscriber.
-     * Slow consumers may miss intermediate states, and Closed ends the stream
-     *
-     * The stream's scope releases its subscription without stopping the client.
-     * The client's owning scope remains responsible for connection cleanup.
-     * Use waitForClose rather than this status stream to observe terminal failure
+     * Observe the current connection state, then later updates.
+     * Each consumer gets a coordinated initial snapshot and at most one newest pending update.
+     * Slow consumers can miss intermediate states. Closed ends the Stream.
+     * Ending consumption releases that subscription without stopping the client.
+     * Use waitForClose to observe a terminal error, rather than inferring success from this status Stream
      */
     observeState(): Stream.Stream<ConnectionState>
 }
 
 /**
- * One client's selected instance discovery result
+ * Resolve the service addresses and URL helpers for the instance selected at client creation
  *
- * `resolve` is lazy and runs in the caller's native Effect context. Concurrent
- * callers share one owner-scoped document read, while interruption releases
+ * `resolve` starts when executed and runs using your Effect program's services. Concurrent
+ * callers share one document read owned by the client Scope, while interruption releases
  * only the interrupted caller. The successful immutable result is retained
  * without refresh until client shutdown
  *
@@ -3448,8 +3886,8 @@ export interface Client extends ClientState {
  */
 export interface Instance {
     /** Resolve this client's immutable selected-instance endpoint map and pure asset/link helpers.
-     * The unauthenticated bootstrap has a 30,000 ms caller-local deadline unless overridden. Interruption releases only this caller's wait, while another resolve, REST request or gateway connection can keep the shared read alive.
-     * Expected document, rate-limit, timeout, closure and local timeout-option failures use Effect's failure channel. Cleanup defects remain in Cause with any failure or interruption
+     * The unauthenticated bootstrap has a 30,000 ms deadline for this caller's wait unless overridden. Interruption releases only this caller's wait, while another resolve, REST request or gateway connection can keep the shared read alive.
+     * Expected document, rate-limit, timeout, closure and local timeout-setting failures use Effect's failure channel. Cleanup defects remain in Cause with any failure or interruption
      */
     resolve(options?: InstanceResolveOptions): Effect.Effect<ResolvedInstance, InstanceResolveError>
 }
@@ -3457,9 +3895,9 @@ export interface Instance {
 /**
  * Create a webhook-only client for hosted Fluxer or an explicitly selected self-hosted instance, from { id, token } or redacted creation credentials.
  * Validate locally without requests, copying the credential into an independently owned redacted reference.
- * Creation is lazy and scope closure shuts down the client.
- * No token storage, gateway or bot authentication. Keep one client per credential for shared admission and rate waits.
- * Invalid configuration fails with ConfigurationError, while defects retain their native cause
+ * Creation is executed on demand and scope closure shuts down the client.
+ * No token storage, gateway or bot authentication. Keep one client per credential for shared request concurrency and queue limits and rate waits.
+ * Invalid configuration fails with ConfigurationError, while defects retain their Cause
  * @example
  * ```ts
  * import { Effect } from "effect"
@@ -3505,14 +3943,15 @@ export function createWebhookClient(
     })
 }
 
-/** Process-local outgoing bot presence and explicitly selected inbound member-presence intent.
- * Outgoing status updates fan out to every live locally owned shard and are spaced by at least four seconds per shard. Member selections are separate bounded Op14 requests.
- * No provider acknowledgement or recipient-delivery guarantee is available. The SDK performs no remote membership lookup or self filtering; Fluxer owns access and filtering
+/** Set the bot's status or choose guild members whose presence updates you want to receive.
+ * The client retains these requests in memory, not across process restarts.
+ * Outgoing status updates send to every live locally owned shard and are spaced by at least four seconds per shard. Member selections are separate bounded gateway presence requests.
+ * No provider acknowledgement or recipient-delivery guarantee is available. The SDK performs no remote membership lookup or self filtering. Fluxer owns access and filtering
  */
 export interface Presence {
-    /** Lazily validate and freeze the latest requested status/custom status, including before connect.
-     * Omitted customStatus preserves this client's previous request; null clears it, and expired custom statuses are not restored.
-     * Success means local acceptance and scheduled per-shard fanout, not an atomic provider acknowledgement across shards. Shutdown releases the intent and pending timer
+    /** Validate and freeze the latest requested status/custom status, including before connect.
+     * Omitted customStatus preserves this client's previous request. Null clears it, and expired custom statuses are not restored.
+     * Success means local acceptance and scheduled updates to each shard, not an atomic provider acknowledgement across shards. Shutdown releases the intent and pending timer
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -3526,17 +3965,18 @@ export interface Presence {
      */
     set(input: PresenceInput): Effect.Effect<void, PresenceFailure>
     /**
-     * Lazily validate, copy and retain this guild's selected member IDs when run. Pass `[]` to clear its selection.
-     * The SDK neither fetches members nor subscribes all guild members. Select accessible non-self members deliberately; Fluxer remains authoritative for access and filtering
+     * Validate, copy and retain this guild's selected member IDs when run. Pass `[]` to clear its selection.
+     * The SDK neither fetches members nor subscribes all guild members. Select accessible non-self members deliberately. Fluxer remains authoritative for access and filtering
      *
      * The guild must route to a shard assigned to this client. An unassigned guild fails PresenceError input instead of retaining an unsent selection
      *
-     * Input accepts at most 1,000 distinct decimal IDs, but the full UTF-8 Op14 frame must be at most 4,096 bytes, so long IDs lower the effective per-guild maximum.
+     * Input accepts at most 1,000 distinct decimal IDs, but the full UTF-8 gateway presence-request frame must be at most 4,096 bytes, so long IDs lower the effective per-guild maximum.
      * This client retains selections for at most 100 guilds and 10,000 IDs. A cleared selection that was already sent retains one bounded session slot until a fresh identify or a confirmed leave, because a local socket write has no provider acknowledgement. Clearing an unsent selection releases its slot immediately
      *
-     * After READY or RESUMED, the latest selection or clear is coalesced and attempted at most once per 125 ms. Calling setMembers with the same list deliberately requests a caller-controlled refresh; matching guild creation also reattempts the latest selection or a previously sent clear. This neither establishes that Fluxer applied it nor that `on("presenceUpdate")` will deliver anything.
-     * A subscription can yield an initial visible state or later transitions; recovery gaps can miss both. Presence is never cached or looked up.
-     * Loss of shared channel visibility can drop provider subscriptions; resend the set after access returns
+     * After READY or RESUMED, the latest selection or clear is coalesced and attempted at most once per 125 ms. Calling setMembers with the same list deliberately requests a caller-controlled refresh. Matching guild creation also reattempts the latest selection or a previously sent clear. This neither establishes that Fluxer applied it nor that `on("presenceUpdate")` will deliver anything
+     *
+     * A subscription can yield an initial visible state or later transitions. Recovery gaps can miss both. Presence is never cached or looked up.
+     * Loss of shared channel visibility can drop provider subscriptions. Resend the set after access returns
      *
      * Listener scope closure does not clear the selection. Clear explicitly or shut down the client to release its local intent
      *
@@ -3559,11 +3999,12 @@ export interface Presence {
     setMembers(guildId: string, memberIds: readonly string[]): Effect.Effect<void, PresenceFailure>
 }
 
-/** Authenticated current-bot application read through GET `/oauth2/applications/@me`, independent of gateway readiness.
- * Effects are lazy and repeatable in the caller context with the shared 30-second total deadline and at most two transient read retries.
- * Returns a frozen no-cache allowlist only. Owner identity, redirect URIs, verification keys, client secrets, and nested bot fields are never exposed.
- * Fluxer remains authoritative for application visibility and installability; this read neither manages an application nor opens an authorization page.
- * Input, HTTP, and malformed-response failures use BotApplicationOperationError; closure uses ClientClosedError; interruption and defects remain in the native cause
+/** Read the application associated with this bot token through GET `/oauth2/applications/@me`.
+ * No gateway connection is required.
+ * Effects are executed on demand and repeatable using your program's services with the shared 30-second total deadline and at most two transient read retries.
+ * Returns a frozen set of documented application fields, without caching. Owner identity, redirect URIs, verification keys, client secrets, and nested bot fields are never exposed.
+ * Fluxer remains authoritative for application visibility and installability. This read neither manages an application nor opens an authorization page.
+ * Input, HTTP, and malformed-response failures use BotApplicationOperationError. Closure uses ClientClosedError. Interruption and defects remain in the Cause
  *
  * @example
  * ```ts
@@ -3576,28 +4017,29 @@ export interface Presence {
  * ```
  */
 export interface CurrentBotApplication {
-    /** Lazily fetch this token's frozen application allowlist remotely, without cache writes, gateway events, owner lookup, or hidden follow-up requests */
+    /** Fetch this token's frozen documented application fields remotely, without cache writes, gateway events, owner lookup, or hidden follow-up requests */
     fetchCurrent(
         options?: BotApplicationOperationOptions,
     ): Effect.Effect<BotApplication, BotApplicationOperationFailure>
 }
 
-/** Lazy Effect operations with shared 30-second default deadlines and bounded read retries.
+/** Read public account information or a privacy-filtered profile.
+ * Methods return Effects with shared 30-second default deadlines and at most two eligible transient read retries.
  * Writes retry only confirmed rate-limit rejection, never an unknown outcome. No gateway connection is required.
- * Interruptions remain in the Effect cause and defects die
+ * Cancellation and unexpected faults remain in Cause rather than becoming UserOperationError
  */
 export interface Users {
-    /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not observation age. May miss or be stale; closed clients fail */
+    /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not snapshot age. May miss or be stale. Closed clients fail */
     get(id: string): Effect.Effect<User | undefined, UserOperationFailure>
-    /** Fetch a public account snapshot remotely by decimal ID; unknown IDs fail with notFound */
+    /** Fetch a public account snapshot remotely by decimal ID. Unknown IDs fail with notFound */
     fetch(id: string, options?: UserOperationOptions): Effect.Effect<User, UserOperationFailure>
-    /** Lazily fetch one frozen privacy-filtered profile by decimal user ID, optionally in an explicit guild context.
-     * Each execution issues a separate read, without gateway readiness, hidden hydration or account/profile cache effects.
-     * Returns allowlisted account identity and profile fields. isLimited reports Fluxer's privacy restriction, not missing membership.
+    /** Fetch one frozen privacy-filtered profile by decimal user ID, optionally in an explicit guild context.
+     * Each execution issues a separate read, without gateway readiness, automatic related-resource reads or account or profile cache changes.
+     * Returns only the documented account identity and profile fields. `isLimited` reports Fluxer's privacy restriction, not missing membership.
      * A null guildProfile means no contextual profile was supplied, not proof that the account is outside the guild.
      * Uses Users' shared deadline and bounded read retries. Fluxer may clear expired premium state while serving this GET.
      * Invalid IDs/query, denied access and malformed responses fail with UserOperationError operation users.fetchProfile.
-     * Closing/Closed fail with ClientClosedError. Interruption awaits cleanup; defects and interruption retain native causes
+     * Closing/Closed fail with ClientClosedError. Interruption awaits cleanup. Defects and interruption retain Cause
      * @example
      * ```ts
      * import type { Client } from "@neontechspace/fluxerly/effect"
@@ -3615,14 +4057,18 @@ export interface Users {
     fetchSelf(options?: UserOperationOptions): Effect.Effect<User, UserOperationFailure>
 }
 
-/** Lazy Effect operations with shared 30-second default deadlines and bounded read retries.
+/** Open private conversations, send messages or manage existing groups.
+ * Methods return Effects with shared 30-second default deadlines and at most two eligible transient read retries.
  * Writes retry only confirmed rate-limit rejection, never an unknown outcome. No gateway connection is required.
- * Interruptions remain in the Effect cause and defects die
+ * Cancellation and unexpected faults remain in Cause rather than becoming UserOperationError
  */
-export interface DirectMessages {
-    /** Open/reopen a DM and send using one total deadline, with mentions disabled by default and files snapshotted before opening.
+export interface DirectMessages<M extends MessageCore = Message> {
+    /** Open or reopen a DM and send using one total deadline, with mentions disabled by default.
+     * Each execution prepares the message metadata and copies data byte inputs before opening the conversation.
+     * File and stream sources are captured, not copied. Their readers are acquired later when uploads start, after any presigned planning.
+     * Sources follow messages.send's size, upload-budget and reader-cleanup rules. An inline multipart 429 does not replay file or stream sources.
      * MessageError(notSent) does not mean opening was undone. Unknown sends are never repeated automatically.
-     * No reply reference is accepted here; use messages.reply after obtaining a channel/message reference
+     * No reply reference is accepted here. Use messages.reply after obtaining a channel/message reference
      * @example
      * ```ts
      * import { Effect } from "effect"
@@ -3633,8 +4079,8 @@ export interface DirectMessages {
      * })
      * ```
      */
-    send(userId: string, input: ReplyInput, options?: SendOptions): Effect.Effect<Message, SendError>
-    /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not observation age. May miss or be stale; closed clients fail */
+    send(userId: string, input: ReplyInput, options?: SendOptions): Effect.Effect<M, SendError>
+    /** Local optional-cache lookup by decimal ID, without a request. A hit promotes recency but not snapshot age. May miss or be stale. Closed clients fail */
     get(id: string): Effect.Effect<DirectMessageChannel | undefined, UserOperationFailure>
     /** Open or reopen a one-to-one conversation. Privacy checks may prevent delivery even after opening succeeds */
     open(userId: string, options?: UserOperationOptions): Effect.Effect<DirectMessageChannel, UserOperationFailure>
@@ -3642,23 +4088,23 @@ export interface DirectMessages {
     fetch(id: string, options?: UserOperationOptions): Effect.Effect<DirectMessageChannel, UserOperationFailure>
     /** Read open one-to-one and group conversations remotely, excluding personal notes. This is not an atomic snapshot or a complete message history */
     fetchAll(options?: UserOperationOptions): Effect.Effect<readonly DirectMessageChannel[], UserOperationFailure>
-    /** Lazily fetch the latest message for 1–100 explicitly selected distinct DM/group-DM IDs through Fluxer's batch endpoint.
-     * POST is read-shaped but is not retried after a dispatched uncertain failure. It does not enumerate conversations or hydrate any cache.
+    /** Fetch the latest message for 1–100 explicitly selected distinct DM/group-DM IDs through Fluxer's batch endpoint.
+     * POST is read-shaped but is not retried after a dispatched uncertain failure. It does not enumerate conversations or populate any cache.
      * Returned null is ambiguous. omittedChannelIds preserves requested IDs Fluxer omitted, rather than treating omission as null, an empty channel or access denial
      */
     fetchLatestMessages(
         channelIds: readonly string[],
         options?: UserOperationOptions,
-    ): Effect.Effect<DirectMessageLatestMessages, UserOperationFailure>
-    /** Edit settings of an existing group. A null name clears it; omission leaves it unchanged. Fluxer enforces member/owner permissions; failure does not guarantee rollback */
+    ): Effect.Effect<DirectMessageLatestMessages<M>, UserOperationFailure>
+    /** Edit settings of an existing group. A null name clears it. Omission leaves it unchanged. Fluxer enforces member/owner permissions. Failure does not guarantee rollback */
     editGroup(
         id: string,
         input: DirectMessageGroupEdit,
         options?: UserOperationOptions,
     ): Effect.Effect<DirectMessageChannel, UserOperationFailure>
-    /** Close a DM for this bot or leave a group. Does not erase another recipient's conversation; owner departure may transfer ownership */
+    /** Close a DM for this bot or leave a group. Does not erase another recipient's conversation. Owner departure may transfer ownership */
     close(id: string, options?: UserOperationOptions): Effect.Effect<void, UserOperationFailure>
-    /** Remove a group recipient as owner, or remove self. Does not request deletion of that user's messages; a last-recipient departure deletes the group */
+    /** Remove a group recipient as owner, or remove self. Does not request deletion of that user's messages. A last-recipient departure deletes the group */
     removeRecipient(
         id: string,
         userId: string,
@@ -3667,22 +4113,33 @@ export interface DirectMessages {
 }
 
 /**
- * Create a Disconnected client when this Effect executes, without networking or background activity
+ * Create a bot client from your token when this Effect runs
  *
- * Validate configuration locally without authenticating the token
+ * Use `Effect.scoped` to keep the client open while your bot works and shut it down when the scope closes.
+ * The client starts disconnected. Call `connect` or `run` to receive gateway events
  *
- * Omit `instance` for hosted Fluxer, or select a self-hosted root whose unauthenticated well-known document supplies REST, gateway and projection endpoints lazily.
- * HTTPS and WSS are required unless that explicit instance sets `allowInsecure: true` for a local or self-hosted HTTP/WS deployment
+ * @remarks
+ * **Client lifetime**
  *
- * Cache settings are copied and validated here without invoking retention policies or reporters.
- * Unknown cache or message-cache option keys fail validation. Caching is disabled by default.
- * Connection settings default to a 30,000 ms overall startup budget and three total attempts per assigned shard
+ * Calling `createClient` only describes the work. Each execution creates a separate client in the caller's scope and validates configuration locally, without authenticating the token
  *
- * Each execution creates a separate client in the caller's owning scope.
- * Cache reporters capture this creation context, including their required services.
- * Closing that scope permanently shuts down the client and releases its credential reference
+ * Creation starts no networking or background activity. HTTP operations work without `connect`.
+ * Closing the scope permanently shuts down the client and releases its credential reference.
+ * Cache-error callbacks capture the Effect services available when creation executes
  *
- * A sharded plan fixes this client's local IDs for its lifetime. Shard zero receives direct-message gateway traffic, and REST/cache budgets remain client-wide
+ * **Instance and caching**
+ *
+ * Omit `instance` for hosted Fluxer. For a self-hosted instance, pass its root; the unauthenticated well-known document supplies HTTP, gateway, image and application addresses when needed.
+ * HTTPS and WSS are required unless that explicit instance sets `allowInsecure: true` for HTTP and WS
+ *
+ * Caching is disabled by default. Cache settings are copied and validated without invoking retention policies or reporters.
+ * Unknown cache or message-cache option keys fail validation
+ *
+ * **Connection and sharding**
+ *
+ * Connection settings default to a 30,000 ms overall startup budget and three total attempts per assigned shard.
+ * A sharding plan fixes this client's local IDs for its lifetime. Shard zero receives direct-message gateway traffic.
+ * REST and cache budgets apply across the whole client, not separately to each shard
  *
  * @example
  * ```ts
@@ -3699,15 +4156,16 @@ export interface DirectMessages {
  * ```
  *
  * @returns A scoped, lazy creation Effect with ConfigurationError for invalid input.
- * Unexpected creation defects retain their native cause
+ * Unexpected creation defects retain their Cause
  */
-export function createClient<E = never, R = never>(
-    options: ClientOptions<E, R>,
-): Effect.Effect<Client, ConfigurationError, Scope.Scope | R> {
+export function createClient<E = never, R = never, const F extends MessageFields | undefined = undefined>(
+    options: ClientOptions<E, R, F>,
+): Effect.Effect<Client<SelectedMessage<F>>, ConfigurationError, Scope.Scope | R> {
+    type M = SelectedMessage<F>
     return Effect.gen(function* () {
         // One client-owned scope lets shutdown mark Closing before interrupting its worker
         const scope = Scope.makeUnsafe()
-        const owner = yield* makeClient(options, scope, true)
+        const owner = yield* makeClient<F>(options, scope, true)
         yield* Effect.addFinalizer((exit) => owner.shutdown().pipe(Effect.ensuring(Scope.close(scope, exit))))
         let instance: ResolvedInstance | undefined
         return Object.freeze({
@@ -3751,7 +4209,11 @@ export function createClient<E = never, R = never>(
                 fetchAll: (options?: UserOperationOptions) =>
                     owner.user("directMessages.fetchAll", () => directMessageList(), options),
                 fetchLatestMessages: (ids: readonly string[], options?: UserOperationOptions) =>
-                    owner.user("directMessages.fetchLatestMessages", () => directMessageLatestMessages(ids), options),
+                    owner.user(
+                        "directMessages.fetchLatestMessages",
+                        () => directMessageLatestMessages(ids, owner.decodeMessage),
+                        options,
+                    ),
                 editGroup: (id: string, input: DirectMessageGroupEdit, options?: UserOperationOptions) =>
                     owner.user("directMessages.editGroup", () => directMessageEdit(id, input), options),
                 close: (id: string, options?: UserOperationOptions) =>
@@ -4036,7 +4498,7 @@ export function createClient<E = never, R = never>(
                     emoji: ReactionEmojiInput,
                     options?: MessageOperationOptions,
                 ) => owner.reaction("removeReaction", target, emoji, options),
-                collect: <E = never, R = never>(channelId: string, options?: CollectorOptions<E, R>) =>
+                collect: <E = never, R = never>(channelId: string, options?: CollectorOptions<E, R, M>) =>
                     Effect.uninterruptible(
                         Effect.gen(function* () {
                             const callerScope = yield* Effect.scope
@@ -4096,21 +4558,17 @@ export function createClient<E = never, R = never>(
                     options?: MessageOperationOptions,
                 ) => owner.keepTyping(channelId, task, options),
                 reply: (target: MessageReference, input: ReplyInput, options?: SendOptions) =>
-                    Effect.suspend(() => {
-                        const data = replyInput(target, input)
-                        return data instanceof MessageError
-                            ? Effect.fail(data)
-                            : owner.send(target.channelId, data, options)
-                    }),
+                    owner.reply(target, input, options),
                 fetch: (target: MessageReference, options?: MessageOperationOptions) => owner.fetch(target, options),
                 fetchHistory: (channelId: string, query?: MessageHistoryQuery, options?: MessageOperationOptions) =>
                     owner.fetchHistory(channelId, query, options),
                 previewCleanup: (
                     channelId: string,
-                    selection: MessageCleanupSelection,
+                    selection: MessageCleanupSelection<M>,
                     options?: MessageOperationOptions,
                 ) => previewCleanup(owner, channelId, selection, options),
-                cleanup: (plan: MessageCleanupPlan, options?: MessageCleanupOptions) => cleanup(owner, plan, options),
+                cleanup: (plan: MessageCleanupPlan<M>, options?: MessageCleanupOptions) =>
+                    cleanup(owner, plan, options),
                 edit: (target: MessageReference, input: EditMessageInput, options?: MessageOperationOptions) =>
                     owner.edit(target, input, options),
                 delete: (target: MessageReference, options?: MessageOperationOptions) => owner.delete(target, options),
@@ -4123,7 +4581,7 @@ export function createClient<E = never, R = never>(
             }),
             on: <E, R, E2 = never, R2 = never, K extends EventName = "messageCreate">(
                 event: K,
-                handler: (message: EventMap[K]) => Effect.Effect<unknown, E, R>,
+                handler: (message: EventMap<M>[K]) => Effect.Effect<unknown, E, R>,
                 options?: EventHandlerOptions<E2, R2>,
             ) =>
                 Effect.gen(function* () {
@@ -4133,7 +4591,7 @@ export function createClient<E = never, R = never>(
                 }),
             events: <K extends EventName>(event: K, options?: EventBufferOptions) =>
                 owner.events.stream(event, options),
-            waitFor: <K extends EventName>(event: K, options?: EventWaitOptions<K>) =>
+            waitFor: <K extends EventName>(event: K, options?: EventWaitOptions<K, M>) =>
                 waitForEvent(owner.events, event, options),
             diagnostics: () => owner.diagnostics(),
             get state() {
@@ -4161,7 +4619,7 @@ function nativeSubscription(source: Pick<EventSource, "stop" | "closed">): Subsc
     })
 }
 
-function nativeCollector(source: MessageCollector): Collector {
+function nativeCollector<M extends MessageCore>(source: MessageCollector<M>): Collector<M> {
     return Object.freeze({
         stop: () => Effect.sync(() => source.stop()),
         waitForClose: () => Deferred.await(source.closed),

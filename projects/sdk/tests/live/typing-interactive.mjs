@@ -40,7 +40,7 @@ async function cleanup() {
     assert.equal(journal.kind, "interactive-typing")
     assert.equal(journal.guildId, guildId)
     assert.equal(journal.botId, botId)
-    await cleanupGuildChannelFixtures(api, journal)
+    await cleanupGuildChannelFixtures(api, journal, () => writeFileSync(journalPath, JSON.stringify(journal)))
     unlinkSync(journalPath)
     journal = undefined
     report("test_channel_removed")

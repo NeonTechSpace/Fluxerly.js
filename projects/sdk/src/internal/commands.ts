@@ -3,10 +3,13 @@ import type {
     CommandCooldownRequest,
     MemoryCooldownOptions,
     PrefixCommandDefinition,
+    PrefixCommandGroupDefinition,
+    PrefixCommandGroupMetadata,
     PrefixCommandMetadata,
     PrefixCommandParse,
     PrefixCommandParseInput,
     PrefixCommandRejection,
+    PrefixCommandRegistrationOptions,
     PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "#sdk/commands"
@@ -16,7 +19,7 @@ import {
     snapshotCommandArguments,
 } from "#sdk/internal/command-arguments"
 import { ConfigurationError } from "#sdk/errors"
-import type { Message } from "#sdk/messages"
+import type { Message, MessageCore } from "#sdk/messages"
 import { Effect } from "effect"
 
 const commandName = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
@@ -27,6 +30,7 @@ export interface PrefixCommandMatch<D extends PrefixCommandDefinition> {
     readonly definition: D
     readonly prefix: string
     readonly parse: PrefixCommandParse
+    readonly path?: readonly string[]
 }
 
 /** Prefix and frozen unmatched result retained only while an attached router dispatches one message */
@@ -36,19 +40,28 @@ export interface PrefixCommandUnmatchedMatch {
 }
 
 /** Shared immutable command lookup state. Entry-point adapters own callback and error boundaries */
-export class PrefixCommandRegistry<D extends PrefixCommandDefinition> {
+export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends MessageCore = Message> {
     readonly #definitions: ReadonlyMap<string, D>
     readonly #commands: readonly PrefixCommandMetadata[]
-    readonly #options: Readonly<PrefixCommandsOptions>
+    readonly #groups: readonly PrefixCommandGroupMetadata[]
+    readonly #groupLookup: ReadonlyMap<string, PrefixCommandGroupMetadata>
+    readonly #entries: readonly PrefixCommandMetadata[]
+    readonly #options: Readonly<PrefixCommandsOptions<M>>
 
     constructor(
-        options: PrefixCommandsOptions,
+        options: PrefixCommandsOptions<M>,
         definitions: ReadonlyMap<string, D> = new Map(),
         commands: readonly PrefixCommandMetadata[] = emptyCommandMetadata,
+        groups: readonly PrefixCommandGroupMetadata[] = Object.freeze([]),
+        groupLookup: ReadonlyMap<string, PrefixCommandGroupMetadata> = new Map(),
+        entries: readonly PrefixCommandMetadata[] = commands,
     ) {
         this.#options = copyOptions(options)
         this.#definitions = definitions
         this.#commands = commands
+        this.#groups = groups
+        this.#groupLookup = groupLookup
+        this.#entries = entries
     }
 
     /** Immutable registration-order help metadata with no callbacks or local storage references */
@@ -56,51 +69,136 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition> {
         return this.#commands
     }
 
-    /** Return a separate registry snapshot. Existing routers and subscriptions keep their previous definitions */
-    register(definition: D): PrefixCommandRegistry<D> {
-        validateDefinition(definition)
-        const stored = copyDefinition(definition)
-        const keys = [stored.name, ...(stored.aliases ?? [])].map((value) => this.normalize(value))
-        if (new Set(keys).size !== keys.length)
-            throw new ConfigurationError("aliases", "A command name and its aliases must be unique")
-        for (const key of keys)
-            if (this.#definitions.has(key))
-                throw new ConfigurationError("aliases", "A command name or alias is already registered")
+    get groups(): readonly PrefixCommandGroupMetadata[] {
+        return this.#groups
+    }
+
+    get entries(): readonly PrefixCommandMetadata[] {
+        return this.#entries
+    }
+
+    /** Retain an adapter-validated owned definition in a separate registry. Existing routers and subscriptions keep their previous definitions */
+    register(stored: D, options?: PrefixCommandRegistrationOptions): PrefixCommandRegistry<D, M> {
+        const parent = this.registrationParent(options)
+        const keys = this.registrationKeys(stored, parent)
         const definitions = new Map(this.#definitions)
         for (const key of keys) definitions.set(key, stored)
+        const metadata = commandMetadata(stored, parent)
         return new PrefixCommandRegistry(
             this.#options,
             definitions,
-            Object.freeze([...this.#commands, snapshotCommandIdentity(stored)]),
+            Object.freeze([...this.#commands, metadata]),
+            this.#groups,
+            this.#groupLookup,
+            Object.freeze([...this.#entries, metadata]),
         )
     }
 
-    resolve(message: Message): PrefixCommandMatch<D> | PrefixCommandUnmatchedMatch | undefined {
+    registerGroup(
+        value: PrefixCommandGroupDefinition,
+        options?: PrefixCommandRegistrationOptions,
+    ): PrefixCommandRegistry<D, M> {
+        validateCommandShape(value, ["name", "aliases", "description"])
+        const aliases = value.aliases
+        const description = value.description
+        const definition = snapshotCommandDefinition({
+            name: value.name,
+            ...(aliases === undefined ? {} : { aliases }),
+            ...(description === undefined ? {} : { description }),
+        })
+        const parent = this.registrationParent(options)
+        const keys = this.registrationKeys(definition, parent)
+        const metadata: PrefixCommandGroupMetadata = Object.freeze({
+            ...definition,
+            kind: "group",
+            path: Object.freeze([...parent, definition.name]),
+        })
+        const lookup = new Map(this.#groupLookup)
+        for (const key of keys) lookup.set(key, metadata)
+        return new PrefixCommandRegistry(
+            this.#options,
+            this.#definitions,
+            this.#commands,
+            Object.freeze([...this.#groups, metadata]),
+            lookup,
+            Object.freeze([...this.#entries, metadata]),
+        )
+    }
+
+    resolve(message: M): PrefixCommandMatch<D> | PrefixCommandUnmatchedMatch | undefined {
         if (this.#options.ignoreBots !== false && message.author.isBot) return undefined
         const prefix = this.matchPrefix(message)
         if (prefix === undefined) return undefined
-        const input: PrefixCommandParseInput = Object.freeze({
+        let source = message.content.slice(prefix.length)
+        let parent: readonly string[] = Object.freeze([])
+        for (;;) {
+            const suffix = source.trimStart()
+            const segment = /^(\S+)(?:\s+|$)/.exec(suffix)
+            const group = segment === null ? undefined : this.#groupLookup.get(this.lookupKey(parent, segment[1]!))
+            if (group === undefined) break
+            parent = group.path
+            source = suffix.slice(segment![0].length)
+            if (source.length === 0)
+                return Object.freeze({
+                    prefix,
+                    unmatched: Object.freeze({ _tag: "CommandMissingSubcommand", path: parent }),
+                })
+        }
+        const grouped = parent.length === 0 ? {} : { path: parent }
+        const input: PrefixCommandParseInput<M> = Object.freeze({
             message,
             prefix,
-            source: message.content.slice(prefix.length),
+            source,
+            ...grouped,
         })
         const parsed = this.#options.parse === undefined ? defaultParse(input) : this.#options.parse(input)
         if (parsed === undefined)
             return Object.freeze({
                 prefix,
-                unmatched: Object.freeze({ _tag: "CommandParserRejected" }),
+                unmatched: Object.freeze({ _tag: "CommandParserRejected", ...grouped }),
             })
         const parse = copyParse(parsed)
-        const definition = this.#definitions.get(this.normalize(parse.name))
+        const definition = this.#definitions.get(this.lookupKey(parent, parse.name))
         return definition === undefined
             ? Object.freeze({
                   prefix,
-                  unmatched: Object.freeze({ _tag: "CommandUnknownName", name: parse.name }),
+                  unmatched: Object.freeze({ _tag: "CommandUnknownName", name: parse.name, ...grouped }),
               })
-            : Object.freeze({ definition, prefix, parse })
+            : Object.freeze({
+                  definition,
+                  prefix,
+                  parse,
+                  ...(parent.length === 0 ? {} : { path: Object.freeze([...parent, definition.name]) }),
+              })
     }
 
-    private matchPrefix(message: Message): string | undefined {
+    private registrationParent(options: PrefixCommandRegistrationOptions | undefined): readonly string[] {
+        if (options === undefined) return Object.freeze([])
+        validateObjectShape(options, ["group"], "command", "Registration options")
+        const path = options.group === undefined ? Object.freeze([]) : copyCommandGroupPath(options.group, "command")
+        if (path.length > 0 && !this.#groups.some((group) => sameCommandPath(group.path, path)))
+            throw new ConfigurationError("command", "Registration requires an existing canonical parent group path")
+        return path
+    }
+
+    private registrationKeys(value: PrefixCommandDefinition, parent: readonly string[]): readonly string[] {
+        const keys = [value.name, ...(value.aliases ?? [])].map((name) => this.lookupKey(parent, name))
+        if (new Set(keys).size !== keys.length)
+            throw new ConfigurationError("aliases", "A name and its aliases must be unique")
+        for (const key of keys)
+            if (this.#definitions.has(key) || this.#groupLookup.has(key))
+                throw new ConfigurationError(
+                    "aliases",
+                    "A sibling command or group name or alias is already registered",
+                )
+        return keys
+    }
+
+    private lookupKey(parent: readonly string[], name: string): string {
+        return JSON.stringify([...parent, this.normalize(name)])
+    }
+
+    private matchPrefix(message: M): string | undefined {
         const resolved =
             typeof this.#options.prefix === "function" ? this.#options.prefix(message) : this.#options.prefix
         const prefixes = typeof resolved === "string" ? [resolved] : resolved
@@ -168,18 +266,27 @@ export function validateCommandCooldown(value: unknown): void {
         throw new ConfigurationError("cooldown", "cooldown key must be a function when supplied")
 }
 
-/** Validate and copy the command identity portion retained by an adapter snapshot */
-export function snapshotCommandIdentity(value: PrefixCommandDefinition): PrefixCommandMetadata {
-    validateDefinition(value)
+/** Validate and copy the shared definition fields once before an adapter adds its callback and cooldown references */
+export function snapshotCommandDefinition(value: PrefixCommandDefinition): PrefixCommandDefinition {
+    if (typeof value !== "object" || value === null)
+        throw new ConfigurationError("command", "A command must be an object")
+    if (!isCommandName(value.name))
+        throw new ConfigurationError(
+            "command",
+            "Command names must use ASCII letters, numbers, `_` or `-` and begin alphanumerically",
+        )
     const aliases = value.aliases === undefined ? undefined : copyCommandNames(value.aliases, "aliases")
+    if (value.description !== undefined && typeof value.description !== "string")
+        throw new ConfigurationError("command", "Command description must be a string when supplied")
+    if (value.usage !== undefined && typeof value.usage !== "string")
+        throw new ConfigurationError("command", "Command usage must be a string when supplied")
     const argumentsSchema = snapshotCommandArguments(value.arguments)
-    const argumentsMetadata = commandArgumentMetadata(argumentsSchema)
     return Object.freeze({
         name: value.name,
         ...(aliases === undefined ? {} : { aliases }),
         ...(value.description === undefined ? {} : { description: value.description }),
         ...(value.usage === undefined ? {} : { usage: value.usage }),
-        ...(argumentsMetadata === undefined ? {} : { arguments: argumentsMetadata }),
+        ...(argumentsSchema === undefined ? {} : { arguments: argumentsSchema }),
     })
 }
 
@@ -205,7 +312,11 @@ export function validateCooldownClaim(value: unknown): asserts value is CommandC
 }
 
 /** Validate and namespace a caller-selected cooldown key before a store sees it */
-export function cooldownRequest(commandName: string, key: unknown, durationMs: number): CommandCooldownRequest {
+export function cooldownRequest(
+    commandName: string | readonly string[],
+    key: unknown,
+    durationMs: number,
+): CommandCooldownRequest {
     if (typeof key !== "string" || key.length === 0)
         throw new ConfigurationError("cooldown", "Cooldown keys must be nonempty strings")
     return Object.freeze({ key: JSON.stringify([commandName, key]), durationMs })
@@ -240,9 +351,9 @@ export interface CommandDispatchAdapter<D extends PrefixCommandDefinition, C, X 
 }
 
 /** Dispatch one resolved command through the caller's Effect runtime without a queue, send or retry */
-export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R>(
-    registry: PrefixCommandRegistry<D>,
-    message: Message,
+export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R, M extends MessageCore>(
+    registry: PrefixCommandRegistry<D, M>,
+    message: M,
     adapter: CommandDispatchAdapter<D, C, X, E, R>,
 ): Effect.Effect<void, ConfigurationError | E, R> {
     const active = (): Effect.Effect<void> =>
@@ -311,7 +422,7 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R>(
     }) as Effect.Effect<void, ConfigurationError | E, R>
 }
 
-function copyOptions(value: PrefixCommandsOptions): Readonly<PrefixCommandsOptions> {
+function copyOptions<M extends MessageCore>(value: PrefixCommandsOptions<M>): Readonly<PrefixCommandsOptions<M>> {
     validateObjectShape(
         value,
         ["prefix", "parse", "ignoreBots", "caseSensitive", "onUnmatched"],
@@ -337,33 +448,35 @@ function copyOptions(value: PrefixCommandsOptions): Readonly<PrefixCommandsOptio
     })
 }
 
-function validateDefinition(value: PrefixCommandDefinition): void {
-    if (typeof value !== "object" || value === null)
-        throw new ConfigurationError("command", "A command must be an object")
-    if (!isCommandName(value.name))
-        throw new ConfigurationError(
-            "command",
-            "Command names must use ASCII letters, numbers, `_` or `-` and begin alphanumerically",
-        )
-    if (value.aliases !== undefined) copyCommandNames(value.aliases, "aliases")
-    if (value.description !== undefined && typeof value.description !== "string")
-        throw new ConfigurationError("command", "Command description must be a string when supplied")
-    if (value.usage !== undefined && typeof value.usage !== "string")
-        throw new ConfigurationError("command", "Command usage must be a string when supplied")
-    snapshotCommandArguments(value.arguments)
-}
-
-function copyDefinition<D extends PrefixCommandDefinition>(value: D): D {
-    const aliases = value.aliases === undefined ? undefined : copyCommandNames(value.aliases, "aliases")
-    const argumentsSchema = snapshotCommandArguments(value.arguments)
+/** Project only public metadata from an already validated owned registration snapshot */
+function commandMetadata(value: PrefixCommandDefinition, parent: readonly string[]): PrefixCommandMetadata {
+    const argumentsMetadata = commandArgumentMetadata(value.arguments)
     return Object.freeze({
-        ...value,
         name: value.name,
-        ...(aliases === undefined ? {} : { aliases }),
+        ...(parent.length === 0 ? {} : { path: Object.freeze([...parent, value.name]) }),
+        ...(value.aliases === undefined ? {} : { aliases: value.aliases }),
         ...(value.description === undefined ? {} : { description: value.description }),
         ...(value.usage === undefined ? {} : { usage: value.usage }),
-        ...(argumentsSchema === undefined ? {} : { arguments: argumentsSchema }),
-    }) as D
+        ...(argumentsMetadata === undefined ? {} : { arguments: argumentsMetadata }),
+    })
+}
+
+/** Validate a canonical group selector without retaining rejected caller values */
+export function copyCommandGroupPath(value: unknown, field: "command" | "help"): readonly string[] {
+    if (!Array.isArray(value)) throw new ConfigurationError(field, "group must be an array of canonical group names")
+    validateArrayShape(value, field)
+    const path: string[] = []
+    for (let index = 0; index < value.length; index += 1) {
+        const name = value[index]
+        if (!isCommandName(name)) throw new ConfigurationError(field, "group requires valid ASCII group names")
+        path.push(name)
+    }
+    return Object.freeze(path)
+}
+
+/** Exact canonical path comparison, independent of alias matching policy */
+export function sameCommandPath(left: readonly string[], right: readonly string[]): boolean {
+    return left.length === right.length && left.every((name, index) => name === right[index])
 }
 
 function copyParse(value: PrefixCommandParse): PrefixCommandParse {
@@ -374,7 +487,7 @@ function copyParse(value: PrefixCommandParse): PrefixCommandParse {
     return Object.freeze({ name: value.name, rawArgs: value.rawArgs, args: copyStringArray(value.args, "parser") })
 }
 
-function defaultParse(input: PrefixCommandParseInput): PrefixCommandParse | undefined {
+function defaultParse<M extends MessageCore>(input: PrefixCommandParseInput<M>): PrefixCommandParse | undefined {
     const source = input.source.trimStart()
     if (source.length === 0) return undefined
     const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(source)
@@ -431,7 +544,10 @@ function validateObjectShape(
             throw new ConfigurationError(field, `${label} contains an unsupported option`)
 }
 
-function validateArrayShape(value: readonly unknown[], field: "aliases" | "prefix" | "parser"): void {
+function validateArrayShape(
+    value: readonly unknown[],
+    field: "aliases" | "prefix" | "parser" | "command" | "help",
+): void {
     for (let index = 0; index < value.length; index += 1)
         if (!Object.hasOwn(value, index)) throw new ConfigurationError(field, `${field} cannot be sparse`)
     for (const key of Reflect.ownKeys(value)) {

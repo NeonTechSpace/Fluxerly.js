@@ -1,5 +1,7 @@
 import { once } from "node:events"
 import { createServer, type ServerResponse } from "node:http"
+import { setImmediate as turn } from "node:timers/promises"
+import { runInNewContext } from "node:vm"
 import { Clock, Effect, Exit, Logger, References, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
@@ -605,6 +607,116 @@ test("default policy failures are private, bounded and do not change successful 
     expect(cached(client, afterRelease)).toBeUndefined()
     await client.shutdown()
 })
+
+test.each(["default", "native"] as const)(
+    "%s cache policies contain rejected promises across realms and hostile properties without changing REST or events",
+    async (mode) => {
+        const server = await fixture()
+        const reports: unknown[] = []
+        const delivered: string[] = []
+        const rejections: unknown[] = []
+        const observe = (reason: unknown) => rejections.push(reason)
+        process.on("unhandledRejection", observe)
+        onTestFinished(() => {
+            process.off("unhandledRejection", observe)
+        })
+        let foreign = false
+        let hostile = false
+        const policy = () => {
+            const reason = new Error("private rejected policy")
+            const rejected = foreign
+                ? (runInNewContext("Promise.reject(reason)", { reason }) as Promise<never>)
+                : Promise.reject(reason)
+            if (hostile)
+                for (const key of ["then", "catch"])
+                    Object.defineProperty(rejected, key, {
+                        get() {
+                            throw new Error("private policy property")
+                        },
+                    })
+            return rejected as never
+        }
+        const scope = Scope.makeUnsafe()
+        const options = { token: "fixture-only-not-a-credential", cache: { messages: { maxAgeMs: policy } } }
+        const client =
+            mode === "default"
+                ? defaultApi({
+                      ...options,
+                      cache: {
+                          messages: {
+                              maxAgeMs: policy,
+                              onError: (report: unknown) => {
+                                  reports.push(report)
+                              },
+                          },
+                      },
+                  })
+                : await Effect.runPromise(
+                      createNative({
+                          ...options,
+                          cache: {
+                              messages: {
+                                  maxAgeMs: policy,
+                                  onError: (report) =>
+                                      Effect.sync(() => {
+                                          reports.push(report)
+                                      }),
+                              },
+                          },
+                      }).pipe(Scope.provide(scope)),
+                  )
+        onTestFinished(async () => {
+            if (mode === "native") {
+                await Effect.runPromise((client as NativeClient).shutdown())
+                await Effect.runPromise(Scope.close(scope, Exit.void))
+            }
+        })
+        if (mode === "default") {
+            value(
+                (client as Client).on("messageCreate", (message) => {
+                    delivered.push(message.id)
+                }),
+            )
+            value(await (client as Client).connect())
+        } else {
+            await Effect.runPromise(
+                (client as NativeClient)
+                    .on("messageCreate", (message) =>
+                        Effect.sync(() => {
+                            delivered.push(message.id)
+                        }),
+                    )
+                    .pipe(Scope.provide(scope)),
+            )
+            await Effect.runPromise((client as NativeClient).connect())
+        }
+        let id = 100
+        for (foreign of [false, true])
+            for (hostile of [false, true]) {
+                const reference = { id: String(id++), channelId: "20" }
+                const result =
+                    mode === "default"
+                        ? value(await (client as Client).messages.fetch(reference))
+                        : await Effect.runPromise((client as NativeClient).messages.fetch(reference))
+                expect(result.id).toBe(reference.id)
+                const retained =
+                    mode === "default"
+                        ? cached(client as Client, reference)
+                        : await Effect.runPromise((client as NativeClient).messages.get(reference))
+                expect(retained).toBeUndefined()
+                await vi.waitFor(() => expect(reports).toHaveLength((id - 100) * 2 - 1))
+                server.dispatch("MESSAGE_CREATE", wire(reference.id, "20"))
+                await vi.waitFor(() => {
+                    expect(delivered).toContain(reference.id)
+                    expect(reports).toHaveLength((id - 100) * 2)
+                })
+                await turn()
+                expect(rejections).toEqual([])
+            }
+        expect(reports).toEqual(Array.from({ length: 8 }, () => ({ reason: "invalidReturn" })))
+        expect((client as Client | NativeClient).state).toBe("Connected")
+    },
+)
 
 test("native reporter captures creation context, logs bounded overflow and is interrupted before shutdown returns", async () => {
     const server = await fixture()

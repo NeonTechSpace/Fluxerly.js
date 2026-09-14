@@ -167,6 +167,67 @@ test("preserves missing versus unknown assets and uses only known display-avatar
     ).toBeUndefined()
 })
 
+test("member asset helpers inspect only their selected public input fields", async () => {
+    const avatarMember = {
+        guildId,
+        userId,
+        avatar: "a_member_hash",
+        banner: "bad-banner",
+        get profileFlags(): never {
+            throw Error("Direct member assets must not read profile flags")
+        },
+    }
+    const bannerMember = {
+        guildId,
+        userId,
+        avatar: "bad-avatar",
+        banner: "a_member_banner",
+        get profileFlags(): never {
+            throw Error("Direct member assets must not read profile flags")
+        },
+    }
+    const avatarUrl = `https://fluxerusercontent.com/guilds/${guildId}/users/${userId}/avatars/a_member_hash.webp`
+    const bannerUrl = `https://fluxerusercontent.com/guilds/${guildId}/users/${userId}/banners/a_member_banner.webp`
+    expect(value(defaultApi.assets.memberAvatar(avatarMember))).toBe(avatarUrl)
+    expect(await Effect.runPromise(native.assets.memberAvatar(avatarMember))).toBe(avatarUrl)
+    expect(value(defaultApi.assets.memberBanner(bannerMember))).toBe(bannerUrl)
+    expect(await Effect.runPromise(native.assets.memberBanner(bannerMember))).toBe(bannerUrl)
+
+    const displayMember = { guildId, userId, avatar: "a_member_hash", banner: "bad-banner", profileFlags: 0 }
+    const user = { id: userId, avatar: null }
+    expect(value(defaultApi.assets.displayMemberAvatar(user, displayMember))).toBe(avatarUrl)
+    expect(await Effect.runPromise(native.assets.displayMemberAvatar(user, displayMember))).toBe(avatarUrl)
+    for (const selected of [undefined, null, "bad-hash"]) {
+        const avatar = {
+            guildId,
+            userId,
+            banner: "bad-banner",
+            ...(selected === undefined ? {} : { avatar: selected }),
+        }
+        const banner = {
+            guildId,
+            userId,
+            avatar: "bad-avatar",
+            ...(selected === undefined ? {} : { banner: selected }),
+        }
+        const avatarResult = defaultApi.assets.memberAvatar(avatar)
+        const bannerResult = defaultApi.assets.memberBanner(banner)
+        if (typeof selected === "string") {
+            expect(avatarResult._unsafeUnwrapErr()).toMatchObject({ reason: "hash" })
+            expect(bannerResult._unsafeUnwrapErr()).toMatchObject({ reason: "hash" })
+            await expect(nativeError(native.assets.memberAvatar(avatar))).resolves.toMatchObject({ reason: "hash" })
+            await expect(nativeError(native.assets.memberBanner(banner))).resolves.toMatchObject({ reason: "hash" })
+        } else {
+            expect(value(avatarResult)).toBe(selected)
+            expect(value(bannerResult)).toBe(selected)
+            expect(await Effect.runPromise(native.assets.memberAvatar(avatar))).toBe(selected)
+            expect(await Effect.runPromise(native.assets.memberBanner(banner))).toBe(selected)
+        }
+    }
+    expect(defaultApi.assets.memberAvatar(avatarMember, { format: defaultApi.AssetFormats.Png }).isErr()).toBe(true)
+    expect(defaultApi.assets.memberBanner(bannerMember, { format: defaultApi.AssetFormats.Png }).isErr()).toBe(true)
+})
+
 test("rejects invalid targets and unsafe animation requests through Result and Effect", async () => {
     const invalidId = defaultApi.assets.avatar({ id: "01", avatar: "avatar_hash" })
     expect(invalidId.isErr()).toBe(true)

@@ -1,137 +1,180 @@
 import type { OperationOptions } from "./client.js"
-import type { MessageOperationOptions, Message } from "./messages.js"
+import type { MessageOperationOptions, Message, MessageCore } from "./messages.js"
 import type { PaginationQuery } from "./pagination.js"
 
-/** Context required for bot message search. At least one decimal guild or channel ID is required and Fluxerly always uses Fluxer's current scope */
+/** Server or channel in which to search messages visible to the bot.
+ * Supply at least guildId or channelId, as decimal strings. You may supply both.
+ * Search always uses Fluxer's current scope, not a cross-account or historical visibility scope
+ */
 export type MessageSearchContext =
-    | { readonly guildId: string; readonly channelId?: string }
-    | { readonly guildId?: string; readonly channelId: string }
+    | {
+          /** Server ID defining the search context, as a decimal string */
+          readonly guildId: string
+          /** Optional channel context supplied alongside the server ID, as a decimal string */
+          readonly channelId?: string
+      }
+    | {
+          /** Optional server ID supplied with this channel context, as a decimal string */
+          readonly guildId?: string
+          /** Channel ID defining the search context, as a decimal string */
+          readonly channelId: string
+      }
 
-/** Indexed message-author classifications accepted by Fluxer */
+/** Author category used by Fluxer's message search: A user, bot or webhook sender */
 export type MessageSearchAuthorType = "user" | "bot" | "webhook"
 
-/** Indexed message-content classifications accepted by Fluxer */
+/** Kind of content to require or exclude in Fluxer's message search.
+ * snapshot identifies copied content in a forwarded message
+ */
 export type MessageSearchContentType =
     "image" | "sound" | "video" | "file" | "sticker" | "embed" | "link" | "poll" | "snapshot"
 
-/** Indexed rich-embed classifications accepted by Fluxer */
+/** Embed category to require or exclude in Fluxer's message search */
 export type MessageSearchEmbedType = "image" | "video" | "sound" | "article"
 
-/** One explicit indexed-message search page. This is not a history query, cache lookup or stable snapshot */
+/** Filters and paging settings for one messages.search request.
+ * Fluxer searches its index, so recent edits and deletions may not yet be reflected.
+ * This does not read message history or the local cache, and results do not populate the message cache.
+ * Omit a filter to leave that criterion unspecified. Fluxer combines and interprets the supplied search criteria.
+ * Unknown properties, invalid values and lists exceeding the documented limits are rejected locally.
+ * All ID filters use decimal strings. Text limits count UTF-16 code units, the units used by JavaScript string.length
+ */
 export interface MessageSearchQuery {
-    /** Results requested in this page, from 1 through 25. Defaults to 25 */
+    /** Maximum indexed messages requested, an integer from 1 through 25, default 25 */
     readonly limit?: number
-    /** One-based provider result page, from 1 through 400. Defaults to 1 and cannot be combined with cursor */
+    /** Numbered result page, an integer from 1 through 400 with 1 meaning the first page. Defaults to 1, cannot accompany cursor */
     readonly page?: number
-    /** Opaque cursor returned by an earlier search page. Do not derive, reorder or combine it with page */
+    /** Continuation value returned by an earlier page, copied as an array of strings.
+     * Pass it unchanged, without interpreting or reordering its entries. It cannot accompany page
+     */
     readonly cursor?: readonly string[]
-    /** Include messages at or below this decimal message ID */
+    /** Include message IDs no greater than this decimal ID, including the boundary */
     readonly maxId?: string
-    /** Include messages at or above this decimal message ID */
+    /** Include message IDs no smaller than this decimal ID, including the boundary */
     readonly minId?: string
-    /** Text query, from 1 through 1,024 UTF-16 code units */
+    /** Text for Fluxer to search, from 1 through 1,024 UTF-16 code units, without local trimming */
     readonly content?: string
-    /** Multiple text queries, at most 100 values of 1 through 1,024 UTF-16 code units each */
+    /** Multiple search texts, at most 100 strings, each from 1 through 1,024 UTF-16 code units */
     readonly contents?: readonly string[]
-    /** Exact contiguous phrases, at most 10 values of 1 through 1,024 UTF-16 code units each */
+    /** Contiguous phrases to match, at most 10 strings, each from 1 through 1,024 UTF-16 code units */
     readonly exactPhrases?: readonly string[]
-    /** Channel IDs to include, at most 500 */
+    /** Limit matches to these channel IDs, at most 500 decimal strings */
     readonly channelIds?: readonly string[]
-    /** Channel IDs to exclude, at most 500 */
+    /** Exclude matches from these channels, at most 500 decimal ID strings */
     readonly excludeChannelIds?: readonly string[]
-    /** Author classifications to include, at most 20 */
+    /** Author categories to include, at most 20 entries */
     readonly authorTypes?: readonly MessageSearchAuthorType[]
-    /** Author classifications to exclude, at most 20 */
+    /** Author categories to exclude, at most 20 entries */
     readonly excludeAuthorTypes?: readonly MessageSearchAuthorType[]
-    /** Author IDs to include, at most 100 */
+    /** Match messages from these author IDs, at most 100 decimal strings */
     readonly authorIds?: readonly string[]
-    /** Author IDs to exclude, at most 100 */
+    /** Exclude messages from these author IDs, at most 100 decimal strings */
     readonly excludeAuthorIds?: readonly string[]
-    /** Mentioned account IDs to require, at most 100 */
+    /** Match account mentions using these IDs, at most 100 decimal strings */
     readonly mentions?: readonly string[]
-    /** Mentioned account IDs to exclude, at most 100 */
+    /** Exclude matches mentioning these accounts, at most 100 decimal ID strings */
     readonly excludeMentions?: readonly string[]
-    /** Filter by @everyone/@here notification state */
+    /** Require or exclude messages that Fluxer's index marks as mentioning @everyone or @here */
     readonly mentionedEveryone?: boolean
-    /** Filter by pin state */
+    /** Require pinned messages with true, or unpinned messages with false, according to the index */
     readonly pinned?: boolean
-    /** Content classifications to require, at most 20 */
+    /** Content categories to require, at most 20 entries */
     readonly has?: readonly MessageSearchContentType[]
-    /** Content classifications to exclude, at most 20 */
+    /** Content categories to exclude, at most 20 entries */
     readonly excludeHas?: readonly MessageSearchContentType[]
-    /** Generated or supplied embed types to require, at most 20 */
+    /** Embed categories to require, at most 20 entries, including generated and explicitly supplied embeds */
     readonly embedTypes?: readonly MessageSearchEmbedType[]
-    /** Generated or supplied embed types to exclude, at most 20 */
+    /** Embed categories to exclude, at most 20 entries, including generated and explicitly supplied embeds */
     readonly excludeEmbedTypes?: readonly MessageSearchEmbedType[]
-    /** Embed providers to require, at most 50 values of 1 through 256 UTF-16 code units each */
+    /** Embed provider names to match, at most 50 strings of 1 through 256 UTF-16 code units each */
     readonly embedProviders?: readonly string[]
-    /** Embed providers to exclude, at most 50 values of 1 through 256 UTF-16 code units each */
+    /** Embed provider names to exclude, at most 50 strings of 1 through 256 UTF-16 code units each */
     readonly excludeEmbedProviders?: readonly string[]
-    /** Link hostnames to require, at most 100 values of 1 through 255 UTF-16 code units each */
+    /** Link hostnames to match, at most 100 strings of 1 through 255 UTF-16 code units each */
     readonly linkHostnames?: readonly string[]
-    /** Link hostnames to exclude, at most 100 values of 1 through 255 UTF-16 code units each */
+    /** Link hostnames to exclude, at most 100 strings of 1 through 255 UTF-16 code units each */
     readonly excludeLinkHostnames?: readonly string[]
-    /** Attachment filenames to require, at most 100 values of 1 through 1,024 UTF-16 code units each */
+    /** Attached file names to match, at most 100 strings of 1 through 1,024 UTF-16 code units each */
     readonly attachmentFilenames?: readonly string[]
-    /** Attachment filenames to exclude, at most 100 values of 1 through 1,024 UTF-16 code units each */
+    /** Attached file names to exclude, at most 100 strings of 1 through 1,024 UTF-16 code units each */
     readonly excludeAttachmentFilenames?: readonly string[]
-    /** Attachment extensions to require, at most 50 values of 1 through 32 UTF-16 code units each */
+    /** Attached file extensions to match, at most 50 strings of 1 through 32 UTF-16 code units each */
     readonly attachmentExtensions?: readonly string[]
-    /** Attachment extensions to exclude, at most 50 values of 1 through 32 UTF-16 code units each */
+    /** Attached file extensions to exclude, at most 50 strings of 1 through 32 UTF-16 code units each */
     readonly excludeAttachmentExtensions?: readonly string[]
-    /** Order by indexed timestamp or relevance. Defaults to timestamp */
+    /** Rank results by timestamp or relevance, default timestamp */
     readonly sortBy?: "timestamp" | "relevance"
-    /** Result direction. Defaults to descending */
+    /** Ascending or descending result order, default desc */
     readonly sortOrder?: "asc" | "desc"
-    /** Include results from channels Fluxer classifies as NSFW. Defaults to false */
+    /** Permit results from channels Fluxer marks NSFW. Defaults to false and does not bypass channel access checks */
     readonly includeNsfw?: boolean
 }
 
-/** Minimal frozen channel context returned beside indexed messages, never a hydrated channel or cache entry */
+/** Channel information supplied beside message search results.
+ * This frozen snapshot is not a complete channel, cached channel or permission check
+ */
 export interface MessageSearchChannel {
-    /** Decimal channel ID */
+    /** Channel ID as a decimal string */
     readonly id: string
-    /** Decimal guild ID when Fluxer includes one */
+    /** Owning server ID, when Fluxer supplied it */
     readonly guildId?: string
-    /** Channel name when Fluxer includes one */
+    /** Observed channel name, when supplied. Private channels may omit it */
     readonly name?: string
-    /** Numeric Fluxer channel type */
+    /** Fluxer's numeric channel type, including unrecognized future values */
     readonly type: number
 }
 
-/** Fluxer accepted a search request but is still building one or more indexes. Issue a later explicit page request to retry */
+/** Successful search response indicating that Fluxer is still preparing an index.
+ * No messages or result total are available yet. Retry later with another explicit search request.
+ * The SDK does not poll or retry indexing automatically
+ */
 export interface MessageSearchIndexingPage {
+    /** True distinguishes this response from a MessageSearchResultsPage */
     readonly indexing: true
 }
 
-/** Frozen indexed page. Its cursor is opaque and pages can change while the index updates */
-export interface MessageSearchResultsPage {
+/** Search results returned once Fluxer's index can answer the request.
+ * The page and its nested results are frozen. Later index updates can change later pages and totals.
+ * Check indexing before reading results, since search can instead return MessageSearchIndexingPage
+ */
+export interface MessageSearchResultsPage<M extends MessageCore = Message> {
+    /** False distinguishes this response from an index-preparation response */
     readonly indexing: false
-    /** Indexed message snapshots without cache admission or hydration */
-    readonly messages: readonly Message[]
-    /** Frozen minimal channel context returned by Fluxer, without recipient or permission data */
+    /** Indexed message snapshots using the client's messageFields selection, without extra fetches or cache writes */
+    readonly messages: readonly M[]
+    /** Channel context Fluxer supplied, without private recipient lists or permission data */
     readonly channels: readonly MessageSearchChannel[]
-    /** Indexed match count observed for this page, not a stable total */
+    /** Indexed match count observed with this response, not a stable count for a multi-page run */
     readonly total: number
-    /** Provider page capacity used for this response */
+    /** Page capacity Fluxer reported for this response, not necessarily the number of returned messages */
     readonly hitsPerPage: number
-    /** One-based provider page number. It may be ignored after an opaque cursor is supplied */
+    /** Page number reported by Fluxer, starting at 1. Cursor-based responses can report numbers beyond the numbered-request limit */
     readonly page: number
-    /** Opaque continuation cursor, omitted when Fluxer supplied no continuation */
+    /** Continuation strings to pass unchanged as query.cursor. Absence means Fluxer supplied no continuation */
     readonly cursor?: readonly string[]
 }
 
-/** One explicit outcome from Fluxer's indexed message search */
-export type MessageSearchPage = MessageSearchIndexingPage | MessageSearchResultsPage
+/** Successful outcome of one messages.search request.
+ * Branch on indexing before accessing result fields
+ */
+export type MessageSearchPage<M extends MessageCore = Message> = MessageSearchIndexingPage | MessageSearchResultsPage<M>
 
-/** Bounds for lazy indexed-message traversal. Each consumption starts at the first contextual page and follows only provider cursors */
+/** Limit how many messages and pages messages.iterateSearch can read.
+ * Each consumption starts at the first page for the given context and filters, then follows only Fluxer's continuation values.
+ * No background prefetch runs. An indexing response fails traversal with PaginationError reason indexing rather than polling
+ */
 export interface MessageSearchIterationLimits extends PaginationQuery {
-    /** Indexed messages requested per page, from 1 through 25 and defaulting to 25 */
+    /** Maximum messages per request, an integer from 1 through 25, default 25, reduced to the remaining maxItems allowance */
     readonly pageSize?: number
 }
 
-/** Per-call indexed-message search deadline */
+/** Deadline for one explicit search request.
+ * For iterateSearch, the deadline applies separately to each page request, not to the entire traversal
+ */
 export interface MessageSearchOptions extends MessageOperationOptions {}
 
-/** Default cancellation affects only this explicit page request or iterator pull */
+/** Search settings for the Promise and Result API, including AbortSignal cancellation.
+ * signal affects this explicit request or this consumption's iterator pulls, not other callers.
+ * The Effect entry point uses interruption instead
+ */
 export interface DefaultMessageSearchOptions extends MessageSearchOptions, OperationOptions {}

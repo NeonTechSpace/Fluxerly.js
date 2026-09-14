@@ -1,4 +1,4 @@
-import type { Message, MessageDeletion, MessageBulkDeletion } from "./messages.js"
+import type { Message, MessageCore, MessageDeletion, MessageBulkDeletion } from "./messages.js"
 import type { ChannelPinsUpdate } from "./pins.js"
 import type { Guild, GuildDeletion, MemberReference } from "./guilds.js"
 import type { GuildEmoji, GuildSticker } from "./expressions.js"
@@ -6,31 +6,33 @@ import type { MessageReaction, MessageReactionBatch, MessageReactionEmojiRemoval
 import type { InviteMetadata } from "./invites.js"
 import type { AuditLogEntry } from "./audit-logs.js"
 
-/** One webhook-set change notice with no webhook metadata or credential.
- * Fetch the current set when needed; this does not populate or invalidate an SDK cache
+/** Notice that the webhooks in a channel changed.
+ * No webhook details or token are included. Fetch the current set explicitly if needed.
+ * This notification does not write or invalidate an SDK cache
  */
 export interface WebhooksUpdate {
-    /** Owning guild ID */
+    /** Server owning the channel, as a decimal ID */
     readonly guildId: string
-    /** Channel whose webhook set changed */
+    /** Channel whose webhook collection changed */
     readonly channelId: string
 }
 
-/** One deleted invite notice, without a snapshot of its former settings.
- * The code grants access to its destination and must not be added to diagnostics or public logs
+/** Notice that an invite was deleted, without its former settings.
+ * Treat the code as access-granting data and keep it out of diagnostics and public logs
  */
 export interface InviteDeleteEvent {
-    /** Provider invite code, retained as the only stable deleted-invite identity */
+    /** Deleted invite's code, the stable identity supplied for this event */
     readonly code: string
-    /** Destination channel when Fluxer supplied one */
+    /** Invite destination channel ID, when supplied */
     readonly channelId?: string
-    /** Owning guild when this was a guild invite */
+    /** Invite destination server ID, when supplied */
     readonly guildId?: string
 }
 
-/** Frozen audit entry written in one guild, including all context supplied by Fluxer.
- * Reason, options, and changes are intentional domain data, not safe diagnostic content.
- * Gateway string metadata is projected into the same numeric/boolean option fields as audit-log reads
+/** Audit entry newly written in a server, using the same field names as audit-log requests.
+ * The entry and its nested data are frozen. Access requires Fluxer's VIEW_AUDIT_LOG permission.
+ * reason, options and changes can contain application or provider data, so do not treat them as safe diagnostics.
+ * Numeric and boolean option values are converted to the same types used by audit-log reads
  * @example
  * ```ts
  * import type { Client } from "@neontechspace/fluxerly"
@@ -40,27 +42,30 @@ export interface InviteDeleteEvent {
  * ```
  */
 export interface GuildAuditLogEntryCreate extends AuditLogEntry {
-    /** Guild that wrote this entry */
+    /** Server that recorded the entry */
     readonly guildId: string
-    /** Acting user ID supplied by the gateway */
+    /** Acting account ID supplied for this entry */
     readonly userId: string
-    /** Affected entity ID or invite code, null when Fluxer recorded no target */
+    /** Affected resource ID or invite code, or null when Fluxer recorded no target */
     readonly targetId: string | null
 }
 
-/** One live typing notice from Fluxer. It is not durable state and does not populate a cache or trigger a lookup */
+/** Notice that an account began typing, not a lasting indication that it is still typing.
+ * The SDK does not cache this notice or fetch the user or channel
+ */
 export interface TypingStart {
-    /** Channel where the user began typing */
+    /** Channel ID where typing began */
     readonly channelId: string
-    /** User who began typing */
+    /** Account ID that began typing */
     readonly userId: string
-    /** Provider Unix timestamp in whole seconds */
+    /** Fluxer's Unix timestamp in whole seconds, not milliseconds */
     readonly timestamp: number
-    /** Guild context when Fluxer supplied it. Its absence does not establish that the channel is not in a guild */
+    /** Owning server ID, when supplied. Absence alone does not prove that the channel is private */
     readonly guildId?: string
 }
 
-/** Full frozen custom-emoji collection observed through the gateway, without creator accounts or image data
+/** Custom emoji collection supplied in one server update, frozen in received order.
+ * No creator accounts or image contents are included. This is not an initial enumeration or an automatic cache refill
  * @example
  * ```ts
  * import type { Client } from "@neontechspace/fluxerly"
@@ -70,21 +75,24 @@ export interface TypingStart {
  * ```
  */
 export interface GuildEmojisUpdate {
-    /** Owning guild ID */
+    /** Server owning this emoji collection, as a decimal ID */
     readonly guildId: string
-    /** Provider collection in gateway order */
+    /** Emoji snapshots in Fluxer's received order */
     readonly items: readonly GuildEmoji[]
 }
 
-/** Full frozen custom-sticker collection observed through the gateway, without creator accounts or image data */
+/** Custom sticker collection supplied in one server update, frozen in received order.
+ * No creator accounts or image contents are included. This is not an initial enumeration or an automatic cache refill
+ */
 export interface GuildStickersUpdate {
-    /** Owning guild ID */
+    /** Server owning this sticker collection, as a decimal ID */
     readonly guildId: string
-    /** Provider collection in gateway order */
+    /** Sticker snapshots in Fluxer's received order */
     readonly items: readonly GuildSticker[]
 }
 
-/** A bounded guild event subscription
+/** Payload types for server availability, configuration and visibility events.
+ * A create event can mean an existing server became available, rather than a new server was created
  * @example
  * ```ts
  * import type { Client } from "@neontechspace/fluxerly"
@@ -95,21 +103,24 @@ export interface GuildStickersUpdate {
  * ```
  */
 export interface GuildLifecycleEvents {
-    /** A complete current guild snapshot became available and updates its enabled guild-cache observation without hydrating nested members, roles or channels */
+    /** Server data became available. Updates the enabled server cache, but does not fetch or retain nested members, roles or channels */
     readonly guildCreate: Guild
-    /** A complete current guild configuration snapshot, not an old/new pair or a partial patch */
+    /** Current server configuration, not previous-and-current values or a patch to merge */
     readonly guildUpdate: Guild
-    /** Guild visibility ended or became temporarily unavailable without an inferred deletion cause or membership result; enabled guild-resource and channel observations for this guild invalidate before delivery. Message-cache observations with this guild or unknown guild scope invalidate conservatively because the SDK has no channel-to-guild index */
+    /** Server visibility ended or became temporarily unavailable, without establishing deletion or the bot's membership outcome.
+     * Before delivery, enabled server-resource and channel caches invalidate this server's observations.
+     * Cached messages in this server or with unknown server scope also invalidate, since the SDK has no channel-to-server lookup index
+     */
     readonly guildDelete: GuildDeletion
 }
 
 /**
- * One presence observation from the gateway, without retained presence state or a user snapshot.
- * Connection gaps can miss changes. The SDK neither caches nor fetches presence, so treat this as a notification rather than current state.
- * Guild-scoped updates include `guildId`; valid account-scoped wire observations can omit it.
- * The hosted provider currently delivers bot presence through guild subscriptions, not friends or group DMs.
- * Registering `on("presenceUpdate")` or `events("presenceUpdate")` does not request guild-member subscriptions or establish delivery.
- * The provider currently sends online, idle, dnd and offline statuses, but this remains a string for forward compatibility
+ * Account presence reported by Fluxer at one point in time, not a cached or continuously updated status.
+ * Changes can be missed during connection gaps. The SDK does not fetch missing presence or account details.
+ * Server-scoped updates include guildId, while valid account-scoped observations can omit it.
+ * Listening for this event does not request server-member presence subscriptions or guarantee delivery.
+ * The hosted provider delivers bot presence through server subscriptions, not friends or group DMs.
+ * Common statuses are online, idle, dnd and offline. Other strings are retained if Fluxer adds statuses
  *
  * @example
  * ```ts
@@ -120,188 +131,258 @@ export interface GuildLifecycleEvents {
  * ```
  */
 export interface PresenceUpdate {
-    /** Guild whose visible member presence changed, when the provider supplied guild scope */
+    /** Server where the account's presence was observed, when supplied */
     readonly guildId?: string
-    /** User whose presence changed, without an automatic account lookup */
+    /** Account ID whose presence changed, without an account lookup */
     readonly userId: string
-    /** Provider status at the time of this observation, not a freshness guarantee */
+    /** Status Fluxer reported at event time, which can already be stale when read */
     readonly status: string
-    /** Whether the provider reports a mobile client */
+    /** Whether Fluxer reported a mobile client */
     readonly mobile: boolean
-    /** Whether the provider reports away-from-keyboard status */
+    /** Whether Fluxer reported the account as away from keyboard */
     readonly afk: boolean
 }
 
 /**
- * Visible online presences delivered together after a guild becomes available again.
- * Fluxer supplies the outer guild context, omits the recipient's own presence, and splits batches at 500 entries. The batch can include visible members outside this client's selected member IDs.
- * This is one frozen recovery observation, not a cache refill, subscription acknowledgement, or synthetic sequence of presenceUpdate events
+ * Visible online presences grouped into one event after a server becomes available again.
+ * Fluxer supplies server context for every entry, omits the recipient's own presence and splits batches at 500 entries.
+ * A batch can include visible members outside this client's selected member IDs.
+ * The frozen batch does not refill a cache, acknowledge subscriptions or emit individual presenceUpdate events
  */
 export interface PresenceUpdateBulk {
-    /** Guild context applied to every presence in this provider batch */
+    /** Server ID shared by every presence in the batch */
     readonly guildId: string
-    /** Frozen presence observations with the batch guild context */
+    /** Frozen presence observations, each carrying this batch's guildId */
     readonly presences: readonly PresenceUpdate[]
 }
 
 /**
- * One frozen non-media voice connection observed through a guild gateway session.
- * `channelId: null` is a disconnect observation. A server move can appear as a disconnect followed by a join under a new connection ID.
- * Fluxer filters observations by channel visibility. Connection gaps can miss transitions, and the SDK performs no lookup or retention
+ * One account's voice connection as observed in a server, without audio or video access.
+ * `channelId: null` reports a disconnect. Moving channels can produce a disconnect followed by a join with a new connectionId.
+ * Fluxer filters delivery by channel visibility, and connection gaps can miss changes.
+ * This frozen observation is not retained as a voice-state cache and does not trigger lookups
  */
 export interface VoiceState {
-    /** Guild that owns the voice channel */
+    /** Server owning this voice connection */
     readonly guildId: string
-    /** Current voice channel, or null when this connection disconnected */
+    /** Observed voice channel ID, or null for a disconnect */
     readonly channelId: string | null
-    /** Connected member's user ID */
+    /** Connected account's user ID */
     readonly userId: string
-    /** Provider connection identity, suitable for targeting one connection in a move or disconnect */
+    /** Fluxer's connection ID, usable to target one connection in a move or disconnect request */
     readonly connectionId: string
-    /** Gateway session identity when Fluxer supplied one */
+    /** Gateway session ID, when supplied by Fluxer */
     readonly sessionId?: string
-    /** Server-controlled mute flag */
+    /** Whether the server has muted this connection */
     readonly isMuted: boolean
-    /** Server-controlled deafen flag */
+    /** Whether the server has deafened this connection */
     readonly isDeafened: boolean
-    /** Participant-controlled mute flag */
+    /** Whether the participant has muted themselves */
     readonly isSelfMuted: boolean
-    /** Participant-controlled deafen flag */
+    /** Whether the participant has deafened themselves */
     readonly isSelfDeafened: boolean
-    /** Whether Fluxer reports this connection as mobile */
+    /** Whether Fluxer identifies this connection as mobile */
     readonly isMobile: boolean
-    /** Whether Fluxer currently suppresses this connection from speaking */
+    /** Whether Fluxer reports this connection as prevented from speaking */
     readonly isSuppressed: boolean
 }
 
 /**
- * Visibility-filtered voice states delivered inside one available `GUILD_CREATE` snapshot.
- * Register before connecting to observe startup snapshots. An empty `voiceStates` array means Fluxer supplied an empty initial collection; no event is emitted when the collection is absent.
- * This is neither a complete guild roster nor a retained cache, and later connection gaps can make it stale immediately
+ * Visible voice connections supplied when a server becomes available.
+ * Register before connecting if you need startup snapshots.
+ * An empty voiceStates array means Fluxer explicitly supplied no initial connections. No event is emitted when the collection is absent.
+ * The frozen collection is not a complete member roster or a voice-state cache, and can become stale immediately
  */
 export interface VoiceStateSnapshot {
-    /** Guild whose available snapshot supplied the collection */
+    /** Server whose availability data supplied these connections */
     readonly guildId: string
-    /** Frozen provider-order connection states, possibly empty */
+    /** Frozen voice connections in received order, including an explicitly supplied empty array */
     readonly voiceStates: readonly VoiceState[]
 }
 
-/** Implemented gateway events and their frozen payloads. No subscription history, cache reconstruction or REST-generated notifications */
-export interface EventMap extends GuildLifecycleEvents {
-    /** Complete public account update, never private account settings */
+/** Event names and payload types accepted by on, events and waitFor.
+ * Register listeners before triggering an action when you need to observe its event.
+ * Payloads are frozen observations received from Fluxer, not live objects or previously cached history.
+ * Requests do not generate synthetic events. Changes can be missed during disconnection and recovery.
+ * Bulk events remain one event instead of also delivering their individual entries.
+ * Message events use this client's messageFields selection. Known malformed received data still fails the connection even if excluded.
+ * Server and account cache handling, where documented below, occurs before event delivery
+ */
+export interface EventMap<M extends MessageCore = Message> extends GuildLifecycleEvents {
+    /** Current public account data, without private account settings.
+     * Updates the enabled account cache and clears the enabled private-conversation cache
+     */
     readonly userUpdate: import("./users.js").User
-    /** Private conversation became visible, not proof it was newly created */
+    /** A private conversation became visible to this bot, which does not prove it was just created.
+     * Updates its enabled private-conversation cache observation
+     */
     readonly directMessageCreate: import("./users.js").DirectMessageChannel
-    /** Complete private conversation update, not an old/new pair */
+    /** Current private conversation data, without previous values to compare. Updates its enabled private-conversation cache observation */
     readonly directMessageUpdate: import("./users.js").DirectMessageChannel
-    /** Visible online guild presences after availability recovery, delivered as one batch and never flattened */
+    /** Visible online presences delivered together after server recovery, without individual presenceUpdate events */
     readonly presenceUpdateBulk: PresenceUpdateBulk
-    /** One visibility-filtered initial connection collection from an available guild snapshot, including an explicit empty collection */
+    /** Visible initial voice connections when a server becomes available, including an explicitly supplied empty collection */
     readonly voiceStateSnapshot: VoiceStateSnapshot
-    /** One subsequent visible connection join, state change, move phase or disconnect; no initial reconstruction or cache update */
+    /** A visible voice connection joined, changed or disconnected. A move can produce multiple phases, and no voice-state cache is updated */
     readonly voiceStateUpdate: VoiceState
-    /** Private conversation closed, left or deleted for this bot, not proof of deletion for others */
-    readonly directMessageDelete: { readonly id: string }
-    /** Recipient added; invalidates private-channel cache without synthesizing a membership list */
+    /** A private conversation closed, was left, or was deleted for this bot. Other accounts may still have access.
+     * Clears the enabled private-conversation cache and evicts this channel's cached messages
+     */
+    readonly directMessageDelete: {
+        /** Private conversation channel ID as a decimal string */
+        readonly id: string
+    }
+    /** A private conversation gained a recipient. Clears the enabled private-conversation cache without reconstructing a recipient list */
     readonly directMessageRecipientAdd: import("./users.js").DirectMessageRecipientChange
-    /** Recipient removed; invalidates private-channel cache without claiming channel deletion */
+    /** A private conversation lost a recipient. Clears the enabled private-conversation cache without establishing conversation deletion */
     readonly directMessageRecipientRemove: import("./users.js").DirectMessageRecipientChange
-    /** Webhook set changed for one visible guild channel. No webhook metadata, token, cache write, or automatic refetch follows */
+    /** A visible server channel's webhook collection changed, without webhook details, tokens, cache writes or automatic requests */
     readonly webhooksUpdate: WebhooksUpdate
-    /** Complete frozen invite metadata. Its code and URL grant destination access, so keep this intentional result out of diagnostics and public logs */
+    /** Invite metadata supplied when an invite was created. Its code and URL grant access, so keep them out of diagnostics and public logs */
     readonly inviteCreate: InviteMetadata
-    /** Deleted invite identity and the optional destination context Fluxer still supplied. No local invite retention or deletion inference occurs */
+    /** A deleted invite's code and any destination IDs Fluxer still supplied, without reconstructing its old settings */
     readonly inviteDelete: InviteDeleteEvent
-    /** One frozen audit entry from a guild where the bot holds `VIEW_AUDIT_LOG`. `reason`, `options`, and `changes` are provider domain data, not diagnostic-safe content */
+    /** A newly recorded server audit entry, requiring VIEW_AUDIT_LOG. Its reason, options and changes are not safe diagnostic text */
     readonly guildAuditLogEntryCreate: GuildAuditLogEntryCreate
-    /** Full emoji collection projection, not an initial enumeration or cache hydration. Connection gaps can miss changes; fetch when current state matters. An enabled expression cache is invalidated before delivery */
+    /** Updated server emoji collection, not an initial list or cache refill.
+     * Invalidates the enabled expression cache before delivery. Fetch explicitly when current state matters after a connection gap
+     */
     readonly guildEmojisUpdate: GuildEmojisUpdate
-    /** Full sticker collection projection, not an initial enumeration or cache hydration. Connection gaps can miss changes; fetch when current state matters. An enabled expression cache is invalidated before delivery */
+    /** Updated server sticker collection, not an initial list or cache refill.
+     * Invalidates the enabled expression cache before delivery. Fetch explicitly when current state matters after a connection gap
+     */
     readonly guildStickersUpdate: GuildStickersUpdate
-    /** Ban recorded for these guild/user IDs, not a full ban or proof member removal has finished. Evicts the member cache entry */
+    /** A ban was recorded for these server and account IDs, without full ban details or proof that member removal finished.
+     * Evicts the enabled member cache entry
+     */
     readonly guildBanAdd: MemberReference
-    /** Explicit ban removal notice, not proof of rejoining. Database TTL expiry need not emit this event. Evicts the member cache entry */
+    /** An explicit ban removal, not proof of rejoining. A ban expiring automatically may not emit this event.
+     * Evicts the enabled member cache entry
+     */
     readonly guildBanRemove: MemberReference
-    /** Channel became visible, including newly created channels. Not proof of remote creation or an initial enumeration */
+    /** A server channel became visible, possibly after creation, without establishing its creation time or enumerating initial channels.
+     * Updates its enabled channel-cache observation
+     */
     readonly guildChannelCreate: import("./channels.js").GuildChannel
-    /** Frozen guild channel update, not an old/new pair. Current permissions may require an explicit fetch */
+    /** Current server channel data, without previous values. Fetch explicitly if a decision requires fresh permissions.
+     * Updates its enabled channel-cache observation, except a category update invalidates all channels cached for the server
+     */
     readonly guildChannelUpdate: import("./channels.js").GuildChannel
-    /** Channel was deleted or became invisible. Evicts cached channel messages without synthesizing message deletion events */
+    /** A server channel was deleted or became invisible. Evicts its cached messages, without generating message deletion events.
+     * Evicts its enabled channel-cache entry. A category deletion invalidates all channels cached for that server
+     */
     readonly guildChannelDelete: import("./channels.js").GuildChannel
-    /** One visibility-filtered batch without fan-out. Not a complete guild list or proof that permission copying has finished */
+    /** Visible server-channel updates grouped into one batch, without individual guildChannelUpdate events.
+     * This is not the complete channel list or proof that permission copying has finished.
+     * Invalidates the enabled channel cache for this server
+     */
     readonly guildChannelUpdateBulk: import("./channels.js").GuildChannelUpdateBulk
-    /** Frozen role creation observation, without an initial enumeration */
+    /** A server role creation observation, not an initial enumeration of roles. Updates the enabled role-cache observation */
     readonly guildRoleCreate: import("./guilds.js").GuildRole
-    /** Frozen role update, not an old/new pair */
+    /** Current role data, without previous values. Updates the enabled role-cache observation */
     readonly guildRoleUpdate: import("./guilds.js").GuildRole
-    /** One batch without fan-out to guildRoleUpdate; not a complete guild role list */
+    /** Role updates grouped into one batch, without individual guildRoleUpdate events or a complete role list.
+     * Updates the enabled role-cache observations for supplied roles
+     */
     readonly guildRoleUpdateBulk: import("./guilds.js").GuildRoleUpdateBulk
-    /** Role deletion notice, not a role snapshot or a guarantee of individual member-update events */
+    /** Deleted role's IDs, without its former settings or a guarantee that affected members each produce an update.
+     * Invalidates enabled role and member caches for the server
+     */
     readonly guildRoleDelete: import("./guilds.js").RoleReference
-    /** Frozen member joined observation. No initial member enumeration or complete guild view */
+    /** A member join observation, not an initial roster or complete server membership view. Updates the enabled member-cache observation */
     readonly guildMemberAdd: import("./guilds.js").GuildMember
-    /** Frozen member update. Delivery can be limited by guild size/session visibility; refetch when current state matters */
+    /** Current member data. Fluxer can limit delivery by server size and session visibility, so fetch when current state matters.
+     * Updates the enabled member-cache observation
+     */
     readonly guildMemberUpdate: import("./guilds.js").GuildMember
-    /** Membership ended; only IDs are available. No account lookup, cause inference or automatic cache */
+    /** Membership ended, with only server and account IDs supplied. No account lookup or removal-cause inference follows.
+     * Evicts the enabled member-cache entry
+     */
     readonly guildMemberRemove: import("./guilds.js").MemberReference
-    /** One delivered presence change, without cache retention, custom-status text, an account snapshot or an automatic guild-member subscription */
+    /** A delivered presence observation, without custom-status text, account data, retained state or automatic member subscriptions */
     readonly presenceUpdate: PresenceUpdate
-    /** Channel pin-list change notice. No target message ID or automatic fetch; its timestamp can stay unchanged after unpin */
+    /** A channel's pins changed, without identifying the message or fetching the list. The timestamp may stay unchanged after unpin */
     readonly channelPinsUpdate: ChannelPinsUpdate
-    /** Ephemeral typing notice. Delivery can be filtered by Fluxer and is not a presence snapshot, cache entry or member lookup */
+    /** A short-lived typing notice, subject to Fluxer's delivery filtering. It is not an account presence snapshot or cache entry */
     readonly typingStart: TypingStart
-    /** Newly created message with text, deeply frozen embeds and attachment metadata, never file bytes. Malformed known message data fails the connection as a protocol error */
-    readonly messageCreate: Message
-    /** Current message projection, not an old/new pair or partial patch. Non-text changes may repeat the same projected values */
-    readonly messageUpdate: Message
-    /** Single deletion with required message/channel IDs and only the optional context supplied by Fluxer */
+    /** Newly created message using this client's selected fields, with frozen nested metadata rather than downloaded file contents.
+     * Updates the enabled message-cache observation
+     */
+    readonly messageCreate: M
+    /** Message data supplied for an update, not previous-and-current values or a patch to merge.
+     * Optional metadata may be absent. A non-text change can deliver the same selected values again.
+     * Replaces the enabled message-cache observation rather than merging absent metadata from an older snapshot
+     */
+    readonly messageUpdate: M
+    /** One deleted message's channel and message IDs, plus only the optional context Fluxer supplied. Evicts its enabled message-cache entry */
     readonly messageDelete: MessageDeletion
-    /** One batch with channel and message IDs. Subscribe to both deletion types to observe both forms */
+    /** Deleted message IDs grouped by channel. Listen to this and messageDelete to observe both deletion forms.
+     * Evicts the listed enabled message-cache entries
+     */
     readonly messageDeleteBulk: MessageBulkDeletion
-    /** One user's reaction addition. The SDK does not synthesize this from add-many batches or REST success */
+    /** One user's reaction addition, not synthesized from reaction batches or successful addReaction requests */
     readonly messageReactionAdd: MessageReaction
-    /** One server-coalesced batch, without fan-out. Subscribe to both addition types to observe both forms */
+    /** Reaction additions grouped by Fluxer. Listen to this and messageReactionAdd to observe both addition forms */
     readonly messageReactionAddMany: MessageReactionBatch
-    /** One user's reaction removal, which may have been performed by a moderator */
+    /** One user's reaction was removed, possibly by a moderator rather than that user */
     readonly messageReactionRemove: MessageReaction
-    /** Every reaction on this message was cleared; no reactor list is provided */
+    /** All reactions on the target message were cleared, without a list of affected users */
     readonly messageReactionRemoveAll: ReactionTarget
-    /** Every reaction using one emoji was cleared; no reactor list is provided */
+    /** All reactions using one emoji were cleared from the target message, without a list of affected users */
     readonly messageReactionRemoveEmoji: MessageReactionEmojiRemoval
 }
 
-/** Names accepted by on, events and waitFor in both API styles */
+/** Event-name strings accepted by on, events and waitFor in both entry points */
 export type EventName = keyof EventMap
 
-/** Pending queue budgets for one live event subscription, message collector or reaction collector, not process memory limits */
+/** Bound the waiting queue for one event subscription or collector.
+ * Each registration owns its own queue. Filling it stops that registration, not unrelated subscriptions.
+ * These budgets measure pending payloads and received JSON bytes, not the total memory used by your application
+ */
 export interface EventBufferOptions {
-    /** Maximum queued event payloads, excluding active handlers. A bulk deletion or reaction batch counts once. Positive safe integer, default 256 */
+    /** Maximum waiting payloads, excluding active handlers. A bulk event counts once, positive safe integer, default 256 */
     readonly maxPendingMessages?: number
-    /** Maximum queued source-JSON bytes, including the full bulk payload. Positive safe integer, default 4,194,304 */
+    /** Maximum UTF-8 bytes of waiting received JSON, including full bulk payloads. Positive safe integer, default 4,194,304 */
     readonly maxPendingBytes?: number
 }
 
-/** Settings for one future event observation. Waiting creates no event history, cache read or gateway connection. Queue budgets apply only to values queued before this wait can take them */
-export interface EventWaitOptions<K extends EventName> extends EventBufferOptions {
-    /** Synchronously accept a projected event, potentially during gateway intake. Keep it short because cancellation and the deadline cannot preempt it. Throws, non-boolean results and thenables fail this wait without exposing the original value */
-    readonly filter?: (event: EventMap[K]) => boolean
-    /** Total listening lifetime in milliseconds from registration. Integer 1 through 2,147,483,647, default 30,000 */
+/** Settings for waitFor to receive one future event that passes an optional filter.
+ * Waiting does not connect the gateway, read cached history or reconstruct missed events.
+ * The queue budgets apply to events received before the wait can take them.
+ * Completion, timeout, cancellation and shutdown release the wait's subscription
+ */
+export interface EventWaitOptions<K extends EventName, M extends MessageCore = Message> extends EventBufferOptions {
+    /** Return true to complete with this event, false to keep waiting. Omit to accept the first event.
+     * Runs synchronously and can run while the gateway receives events. Keep it short, since deadlines cannot preempt blocking JavaScript.
+     * A throw or non-boolean return fails with EventWaitError reason filter, without exposing your original error.
+     * Do not return a Promise. Mistaken asynchronous work is neither awaited nor cancelled, and its rejection is discarded
+     */
+    readonly filter?: (event: EventMap<M>[K]) => boolean
+    /** Total milliseconds to wait from registration, an integer from 1 through 2,147,483,647, default 30,000.
+     * Expiry fails with EventWaitError reason timeout, rather than returning an empty event
+     */
     readonly timeoutMs?: number
 }
 
-/** Callback scheduling shared by default and native consumption */
+/** Queue limits and parallelism for one on callback registration.
+ * Callbacks are not retried. Callback failures are reported safely and do not stop later event delivery.
+ * Overflow stops the subscription, and closure waits for active callback cleanup
+ */
 export interface HandlerOptions extends EventBufferOptions {
-    /** Active invocations per registration. Defaults to 1, with receive-order starts but no concurrent completion order */
+    /** Maximum active callbacks, a positive safe integer, default 1.
+     * Starts follow receive order. Values above 1 allow callbacks to finish out of order
+     */
     readonly concurrency?: number
 }
 
-/** Safe diagnostic metadata. Intentionally excludes message bodies, credentials and original handler errors.
- * Inspect the original error inside a default callback's try/catch or a native handler's Effect.tapCause
- * before SDK isolation. SDK hooks do not provide a raw-exception logging bypass
+/** Safe notification that an event callback failed or its waiting queue overflowed.
+ * No message bodies, credentials or original callback errors are exposed.
+ * To inspect your original failure, catch it inside a default API callback or use Effect.tapCause inside a native handler.
+ * The SDK error hook does not provide access to the raw exception
  */
 export interface HandlerErrorReport {
-    /** Event whose subscription reported this failure */
+    /** Event name belonging to the affected registration */
     readonly event: EventName
-    /** Handler failures continue delivery. Overflow permanently stops this subscription */
+    /** handler means a callback failed and delivery continues, overflow means this subscription stopped permanently */
     readonly kind: "handler" | "overflow"
 }

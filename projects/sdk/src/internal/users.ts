@@ -7,7 +7,8 @@ import type {
     UserProfileFields,
     UserProfileQuery,
 } from "#sdk/users"
-import type { Message } from "#sdk/messages"
+import type { MessageCore } from "#sdk/messages"
+import type { MessageDecoder } from "./message-fields.js"
 import { decodeMessage, identifier, record } from "./message.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
@@ -255,7 +256,15 @@ export function directMessageList(): UserRequest<readonly DirectMessageChannel[]
 }
 
 /** Request latest messages only for explicit private-channel IDs, without cache admission or conversation enumeration */
-export function directMessageLatestMessages(ids: readonly string[]): UserValidationResult<DirectMessageLatestMessages> {
+export function directMessageLatestMessages(ids: readonly string[]): UserValidationResult<DirectMessageLatestMessages>
+export function directMessageLatestMessages<M extends MessageCore>(
+    ids: readonly string[],
+    decode: MessageDecoder<M>,
+): UserValidationResult<DirectMessageLatestMessages<M>>
+export function directMessageLatestMessages(
+    ids: readonly string[],
+    decode: MessageDecoder<MessageCore> = decodeMessage,
+): UserValidationResult<DirectMessageLatestMessages<MessageCore>> {
     if (!Array.isArray(ids)) return inputValidationFailure("channelIds", "type", "Channel IDs must be an array")
     if (ids.length === 0 || ids.length > 100)
         return inputValidationFailure("channelIds", "length", "Latest-message reads require 1 through 100 channel IDs")
@@ -275,13 +284,13 @@ export function directMessageLatestMessages(ids: readonly string[]): UserValidat
         noCache: true,
         decode: (value) => {
             if (!record(value) || Object.keys(value).some((id) => !channelIds.includes(id))) return undefined
-            const messages: Record<string, Message | null> = {}
+            const messages: Record<string, MessageCore | null> = {}
             for (const [id, item] of Object.entries(value)) {
                 if (item === null) {
                     messages[id] = null
                     continue
                 }
-                const message = decodeMessage(item)
+                const message = decode(item)
                 if (!message || message.channelId !== id) return undefined
                 messages[id] = message
             }

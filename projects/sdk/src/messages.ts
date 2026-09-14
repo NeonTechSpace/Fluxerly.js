@@ -2,17 +2,24 @@ import type { OperationOptions } from "./client.js"
 import type { Embed, EmbedInput } from "./embeds.js"
 import type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
 
-/** Identifies a message without retaining a client or requiring a fetched snapshot */
+/** Address a message using its channel ID and message ID.
+ * Pass this plain object to message operations without fetching the message first.
+ * It holds no client and makes no request by itself
+ */
 export interface MessageReference {
-    /** Decimal string ID of the message. Never convert snowflakes to JavaScript numbers */
+    /** Message ID as a decimal string. Keep it as a string to avoid losing integer precision */
     readonly id: string
-    /** Decimal string ID of the channel containing this message */
+    /** Channel ID as a decimal string, identifying where to send the operation */
     readonly channelId: string
 }
 
-/** Frozen message projection shared by REST responses and messageCreate/messageUpdate events, not a complete wire object.
- * Each observation is independent: omitted optional fields are unknown, and explicit nulls retain Fluxer's response state.
- * The SDK neither hydrates absent references/users nor updates a snapshot's reaction totals after delivery
+/** Message data returned by a request or delivered through messageCreate and messageUpdate.
+ * This object and its nested data are frozen snapshots, not a message with methods or a live view.
+ * Later edits, deletions and reaction changes do not update an existing object.
+ * An omitted optional field means Fluxer did not supply it, not that its value is false or empty.
+ * A null value preserves the explicit value Fluxer returned.
+ * References and mentioned accounts are included only as supplied, without extra fetches.
+ * Clients configured with messageFields return SelectedMessage instead of the complete Message shape
  * @example
  * ```ts
  * import type { Message } from "@neontechspace/fluxerly"
@@ -24,183 +31,250 @@ export interface MessageReference {
  * ```
  */
 export interface Message extends MessageReference {
-    /** Client nonce returned by Fluxer. Null is an explicit provider value, while omission means this observation supplied none */
+    /** Correlation nonce returned by Fluxer, null when explicitly reported, or absent when not supplied */
     readonly nonce?: string | null
-    /** Webhook ID when supplied by Fluxer. Missing/null wire values omit this field, without inferring identity from the author */
+    /** Webhook that sent this message, when Fluxer supplied its ID. A missing or null response value omits this field */
     readonly webhookId?: string
-    /** Pin status supplied by Fluxer. Omitted means unknown, not false. Snapshots do not update in place */
+    /** Pin status at observation time. Absence means unknown, not unpinned */
     readonly pinned?: boolean
-    /** ISO 8601 creation time when Fluxer supplied it. Omitted means this partial observation did not include a creation time */
+    /** Creation timestamp as an ISO 8601 string with a timezone, when supplied */
     readonly createdAt?: string
-    /** ISO 8601 time of the latest observed edit. Null means Fluxer explicitly reported no edit; omission means unknown */
+    /** Latest edit timestamp as an ISO 8601 string with a timezone. Null means no edit was reported, absence means unknown */
     readonly editedAt?: string | null
-    /** Provider message type as an integer. Unknown future values are retained; omission means this partial observation did not include it */
+    /** Fluxer's integer message type, when supplied. Values added by Fluxer in the future are retained */
     readonly type?: number
-    /** Provider message flags as an integer. Unknown future bits are retained; omission does not mean no flags */
+    /** Fluxer's integer flag set, when supplied. Unrecognized bits are retained, and absence does not mean zero */
     readonly flags?: number
-    /** Guild containing this message when Fluxer supplied one. Private or partial observations omit it; no guild lookup occurs */
+    /** Server containing the message, when supplied. Absence alone does not establish that the channel is private */
     readonly guildId?: string
-    /** Whether Fluxer reports an @everyone or @here mention. Omitted means unknown, not false */
+    /** Whether Fluxer reports an @everyone or @here mention. Absence means unknown */
     readonly mentionedEveryone?: boolean
-    /** Text exactly as returned by Fluxer, including empty text for non-text messages */
+    /** Message text without trimming, possibly empty for a message containing only media */
     readonly content: string
-    /** Deeply frozen embeds in received order, empty when absent. Included in cache and collector byte budgets */
+    /** Received embeds in display order, or an empty array when none were supplied */
     readonly embeds: readonly Embed[]
-    /** Frozen file metadata in received order, empty when absent. Budgets count metadata, never remote file bytes */
+    /** Attached file metadata in received order, or an empty array. File contents are not downloaded */
     readonly attachments: readonly Attachment[]
-    /** Frozen sticker metadata in received order, empty when absent. No image bytes are fetched or retained */
+    /** Attached sticker metadata in received order, or an empty array. Sticker images are not downloaded */
     readonly stickers: readonly MessageSticker[]
-    /** Mentioned account projections in received order. Omitted means unknown; an empty frozen array means Fluxer reported no user mentions */
+    /** Mentioned accounts in received order. An empty array means no mentions were reported, absence means unknown */
     readonly mentions?: readonly MessageMention[]
-    /** Mentioned role IDs in received order. Omitted means unknown; an empty frozen array means Fluxer reported none */
+    /** Mentioned role IDs in received order. An empty array means none were reported, absence means unknown */
     readonly mentionRoleIds?: readonly string[]
-    /** Mentioned visible channel projections in received order. Omitted means Fluxer did not supply channel mentions */
+    /** Channel mentions supplied with the message. Null and absence preserve distinct response values */
     readonly mentionChannels?: readonly MessageChannelMention[] | null
-    /** Reaction totals observed with this message. They are not a reactor list and may be stale immediately after this snapshot */
+    /** Reaction counts at observation time, not a list of users or counts that update after delivery */
     readonly reactions?: readonly MessageReactionSummary[] | null
-    /** Reply or forward target data when supplied. This is only a reference; it never fetches, retains, or expands snapshots */
+    /** Reply or forward source address, when supplied. Reading it does not fetch the source message */
     readonly messageReference?: MessageContextReference | null
-    /** Deeply frozen copies captured when Fluxer created a forward. Null preserves Fluxer's explicit response state; snapshots have no source identity and never follow source edits */
+    /** Copies captured when Fluxer created a forward. They contain no source ID and do not follow later source edits */
     readonly messageSnapshots?: readonly MessageSnapshot[] | null
-    /** Shallow resolved reply target. Null means Fluxer reported the reply target missing; omission means it supplied no reply resolution state */
+    /** Only the resolved reply's message and channel IDs. Null means the target was missing, absence means no resolution was supplied */
     readonly referencedMessage?: MessageReference | null
-    /** Frozen author projection. No client-bound methods or cached live state */
+    /** Account identity supplied as the author, without profile lookup or account methods */
     readonly author: {
-        /** Decimal author ID supplied by Fluxer. Use webhookId to identify webhook-authored messages */
+        /** Author ID as a decimal string. Use webhookId, rather than this ID, to identify a webhook sender */
         readonly id: string
-        /** Account username supplied by Fluxer */
+        /** Author's username at observation time */
         readonly username: string
-        /** Whether Fluxer identifies the author as a bot. An omitted wire flag means false */
+        /** True when Fluxer marked the author as a bot, otherwise false */
         readonly isBot: boolean
     }
 }
 
-/** One mentioned account as supplied with a message, not a complete profile, guild member or client-cached object */
+/** Message fields available even when messageFields is an empty array.
+ * IDs, text and author remain available for message operations, commands and collectors.
+ * guildId is retained when supplied, but remains optional
+ */
+export type MessageCore = Pick<Message, "id" | "channelId" | "content" | "author" | "guildId">
+
+/** Name of a Message property accepted by the client's messageFields option.
+ * Selecting an already-retained MessageCore property does not add or remove data
+ */
+export type MessageField = keyof Message
+
+/** Message property names to retain in this client's request results, events, cache and collectors.
+ * Omit messageFields to keep the full Message shape, or use [] to keep only MessageCore.
+ * The client copies the list at creation, so later edits to your array do not change its selection.
+ * A selected property includes its complete nested value, including media metadata inside messageSnapshots.
+ * Excluded data is still validated when received, so selection does not hide malformed responses
+ */
+export type MessageFields = readonly MessageField[]
+
+/** Type of message returned for a client's messageFields selection.
+ * With no selection, this is Message. With a fixed list, it includes MessageCore and the named properties.
+ * Properties optional in Message remain optional, even when selected.
+ * Advanced typing: A dynamic array makes selectable properties optional because its contents are not known at compile time.
+ * Alternative fixed lists produce alternative message shapes, not a shape promising properties from both lists
+ */
+export type SelectedMessage<F extends MessageFields | undefined = undefined> = F extends undefined
+    ? Message
+    : F extends MessageFields
+      ? number extends F["length"]
+          ? MessageCore & Partial<Pick<Message, F[number]>>
+          : Pick<Message, keyof MessageCore | F[number]>
+      : never
+
+/** Account identity supplied in a message's mentions array.
+ * This is not a full account profile, server member or live cached object
+ */
 export interface MessageMention {
-    /** Decimal account ID */
+    /** Mentioned account ID as a decimal string */
     readonly id: string
-    /** Account username supplied by Fluxer */
+    /** Mentioned account's username at observation time */
     readonly username: string
-    /** Whether Fluxer identifies this account as a bot. An omitted wire flag means false */
+    /** True when Fluxer marked the mentioned account as a bot, otherwise false */
     readonly isBot: boolean
 }
 
-/** One channel mention visible to everyone, not a channel cache entry or permission decision */
+/** Channel identity supplied in message or forward-snapshot mention data.
+ * It contains only an ID, name and type, not cached channel settings or a decision that the bot may access it
+ */
 export interface MessageChannelMention {
-    /** Decimal channel ID */
+    /** Mentioned channel ID as a decimal string */
     readonly id: string
-    /** Channel name observed with this message */
+    /** Channel name captured with the mention */
     readonly name: string
-    /** Provider channel type. Unknown future values are retained */
+    /** Fluxer's numeric channel type. Unrecognized future values are retained */
     readonly type: number
 }
 
-/** Emoji identity nested in a received reaction summary. Null and omission remain distinct when Fluxer supplied them */
+/** Emoji information supplied beside a message's reaction count.
+ * Optional values preserve both null and absence when Fluxer distinguishes them
+ */
 export interface MessageReactionEmoji {
-    /** Unicode emoji or custom emoji name supplied by Fluxer */
+    /** Literal Unicode emoji text or the custom emoji's name */
     readonly name: string
-    /** Custom emoji ID. Null means an explicit Unicode-emoji identity; omission means the field was not supplied */
+    /** Custom emoji ID, or null for an explicitly identified Unicode emoji. Absence means the ID field was not supplied */
     readonly id?: string | null
-    /** Animation state. Null and omission retain Fluxer's distinct response states */
+    /** Animation flag when supplied, retaining null separately from absence */
     readonly animated?: boolean | null
 }
 
-/** One reaction total observed in a received message. It is not a complete reactor list and never updates an existing snapshot */
+/** Count of reactions using one emoji when Fluxer supplied this message.
+ * This is not a user list or a count that updates after delivery
+ */
 export interface MessageReactionSummary {
-    /** Frozen emoji identity */
+    /** Emoji to which this count belongs */
     readonly emoji: MessageReactionEmoji
-    /** Total reactions Fluxer reported for this emoji at snapshot time */
+    /** Nonnegative reaction count reported at observation time */
     readonly count: number
-    /** Whether the current bot had reacted when Fluxer supplied that viewer-specific value. Null and omission remain distinct */
+    /** Whether the observing bot had reacted, when supplied. Null and absence preserve distinct response values */
     readonly me?: boolean | null
 }
 
-/** Shallow reply/forward reference supplied by Fluxer. Its type is 0 for a reply and 1 for a forward in the inspected protocol */
+/** Source address supplied for a reply or forward, without the source message's contents.
+ * type 0 identifies a reply and type 1 identifies a forward. Future numeric types are retained
+ */
 export interface MessageContextReference extends MessageReference {
-    /** Guild containing the referenced message. Null means Fluxer explicitly reported no guild; omission means unknown */
+    /** Source server ID, or null when Fluxer explicitly supplied no server. Absence means unknown */
     readonly guildId?: string | null
-    /** Provider reference type. Omitted by partial gateway payloads; unknown future values are retained */
+    /** Reference kind, when supplied. A partial gateway observation can omit it */
     readonly type?: number
 }
 
-/** One deeply frozen, source-anonymous copy captured for a forward. Omitted and null fields preserve Fluxer's distinct response states */
+/** Copy of source content captured by Fluxer when a message was forwarded.
+ * The snapshot is deeply frozen and contains no source message or author ID.
+ * Later source edits and deletions do not change this copy. Optional null and absent values remain distinct
+ */
 export interface MessageSnapshot {
-    /** Original text when Fluxer captured it. Null preserves an explicit provider value */
+    /** Source text at capture time, including null when explicitly supplied */
     readonly content?: string | null
-    /** ISO 8601 creation time of the source message */
+    /** Source message creation time as an ISO 8601 string with a timezone */
     readonly createdAt: string
-    /** ISO 8601 source-edit time when one existed at capture. Null preserves an explicit provider value */
+    /** Source edit time at capture, as an ISO 8601 string, or null when explicitly supplied */
     readonly editedAt?: string | null
-    /** Source user IDs mentioned at capture. Resolve them only from parent message data if Fluxer supplied it */
+    /** Account IDs mentioned in the source, not account objects. No account lookup is performed */
     readonly mentionUserIds?: readonly string[] | null
-    /** Source role IDs mentioned at capture */
+    /** Role IDs mentioned in the source at capture time */
     readonly mentionRoleIds?: readonly string[] | null
-    /** Source channel mentions captured in display order */
+    /** Source channel mentions in captured display order */
     readonly mentionChannels?: readonly MessageChannelMention[] | null
-    /** Source embeds captured in display order */
+    /** Source embed copies in captured display order */
     readonly embeds?: readonly Embed[] | null
-    /** Independent attachment metadata captured in display order. Deleting the source does not update this copy */
+    /** Copied attachment metadata in display order, without downloading file contents */
     readonly attachments?: readonly Attachment[] | null
-    /** Source sticker metadata captured in display order */
+    /** Source sticker metadata in captured display order, without downloading images */
     readonly stickers?: readonly MessageSticker[] | null
-    /** Source message type as an integer. Unknown future values are retained */
+    /** Fluxer's integer source message type at capture, retaining unrecognized future values */
     readonly type: number
-    /** Source message flags as an integer. Unknown future bits are retained */
+    /** Source flag set at capture, retaining unrecognized bits */
     readonly flags: number
 }
 
-/** Sticker observation attached to a message, not the editable guild resource */
+/** Sticker metadata supplied with a message or forward snapshot.
+ * This frozen observation is not the editable server sticker resource
+ */
 export interface MessageSticker {
-    /** Decimal sticker ID */
+    /** Sticker ID as a decimal string */
     readonly id: string
-    /** Name observed when Fluxer projected this message */
+    /** Sticker name at observation time */
     readonly name: string
-    /** Whether the sticker is animated */
+    /** Whether Fluxer identifies this sticker as animated */
     readonly animated: boolean
 }
 
-/** Frozen deletion notice, not a full Message or a recoverable copy of the deleted resource */
+/** Notice identifying one deleted message, not its full contents or a recoverable copy.
+ * The SDK does not fetch or reconstruct missing details from its cache
+ */
 export interface MessageDeletion extends MessageReference {
-    /** Text supplied by Fluxer before deletion. Omitted means unavailable, null is preserved, and an empty string is known empty text */
+    /** Deleted text when supplied. Absence means unavailable, null is preserved, and "" means known empty text */
     readonly content?: string | null
-    /** Author ID only when supplied by Fluxer. Never inferred from a cache or fetched after deletion */
+    /** Deleted message's author ID, only when supplied by Fluxer */
     readonly authorId?: string
 }
 
-/** One frozen channel deletion batch. Does not produce additional messageDelete notifications */
+/** Message IDs deleted together in one channel.
+ * The frozen batch produces one messageDeleteBulk event, without additional messageDelete events
+ */
 export interface MessageBulkDeletion {
-    /** Decimal string ID of the channel containing the deleted messages */
+    /** Channel ID shared by the deleted messages */
     readonly channelId: string
-    /** Frozen decimal message IDs in received order, not a chronological ordering or exactly-once guarantee */
+    /** Deleted decimal message IDs in received order, not necessarily chronological or guaranteed to arrive exactly once */
     readonly ids: readonly string[]
 }
 
-/** Explicit notification permissions. Omitted fields disable their notification category */
+/** Choose which existing mentions may notify users when sending, replying or editing.
+ * All notification categories are disabled unless explicitly enabled.
+ * These settings permit notifications but do not insert mention text or bypass Fluxer's permissions
+ */
 export interface AllowedMentions {
-    /** Up to 100 user IDs whose textual mentions may notify. Does not insert mentions */
+    /** Permit notifications for textual mentions of these account IDs, at most 100. Omit to permit none */
     readonly users?: readonly string[]
-    /** Up to 100 role IDs whose textual mentions may notify. Server permissions still apply */
+    /** Permit notifications for textual mentions of these role IDs, at most 100. Fluxer's server permissions still apply */
     readonly roles?: readonly string[]
-    /** Allow @everyone and @here notifications. Defaults to false */
+    /** Permit @everyone and @here notifications, default false */
     readonly everyone?: boolean
-    /** Allow notification of the referenced message's author. Defaults to false */
+    /** Permit notification of the reply target's author, default false */
     readonly repliedUser?: boolean
 }
 
-/** Fluxer's writable non-voice message flags exposed by the SDK */
-export const MessageFlags = Object.freeze({
+/** Flags accepted when sending or editing a non-voice message.
+ * Combine flags with bitwise OR, for example MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications.
+ * Other flag bits are rejected locally
+ */
+export const MessageFlags: Readonly<{
+    /** Hide embeds on this message */
+    readonly SuppressEmbeds: 4
+    /** Suppress message notifications */
+    readonly SuppressNotifications: 4096
+}> = Object.freeze({
     SuppressEmbeds: 4,
     SuppressNotifications: 4096,
 } as const)
 
-/** One writable non-voice message flag. Combine values with bitwise OR before assigning `flags` */
+/** One value from MessageFlags. To set multiple flags, combine the values with bitwise OR */
 export type MessageFlag = (typeof MessageFlags)[keyof typeof MessageFlags]
 
-/** Fluxer's client-generated message identifier. Strings contain 1 through 32 UTF-16 code units; numbers are nonnegative safe integers and are encoded as decimal strings */
+/** Correlation identifier attached to a send, reply or forward.
+ * Use a string of 1 through 32 UTF-16 code units, or a nonnegative safe integer encoded as a decimal string.
+ * This is not the message ID returned after creation
+ */
 export type MessageNonce = string | number
 
-/** Text, embeds, file uploads or stickers. TypeScript does not establish nonempty content.
- * Stickers can be sent by bots and webhooks but cannot be replaced through message edits
+/** Content for a new message: Text, embeds, file uploads, stickers, or a combination.
+ * At least one of these must be nonempty when the operation runs, even if TypeScript accepts an empty value.
+ * Stickers can be sent by bots and webhooks, but cannot be replaced in message edits
  * @example
  * ```ts
  * import type { Client } from "@neontechspace/fluxerly"
@@ -212,143 +286,180 @@ export type MessageNonce = string | number
 export type MessageBody = (
     | Body<AttachmentInput>
     | {
-          /** Optional text alongside stickers */
+          /** Text to send alongside stickers, without trimming */
           readonly content?: string
-          /** Optional rich embeds alongside stickers */
+          /** Embeds to display alongside stickers */
           readonly embeds?: readonly EmbedInput[]
-          /** Optional new uploads alongside stickers */
+          /** New files to upload alongside stickers */
           readonly attachments?: readonly AttachmentInput[]
-          /** Required sticker list when no other body field supplies message content */
+          /** Stickers that supply the message body when text, embeds and files are absent */
           readonly stickerIds: readonly string[]
       }
 ) & {
-    /** Up to three decimal sticker IDs in send order. Fluxer checks availability and external-sticker permissions.
-     * Omitted/empty means no stickers. Inputs are copied before dispatch; no image upload or lookup is performed
+    /** Sticker IDs to send, at most three decimal strings in display order.
+     * Omit or use [] for no stickers. The SDK copies IDs before dispatch without uploading or looking up images.
+     * Fluxer checks sticker availability and external-sticker permissions
      */
     readonly stickerIds?: readonly string[]
 }
 
 type Body<A> =
     | {
-          /** Text sent without trimming. Fluxer validates its applicable content limit */
+          /** Message text without trimming. Fluxer checks its applicable content-length limit */
           readonly content: string
-          /** Rich embeds in display order. Fluxer owns the applicable embed-count limit */
+          /** Embeds in display order, subject to Fluxer's applicable count limit */
           readonly embeds?: readonly EmbedInput[]
-          /** New uploads for send/reply; an explicit replacement list for edits */
+          /** New uploads when sending or replying, or the complete replacement file list when editing */
           readonly attachments?: readonly A[]
       }
     | {
-          /** Omit for an embed-only send or to preserve text during an edit */
+          /** Optional text. Omit for an embed-only send or to leave existing text unchanged in an edit */
           readonly content?: string
-          /** Rich embeds in display order, or an empty replacement array during an edit */
+          /** Embeds to send in display order, or the replacement embed collection in an edit */
           readonly embeds: readonly EmbedInput[]
-          /** New uploads for send/reply; an explicit replacement list for edits */
+          /** New uploads when sending or replying, or the complete replacement file list when editing */
           readonly attachments?: readonly A[]
       }
     | {
-          /** Omit to send only files or preserve text during an edit */
+          /** Optional text. Omit for a file-only send or to leave existing text unchanged in an edit */
           readonly content?: string
-          /** Omit to preserve embeds during an edit */
+          /** Optional embeds. Omit to leave existing embeds unchanged in an edit */
           readonly embeds?: readonly EmbedInput[]
-          /** New uploads for send/reply; edits must list retained IDs alongside new files */
+          /** Files to send, or the complete replacement file list in an edit, including IDs of existing files to keep */
           readonly attachments: readonly A[]
       }
 
-/** Send text, rich embeds, files and/or stickers. A send needs nonempty text, embeds, uploads or sticker IDs.
- * Unknown input keys are rejected. Use `messages.forward` for immutable source snapshots. An `attachment://` image or thumbnail URL needs one matching new image upload in this request
+/** Input for messages.send, including content and optional delivery settings.
+ * Supply nonempty text, embeds, new files or sticker IDs. Unknown properties are rejected locally.
+ * Notifications are off by default. Use allowedMentions to permit specific existing mentions to notify.
+ * An attachment:// embed image or thumbnail must name one matching new image upload in this request.
+ * Use messages.forward, rather than this input, to copy a source message into an immutable forward
  */
 export type MessageInput = MessageBody & {
-    /** Optional caller-controlled correlation identifier. Fluxer suppresses a matching nonce best-effort for five minutes after persistence. Omit it for one SDK-generated nonce per send execution */
+    /** Correlation nonce chosen by your application, or omit for one SDK-generated nonce per send execution.
+     * Fluxer makes a best-effort attempt to suppress a matching nonce for five minutes after persistence, not a durable exactly-once guarantee
+     */
     readonly nonce?: MessageNonce
-    /** Mention notifications are disabled by default, including the replied-to author */
+    /** Existing mentions permitted to notify. Defaults to no mention notifications, including the reply author's */
     readonly allowedMentions?: AllowedMentions
-    /** Optional reply reference. Its channelId must match the send destination */
+    /** Reply target address, whose channelId must equal the send destination */
     readonly messageReference?: MessageReference
-    /** Writable non-voice flags. Only MessageFlags bits are accepted. Omit to use Fluxer's default */
+    /** Flag set containing only MessageFlags bits. Omit to use Fluxer's default for a new message */
     readonly flags?: number
 }
 
-/** Reply helper input. The reference comes from reply's first argument */
+/** Content and delivery settings for messages.reply.
+ * The target argument supplies the reply reference, so do not add messageReference here
+ */
 export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions" | "flags" | "nonce">
 
-/** Create an immutable forward without fetching or validating the source locally, or uploading new content.
- * A nonempty media selector creates a media-only forward, omitting source text. Omit both selectors to copy source text and media.
- * Empty arrays alone behave like omitted selectors; they do not request a text-only forward
+/** Input for copying a source message into a new forward.
+ * Fluxer captures the source. The SDK does not fetch it, check access beforehand or upload new content.
+ * Omit both media selectors to copy source text and media.
+ * A nonempty selector copies only selected media and omits source text.
+ * Empty selectors behave like omitted selectors, not a request for text-only forwarding
  */
 export interface ForwardMessageInput {
-    /** Optional caller-controlled correlation identifier. Fluxer suppresses a matching nonce best-effort for five minutes after persistence. Omit it for one SDK-generated nonce per forward execution */
+    /** Application-chosen correlation nonce, or omit for one SDK-generated nonce per forward execution.
+     * Fluxer's matching-nonce suppression is best-effort for five minutes after persistence, not guaranteed exactly-once creation
+     */
     readonly nonce?: MessageNonce
-    /** Source message to capture. Its channel may differ from the destination channel, and the SDK does not fetch it */
+    /** Source address Fluxer should capture. It may be in another channel, and the SDK does not fetch it beforehand */
     readonly source: MessageReference
-    /** Up to ten source attachment IDs to copy. A nonempty list makes the forward media-only */
+    /** Source attachment IDs to copy, at most ten. A nonempty list makes the forward media-only */
     readonly attachmentIds?: readonly string[]
-    /** Up to ten zero-based source embed positions to copy. A nonempty list makes the forward media-only */
+    /** Source embed positions to copy, at most ten, with 0 identifying the first embed. A nonempty list makes the forward media-only */
     readonly embedIndices?: readonly number[]
 }
 
 type EditMessageOptions = {
-    /** Mention notifications default off for this edit, including the reply author. Explicit entries permit notifications */
+    /** Mentions permitted to notify during this edit, defaulting to none, including the reply author */
     readonly allowedMentions?: AllowedMentions
-    /** Replace the writable non-voice flags. Omit to preserve them, or use zero to clear both. Voice-message flags are unsupported */
+    /** Replacement flag set using only MessageFlags bits. Omit to leave flags unchanged, or use 0 to clear both writable flags */
     readonly flags?: number
 }
 
-/** Replace supplied text/embeds/attachments without fetching or merging old data. Omitted properties are not sent.
- * Omitted attachments preserve files; a supplied list replaces them, so list existing IDs to retain alongside new uploads.
- * Clearing attachments requires nonempty content or embeds alongside attachments: [].
- * Omitted embeds preserve rich embeds, though Fluxer may regenerate link previews when text changes.
- * Clearing embeds requires nonempty content alongside embeds: []; an empty edit alone is rejected by Fluxer.
- * Empty content requests clearing text, subject to Fluxer validation. A flags-only edit is valid. Unknown input keys are rejected
+/** Input for changing an existing message without fetching or merging its old data.
+ * Omitted body properties are left unchanged. Each supplied array replaces its corresponding collection.
+ * To keep existing files alongside new uploads, include their attachment IDs in attachments.
+ * To clear files, supply attachments: [] together with nonempty text or embeds.
+ * To clear embeds, supply embeds: [] together with nonempty text.
+ * Empty content asks Fluxer to clear text. Fluxer may regenerate link previews when text changes.
+ * A flags-only edit is accepted. An empty edit and unknown properties are rejected.
+ * Mention notifications default off for this edit, including notification of the reply author
  */
 export type EditMessageInput =
     | (Body<AttachmentInput | AttachmentReference> & EditMessageOptions)
     | (EditMessageOptions & {
-          /** A flags-only edit cannot also supply a body field */
+          /** Replacement flags when editing flags alone, without any content, embeds or attachments property */
           readonly flags: number
           readonly content?: never
           readonly embeds?: never
           readonly attachments?: never
       })
 
-/** One remote history page. Omit cursor fields for the latest messages. Combined cursor modes and unknown fields are rejected */
+/** Choose one page for messages.fetchHistory.
+ * Omit cursors for the latest visible messages, or choose exactly one of before, after and around.
+ * Results are returned newest first, including pages selected with after.
+ * Combined cursor modes and unknown properties are rejected locally
+ */
 export type MessageHistoryQuery = {
-    /** Maximum returned messages, an integer from 1 through Fluxer's per-request limit of 100. Defaults to 50, not a total-history limit */
+    /** Maximum messages requested in this page, an integer from 1 through 100, default 50, not a total-history cap */
     readonly limit?: number
 } & (
     | {
-          /** Decimal message ID, excluded from the result. Select the nearest older messages and return them newest first */
+          /** Fetch the nearest messages older than this decimal ID, excluding the cursor message */
           readonly before?: string
           readonly after?: never
           readonly around?: never
       }
     | {
           readonly before?: never
-          /** Decimal message ID, excluded from the result. Select the nearest newer messages but return them newest first */
+          /** Fetch the nearest messages newer than this decimal ID, excluding it. Results still arrive newest first */
           readonly after?: string
           readonly around?: never
       }
     | {
           readonly before?: never
           readonly after?: never
-          /** Decimal message ID to center on, included only when present and visible. A full or balanced window is not guaranteed */
+          /** Center the page on this decimal message ID, including it only when present and visible.
+           * Fluxer does not guarantee a full page or equal numbers of messages on either side
+           */
           readonly around?: string
       }
 )
 
-/** Per-call remote message/reaction/pin deadline, separate from the client's gateway startup budget */
+/** Deadline settings for a remote message, reaction or pin operation.
+ * The budget includes local queueing, retry delays, rate-limit waits and HTTP work.
+ * Cleanup is awaited after the deadline, so completion can take longer than timeoutMs.
+ * It does not control gateway connection startup
+ */
 export interface MessageOperationOptions {
-    /** Total admission, retry/rate-limit wait and HTTP budget in milliseconds, from 1 to 2,147,483,647 as an integer. Defaults to 30,000, with cleanup awaited afterward */
+    /** Total request budget in milliseconds, an integer from 1 through 2,147,483,647, default 30,000 */
     readonly timeoutMs?: number
 }
 
-/** Default cancellation affects this request only. After dispatch, cancelling an edit/delete cannot undo it */
+/** Remote operation settings for the Promise and Result API.
+ * signal cancels this operation only. Cancelling after dispatch cannot undo an edit or deletion.
+ * The Effect entry point uses interruption instead of an AbortSignal option
+ */
 export interface DefaultMessageOperationOptions extends MessageOperationOptions, OperationOptions {}
 
-/** Send deadline shared by both entry points */
+/** Deadline settings for sending, replying or forwarding.
+ * timeoutMs covers local queueing, rate-limit waits and HTTP work. Cleanup is awaited after that budget.
+ * If message creation was dispatched, failure can leave delivery unknown even when no message result was returned.
+ * The SDK does not automatically retry an uncertain send. Check MessageError.delivery before deciding what to do.
+ * Advanced response limits: Created-message JSON is limited to 16 MiB of body bytes before parsing.
+ * Upload-plan and completion responses use a separate 1 MiB limit. Neither limit caps total memory use.
+ * An oversized or malformed successful response fails with reason response
+ */
 export interface SendOptions {
-    /** Total admission, rate-limit wait and HTTP budget in milliseconds. Defaults to 30,000 */
+    /** Total send budget in milliseconds, an integer from 1 through 2,147,483,647, default 30,000 */
     readonly timeoutMs?: number
 }
 
-/** Default cancellation affects this send only. After dispatch it cannot establish whether a message was created */
+/** Send settings for the Promise and Result API.
+ * signal cancels this send only, without proving whether a dispatched request created a message.
+ * The Effect entry point uses interruption instead of an AbortSignal option
+ */
 export interface DefaultSendOptions extends SendOptions, OperationOptions {}

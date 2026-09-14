@@ -13,8 +13,8 @@ import type {
 } from "#sdk/oauth"
 import { OAuthOperationError as OAuthError } from "#sdk/oauth"
 import { apiErrorDetail } from "#sdk/api-errors"
-import { ClientClosedError, ConfigurationError } from "#sdk/errors"
-import { withDeadline } from "#sdk/internal/effect-failures"
+import { ClientClosedError, ConfigurationError, RateLimitError } from "#sdk/errors"
+import { mapFailureCause, withDeadline } from "#sdk/internal/effect-failures"
 import { InstanceResolver, instanceConfiguration } from "#sdk/internal/instance"
 import { guildList } from "#sdk/internal/guild-lifecycle"
 import { identifier, record } from "#sdk/internal/message"
@@ -353,12 +353,14 @@ export class OAuthOwner {
             }
             return this.instance.resolve().pipe(
                 withDeadline(deadline, () => new OAuthError(operation, "timeout", "notDispatched")),
-                Effect.mapError((error) =>
+                mapFailureCause((error) =>
                     error instanceof OAuthError || error instanceof ClientClosedError
                         ? error
                         : this.#closed
                           ? new ClientClosedError()
-                          : new OAuthError(operation, "network", "notDispatched"),
+                          : error instanceof RateLimitError
+                            ? new OAuthError(operation, "rateLimit", "notDispatched", 429, error.retryAfterMs)
+                            : new OAuthError(operation, "network", "notDispatched"),
                 ),
                 Effect.flatMap((endpoints): Effect.Effect<A, OAuthOperationError | ClientClosedError> =>
                     this.#closed || !this.#secret

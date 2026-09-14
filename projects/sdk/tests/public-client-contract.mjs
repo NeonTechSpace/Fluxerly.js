@@ -13,7 +13,7 @@ const clientNamespaces = [
     ["Presence", "presence"],
     ["CurrentBotApplication", "application"],
     ["Users", "users"],
-    ["DirectMessages", "directMessages"],
+    ["DirectMessages", "directMessages", "DirectMessages<M>"],
     ["Webhooks", "webhooks"],
     ["Roles", "roles"],
     ["PermissionHelpers", "permissions"],
@@ -25,10 +25,11 @@ const clientNamespaces = [
     ["Channels", "channels"],
     ["Members", "members"],
     ["Attachments", "attachments"],
-    ["Messages", "messages"],
-    ["ClientCache", "cache"],
+    ["Messages", "messages", "Messages<M>"],
+    ["ClientCache", "cache", "ClientCache<M>"],
 ]
 const clientNamespaceTypes = clientNamespaces.map(([type]) => type)
+const clientNamespaceSignatures = clientNamespaces.map(([type, , signature]) => signature ?? type)
 const pairedInterfaces = ["Client", "WebhookClient", "OAuthClient", ...clientNamespaceTypes]
 const inheritedClientMembers = ["state", "shards", "gatewayLatencyMs"]
 const symbolIsAlias = 1 << 21
@@ -124,12 +125,12 @@ export function assertPublicClientContract({ defaultApi, native, defaultRuntime,
             .sort()
     assert.deepEqual(
         clientNamespacesOf(defaultClient),
-        [...clientNamespaceTypes].sort(),
+        [...clientNamespaceSignatures].sort(),
         "Default Client namespace inventory drifted",
     )
     assert.deepEqual(
         clientNamespacesOf(nativeClient),
-        [...clientNamespaceTypes].sort(),
+        [...clientNamespaceSignatures].sort(),
         "Native Client namespace inventory drifted",
     )
 
@@ -161,7 +162,10 @@ export function assertPublicClientContract({ defaultApi, native, defaultRuntime,
 function fixtureInterfaces() {
     const namespaces = new Map(clientNamespaceTypes.map((name) => [name, new Map([["member", { documented: true }]])]))
     const client = new Map(
-        clientNamespaces.map(([type, member]) => [member, { documented: true, readonly: true, typeName: type }]),
+        clientNamespaces.map(([type, member, signature]) => [
+            member,
+            { documented: true, readonly: true, typeName: signature ?? type },
+        ]),
     )
     client.set("shutdown", { documented: true })
     return new Map([

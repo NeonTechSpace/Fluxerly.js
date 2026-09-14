@@ -1,14 +1,24 @@
 {
-  "private": true,
-  "scripts": {
-    "build": "pnpm --filter @neontechspace/fluxerly build",
-    "check": "pnpm --filter @neontechspace/fluxerly check"
-  },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": ">=12 <13",
-      "onFail": "download"
+    "private": true,
+    "scripts": {
+        "build": "pnpm --filter @neontechspace/fluxerly build && pnpm --filter fluxerly-docs build",
+        "check": "pnpm --filter @neontechspace/fluxerly check && pnpm --filter @fluxerly/release test && pnpm --filter fluxerly-docs check",
+        "changeset": "node release/cli.mjs changeset",
+        "release:plan": "node release/cli.mjs plan",
+        "release:check": "node release/cli.mjs check-support",
+        "release:inspect": "node release/cli.mjs inspect",
+        "release:status": "node release/cli.mjs status",
+        "release:version": "node release/cli.mjs version",
+        "release:prepare": "node release/cli.mjs prepare",
+        "release:verify": "node release/cli.mjs verify",
+        "release:publish": "node release/cli.mjs publish",
+        "docs:dev": "pnpm --filter @neontechspace/fluxerly build && pnpm --filter fluxerly-docs generate && pnpm --filter fluxerly-docs dev"
+    },
+    "devEngines": {
+        "packageManager": {
+            "name": "pnpm",
+            "version": ">=12 <13",
+            "onFail": "download"
+        }
     }
-  }
 }

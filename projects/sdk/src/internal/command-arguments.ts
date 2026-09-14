@@ -263,10 +263,13 @@ function selectResource<N extends "username" | "name", T extends { readonly id: 
 ):
     | { readonly _tag: "Converted"; readonly value: T }
     | { readonly _tag: "Rejected"; readonly reason: CommandArgumentRejectionReason } {
-    const id = mention.exec(raw)?.[1] ?? (decimalId.test(raw) ? raw : undefined)
-    const matches = candidates.filter((candidate) =>
+    const mentionId = mention.exec(raw)?.[1]
+    const id = mentionId ?? (decimalId.test(raw) ? raw : undefined)
+    let matches = candidates.filter((candidate) =>
         id === undefined ? candidate[nameKey] === raw : candidate.id === id,
     )
+    if (matches.length === 0 && id !== undefined && mentionId === undefined)
+        matches = candidates.filter((candidate) => candidate[nameKey] === raw)
     return matches.length === 1
         ? Object.freeze({ _tag: "Converted" as const, value: matches[0]! })
         : matches.length > 1

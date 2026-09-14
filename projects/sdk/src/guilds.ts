@@ -3,7 +3,10 @@ import type { ClientClosedError } from "./errors.js"
 import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** Frozen guild identity and configuration observation, not a complete wire object or an object that updates in place */
+/** Identity and settings of a Fluxer guild, the server that owns channels, members and roles.
+ * Reads and gateway events return frozen snapshots, not objects that update as the server changes.
+ * Optional settings can be unavailable in this observation. Do not substitute creation defaults for missing fields
+ */
 export interface Guild {
     /** Decimal guild ID */
     readonly id: string
@@ -13,21 +16,21 @@ export interface Guild {
     readonly ownerId: string
     /** Feature names supplied by Fluxer, including unknown future names */
     readonly features: readonly string[]
-    /** Icon hash; null means no icon, omission means unavailable */
+    /** Icon asset hash, not an image URL. Null means no icon, omission means unavailable */
     readonly icon?: string | null
-    /** Banner hash; null means no banner, omission means unavailable */
+    /** Banner asset hash, not an image URL. Null means no banner, omission means unavailable */
     readonly banner?: string | null
-    /** Invite splash hash; null means no splash, omission means unavailable */
+    /** Background asset hash for invites. Null means no splash, omission means unavailable */
     readonly splash?: string | null
-    /** Embedded-invite splash hash; null means no splash, omission means unavailable */
+    /** Background asset hash for embedded invites. Null means no splash, omission means unavailable */
     readonly embedSplash?: string | null
     /** Invite splash-card alignment, omission means unavailable */
     readonly splashCardAlignment?: GuildSplashCardAlignment
-    /** System-message channel ID; null disables it, omission means unavailable */
+    /** System-message channel ID. Null disables it, omission means unavailable */
     readonly systemChannelId?: string | null
     /** System-message suppression flags, omission means unavailable */
     readonly systemChannelFlags?: number
-    /** AFK voice-channel ID; null disables it, omission means unavailable */
+    /** AFK voice-channel ID. Null disables it, omission means unavailable */
     readonly afkChannelId?: string | null
     /** Seconds before Fluxer moves inactive voice participants to the AFK channel, omission means unavailable */
     readonly afkTimeoutSeconds?: number
@@ -39,16 +42,17 @@ export interface Guild {
     readonly nsfw?: boolean
     /** Whether Fluxer displays a guild-wide content warning, omission means unavailable */
     readonly contentWarningLevel?: GuildContentWarningLevel
-    /** Custom guild-wide warning text; null restores Fluxer's localized default, omission means unavailable */
+    /** Custom guild-wide warning text. Null restores Fluxer's localized default, omission means unavailable */
     readonly contentWarningText?: string | null
     /** Explicit-media filtering level, omission means unavailable */
     readonly explicitContentFilter?: GuildExplicitContentFilter
-    /** ISO 8601 historical-message cutoff; null disables history for members without Read Message History */
+    /** ISO 8601 historical-message cutoff. Null disables history for members without Read Message History */
     readonly messageHistoryCutoff?: string | null
 }
 
-/** Frozen guild visibility-loss observation, not a deletion-cause or membership inference
+/** Gateway notification that a guild is no longer visible to this client
  *
+ * This can describe temporary unavailability rather than server deletion or removal of the bot.
  * `unavailable` is true when Fluxer temporarily withholds the guild and false when its field is absent.
  * `unavailableHidden` is true when Fluxer marks that unavailable guild hidden and false when its field is absent
  */
@@ -61,16 +65,26 @@ export interface GuildDeletion {
     readonly unavailableHidden: boolean
 }
 
-/** Fluxer's currently supported system-channel flag bits */
-export const GuildSystemChannelFlags = Object.freeze({
+/** Suppress selected automatic messages in a guild's system channel through GuildEdit.systemChannelFlags */
+export const GuildSystemChannelFlags: Readonly<{
+    /** Hide automatic member-join notifications */
+    SuppressJoinNotifications: 1
+}> = Object.freeze({
     SuppressJoinNotifications: 1,
 })
 
 /** One known system-channel flag bit. A flags value of zero clears every currently supported suppression */
 export type GuildSystemChannelFlag = (typeof GuildSystemChannelFlags)[keyof typeof GuildSystemChannelFlags]
 
-/** Fluxer's default notification levels for new guild members */
-export const GuildDefaultMessageNotifications = Object.freeze({
+/** Set the initial notification preference for new guild members through GuildEdit.defaultMessageNotifications.
+ * Existing members can keep their own notification preferences
+ */
+export const GuildDefaultMessageNotifications: Readonly<{
+    /** Notify for all messages by default */
+    AllMessages: 0
+    /** Notify only when mentioned by default */
+    OnlyMentions: 1
+}> = Object.freeze({
     AllMessages: 0,
     OnlyMentions: 1,
 })
@@ -79,8 +93,25 @@ export const GuildDefaultMessageNotifications = Object.freeze({
 export type GuildDefaultMessageNotification =
     (typeof GuildDefaultMessageNotifications)[keyof typeof GuildDefaultMessageNotifications]
 
-/** Fluxer's member-verification levels */
-export const GuildVerificationLevels = Object.freeze({
+/** Values for the verification policy required before members can participate in a guild.
+ * Use GuildEdit.verificationLevel to request a level. Fluxer enforces the account requirements for each level.
+ * Fluxer's verification check exempts the guild owner, bots and members with assigned roles.
+ * Discoverable guilds enforce at least Low even when the stored setting is None.
+ * These describe the verification check only, not all requirements for sending messages or joining voice
+ * @see https://github.com/fluxerapp/fluxer/blob/a59b80ce111be8af6e7a65f927a3ebefcfdf99f3/fluxer_api/src/api/utils/GuildVerificationUtils.ts
+ */
+export const GuildVerificationLevels: Readonly<{
+    /** No guild-level verification requirement, except that discoverable guilds still enforce Low */
+    None: 0
+    /** Require a verified email address for members who are not exempt */
+    Low: 1
+    /** Require Low and an account at least five minutes old */
+    Medium: 2
+    /** Require Medium and, when join time is available, at least ten minutes of guild membership */
+    High: 3
+    /** Require a verified phone number instead of the email and waiting-period checks of the lower levels */
+    VeryHigh: 4
+}> = Object.freeze({
     None: 0,
     Low: 1,
     Medium: 2,
@@ -91,8 +122,15 @@ export const GuildVerificationLevels = Object.freeze({
 /** One Fluxer member-verification level */
 export type GuildVerificationLevel = (typeof GuildVerificationLevels)[keyof typeof GuildVerificationLevels]
 
-/** Fluxer's explicit-media filtering levels */
-export const GuildExplicitContentFilters = Object.freeze({
+/** Choose whose uploaded media Fluxer filters for explicit content through GuildEdit.explicitContentFilter */
+export const GuildExplicitContentFilters: Readonly<{
+    /** Do not enable this filtering policy */
+    Disabled: 0
+    /** Apply filtering to members without assigned roles */
+    MembersWithoutRoles: 1
+    /** Apply filtering to all members */
+    AllMembers: 2
+}> = Object.freeze({
     Disabled: 0,
     MembersWithoutRoles: 1,
     AllMembers: 2,
@@ -101,8 +139,13 @@ export const GuildExplicitContentFilters = Object.freeze({
 /** One Fluxer explicit-media filtering level */
 export type GuildExplicitContentFilter = (typeof GuildExplicitContentFilters)[keyof typeof GuildExplicitContentFilters]
 
-/** Fluxer's guild-wide content-warning levels */
-export const GuildContentWarningLevels = Object.freeze({
+/** Choose the guild-wide warning policy through GuildEdit.contentWarningLevel */
+export const GuildContentWarningLevels: Readonly<{
+    /** Use the inherited warning policy */
+    Inherit: 0
+    /** Request a guild-wide content warning */
+    ContentWarning: 1
+}> = Object.freeze({
     Inherit: 0,
     ContentWarning: 1,
 })
@@ -110,8 +153,15 @@ export const GuildContentWarningLevels = Object.freeze({
 /** One Fluxer guild-wide content-warning level */
 export type GuildContentWarningLevel = (typeof GuildContentWarningLevels)[keyof typeof GuildContentWarningLevels]
 
-/** Fluxer's invite splash-card alignments */
-export const GuildSplashCardAlignments = Object.freeze({
+/** Position the card over the invite splash image through GuildEdit.splashCardAlignment */
+export const GuildSplashCardAlignments: Readonly<{
+    /** Center the invitation card over its background image */
+    Center: 0
+    /** Place the invitation card on the left side of its background image */
+    Left: 1
+    /** Place the invitation card on the right side of its background image */
+    Right: 2
+}> = Object.freeze({
     Center: 0,
     Left: 1,
     Right: 2,
@@ -120,14 +170,27 @@ export const GuildSplashCardAlignments = Object.freeze({
 /** One Fluxer invite splash-card alignment */
 export type GuildSplashCardAlignment = (typeof GuildSplashCardAlignments)[keyof typeof GuildSplashCardAlignments]
 
-/** Guild features that bots with ManageGuild may toggle; cloning is opt-in on the source guild */
-export const GuildFeatureToggles = Object.freeze({
+/** Optional server behaviors that a bot with ManageGuild can replace through GuildEdit.featureToggles.
+ * Supply the complete desired set, not just toggles to add. Cloning must be enabled on the source guild
+ */
+export const GuildFeatureToggles: Readonly<{
+    /** Disable guild invitations */
+    InvitesDisabled: "INVITES_DISABLED"
+    /** Permit flexible text-channel names. Disabling this can sanitize existing channel names */
+    TextChannelFlexibleNames: "TEXT_CHANNEL_FLEXIBLE_NAMES"
+    /** Display the guild banner in a separate section below the guild header in the Fluxer app */
+    DetachedBanner: "DETACHED_BANNER"
+    /** Allow eligible callers to clone this guild's emoji into another guild */
+    CloneEmojiEnabled: "CLONE_EMOJI_ENABLED"
+    /** Allow eligible callers to clone this guild's stickers into another guild */
+    CloneStickerEnabled: "CLONE_STICKER_ENABLED"
+    /** Hide the guild owner's crown indicator */
+    HideOwnerCrown: "HIDE_OWNER_CROWN"
+}> = Object.freeze({
     InvitesDisabled: "INVITES_DISABLED",
     TextChannelFlexibleNames: "TEXT_CHANNEL_FLEXIBLE_NAMES",
     DetachedBanner: "DETACHED_BANNER",
-    /** Allow eligible callers to clone this guild's emoji into another guild */
     CloneEmojiEnabled: "CLONE_EMOJI_ENABLED",
-    /** Allow eligible callers to clone this guild's stickers into another guild */
     CloneStickerEnabled: "CLONE_STICKER_ENABLED",
     HideOwnerCrown: "HIDE_OWNER_CROWN",
 })
@@ -135,7 +198,10 @@ export const GuildFeatureToggles = Object.freeze({
 /** One guild feature that a bot can include in GuildEdit.featureToggles */
 export type GuildFeatureToggle = (typeof GuildFeatureToggles)[keyof typeof GuildFeatureToggles]
 
-/** Frozen observation of a guild's custom invite, without SDK retention or guaranteed joinability */
+/** The guild's current custom invitation code and shareable URL, or null fields when no custom code is set.
+ * This is distinct from individually created channel invites. The SDK does not retain this frozen result or verify
+ * that a later join can succeed
+ */
 export interface GuildVanityUrl {
     /** Lowercase custom code, or null when removed. Share only with intended recipients */
     readonly code: string | null
@@ -143,14 +209,17 @@ export interface GuildVanityUrl {
     readonly url: string | null
 }
 
-/** Remote custom-invite observation. The use count can change immediately after the read */
+/** Custom invitation details with a use count returned by guilds.fetchVanityUrl.
+ * guilds.editVanityUrl returns GuildVanityUrl without a hidden follow-up count read.
+ * The observed count can change immediately after the request
+ */
 export interface GuildVanityUrlUsage extends GuildVanityUrl {
     /** Observed nonnegative use count, not retained or inferred by editVanityUrl */
     readonly uses: number
 }
 
 /**
- * Bot-permitted patch for existing guild settings
+ * Change an existing guild's settings through the bot client
  *
  * Omitted properties remain unchanged and null clears the applicable setting. Fluxer requires ManageGuild and can
  * reject feature-gated assets, invalid channel types, content, discoverability or historical-cutoff values after local
@@ -190,7 +259,7 @@ export interface GuildEdit {
     readonly embedSplash?: string | null
     /** System-message channel ID, or null to disable system messages */
     readonly systemChannelId?: string | null
-    /** Bitwise combination of GuildSystemChannelFlags; zero clears all supported suppression flags */
+    /** Bitwise combination of GuildSystemChannelFlags. Zero clears all supported suppression flags */
     readonly systemChannelFlags?: number
     /** AFK voice-channel ID, or null to disable automatic AFK moves */
     readonly afkChannelId?: string | null
@@ -212,7 +281,7 @@ export interface GuildEdit {
     readonly splashCardAlignment?: GuildSplashCardAlignment
     /**
      * Complete desired set of bot-toggleable features, replacing every prior toggle in GuildFeatureToggles.
-     * Include CloneEmojiEnabled and CloneStickerEnabled to allow cloning from this guild; omitting them disables
+     * Include CloneEmojiEnabled and CloneStickerEnabled to allow cloning from this guild. Omitting them disables
      * that permission. Keep them in the list when changing another toggle if cloning should remain enabled.
      * Deprecated CLONE_EMOJI_DISABLED and CLONE_STICKER_DISABLED values are rejected, not inverted or translated.
      * Fluxer preserves its managed, unknown and deprecated observed features. Disabling TextChannelFlexibleNames
@@ -227,7 +296,10 @@ export interface GuildEdit {
     readonly messageHistoryCutoff?: string | null
 }
 
-/** Identifies a guild membership without retaining a client */
+/** Address one user's membership in one guild for member reads and changes.
+ * The same account can have different nicknames, roles and moderation state in different guilds.
+ * This contains IDs only and does not retain a client or fetch the membership
+ */
 export interface MemberReference {
     /** Decimal guild ID */
     readonly guildId: string
@@ -237,11 +309,16 @@ export interface MemberReference {
 
 /** Identifies one member and, optionally, one of that member's active voice connections */
 export interface VoiceConnectionReference extends MemberReference {
-    /** Provider connection ID from a voice-state observation. Omit to target every active connection for this member */
+    /** Connection ID from a voice-state observation, 1–32 Unicode code points.
+     * Omit to target every active connection for this member
+     */
     readonly connectionId?: string
 }
 
-/** Frozen member projection shared by REST and member-add/update events, not a live permission result */
+/** A user's membership in one guild, including assigned roles, guild-profile settings and available moderation state.
+ * This frozen snapshot comes from REST or member-add/update events. It does not update in place or calculate
+ * permissions. Account identity and guild-specific customization are distinct
+ */
 export interface GuildMember extends MemberReference {
     /** ISO 8601 timeout expiry, null when cleared, omitted when unavailable. A past timestamp is not an active timeout */
     readonly communicationDisabledUntil?: string | null
@@ -249,11 +326,11 @@ export interface GuildMember extends MemberReference {
     readonly username: string
     /** Omitted upstream bot flags mean false */
     readonly isBot: boolean
-    /** Explicit assigned role IDs, not an expanded permission set or implicit everyone role */
+    /** Roles assigned to this member. The implicit everyone role is not listed and grants are not expanded here */
     readonly roleIds: readonly string[]
     /** ISO 8601 guild join timestamp */
     readonly joinedAt: string
-    /** Guild nickname, preserving absent versus null */
+    /** Guild-specific display name. Null means no nickname, omission means unavailable */
     readonly nickname?: string | null
     /** Guild avatar hash, preserving absent versus null */
     readonly avatar?: string | null
@@ -265,20 +342,32 @@ export interface GuildMember extends MemberReference {
     readonly profileFlags?: number | null
     /** Guild reply-mention preference, preserving absent versus null */
     readonly mentionFlags?: MemberMentionPreference | null
-    /** Whether Fluxer reports this member as server-muted, omitted when the member projection does not include voice flags */
+    /** Whether Fluxer reports this member as server-muted, omitted when the returned member data excludes voice flags */
     readonly isMuted?: boolean
-    /** Whether Fluxer reports this member as server-deafened, omitted when the member projection does not include voice flags */
+    /** Whether Fluxer reports this member as server-deafened, omitted when the returned member data excludes voice flags */
     readonly isDeafened?: boolean
 }
 
 /** Known Fluxer guild-profile bit flags. Other nonnegative 32-bit bits can be observed for forward compatibility */
-export const GuildMemberProfileFlags = Object.freeze({
+export const GuildMemberProfileFlags: Readonly<{
+    /** Mark the guild-profile avatar as explicitly unset */
+    AvatarUnset: 1
+    /** Mark the guild-profile banner as explicitly unset */
+    BannerUnset: 2
+}> = Object.freeze({
     AvatarUnset: 1,
     BannerUnset: 2,
 })
 
 /** Fluxer's per-guild reply-mention preferences */
-export const MemberMentionPreferences = Object.freeze({
+export const MemberMentionPreferences: Readonly<{
+    /** Express no preference about mentions on replies */
+    NoPreference: 0
+    /** Prefer replies to mention this member */
+    PreferMention: 1
+    /** Prefer replies not to mention this member */
+    PreferNoMention: 2
+}> = Object.freeze({
     NoPreference: 0,
     PreferMention: 1,
     PreferNoMention: 2,
@@ -288,7 +377,7 @@ export const MemberMentionPreferences = Object.freeze({
 export type MemberMentionPreference = (typeof MemberMentionPreferences)[keyof typeof MemberMentionPreferences]
 
 /**
- * Requested profile changes for the authenticated bot's membership in one guild
+ * Change this bot's nickname and guild-specific profile in one guild
  *
  * Omitted properties are not sent and leave the provider value unchanged. Null clears the corresponding property.
  * Fluxer can silently ignore avatar, banner, bio and accentColor when its per-guild-profile customization feature is
@@ -315,7 +404,9 @@ export interface MemberProfileEdit {
     readonly mentionFlags?: MemberMentionPreference | null
 }
 
-/** One explicit member page. No background traversal or complete guild snapshot */
+/** Select one REST page of guild members, for example to inspect a bounded set or continue after a previous user ID.
+ * Use members.iterate for bounded multi-page traversal. A page alone is not a complete guild snapshot
+ */
 export interface MemberQuery {
     /** Maximum member count, integer 1–1000, default 100 */
     readonly limit?: number
@@ -323,7 +414,7 @@ export interface MemberQuery {
     readonly after?: string
 }
 
-/** One fresh authenticated-bot guild-membership summary from the REST list endpoint.
+/** Details of one guild this bot belongs to, freshly returned by the REST membership list.
  * This is not a cached Guild and does not update a cached Guild. permissions and approximate counts remain absent
  * when Fluxer omits them, including provider lookup failures. Absence is not zero or a complete-membership claim
  */
@@ -356,13 +447,13 @@ export interface GuildListQuery {
 
 /** Settings shared by remote guild, member and role operations */
 export interface GuildOperationOptions {
-    /** Total milliseconds across admission, rate waits, retries and HTTP; integer 1–2,147,483,647, default 30,000.
+    /** Total milliseconds across local queueing, rate waits, retries and HTTP. Integer 1–2,147,483,647, default 30,000.
      * Owned cleanup is awaited afterward, so completion can take longer
      */
     readonly timeoutMs?: number
 }
 
-/** Default calls start immediately; abort cancels only this call and awaits owned cleanup */
+/** Default API calls start immediately. Abort cancels only this call and awaits owned cleanup */
 export interface DefaultGuildOperationOptions extends GuildOperationOptions, OperationOptions {}
 
 /** Moderation-only request settings, with the same deadline and cleanup ownership as guild operations */
@@ -374,19 +465,22 @@ export interface ModerationOptions extends GuildOperationOptions {
     readonly auditReason?: string
 }
 
-/** Default moderation starts immediately. Aborting waits for owned cleanup but cannot roll back a dispatched action */
+/** Default API moderation starts immediately. Aborting waits for owned cleanup but cannot roll back a dispatched action */
 export interface DefaultModerationOptions extends ModerationOptions, OperationOptions {}
 
 /** Timeout-only request settings. A timeoutReason is provider audit metadata, not a stored GuildMember field */
 export interface TimeoutOptions extends ModerationOptions {
-    /** Optional timeout audit metadata. Null or omission sends no meaningful reason; nonempty strings allow 1–512 Unicode code points */
+    /** Optional timeout audit metadata. Null or omission sends no meaningful reason. Nonempty strings allow 1–512 Unicode code points */
     readonly timeoutReason?: string | null
 }
 
-/** Default timeout operations begin immediately. Aborting waits for owned cleanup but cannot roll back a dispatched timeout change */
+/** Default API timeout operations begin immediately. Aborting waits for owned cleanup but cannot roll back a dispatched timeout change */
 export interface DefaultTimeoutOptions extends TimeoutOptions, OperationOptions {}
 
-/** Explicit ban settings. The server owns expiry and any requested message-deletion job */
+/** Ban an account from a guild permanently or for a provider-managed duration, optionally deleting recent messages.
+ * The server owns expiry and any requested deletion job. Removing or expiring a ban does not restore membership
+ * or deleted messages
+ */
 export interface BanInput {
     /** Stored ban reason, up to 512 Unicode code points. Omit to use auditReason when supplied, otherwise no reason */
     readonly reason?: string
@@ -401,7 +495,9 @@ export interface BanInput {
     readonly deleteMessageSeconds?: number
 }
 
-/** Frozen remote ban observation, not a membership or a guarantee that the ban is still active */
+/** Recorded ban details returned by guilds.fetchBans, including available reason, moderator and expiry.
+ * This frozen observation does not establish that the ban is still active at a later time
+ */
 export interface GuildBan extends MemberReference {
     /** Account username returned with this ban */
     readonly username: string
@@ -417,7 +513,7 @@ export interface GuildBan extends MemberReference {
     readonly expiresAt?: string | null
 }
 
-/** Identifies a role without retaining a client */
+/** Address one role inside its owning guild for role reads and changes, without fetching it or retaining a client */
 export interface RoleReference {
     /** Decimal guild ID */
     readonly guildId: string
@@ -425,7 +521,10 @@ export interface RoleReference {
     readonly id: string
 }
 
-/** Frozen role observation, not a member's effective permissions or a live hierarchy cache */
+/** A guild role that groups members and supplies permission grants, hierarchy rank and display settings.
+ * Every guild also has an implicit everyone role whose ID equals the guild ID.
+ * This frozen snapshot is not a member's effective permissions and does not update as roles change
+ */
 export interface GuildRole extends RoleReference {
     /** Role display name */
     readonly name: string
@@ -435,7 +534,7 @@ export interface GuildRole extends RoleReference {
     readonly position: number
     /** Raw grants, including unknown future bits. Convert to a decimal string before JSON serialization */
     readonly permissions: bigint
-    /** Whether members are displayed separately */
+    /** Whether members with this role are displayed as a separate group in the member list */
     readonly hoist: boolean
     /** Whether anyone can mention the role */
     readonly mentionable: boolean
@@ -445,7 +544,10 @@ export interface GuildRole extends RoleReference {
     readonly unicodeEmoji?: string | null
 }
 
-/** Create only the fields Fluxer's creation endpoint supports */
+/** Create a named guild role with an optional color and permission grants.
+ * New roles have no grants by default in this SDK. Use roles.edit afterward for hoist and mentionable settings.
+ * Role creation does not assign the role to a member, and Fluxer chooses its initial hierarchy position
+ */
 export interface RoleCreate {
     /** Nonblank role name, 1–100 Unicode code points */
     readonly name: string
@@ -455,7 +557,10 @@ export interface RoleCreate {
     readonly permissions?: bigint
 }
 
-/** Explicit role patch. Omitted fields stay unchanged; at least one defined field is required. The guild default role accepts only color and permissions */
+/** Change the name, grants or display settings of an existing role.
+ * Omitted fields stay unchanged and at least one defined field is required. permissions replaces grants instead of
+ * adding to them. The implicit everyone role accepts only color and permissions. Use roles.reorder for hierarchy rank
+ */
 export interface RoleEdit {
     /** Nonblank role name, 1–100 Unicode code points */
     readonly name?: string
@@ -465,7 +570,7 @@ export interface RoleEdit {
     readonly permissions?: bigint
     /** Display members separately */
     readonly hoist?: boolean
-    /** Signed 32-bit member-list position; null clears it */
+    /** Signed 32-bit member-list position. Null clears it */
     readonly hoistPosition?: number | null
     /** Allow anyone to mention this role */
     readonly mentionable?: boolean
@@ -479,11 +584,90 @@ export interface GuildRoleUpdateBulk {
     readonly roles: readonly GuildRole[]
 }
 
-/** Fluxer permission bits, combined with bigint | and tested with &.
+/** Named permission grants for role inputs, channel overwrites and raw permission checks
+ *
+ * Combine bigint values with |, such as Permissions.ViewChannel | Permissions.SendMessages.
+ * Test a grant with (bits & Permissions.SendMessages) === Permissions.SendMessages.
+ * Convert bigint to a decimal string before JSON serialization, which cannot serialize bigint directly.
  * These are raw grants, not effective-permission calculations: Hierarchy, channel overwrites and server rules still apply.
- * Unknown unsigned 64-bit bits can be passed explicitly; Fluxer may mask or reject grants
+ * Unknown unsigned 64-bit bits can be passed explicitly. Fluxer may mask or reject grants
  */
-export const Permissions = Object.freeze({
+export const Permissions: Readonly<{
+    /** Create invitation links to a guild or channel */
+    CreateInstantInvite: bigint
+    /** Remove members from a guild without banning them from joining again */
+    KickMembers: bigint
+    /** Ban accounts from a guild and optionally remove their recent messages */
+    BanMembers: bigint
+    /** Grant all permission bits and bypass channel overwrites. Hierarchy and other server checks still apply */
+    Administrator: bigint
+    /** Create, edit or delete guild channels and categories */
+    ManageChannels: bigint
+    /** Change guild-wide settings, such as its name and icon */
+    ManageGuild: bigint
+    /** Start a new emoji reaction on a message, rather than only join an existing reaction */
+    AddReactions: bigint
+    /** Read the guild's recorded administrative and moderation activity */
+    ViewAuditLog: bigint
+    /** Use the priority push-to-talk key binding to make your voice stand out over other speakers */
+    PrioritySpeaker: bigint
+    /** Share a camera or screen in a voice channel */
+    Stream: bigint
+    /** See a channel, subject to the channel's applicable overwrites */
+    ViewChannel: bigint
+    /** Post messages in a channel */
+    SendMessages: bigint
+    /** Send text-to-speech messages that enabled recipients can hear read aloud */
+    SendTtsMessages: bigint
+    /** Delete other members' messages. Pinning and unpinning use PinMessages separately */
+    ManageMessages: bigint
+    /** Show automatic embedded previews for links in messages */
+    EmbedLinks: bigint
+    /** Upload files and media with messages */
+    AttachFiles: bigint
+    /** Read earlier messages in a channel, subject to guild history-cutoff rules */
+    ReadMessageHistory: bigint
+    /** Use @everyone and @here, and mention roles even when they are not marked mentionable */
+    MentionEveryone: bigint
+    /** Use custom emoji owned by other guilds */
+    UseExternalEmojis: bigint
+    /** Join a voice channel and listen to participants */
+    Connect: bigint
+    /** Transmit speech in a voice channel */
+    Speak: bigint
+    /** Server-mute other voice participants, preventing them from speaking to everyone */
+    MuteMembers: bigint
+    /** Server-deafen other voice participants, preventing them from hearing or speaking */
+    DeafenMembers: bigint
+    /** Move members between voice channels they can access, or disconnect them from voice */
+    MoveMembers: bigint
+    /** Use voice activity detection to transmit speech without holding a push-to-talk key */
+    UseVad: bigint
+    /** Change your own nickname in the guild */
+    ChangeNickname: bigint
+    /** Change other members' guild nicknames */
+    ManageNicknames: bigint
+    /** Manage roles below your highest role and edit channel permission overwrites */
+    ManageRoles: bigint
+    /** Create, edit or delete webhooks in the applicable guild or channel */
+    ManageWebhooks: bigint
+    /** Edit or delete custom emoji and stickers created by other members */
+    ManageExpressions: bigint
+    /** Use custom stickers owned by other guilds */
+    UseExternalStickers: bigint
+    /** Apply member timeouts that temporarily restrict messaging, reactions and voice participation */
+    ModerateMembers: bigint
+    /** Upload custom emoji and stickers and manage your own creations */
+    CreateExpressions: bigint
+    /** Pin or unpin messages, including messages written by other members */
+    PinMessages: bigint
+    /** Send messages without waiting for the channel's per-user slowmode delay */
+    BypassSlowmode: bigint
+    /** Change the voice-server region used by a voice channel */
+    UpdateRtcRegion: bigint
+    /** See the member list for the applicable channel */
+    ViewChannelMembers: bigint
+}> = Object.freeze({
     CreateInstantInvite: 1n << 0n,
     KickMembers: 1n << 1n,
     BanMembers: 1n << 2n,
@@ -527,7 +711,7 @@ export const Permissions = Object.freeze({
 export interface RolePosition {
     /** Decimal role ID, excluding the implicit everyone role */
     readonly id: string
-    /** Nonnegative safe integer ordering value; Fluxer normalizes positions and applies manageable-role constraints */
+    /** Nonnegative safe integer ordering value. Fluxer normalizes positions and applies manageable-role constraints */
     readonly position: number
 }
 
@@ -539,7 +723,7 @@ export interface RoleHoistPosition {
     readonly hoistPosition: number
 }
 
-/** Guild-area operation identified by expected failures and default defects */
+/** The guild or related-resource action named in an expected failure or SdkDefect */
 export type GuildOperation =
     | "permissions.calculate"
     | "permissions.fetch"
@@ -586,26 +770,36 @@ export type GuildOperation =
     | "roles.setHoistPositions"
     | "roles.resetHoistPositions"
 
-/** Expected guild-area failure with safe metadata, never a token, input value or upstream response body.
- * HTTP completion is not gateway delivery. Cancellation and client closure use separate error types
+/** Expected failure from guild, member, role and related resource operations.
+ * Inspect operation for the failed step, reason for the failure category and outcome before deciding whether to retry.
+ * Safe metadata excludes tokens, private input values and upstream response bodies. Default API methods return this
+ * error in an Err, while Effect-native methods fail in the typed error channel. Cancellation and client closure use
+ * separate error types. An HTTP response does not establish that a corresponding gateway event was delivered
  */
 export class GuildOperationError extends Error {
     /** Stable expected-failure discriminator */
     readonly _tag = "GuildOperationError"
-    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    /** Safe explanation of the locally invalid property, or null when no input problem could be identified */
     readonly inputValidation: InputValidationDetail | null
     constructor(
         /** Requested operation */
         readonly operation: GuildOperation,
-        /** notFound is HTTP 404, not proof that an earlier deletion succeeded */
+        /** input means local validation failed, busy means local request capacity was full, and notFound means HTTP 404.
+         * rejected is an API rejection, network is a transport failure, and response means unusable success data.
+         * timeout means the deadline expired, and rateLimit means the provider's required wait could not be completed.
+         * A 404 does not prove that an earlier deletion succeeded
+         */
         readonly reason: "input" | "busy" | "notFound" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
-        /** unknown means a write may have applied; rejected is an API rejection, not rollback proof */
+        /** notDispatched means no request was submitted, rejected means an API rejection was observed,
+         * and unknown means the remote result is uncertain. Unknown writes may already have applied, so reconcile
+         * remote state before repeating them. An API rejection is not proof of rollback
+         */
         readonly outcome: "notDispatched" | "rejected" | "unknown",
         /** HTTP status when available, otherwise null */
         readonly status: number | null = null,
         /** Usable server-required retry wait in milliseconds, otherwise null */
         readonly retryAfterMs: number | null = null,
-        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        /** Safe classification of why Fluxer rejected the request, or null when the response could not be classified */
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
@@ -626,5 +820,5 @@ export class GuildOperationError extends Error {
     }
 }
 
-/** Native interruption is outside this union; default methods additionally return CancelledError */
+/** Native interruption is outside this union. Default API methods additionally return CancelledError */
 export type GuildOperationFailure = GuildOperationError | ClientClosedError

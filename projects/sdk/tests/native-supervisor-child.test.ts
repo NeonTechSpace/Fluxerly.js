@@ -144,3 +144,56 @@ test("native child disconnect retains both the terminal failure and losing confi
     expect(client.run).not.toHaveBeenCalled()
     expect(control.bridge.failed).toHaveBeenCalledWith("configure")
 })
+
+test.each(["stop", "disconnect"] as const)(
+    "native child %s awaits branch-owned cleanup and retains its defect",
+    async (terminal) => {
+        const control = controlledBridge()
+        const client = controlledClient()
+        const tools = await childTools(control, client)
+        const entered = Deferred.makeUnsafe<void>()
+        const cleanupEntered = Deferred.makeUnsafe<void>()
+        const releaseCleanup = Deferred.makeUnsafe<void>()
+        const cleanup = new Error("branch-owned configuration cleanup defect")
+        const running = Effect.runPromiseExit(
+            tools.child.run({
+                token: "fixture-only-not-a-credential",
+                configure: () =>
+                    Effect.sync(() => Deferred.doneUnsafe(entered, Effect.void)).pipe(
+                        Effect.andThen(Effect.never),
+                        Effect.ensuring(
+                            Effect.sync(() => Deferred.doneUnsafe(cleanupEntered, Effect.void)).pipe(
+                                Effect.andThen(Deferred.await(releaseCleanup)),
+                                Effect.andThen(Effect.die(cleanup)),
+                            ),
+                        ),
+                    ),
+            }),
+        )
+        try {
+            await Effect.runPromise(Deferred.await(entered))
+            control[terminal]()
+            await Effect.runPromise(Deferred.await(cleanupEntered))
+            expect(control.bridge.close).not.toHaveBeenCalled()
+            expect(client.run).not.toHaveBeenCalled()
+        } finally {
+            Deferred.doneUnsafe(releaseCleanup, Effect.void)
+            await running
+        }
+        const exit = await running
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+            expect(exit.cause.reasons).toContainEqual(expect.objectContaining({ _tag: "Die", defect: cleanup }))
+            if (terminal === "disconnect")
+                expect(exit.cause.reasons).toContainEqual(
+                    expect.objectContaining({
+                        _tag: "Fail",
+                        error: expect.objectContaining({ reason: "disconnected" }),
+                    }),
+                )
+        }
+        if (terminal === "stop") expect(control.bridge.failed).not.toHaveBeenCalled()
+        else expect(control.bridge.failed).toHaveBeenCalledWith("configure")
+        expect(control.bridge.close).toHaveBeenCalledTimes(1)
+    },
+)

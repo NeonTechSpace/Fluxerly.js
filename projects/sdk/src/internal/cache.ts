@@ -1,10 +1,11 @@
 import { isDeepStrictEqual } from "node:util"
 import type { CacheDiagnostic } from "#sdk/client"
-import type { Message, MessageReference } from "#sdk/messages"
+import type { Message, MessageCore, MessageReference } from "#sdk/messages"
 import type { CachePolicyErrorReport } from "#sdk/cache"
 import { validAge, type CacheConfiguration } from "./configuration.js"
+import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
 
-type Entry = { message: Message; bytes: number; storedAt: number; age: number | null }
+type Entry<M extends MessageCore> = { message: M; bytes: number; storedAt: number; age: number | null }
 export type CacheRequest = {
     readonly channel: string
     readonly id: string | undefined
@@ -14,8 +15,8 @@ export type CacheRequest = {
 }
 
 /** One client's retained observations and bounded in-flight guards, never a server-state replica */
-export class MessageCache {
-    #entries = new Map<string, Entry>()
+export class MessageCache<M extends MessageCore = Message> {
+    #entries = new Map<string, Entry<M>>()
     #requests = new Set<CacheRequest>()
     #bytes = 0
     #generation = 0
@@ -24,7 +25,7 @@ export class MessageCache {
     readonly #limits: { readonly maxEntries: number; readonly maxBytes: number } | undefined
 
     constructor(
-        private settings: CacheConfiguration | undefined,
+        private settings: CacheConfiguration<M> | undefined,
         private report: (report: CachePolicyErrorReport) => void,
         private readonly now: () => number,
     ) {
@@ -47,10 +48,10 @@ export class MessageCache {
         }
     }
 
-    entries(limit: number): readonly Message[] {
+    entries(limit: number): readonly M[] {
         this.#purge()
         this.#schedule()
-        const entries: Message[] = []
+        const entries: M[] = []
         for (const entry of this.#entries.values()) {
             entries.push(entry.message)
             if (entries.length === limit) break
@@ -64,7 +65,7 @@ export class MessageCache {
         this.gap()
     }
 
-    get(target: MessageReference): Message | undefined {
+    get(target: MessageReference): M | undefined {
         const entry = this.#peek(target)
         if (!entry) return undefined
         this.#entries.delete(target.id)
@@ -114,7 +115,7 @@ export class MessageCache {
         this.#requests.delete(request)
     }
 
-    complete(request: CacheRequest, messages: readonly Message[]) {
+    complete(request: CacheRequest, messages: readonly M[]) {
         if (this.#closed || request.generation !== this.#generation) return
         // Admit a history page oldest first so its newest members survive tight capacity limits
         for (let index = messages.length - 1; index >= 0; index--) {
@@ -130,7 +131,7 @@ export class MessageCache {
         this.#schedule()
     }
 
-    observe(message: Message, request?: CacheRequest) {
+    observe(message: M, request?: CacheRequest) {
         if (this.#closed || !this.settings) return
         this.#invalidate(message, request)
         let age: unknown = this.settings.maxAgeMs ?? null
@@ -144,8 +145,7 @@ export class MessageCache {
         }
         if (this.#closed || !this.settings) return
         if (!validAge(age)) {
-            // Invalid asynchronous policies are not awaited; consume a native rejection without retaining its reason
-            if (age instanceof Promise) void age.catch(() => undefined)
+            discardInvalidCallbackReturn(age)
             this.#remove(message)
             this.report(Object.freeze({ reason: "invalidReturn" }))
             this.#schedule()

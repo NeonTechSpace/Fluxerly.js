@@ -1,82 +1,106 @@
-import type { Message } from "./messages.js"
+import type { Message, MessageCore } from "./messages.js"
 
-/** Optional non-message resource retention, independently bounded across the entire client for each enabled resource.
- * Off by default. True or an options object enables the resource. REST calls and event delivery never require caching.
- * Retains encountered frozen projections, not a complete remote replica. No persistence, preload or background refresh.
- * LRU capacity eviction favors repeated lookups. Expiry, conflicting observations and connection gaps can cause misses.
- * Gaps clear snapshots even after resume. Pre-gap requests cannot repopulate them. Shutdown releases SDK-held references.
- * Reads stay remote and writes are never suppressed by cached state
+/** Set memory-only cache bounds for a resource category such as users, guilds or channels.
+ * Use true or an options object in ClientOptions.cache to enable that category, which is otherwise disabled.
+ * The SDK stores frozen resources encountered through supported reads and events, not a complete copy of remote state.
+ * Fetches still contact Fluxer, writes still execute, and the SDK does no preload, persistence or background refresh.
+ * When capacity is full, the least recently used snapshot is removed first.
+ * Expiry, conflicting reads and lost gateway connections can cause misses.
+ * Connection gaps clear affected snapshots even after resume and block older requests from refilling them.
+ * Shutdown releases the SDK's references, not copies still held by your application
  */
 export interface ResourceCacheSettings {
-    /** Retained entries per resource across all guilds, a positive safe integer. Defaults to 1,000 */
+    /** Maximum snapshots kept for this category across the client, as a positive safe integer.
+     * Defaults to 1,000, not a limit per guild
+     */
     readonly maxEntries?: number
-    /** Accounted UTF-8 JSON bytes per resource, a positive safe integer. Defaults to 4,194,304.
-     * Permission bitfields are counted as decimal strings. Excludes keys, runtime overhead and caller-held references.
-     * This is not an exact heap or process-memory limit. Message-cache budgets remain separate
+    /** Maximum accounted UTF-8 JSON bytes kept for this category, as a positive safe integer.
+     * Defaults to 4,194,304 (4 MiB), separate from the message-cache byte budget.
+     * Permission bitfields are counted as decimal strings.
+     * Cache keys, runtime overhead and caller-held copies are excluded, so this is not an exact heap or process-memory limit
      */
     readonly maxBytes?: number
-    /** Nonnegative safe-integer milliseconds from observation, not last lookup. Null/default disables time expiry.
-     * Zero retains nothing. Expiry runs without lookups and never refreshes remotely.
-     * Unlike message policies, this setting accepts no callback
+    /** How long to keep a snapshot after observation, in nonnegative safe-integer milliseconds.
+     * Null or omission disables time expiry, while zero retains nothing.
+     * Local lookups do not renew age, and expiry removes SDK references without fetching a replacement.
+     * Expiry runs without a lookup and can be delayed by an event-loop stall.
+     * Unlike message caching, this setting accepts no duration callback
      */
     readonly maxAgeMs?: number | null
 }
 
-/** Safe policy diagnostic, never the rejected value, original exception or message payload */
+/** A message age-policy failure reported without the message, rejected return value or thrown exception */
 export interface CachePolicyErrorReport {
-    /** The retention function threw or returned something other than null or a nonnegative safe integer */
+    /** threw means the duration callback threw, while invalidReturn means it returned neither null nor a nonnegative safe integer */
     readonly reason: "threw" | "invalidReturn"
 }
 
 /**
- * Client-wide message retention settings shared by both API styles.
- * Enabled caches observe REST fetch/send/reply/edit/history results and gateway create/update events
+ * Bound the message snapshots kept for local lookups in either API style.
+ * Enable the cache in ClientOptions.cache.messages before using these settings.
+ * Eligible fetch, send, reply, edit and history results, plus gateway create and update events, supply snapshots.
+ * Entry and byte limits apply across this client, not separately per channel or server.
+ * Capacity eviction removes the least recently used snapshot first.
+ * An oversized or zero-age replacement removes the older copy without retaining the new one
  *
- * Both budgets apply globally using least-recently-used eviction, never separately per channel or server.
- * Oversized or zero-age candidates remove a superseded copy without retaining the replacement
+ * A cache hit is a past observation, not proof of current server state or complete channel history
  *
- * Responses crossing a gateway gap cannot repopulate the cache, even when the session resumes.
- * An overlapping mutation or observation can invalidate a pending response's cache admission.
- * That response cannot insert or renew age. It evicts a different retained snapshot but may leave an identical one.
- * These guards do not establish a global server revision order or complete channel history
+ * Connection gaps prevent older responses from refilling affected snapshots, even after resume.
+ * Conflicting reads or mutations can make a pending response ineligible to insert or renew a snapshot.
+ * Such a response removes a different retained copy but may leave an identical one
  *
- * Channel deletion or visibility loss removes that channel's snapshots and blocks already-started response admission.
- * Other retained channels remain, although their pending responses may also skip cache admission
+ * Channel deletion or visibility loss removes that channel's snapshots.
+ * Batch deletion evicts selected messages after dispatch even on rejection.
+ * These operations also prevent older responses from entering the cache, including some pending reads of unaffected resources
  *
- * Dispatched batch deletion evicts selected messages even on rejection and blocks already-started response admission.
- * Other retained messages remain, although overlapping or older responses may skip cache admission
- *
- * Banning with message deletion deliberately evicts the author's messages across all guilds, including known unrelated scope, because projections need not carry guild IDs.
- * That server job is asynchronous. Later observations may precede its completion and are not proof a message survived
+ * A ban that requests message deletion evicts this author's cached messages across guilds because some messages lack guild context.
+ * The server deletion job is asynchronous, so later observations do not establish whether the job has finished
  */
-export interface MessageCacheSettings {
-    /** Global retained snapshot count, a positive safe integer. Defaults to 1,000, not a per-channel allowance */
+export interface MessageCacheSettings<M extends MessageCore = Message> {
+    /** Maximum messages kept across this client, as a positive safe integer.
+     * Defaults to 1,000, not a separate allowance per channel
+     */
     readonly maxEntries?: number
-    /** UTF-8 JSON bytes of canonical Message projections, a positive safe integer. Defaults to 8,388,608, not exact heap/RSS */
+    /** Maximum UTF-8 JSON bytes of retained messages with this client's selected fields, as a positive safe integer.
+     * Defaults to 8,388,608 (8 MiB), excluding runtime overhead and caller-held copies rather than measuring exact process memory
+     */
     readonly maxBytes?: number
     /**
-     * Elapsed milliseconds per accepted observation, or a fast synchronous policy receiving its frozen snapshot.
-     * Nonnegative safe integers only: Zero skips retention, null or an omitted setting disables age expiry.
-     * Returning undefined, a Promise or an invalid number is a policy failure, not unlimited retention
+     * How long to keep each accepted snapshot, in milliseconds, or a synchronous function that chooses that duration.
+     * Use a nonnegative safe integer, zero to skip retention, or null to disable age expiry.
+     * Omitting this setting also disables age expiry
      *
-     * Eligible REST/event replacements reset age even if values are unchanged. Local reads only update LRU recency.
-     * Expired references are actively removed, but event-loop stalls can delay cleanup and GC is not immediate.
-     * A hit never proves current server state. Count/byte eviction can remove entries before their age limit
+     * The function receives the frozen message with this client's selected fields and must return a duration or null.
+     * A throw, undefined, Promise, thenable or invalid number removes the older copy and reports a policy failure.
+     * Message delivery and successful REST results still succeed when the policy fails.
+     * The SDK does not await or cancel invalid promises and thenables, and does not report their rejection values
      *
-     * Policy failures remove the superseded copy, report safely and preserve delivery and successful REST results.
-     * Changes to application state captured by the function affect subsequent observations only.
-     * Keep policy functions side-effect-free and nonblocking. Retention is not persistence or secure erasure
+     * Each eligible replacement starts a new age, even when values are unchanged.
+     * Local lookups change eviction order but do not renew age.
+     * Expiry removes SDK references without a lookup, although event-loop stalls can delay cleanup and garbage collection is not immediate.
+     * Capacity limits can remove a snapshot before its age limit
+     *
+     * Keep the function nonblocking and side-effect-free, since it runs while the SDK accepts an observation.
+     * Changing state captured by the function affects later observations only
+     *
+     * Cache removal is neither persistence management nor secure erasure
      */
-    readonly maxAgeMs?: number | null | ((message: Message) => number | null)
+    readonly maxAgeMs?: number | null | ((message: M) => number | null)
 }
 
-/** Optional default message-cache controls. An options object enables caching with defaults for omitted fields */
-export interface MessageCacheOptions extends MessageCacheSettings {
+/** Configure the default API's message cache and optionally handle age-policy failures.
+ * An options object enables caching with defaults for omitted settings
+ */
+export interface MessageCacheOptions<M extends MessageCore = Message> extends MessageCacheSettings<M> {
     /**
-     * Report safe retention-policy failures. Without a hook, the shared operational logger reports them.
-     * At most one custom report is outstanding per client. Further failures use the logger while it is busy.
-     * Reporter failure attempts one safe fallback log. No policy retry and no delay to message delivery.
-     * Reporter promises remain application-owned after shutdown. Reports contain no message references
+     * Handle a message duration callback that throws or returns an invalid value.
+     * Omission sends safe reports to this client's operational logger instead.
+     * The SDK allows one unfinished custom report per client and logs later failures while that report is busy.
+     * A reporter failure attempts one safe fallback log without rerunning the duration policy.
+     * The SDK does not await a reporter Promise before delivering messages or returning successful REST results.
+     * Keep synchronous reporter work nonblocking because it shares the application's event loop.
+     * Shutdown does not await or cancel reporter Promises, which remain application-owned.
+     * Reports contain no message references
      */
     readonly onError?: (report: CachePolicyErrorReport) => void | Promise<void>
 }

@@ -14,7 +14,7 @@ Add a focused check when existing tests cannot establish the affected behavior, 
 Use the designated sandbox under the [live-test instructions](/docs/REPOSITORY.md#opt-in-live-sandbox-check), with target verification, bounded execution and verified test-owned cleanup
 
 When a check cannot run, report the concrete blocker and remaining evidence gap.
-This standing rule applies to new chats and does not authorize unrelated systems, publication, VCS changes or recurring unattended work
+These checks do not authorize unrelated systems, publication, VCS changes or recurring unattended work
 
 # Repository Markdown links
 

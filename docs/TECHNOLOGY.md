@@ -17,13 +17,13 @@ Use [the repository guide](/docs/REPOSITORY.md) for setup and file locations
 | Public error results | neverthrow `Result` for default synchronous operations and `ResultAsync` for default async operations, typed Effect failures for the native API |
 | Initial build | TypeScript 7 compiler-only ESM output, public declarations and source maps |
 | Tests | Vitest runtime tests and separate TypeScript 7 consumer checks |
-| Distribution | npm |
+| Distribution | npm from a separately staged package |
 
 ### Consumer support
 
-Planned support covers JavaScript and TypeScript 7 only.
+The SDK supports JavaScript and TypeScript 7.
 TypeScript 6 and earlier are outside the SDK's support policy.
-JavaScript consumers will not need a TypeScript installation
+JavaScript consumers do not need a TypeScript installation
 
 The minimum is Node.js 24.11.0, the [first Node 24 LTS release](https://nodejs.org/en/blog/release/v24.11.0).
 This compatibility floor is separate from the development pin and does not recommend running an old patch instead of current security updates
@@ -43,22 +43,19 @@ The release suffix describes readiness, independently of compatibility changes
 
 | Suffix | Meaning |
 | --- | --- |
-| `-alpha.N` | Initial SDK development, not ready for supported public use |
-| `-beta.N` | Preview of upcoming changes, available for testing |
+| `-canary.N` | Preview of upcoming changes, available for testing |
 | `-rc.N` | Release candidate believed ready to ship, with no known release blockers, pending final validation |
 | No suffix | Stable release supported for public use |
 
 There is no literal `-none` suffix.
-A prerelease containing breaking changes targets the next breaking version even when the suffix is beta or RC
+A prerelease containing breaking changes targets the next breaking version even when the suffix is Canary or RC
 
-Initial development uses default `0.x.y-alpha.N` versions without a stable public API guarantee.
-Epoch zero leaves the package major unchanged because `0 * 1000 + MAJOR = MAJOR`.
+The first published preview starts at `1000.0.0-canary.0`, then moves through RC to Stable.
 The first stable public generation is called Epoch 1 and starts at `1000.0.0`, not `1.0.0`
 
 | Example release | Package version |
 | --- | --- |
-| Initial development | `0.1.0-alpha.1` |
-| First public release preview | `1000.0.0-beta.1` |
+| First public release preview | `1000.0.0-canary.0` |
 | First release candidate | `1000.0.0-rc.1` |
 | First stable release | `1000.0.0` |
 | Compatible bug fix | `1000.0.1` |
@@ -67,7 +64,10 @@ The first stable public generation is called Epoch 1 and starts at `1000.0.0`, n
 | Next major project generation | `2000.0.0` |
 
 These are policy examples, not published releases.
-The private development manifest remains at `0.0.0` for local package checks, as described under [build and package optimization](/docs/TECHNOLOGY.md#build-and-package-optimization)
+The private development manifest remains at `0.0.0` for local package checks, as described under [build and package optimization](/docs/TECHNOLOGY.md#build-and-package-optimization).
+The only release channels are Canary, RC and Stable.
+npm maps them to `canary`, `rc` and `latest` distribution tags.
+Release documentation snapshots use the matching exact package version, including its prerelease suffix
 
 ### Effect and diagnostics
 
@@ -79,9 +79,11 @@ The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and
 
 The initial target is Effect 4's release-candidate line, not Effect 3 or a stable Effect 4 release.
 Use an exact prerelease pin for reproducible implementation and validation.
-The private development package currently pins Effect as a runtime dependency.
-Native consumers must use the same exact Effect version as the SDK for now, not an arbitrary Effect 4 RC.
-The published dependency-versus-peer arrangement remains a separate release decision
+The package declares Effect as an exact required peer, with the same exact version in development dependencies.
+Native consumers must use the same exact Effect version as the SDK for now, not an arbitrary Effect 4 RC
+
+Modern npm and pnpm install required peers automatically by default.
+Consumers that disable peer installation must install the declared exact Effect version themselves
 
 ### Build and package optimization
 
@@ -90,19 +92,20 @@ Keep deliberate public exports and clean package contents.
 Validate the packed artifacts through default JavaScript, TypeScript 7 and native Effect consumers rather than relying only on source imports
 
 The private development package uses version `0.0.0` so it can be packed for local consumer checks.
-Its tarball includes compiled output and source files for source-map and declaration-map navigation.
-Release packaging is not configured, and the tarball does not yet include the repository license or a package README
+Its tarball includes readable compiled output, public declarations, JavaScript and declaration maps, and sources for navigation.
+The staged npm package includes the package README, consumer agent guidance and Apache-2.0 license, plus the Changesets changelog when present
 
-Before publication, compare compiler-only and bundled artifacts once representative SDK code exists.
-Measure package size and cold-import or startup behavior.
-Check equivalent public behavior, declarations, export boundaries, source maps, diagnostics and native Effect interoperability.
-Adopt bundling only when the measured benefit justifies the additional build dependency and maintenance cost.
+The staged npm manifest derives its public identity and release version from the private SDK source manifest.
+TypeScript 7 remains authoritative for SDK compilation and consumer checks.
+Manual release workflows and immutable candidate tooling enforce the [registry publication contract](/docs/RELEASING.md#registry-publication-contract)
+
+Compiler-only output is the selected release format.
 No bundler is selected
 
 Minification is off by default.
 A smaller package must demonstrate enough benefit to justify less readable output and another code transformation.
 A proposed change to that default requires runtime, type, source-map and diagnostic checks.
-Build the working SDK first, then evaluate packaging optimizations before publishing
+Bundling or minification requires a separate decision, not a prerequisite for the selected compiler-only package
 
 ### Test tooling
 
@@ -136,13 +139,17 @@ The [gateway implementation](/projects/sdk/src/internal/gateway.ts) owns product
 | Area | Selected choice |
 | --- | --- |
 | Framework | Astro |
+| Documentation UI | React and Fumadocs, integrated into Astro routes |
 | Hosting | Cloudflare Pages |
 | Tooling compiler | TypeScript 6 until the website toolchain supports TypeScript 7 and migration is approved |
 | SDK reference generator | TypeDoc with typedoc-plugin-markdown, reading TypeScript 7-generated declarations |
 
 TypeScript 6 is a compatibility exception for the website and reference-generation tooling, not SDK consumer support.
 The website is separate from the SDK's npm package.
-A documentation theme has not been selected
+The implemented documentation UI uses a dark, cozy theme with a 20px reading body.
+Temporary public delivery is Preview only, with no SEO or sitemap and explicit noindex controls.
+The permanent cinematic website remains deferred until the first stable SDK release.
+Use [documentation maintenance](/docs/DOCUMENTATION.md) for generation, exact-version snapshots and delivery setup
 
 ### SDK reference generation
 
@@ -154,7 +161,9 @@ Generated Markdown supplies the API reference within Astro, alongside handwritte
 The website must explicitly map generated reference links to its page routes and preserve fragment targets.
 Generated reference files must not require manual link edits
 
-The generator and routing integration are selected but not installed or implemented in this repository
+The generator and route integration are implemented in `projects/web/`
+
+The handwritten quickstart remains website source, and Changesets owns the package changelog rendered by the website and GitHub release notes
 
 #### Documentation placement
 
@@ -165,10 +174,11 @@ Before adding or expanding documentation, choose its owner:
 | Member signatures, defaults and caller-visible behavior | Public source comments, preserved in declarations for the website reference |
 | User guides, tutorials, recipes and design explanations for SDK users | Documentation website |
 | Introduction, contributor setup, navigation, testing procedures and release policy | Repository Markdown |
+| Instructions for agents consuming the installed package | [Consumer agent guide](/projects/sdk/consumer/AGENTS.md), discovered through the package README |
 | Cross-component ownership, invariants and coordination that maintainers need beyond documented public members | Concise repository implementation contracts |
 
 Website Markdown and MDX are website source, not a parallel repository manual.
-Until the website is implemented, keep member behavior in source comments.
+Keep member behavior in source comments and handwritten guides in website source.
 Link to existing owners instead of repeating API reference, defaults, feature inventories or test assertions.
 Update repository docs only when the milestone changes a maintainer-facing rule, boundary, navigation or procedure
 
@@ -197,7 +207,7 @@ For implementation or review of SDK public API changes, complete these steps bef
 5. Report the documentation review and verification results with the implementation result.
    Unresolved gaps or skipped required checks mean the affected work is not complete
 
-Apply this gate even before reference generation is installed.
+Apply this gate to both development and release reference generation.
 Repository prose does not substitute for public source comments
 
 Comment-presence checks, successful compilation and declaration preservation cannot establish documentation accuracy.
@@ -236,5 +246,7 @@ Lint tooling and website formatting have not been selected
 
 The SDK build and test tools are installed and configured.
 The optional transitive `msgpackr-extract` install script is explicitly disabled in the workspace's `allowBuilds` policy.
-Unreviewed dependency builds still fail installation rather than being enabled globally.
-Release and deployment workflows are not configured
+Unreviewed dependency builds still fail installation rather than being enabled globally
+
+CI and manual version PR, candidate preparation, publication and Preview workflows are configured under [.github/workflows](/.github/workflows/).
+External authentication and Preview configuration remain prerequisites rather than established deployments

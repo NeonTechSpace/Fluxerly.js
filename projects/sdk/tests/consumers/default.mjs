@@ -1,6 +1,27 @@
 import assert from "node:assert/strict"
+import { registerHooks } from "node:module"
 import { withHostedDiscovery } from "../hosted-discovery.mjs"
-import {
+
+const guardedWebSocketUrl = `data:text/javascript,${encodeURIComponent(`
+    export let constructions = 0
+    export default class WebSocket {
+        constructor() {
+            constructions += 1
+            throw new Error("Creation must not open a WebSocket")
+        }
+    }
+`)}`
+let guardedWebSocketResolutions = 0
+registerHooks({
+    resolve(specifier, context, nextResolve) {
+        const resolved = nextResolve(specifier, context)
+        if (specifier !== "ws") return resolved
+        guardedWebSocketResolutions += 1
+        return { ...resolved, url: guardedWebSocketUrl }
+    },
+})
+const guardedWebSocket = await import(guardedWebSocketUrl)
+const {
     createWebhookClient,
     oauth,
     builders,
@@ -13,7 +34,8 @@ import {
     MemberChunkError,
     ShardConnectionError,
     AuthenticationError,
-} from "@neontechspace/fluxerly"
+} = await import("@neontechspace/fluxerly")
+assert.ok(guardedWebSocketResolutions > 0, "The SDK must import the guarded ws dependency")
 
 assert.equal(colors.parse("#ff8800")._unsafeUnwrap(), 0xff8800)
 assert.equal(colors.toHex(1)._unsafeUnwrap(), "#000001")
@@ -47,11 +69,6 @@ assert.equal((await webhookClient.value.fetchMessage("400")).error._tag, "Client
 
 globalThis.fetch = () => {
     throw new Error("Creation must not make HTTP requests")
-}
-globalThis.WebSocket = class {
-    constructor() {
-        throw new Error("Creation must not open a WebSocket")
-    }
 }
 
 const { createClient, ConfigurationError, MessageOperationError, CollectorError, MessageFlags } =
@@ -96,6 +113,7 @@ const result = createClient({
         },
     },
 })
+assert.equal(guardedWebSocket.constructions, 0)
 assert.equal(result.isOk(), true)
 assert.equal(result.value.state, "Disconnected")
 for await (const batch of result.value.members.iterateChunks("20", { all: true })) {

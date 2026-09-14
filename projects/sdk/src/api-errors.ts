@@ -155,7 +155,9 @@ const validationErrorMappings = {
     VANITY_URL_INVALID_CHARACTERS: "The vanity URL code has invalid characters",
 } as const
 
-/** Safe fixed explanation for one reviewed validation code, without the provider's path or localized message */
+/** A recognized validation error Fluxer reported, with the SDK's fixed explanation.
+ * This identifies a server rejection, not a local input failure, and contains no provider field path or localized message
+ */
 export type ApiValidationErrorDetail = {
     readonly [ProviderCode in keyof typeof validationErrorMappings]: {
         /** Exact reviewed provider validation code */
@@ -166,12 +168,13 @@ export type ApiValidationErrorDetail = {
 }[keyof typeof validationErrorMappings]
 
 /**
- * A finite allowlist of reviewed Fluxer error codes, with the SDK's fixed explanation for each code
- *
- * These details retain an exact providerCode but never a provider response body, localized message, field path, or
- * rejected value. Validation details retain at most eight reviewed codes, excluding their paths and messages because
- * either can contain private caller data. Unknown provider codes deliberately produce null apiError.
- * These classifications apply only to Fluxer API responses, not responses from presigned upload destinations
+ * Details of a Fluxer rejection, available in an operation error's apiError field.
+ * Use code for the SDK category and providerCode for the exact reviewed server code.
+ * Explanation is fixed SDK text, not the server's message or an application's user-facing copy.
+ * Unknown provider codes leave apiError null rather than copying unreviewed text.
+ * For form-validation errors, validationErrors contains at most eight reviewed codes without field paths or messages.
+ * No detail retains the provider body, localized message, rejected value or private caller data.
+ * This classification applies to Fluxer API responses, not responses from presigned upload destinations
  *
  * @example
  * ```ts

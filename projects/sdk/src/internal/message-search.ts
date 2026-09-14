@@ -1,8 +1,11 @@
+import type { MessageCore } from "#sdk/messages"
+import type { MessageDecoder } from "./message-fields.js"
 import type {
     MessageSearchChannel,
     MessageSearchContentType,
     MessageSearchEmbedType,
     MessageSearchPage,
+    MessageSearchQuery,
 } from "#sdk/message-search"
 import { decodeMessage, identifier, record } from "./message.js"
 import { inputValidationFailure } from "#sdk/input-validation"
@@ -59,29 +62,29 @@ const authorTypes = new Set(["user", "bot", "webhook"])
 const integer = (value: unknown, minimum: number, maximum: number): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum
 
-function identifiers(value: unknown, maximum: number): value is readonly string[] {
-    return Array.isArray(value) && value.length <= maximum && Array.from(value).every(identifier)
+function identifiers(value: unknown, maximum: number): readonly string[] | undefined {
+    if (!Array.isArray(value) || value.length > maximum) return undefined
+    const items = Array.from(value)
+    return items.every(identifier) ? Object.freeze(items) : undefined
 }
 
-function texts(value: unknown, maximum: number, length: number): value is readonly string[] {
-    return (
-        Array.isArray(value) &&
-        value.length <= maximum &&
-        Array.from(value).every((item) => typeof item === "string" && item.length >= 1 && item.length <= length)
-    )
+function texts(value: unknown, maximum: number, length: number): readonly string[] | undefined {
+    if (!Array.isArray(value) || value.length > maximum) return undefined
+    const items = Array.from(value)
+    return items.every((item) => typeof item === "string" && item.length >= 1 && item.length <= length)
+        ? Object.freeze(items)
+        : undefined
 }
 
-function literals(value: unknown, maximum: number, allowed: ReadonlySet<string>): value is readonly string[] {
-    return (
-        Array.isArray(value) &&
-        value.length <= maximum &&
-        Array.from(value).every((item) => typeof item === "string" && allowed.has(item))
-    )
+function literals(value: unknown, maximum: number, allowed: ReadonlySet<string>): readonly string[] | undefined {
+    if (!Array.isArray(value) || value.length > maximum) return undefined
+    const items = Array.from(value)
+    return items.every((item) => typeof item === "string" && allowed.has(item)) ? Object.freeze(items) : undefined
 }
 
 /** Copy one strict contextual request into Fluxer's bot-permitted current scope */
 export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
-    const input = query === undefined ? {} : query
+    const supplied = query === undefined ? {} : query
     if (!record(contextInput))
         return inputValidationFailure("context", "type", "Message search context must be an object")
     if (Object.keys(contextInput).some((key) => key !== "guildId" && key !== "channelId"))
@@ -96,16 +99,18 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
         return inputValidationFailure("context.guildId", "format", "Guild IDs must be decimal strings")
     if (contextInput.channelId !== undefined && !identifier(contextInput.channelId))
         return inputValidationFailure("context.channelId", "format", "Channel IDs must be decimal strings")
-    if (!record(input)) return inputValidationFailure("query", "type", "Message search query must be an object")
-    if (Object.keys(input).some((key) => !queryKeys.has(key)))
+    if (!record(supplied)) return inputValidationFailure("query", "type", "Message search query must be an object")
+    if (Object.keys(supplied).some((key) => !queryKeys.has(key)))
         return inputValidationFailure(
             "query",
             "allowedFields",
             "Message search query may contain only documented search fields",
         )
+    // Read recognized properties once, regardless of ownership or enumerability
+    const input = Object.fromEntries(Array.from(queryKeys, (key) => [key, supplied[key]]))
     const limit = input.limit === undefined ? 25 : input.limit
     const page = input.page === undefined ? 1 : input.page
-    const cursor = input.cursor
+    let cursor = input.cursor
     if (!integer(limit, 1, 25))
         return inputValidationFailure(
             "query.limit",
@@ -118,6 +123,7 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
             "range",
             "Message search page must be an integer from 1 through 400",
         )
+    if (Array.isArray(cursor)) input.cursor = cursor = Object.freeze(Array.from(cursor))
     if (
         cursor !== undefined &&
         (!Array.isArray(cursor) || !Array.from(cursor).every((item) => typeof item === "string"))
@@ -138,61 +144,64 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
             "length",
             "Search content must contain 1 through 1,024 UTF-16 code units",
         )
-    if (input.contents !== undefined && !texts(input.contents, 100, 1024))
+    if (input.contents !== undefined && !(input.contents = texts(input.contents, 100, 1024)))
         return inputValidationFailure(
             "query.contents[]",
             "format",
             "contents must be an array of at most 100 strings containing 1 through 1,024 UTF-16 code units",
         )
-    if (input.exactPhrases !== undefined && !texts(input.exactPhrases, 10, 1024))
+    if (input.exactPhrases !== undefined && !(input.exactPhrases = texts(input.exactPhrases, 10, 1024)))
         return inputValidationFailure(
             "query.exactPhrases[]",
             "format",
             "exactPhrases must be an array of at most 10 strings containing 1 through 1,024 UTF-16 code units",
         )
-    if (input.channelIds !== undefined && !identifiers(input.channelIds, 500))
+    if (input.channelIds !== undefined && !(input.channelIds = identifiers(input.channelIds, 500)))
         return inputValidationFailure(
             "query.channelIds[]",
             "format",
             "channelIds must be an array of at most 500 decimal ID strings",
         )
-    if (input.excludeChannelIds !== undefined && !identifiers(input.excludeChannelIds, 500))
+    if (input.excludeChannelIds !== undefined && !(input.excludeChannelIds = identifiers(input.excludeChannelIds, 500)))
         return inputValidationFailure(
             "query.excludeChannelIds[]",
             "format",
             "excludeChannelIds must be an array of at most 500 decimal ID strings",
         )
-    if (input.authorTypes !== undefined && !literals(input.authorTypes, 20, authorTypes))
+    if (input.authorTypes !== undefined && !(input.authorTypes = literals(input.authorTypes, 20, authorTypes)))
         return inputValidationFailure(
             "query.authorTypes[]",
             "allowedValue",
             "authorTypes must be an array of at most 20 supported values",
         )
-    if (input.excludeAuthorTypes !== undefined && !literals(input.excludeAuthorTypes, 20, authorTypes))
+    if (
+        input.excludeAuthorTypes !== undefined &&
+        !(input.excludeAuthorTypes = literals(input.excludeAuthorTypes, 20, authorTypes))
+    )
         return inputValidationFailure(
             "query.excludeAuthorTypes[]",
             "allowedValue",
             "excludeAuthorTypes must be an array of at most 20 supported values",
         )
-    if (input.authorIds !== undefined && !identifiers(input.authorIds, 100))
+    if (input.authorIds !== undefined && !(input.authorIds = identifiers(input.authorIds, 100)))
         return inputValidationFailure(
             "query.authorIds[]",
             "format",
             "authorIds must be an array of at most 100 decimal ID strings",
         )
-    if (input.excludeAuthorIds !== undefined && !identifiers(input.excludeAuthorIds, 100))
+    if (input.excludeAuthorIds !== undefined && !(input.excludeAuthorIds = identifiers(input.excludeAuthorIds, 100)))
         return inputValidationFailure(
             "query.excludeAuthorIds[]",
             "format",
             "excludeAuthorIds must be an array of at most 100 decimal ID strings",
         )
-    if (input.mentions !== undefined && !identifiers(input.mentions, 100))
+    if (input.mentions !== undefined && !(input.mentions = identifiers(input.mentions, 100)))
         return inputValidationFailure(
             "query.mentions[]",
             "format",
             "mentions must be an array of at most 100 decimal ID strings",
         )
-    if (input.excludeMentions !== undefined && !identifiers(input.excludeMentions, 100))
+    if (input.excludeMentions !== undefined && !(input.excludeMentions = identifiers(input.excludeMentions, 100)))
         return inputValidationFailure(
             "query.excludeMentions[]",
             "format",
@@ -202,73 +211,94 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
         return inputValidationFailure("query.mentionedEveryone", "type", "mentionedEveryone must be a boolean")
     if (input.pinned !== undefined && typeof input.pinned !== "boolean")
         return inputValidationFailure("query.pinned", "type", "pinned must be a boolean")
-    if (input.has !== undefined && !literals(input.has, 20, contentTypes))
+    if (input.has !== undefined && !(input.has = literals(input.has, 20, contentTypes)))
         return inputValidationFailure(
             "query.has[]",
             "allowedValue",
             "has must be an array of at most 20 supported values",
         )
-    if (input.excludeHas !== undefined && !literals(input.excludeHas, 20, contentTypes))
+    if (input.excludeHas !== undefined && !(input.excludeHas = literals(input.excludeHas, 20, contentTypes)))
         return inputValidationFailure(
             "query.excludeHas[]",
             "allowedValue",
             "excludeHas must be an array of at most 20 supported values",
         )
-    if (input.embedTypes !== undefined && !literals(input.embedTypes, 20, embedTypes))
+    if (input.embedTypes !== undefined && !(input.embedTypes = literals(input.embedTypes, 20, embedTypes)))
         return inputValidationFailure(
             "query.embedTypes[]",
             "allowedValue",
             "embedTypes must be an array of at most 20 supported values",
         )
-    if (input.excludeEmbedTypes !== undefined && !literals(input.excludeEmbedTypes, 20, embedTypes))
+    if (
+        input.excludeEmbedTypes !== undefined &&
+        !(input.excludeEmbedTypes = literals(input.excludeEmbedTypes, 20, embedTypes))
+    )
         return inputValidationFailure(
             "query.excludeEmbedTypes[]",
             "allowedValue",
             "excludeEmbedTypes must be an array of at most 20 supported values",
         )
-    if (input.embedProviders !== undefined && !texts(input.embedProviders, 50, 256))
+    if (input.embedProviders !== undefined && !(input.embedProviders = texts(input.embedProviders, 50, 256)))
         return inputValidationFailure(
             "query.embedProviders[]",
             "format",
             "embedProviders must be an array of at most 50 strings containing 1 through 256 UTF-16 code units",
         )
-    if (input.excludeEmbedProviders !== undefined && !texts(input.excludeEmbedProviders, 50, 256))
+    if (
+        input.excludeEmbedProviders !== undefined &&
+        !(input.excludeEmbedProviders = texts(input.excludeEmbedProviders, 50, 256))
+    )
         return inputValidationFailure(
             "query.excludeEmbedProviders[]",
             "format",
             "excludeEmbedProviders must be an array of at most 50 strings containing 1 through 256 UTF-16 code units",
         )
-    if (input.linkHostnames !== undefined && !texts(input.linkHostnames, 100, 255))
+    if (input.linkHostnames !== undefined && !(input.linkHostnames = texts(input.linkHostnames, 100, 255)))
         return inputValidationFailure(
             "query.linkHostnames[]",
             "format",
             "linkHostnames must be an array of at most 100 strings containing 1 through 255 UTF-16 code units",
         )
-    if (input.excludeLinkHostnames !== undefined && !texts(input.excludeLinkHostnames, 100, 255))
+    if (
+        input.excludeLinkHostnames !== undefined &&
+        !(input.excludeLinkHostnames = texts(input.excludeLinkHostnames, 100, 255))
+    )
         return inputValidationFailure(
             "query.excludeLinkHostnames[]",
             "format",
             "excludeLinkHostnames must be an array of at most 100 strings containing 1 through 255 UTF-16 code units",
         )
-    if (input.attachmentFilenames !== undefined && !texts(input.attachmentFilenames, 100, 1024))
+    if (
+        input.attachmentFilenames !== undefined &&
+        !(input.attachmentFilenames = texts(input.attachmentFilenames, 100, 1024))
+    )
         return inputValidationFailure(
             "query.attachmentFilenames[]",
             "format",
             "attachmentFilenames must be an array of at most 100 strings containing 1 through 1,024 UTF-16 code units",
         )
-    if (input.excludeAttachmentFilenames !== undefined && !texts(input.excludeAttachmentFilenames, 100, 1024))
+    if (
+        input.excludeAttachmentFilenames !== undefined &&
+        !(input.excludeAttachmentFilenames = texts(input.excludeAttachmentFilenames, 100, 1024))
+    )
         return inputValidationFailure(
             "query.excludeAttachmentFilenames[]",
             "format",
             "excludeAttachmentFilenames must be an array of at most 100 strings containing 1 through 1,024 UTF-16 code units",
         )
-    if (input.attachmentExtensions !== undefined && !texts(input.attachmentExtensions, 50, 32))
+    if (
+        input.attachmentExtensions !== undefined &&
+        !(input.attachmentExtensions = texts(input.attachmentExtensions, 50, 32))
+    )
         return inputValidationFailure(
             "query.attachmentExtensions[]",
             "format",
             "attachmentExtensions must be an array of at most 50 strings containing 1 through 32 UTF-16 code units",
         )
-    if (input.excludeAttachmentExtensions !== undefined && !texts(input.excludeAttachmentExtensions, 50, 32))
+    if (
+        input.excludeAttachmentExtensions !== undefined &&
+        !(input.excludeAttachmentExtensions = texts(input.excludeAttachmentExtensions, 50, 32))
+    )
         return inputValidationFailure(
             "query.excludeAttachmentExtensions[]",
             "format",
@@ -283,6 +313,7 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
     const list = (value: readonly unknown[] | undefined) => (value === undefined ? undefined : [...value])
     return Object.freeze({
         limit,
+        query: Object.freeze(input) as MessageSearchQuery,
         json: JSON.stringify({
             scope: "current",
             ...(contextInput.guildId === undefined ? {} : { context_guild_id: contextInput.guildId }),
@@ -369,7 +400,15 @@ function channel(value: unknown): MessageSearchChannel | undefined {
 }
 
 /** Decode only the frozen search page projections Fluxerly exposes. No search result enters the message or channel cache */
-export function decodeMessageSearchPage(value: unknown): MessageSearchPage | undefined {
+export function decodeMessageSearchPage(value: unknown): MessageSearchPage | undefined
+export function decodeMessageSearchPage<M extends MessageCore>(
+    value: unknown,
+    decode: MessageDecoder<M>,
+): MessageSearchPage<M> | undefined
+export function decodeMessageSearchPage(
+    value: unknown,
+    decode: MessageDecoder<MessageCore> = decodeMessage,
+): MessageSearchPage<MessageCore> | undefined {
     if (!record(value)) return undefined
     if (value.indexing === true) return Object.freeze({ indexing: true })
     if (
@@ -386,7 +425,7 @@ export function decodeMessageSearchPage(value: unknown): MessageSearchPage | und
         return undefined
     const messages = []
     for (const item of value.messages) {
-        const message = decodeMessage(item)
+        const message = decode(item)
         if (!message) return undefined
         messages.push(message)
     }

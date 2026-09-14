@@ -1,0 +1,235 @@
+name: Release publish
+on:
+  workflow_dispatch:
+    inputs:
+      preparation_run_id:
+        description: Successful Release prepare run ID from this repository
+        required: true
+        type: string
+      candidate_checksum:
+        description: Externally reviewed candidate.json SHA256 from the preparation summary
+        required: true
+        type: string
+      operation:
+        description: Publish npm then reconcile GitHub, or only reconcile an already-published npm version
+        required: true
+        default: publish
+        type: choice
+        options: [publish, reconcile]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact_id: ${{ steps.preparation.outputs.artifactId }}
+      source_commit: ${{ steps.preparation.outputs.sourceCommit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+      - name: Require supported registry contracts before requesting credentials
+        id: support
+        working-directory: projects
+        run: pnpm release:check
+      - name: Verify successful preparation and selected-source provenance
+        id: preparation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARATION_RUN_ID: ${{ inputs.preparation_run_id }}
+        run: node projects/release/github.mjs preparation
+      - name: Download only the verified preparation candidate
+        id: download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.preparation.outputs.artifactId }}
+          run-id: ${{ inputs.preparation_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/release-candidate
+      - name: Inspect exact candidate contents before entering the protected environment
+        id: inspect
+        env:
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
+          CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
+          CANDIDATE_SOURCE_COMMIT: ${{ steps.preparation.outputs.sourceCommit }}
+        run: node projects/release/github.mjs inspect
+      - name: Summarize protected-release inspection
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_KIND: inspect
+          SUMMARY_STEPS: ${{ toJSON(steps) }}
+          SUMMARY_DETAILS: >-
+            {"preparationRunId": ${{ toJSON(inputs.preparation_run_id) }}, "checksum": ${{ toJSON(inputs.candidate_checksum) }}}
+        run: |
+          if [ -f .github/scripts/workflow-summary.mjs ]; then
+            node .github/scripts/workflow-summary.mjs
+          else
+            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  publish:
+    needs: inspect
+    if: inputs.operation == 'publish'
+    name: Publish npm version
+    concurrency:
+      group: package-release-publish-npm
+      cancel-in-progress: false
+      queue: max
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: package
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          ref: ${{ needs.inspect.outputs.source_commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+      - name: Download only the inspected preparation candidate
+        id: download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.inspect.outputs.artifact_id }}
+          run-id: ${{ inputs.preparation_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/release-candidate
+      - name: Reinspect the externally reviewed candidate
+        id: inspect
+        env:
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
+          CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
+          CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
+        run: node projects/release/github.mjs inspect
+      - name: Publish the npm version
+        id: publish
+        working-directory: projects
+        env:
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
+          CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
+        run: pnpm release:publish "$CANDIDATE_DIRECTORY" --checksum "$CANDIDATE_CHECKSUM"
+      - name: Confirm the npm version is available
+        id: verify
+        working-directory: projects
+        env:
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
+          CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
+        run: pnpm release:verify "$CANDIDATE_DIRECTORY" --checksum "$CANDIDATE_CHECKSUM"
+      - name: Summarize npm publication
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_KIND: publish-npm
+          SUMMARY_STEPS: ${{ toJSON(steps) }}
+          SUMMARY_DETAILS: >-
+            {"preparationRunId": ${{ toJSON(inputs.preparation_run_id) }}, "checksum": ${{ toJSON(inputs.candidate_checksum) }}, "sourceCommit": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "artifactId": ${{ toJSON(needs.inspect.outputs.artifact_id) }}}
+        run: |
+          if [ -f .github/scripts/workflow-summary.mjs ]; then
+            node .github/scripts/workflow-summary.mjs
+          else
+            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  reconcile:
+    needs: [inspect, publish]
+    if: ${{ always() && !cancelled() && needs.inspect.result == 'success' }}
+    concurrency:
+      group: package-release-reconcile
+      cancel-in-progress: false
+      queue: max
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: package
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      complete: ${{ steps.status.outputs.complete }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          ref: ${{ needs.inspect.outputs.source_commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+      - name: Download only the inspected preparation candidate
+        id: download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.inspect.outputs.artifact_id }}
+          run-id: ${{ inputs.preparation_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/release-candidate
+      - name: Reinspect the externally reviewed candidate before final reconciliation
+        id: inspect
+        env:
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
+          CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
+          CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
+        run: node projects/release/github.mjs inspect
+      - name: Read npm version availability
+        id: status
+        working-directory: projects
+        env:
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
+          CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
+        run: |
+          status="$(pnpm release:status "$CANDIDATE_DIRECTORY" --checksum "$CANDIDATE_CHECKSUM")"
+          printf '%s\n' "$status"
+          node --input-type=module --eval '
+          const status = JSON.parse(process.argv[1].trim().split(/\r?\n/).at(-1))
+          if (!["published", "missing"].includes(status.npm))
+              throw new Error("Release status must report npm version availability")
+          if (status.complete !== (status.npm === "published"))
+              throw new Error("Release status completeness does not match npm availability")
+          process.stdout.write(`complete=${status.complete}\nnpm=${status.npm}\n`)
+          ' "$status" >> "$GITHUB_OUTPUT"
+      - name: Create the repository-scoped release App token
+        id: release_token
+        if: steps.status.outputs.complete == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Announce the exact-source GitHub release when the npm version is available
+        id: announce
+        if: steps.status.outputs.complete == 'true'
+        env:
+          GH_TOKEN: ${{ steps.release_token.outputs.token }}
+          CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
+          CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
+          CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
+        run: node projects/release/github.mjs announce
+      - name: Summarize final reconciliation
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_KIND: reconcile
+          SUMMARY_STEPS: ${{ toJSON(steps) }}
+          SUMMARY_DETAILS: >-
+            {"operation": ${{ toJSON(inputs.operation) }}, "publishResult": ${{ toJSON(needs.publish.result) }}, "npm": ${{ toJSON(steps.status.outputs.npm) }}, "complete": ${{ toJSON(steps.status.outputs.complete) }}, "preparationRunId": ${{ toJSON(inputs.preparation_run_id) }}, "checksum": ${{ toJSON(inputs.candidate_checksum) }}, "sourceCommit": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "artifactId": ${{ toJSON(needs.inspect.outputs.artifact_id) }}}
+        run: |
+          if [ -f .github/scripts/workflow-summary.mjs ]; then
+            node .github/scripts/workflow-summary.mjs
+          else
+            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  docs-preview:
+    needs: reconcile
+    if: ${{ !cancelled() && needs.reconcile.result == 'success' && needs.reconcile.outputs.complete == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/docs-preview.yml
+    secrets: inherit

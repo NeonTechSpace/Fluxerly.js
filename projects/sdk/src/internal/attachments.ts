@@ -237,10 +237,13 @@ export function encodeAttachments(value: unknown, edit: boolean) {
     return { metadata: metadataValues, files, uploadedFilenames }
 }
 
-export function decodeAttachments(value: unknown): readonly Attachment[] | undefined {
-    if (value === undefined || value === null) return Object.freeze([])
+export function decodeAttachments(value: unknown): readonly Attachment[] | undefined
+export function decodeAttachments(value: unknown, construct: boolean): readonly Attachment[] | true | undefined
+/** False validates metadata without constructing a projection. The value true is the validation-only success marker */
+export function decodeAttachments(value: unknown, construct = true): readonly Attachment[] | true | undefined {
+    if (value === undefined || value === null) return construct ? Object.freeze([]) : true
     if (!Array.isArray(value)) return undefined
-    const result: Attachment[] = []
+    const result: Attachment[] | undefined = construct ? [] : undefined
     for (const item of value) {
         if (
             !record(item) ||
@@ -254,12 +257,14 @@ export function decodeAttachments(value: unknown): readonly Attachment[] | undef
             item.flags < 0
         )
             return undefined
-        const out: Record<string, unknown> = {
-            id: item.id,
-            filename: item.filename,
-            size: item.size,
-            flags: item.flags,
-        }
+        const out: Record<string, unknown> | undefined = construct
+            ? {
+                  id: item.id,
+                  filename: item.filename,
+                  size: item.size,
+                  flags: item.flags,
+              }
+            : undefined
         for (const [key, wire] of Object.entries({
             title: "title",
             description: "description",
@@ -273,7 +278,7 @@ export function decodeAttachments(value: unknown): readonly Attachment[] | undef
         })) {
             if (item[wire] == null) continue
             if (typeof item[wire] !== "string") return undefined
-            out[key] = item[wire]
+            if (out) out[key] = item[wire]
         }
         for (const key of ["width", "height", "duration"] as const) {
             if (item[key] == null) continue
@@ -284,14 +289,14 @@ export function decodeAttachments(value: unknown): readonly Attachment[] | undef
                 item[key] > 2_147_483_647
             )
                 return undefined
-            out[key] = item[key]
+            if (out) out[key] = item[key]
         }
         for (const key of ["nsfw", "expired"] as const) {
             if (item[key] == null) continue
             if (typeof item[key] !== "boolean") return undefined
-            out[key] = item[key]
+            if (out) out[key] = item[key]
         }
-        result.push(Object.freeze(out) as unknown as Attachment)
+        if (out) result!.push(Object.freeze(out) as unknown as Attachment)
     }
-    return Object.freeze(result)
+    return result ? Object.freeze(result) : true
 }

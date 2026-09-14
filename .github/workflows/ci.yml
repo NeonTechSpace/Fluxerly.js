@@ -1,0 +1,160 @@
+name: Check
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: check-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+jobs:
+  workspace:
+    name: Workspace checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+      - run: pnpm check
+        id: workspace
+        working-directory: projects
+      - name: Summarize workspace checks
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_KIND: workspace
+          SUMMARY_STEPS: ${{ toJSON(steps) }}
+        run: |
+          if [ -f .github/scripts/workflow-summary.mjs ]; then
+            node .github/scripts/workflow-summary.mjs
+          else
+            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  browser:
+    name: Documentation browser checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+      - name: Build the SDK and documentation
+        id: build
+        run: pnpm build
+        working-directory: projects
+      - name: Install browser
+        id: browser_install
+        run: pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
+        working-directory: projects
+      - name: Check documentation in a browser
+        id: browser
+        run: |
+          pnpm --filter fluxerly-docs test:browser
+          pnpm --filter fluxerly-docs test:versions
+        working-directory: projects
+      - name: Retain failing browser evidence
+        id: browser_evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-failure
+          path: projects/web/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Summarize browser checks
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_KIND: browser
+          SUMMARY_STEPS: ${{ toJSON(steps) }}
+        run: |
+          if [ -f .github/scripts/workflow-summary.mjs ]; then
+            node .github/scripts/workflow-summary.mjs
+          else
+            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  consumers:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - runtime-policy: development
+            name: SDK consumers on the development Node version
+          - runtime-policy: consumer-floor
+            name: SDK consumers on the declared Node floor
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+        with:
+          runtime-policy: ${{ matrix.runtime-policy }}
+      - name: Build the SDK on the selected Node version
+        id: build
+        run: pnpm --filter @neontechspace/fluxerly build
+        working-directory: projects
+      - name: Check packed JavaScript and TypeScript consumers
+        id: package
+        run: pnpm --filter @neontechspace/fluxerly test:package
+        working-directory: projects
+      - name: Check npm-installed consumers
+        id: npm
+        run: pnpm --filter @neontechspace/fluxerly test:npm
+        working-directory: projects
+      - name: Summarize consumer compatibility
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_KIND: consumers
+          SUMMARY_STEPS: ${{ toJSON(steps) }}
+          SUMMARY_DETAILS: '{"runtimePolicy": ${{ toJSON(matrix.runtime-policy) }}}'
+        run: |
+          if [ -f .github/scripts/workflow-summary.mjs ]; then
+            node .github/scripts/workflow-summary.mjs
+          else
+            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  check:
+    name: check
+    needs: [workspace, browser, consumers]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarize required checks and enforce the result
+        shell: bash
+        env:
+          WORKSPACE_RESULT: ${{ needs.workspace.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+          CONSUMERS_RESULT: ${{ needs.consumers.result }}
+        run: |
+          status=0
+          printf '## Required checks\n\n| Check group | Result |\n| --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
+          for group in WORKSPACE BROWSER CONSUMERS; do
+            variable="${group}_RESULT"
+            result="${!variable}"
+            printf '| %s | %s |\n' "$group" "$result" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$result" != success ]; then status=1; fi
+          done
+          if [ "$status" -eq 0 ]; then
+            printf '\nAll required CI groups passed, including both Node consumer versions\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '\nRequired checks did not all pass. Inspect failed, cancelled or skipped jobs before merging\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          printf '\nCI does not publish packages or verify live sandbox behavior\n' >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"

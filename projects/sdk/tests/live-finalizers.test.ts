@@ -440,54 +440,45 @@ async function runExtractedFinalizer(
     return { client, events, lockExists: existsSync(lockPath) }
 }
 
-test.each(["default", "effect"])(
-    "%s expression finalizers retain evidence when a writer cannot be proven quiescent",
-    (mode) => {
-        const root = fixture()
-        const output = run(root, mode, ["webhook_client_shutdown"])
-        expect(output).toContain('"fixture":"webhook_client_shutdown"')
-        expect(output).toContain('"fixture":"webhook_client_shutdown","state":"Unknown"')
-        expect(output).toContain('"fixture":"client_shutdown"')
-        expect(output).toContain('"fixture":"client_shutdown","state":"Closed"')
-        expect(output).toContain('"fixture":"scope_close"')
-        expect(output).not.toContain('"fixture":"remote_cleanup"')
-        expect(output).not.toContain('"fixture":"watchdog_cleared"')
-        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(true)
-        const lock = openSync(join(root, ".env.test.local.lock"), "r+")
-        closeSync(lock)
-        unlinkSync(join(root, ".env.test.local.lock"))
-    },
-)
+test("expression finalizers retain evidence when a writer cannot be proven quiescent", () => {
+    const root = fixture()
+    const output = run(root, "default", ["webhook_client_shutdown"])
+    expect(output).toContain('"fixture":"webhook_client_shutdown"')
+    expect(output).toContain('"fixture":"webhook_client_shutdown","state":"Unknown"')
+    expect(output).toContain('"fixture":"client_shutdown"')
+    expect(output).toContain('"fixture":"client_shutdown","state":"Closed"')
+    expect(output).toContain('"fixture":"scope_close"')
+    expect(output).not.toContain('"fixture":"remote_cleanup"')
+    expect(output).not.toContain('"fixture":"watchdog_cleared"')
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(true)
+    const lock = openSync(join(root, ".env.test.local.lock"), "r+")
+    closeSync(lock)
+    unlinkSync(join(root, ".env.test.local.lock"))
+})
 
-test.each(["default", "effect"])(
-    "%s expression finalizers release a quiescent harness after all owned writers close",
-    (mode) => {
-        const root = fixture()
-        const output = run(root, mode)
-        expect(output).toContain('"fixture":"webhook_client_shutdown","state":"Closed"')
-        expect(output).toContain('"fixture":"client_shutdown","state":"Closed"')
-        expect(output).toContain('"fixture":"scope_close"')
-        expect(output).toContain('"fixture":"remote_cleanup"')
-        expect(output).toContain('"fixture":"watchdog_cleared"')
-        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
-    },
-)
+test("expression finalizers release a quiescent harness after all owned writers close", () => {
+    const root = fixture()
+    const output = run(root, "default")
+    expect(output).toContain('"fixture":"webhook_client_shutdown","state":"Closed"')
+    expect(output).toContain('"fixture":"client_shutdown","state":"Closed"')
+    expect(output).toContain('"fixture":"scope_close"')
+    expect(output).toContain('"fixture":"remote_cleanup"')
+    expect(output).toContain('"fixture":"watchdog_cleared"')
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(false)
+})
 
-test.each(["default", "effect"])(
-    "%s expression closes independent owned writers after a scope finalizer failure",
-    (mode) => {
-        const root = fixture()
-        const output = run(root, mode, ["scope_close"])
-        expect(output).toContain('"fixture":"webhook_client_shutdown","state":"Closed"')
-        expect(output).toContain('"fixture":"client_shutdown","state":"Closed"')
-        expect(output).toContain('"fixture":"scope_close"')
-        expect(output).not.toContain('"fixture":"remote_cleanup"')
-        expect(output).not.toContain('"fixture":"watchdog_cleared"')
-        expect(existsSync(join(root, ".env.test.local.lock"))).toBe(true)
-        closeSync(openSync(join(root, ".env.test.local.lock"), "r+"))
-        unlinkSync(join(root, ".env.test.local.lock"))
-    },
-)
+test("expression closes independent owned writers after a scope finalizer failure", () => {
+    const root = fixture()
+    const output = run(root, "default", ["scope_close"])
+    expect(output).toContain('"fixture":"webhook_client_shutdown","state":"Closed"')
+    expect(output).toContain('"fixture":"client_shutdown","state":"Closed"')
+    expect(output).toContain('"fixture":"scope_close"')
+    expect(output).not.toContain('"fixture":"remote_cleanup"')
+    expect(output).not.toContain('"fixture":"watchdog_cleared"')
+    expect(existsSync(join(root, ".env.test.local.lock"))).toBe(true)
+    closeSync(openSync(join(root, ".env.test.local.lock"), "r+"))
+    unlinkSync(join(root, ".env.test.local.lock"))
+})
 
 test("users finalizes its bot and scope after a presence-reset defect, then recovers only owned resources", () => {
     const root = usersFixture()

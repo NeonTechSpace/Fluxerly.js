@@ -40,11 +40,11 @@ test("confirmed validation rejection can be cleaned up but a transport failure r
         expect(creates).toBe(1)
         if (error.status === 400) {
             expect(saved[1].emojiCreateRejected).toBe(true)
-            await cleanupReactionEmoji(api, journal)
+            await cleanupReactionEmoji(api, journal, () => saved.push({ ...journal }))
         } else {
             expect(saved).toHaveLength(1)
             expect(journal.emojiCreateRejected).toBeUndefined()
-            await expect(cleanupReactionEmoji(api, journal)).rejects.toBeDefined()
+            await expect(cleanupReactionEmoji(api, journal, () => saved.push({ ...journal }))).rejects.toBeDefined()
         }
     }
 })
@@ -71,9 +71,9 @@ test("emoji intent precedes creation and cleanup verifies marker, uploader and a
     const emoji = await createReactionEmoji(api, journal, () => saved.push({ ...journal }), "30")
     expect(emoji.id).toBe("45")
     expect(saved[1].emojiId).toBe("45")
-    await cleanupReactionEmoji(api, journal)
+    await cleanupReactionEmoji(api, journal, () => saved.push({ ...journal }))
     expect(items).toEqual([])
-    await cleanupReactionEmoji(api, journal)
+    await cleanupReactionEmoji(api, journal, () => saved.push({ ...journal }))
 })
 
 test("lost create responses reconcile a unique marker but unresolved absence and ownership conflicts fail closed", async () => {
@@ -87,12 +87,12 @@ test("lost create responses reconcile a unique marker but unresolved absence and
         }
         return { status: 200, data: items }
     }
-    await expect(cleanupReactionEmoji(api, journal)).rejects.toBeDefined()
+    await expect(cleanupReactionEmoji(api, journal, () => undefined)).rejects.toBeDefined()
     expect(deletes).toBe(0)
     items = []
-    await expect(cleanupReactionEmoji(api, journal)).rejects.toBeDefined()
+    await expect(cleanupReactionEmoji(api, journal, () => undefined)).rejects.toBeDefined()
     expect(deletes).toBe(0)
     items = [{ id: "45", name: journal.emojiName, user: { id: "30" } }]
-    await cleanupReactionEmoji(api, journal)
+    await cleanupReactionEmoji(api, journal, () => undefined)
     expect(deletes).toBe(1)
 })

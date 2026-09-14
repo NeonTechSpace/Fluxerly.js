@@ -240,7 +240,7 @@ export function shardingTypes(client: Client) {
     // @ts-expect-error Shard totals are numeric
     createClient({ token: "fixture-only", sharding: { totalShards: "2" } })
     client.messages.collect("20", { guildId: "40" })
-    client.messages.collectReactions({ id: "10", channelId: "20" }, { guildId: "40" })
+    client.messages.collectReactions({ id: "10", channelId: "20" }, { guildId: "40", idleMs: 1_000 })
     return { recovery, created: createClient({ token: "fixture-only", sharding: plan }) }
 }
 
@@ -470,7 +470,7 @@ export function createAndReadState(token: string): ConnectionState | "Configurat
     )
 }
 
-/** Typechecked cache modes: disabled, default retention and configured synchronous policy with a default Promise reporter */
+/** Typechecked cache modes: disabled, default retention and configured synchronous policy with a normal Promise reporter */
 export function createWithMessageCache(token: string) {
     const disabled = createClient({ token, cache: { messages: false } })
     const defaults = createClient({ token, cache: { messages: true } })
@@ -620,6 +620,7 @@ export async function collectReplies(client: Client) {
     const options: CollectorOptions = {
         maxMessages: 2,
         timeoutMs: 5_000,
+        idleMs: 1_000,
         maxBytes: 1_024,
         maxPendingMessages: 10,
         maxPendingBytes: 2_048,
@@ -633,7 +634,8 @@ export async function collectReplies(client: Client) {
     const completed: CollectorResult = result.value
     // @ts-expect-error Successful collector results are immutable
     completed.messages.push(completed.messages[0]!)
-    return completed.reason
+    const reason: "idle" | "limit" | "timeout" | "stopped" = completed.reason
+    return reason
 }
 
 export function collectWithProgress(client: Client) {

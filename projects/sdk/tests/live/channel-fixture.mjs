@@ -28,7 +28,7 @@ export async function createGuildChannelFixture(journal, save, key, input, creat
 }
 
 /** Delete only journaled channels that still match their unique markers. Missing ID-less intent remains fail-closed */
-export async function cleanupGuildChannelFixtures(api, journal) {
+export async function cleanupGuildChannelFixtures(api, journal, save) {
     if (journal.channelFixtures === undefined) return
     assert.match(journal.guildId ?? "", /^\d+$/)
     assert.ok(journal.channelFixtures && typeof journal.channelFixtures === "object")
@@ -75,6 +75,8 @@ export async function cleanupGuildChannelFixtures(api, journal) {
             )
             assert.ok(!beforeCategoryDelete.data.some((item) => item.parent_id === channel.id))
         }
+        entry.id = channel.id
+        await save()
         assert.equal((await api("DELETE", `/channels/${channel.id}`)).status, 204)
         assert.equal((await api("GET", `/channels/${channel.id}`)).status, 404)
     }

@@ -53,7 +53,7 @@ const save = () => writeFileSync(journalPath, JSON.stringify(journal))
 async function cleanup() {
     if (!journal) return
     assert.equal(journal.guildId, guildId)
-    await cleanupGuildChannelFixtures(api, journal)
+    await cleanupGuildChannelFixtures(api, journal, save)
     unlinkSync(journalPath)
     journal = undefined
     report("test_channel_and_messages_removed")

@@ -15,6 +15,7 @@ import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { API } from "typescript/unstable/sync"
+import { stageRelease } from "../scripts/packages.mjs"
 
 const sdk = fileURLToPath(new URL("../", import.meta.url))
 const fixtureDirectory = fileURLToPath(new URL("./consumers/", import.meta.url))
@@ -42,6 +43,14 @@ function examples(source) {
     )
 }
 
+const checkedExampleSources = new Map()
+
+function rememberExample(consumer, example) {
+    const checked = checkedExampleSources.get(consumer) ?? new Set()
+    checked.add(example.replaceAll("\r\n", "\n").trim())
+    checkedExampleSources.set(consumer, checked)
+}
+
 function writeNamedExampleFixtures(consumer, source, fixtures) {
     const authoredExamples = examples(source)
     for (const {
@@ -53,8 +62,31 @@ function writeNamedExampleFixtures(consumer, source, fixtures) {
     } of fixtures) {
         const selected = authoredExamples.filter(matches)
         assert.equal(selected.length, count, `Expected ${count} exact ${name} example(s)`)
-        for (const [index, example] of selected.entries()) writeFileSync(join(consumer, file(index)), rewrite(example))
+        for (const [index, example] of selected.entries()) {
+            const rewritten = rewrite(example)
+            writeFileSync(join(consumer, file(index)), rewritten)
+            rememberExample(consumer, rewritten)
+        }
     }
+}
+
+function writeAdditionalDocumentationExamples(consumer, kind) {
+    const owners = new Set([...exportedOwnerComments("index").keys(), ...exportedOwnerComments("effect").keys()])
+    const files = []
+    for (const owner of owners) {
+        const source = readFileSync(join(sdk, "src", `${owner}.ts`), "utf8")
+        for (const [index, example] of examples(source).entries()) {
+            // Compile each example as authored, against its actual public entry point, without rewriting its API usage
+            const native = /from\s+["'](?:effect|@neontechspace\/fluxerly\/effect)["']/.test(example)
+            if (native !== (kind === "effect")) continue
+            if (checkedExampleSources.get(consumer)?.has(example.replaceAll("\r\n", "\n").trim())) continue
+            const file = `additional-documentation-${owner.replaceAll("/", "-")}-${index}.ts`
+            writeFileSync(join(consumer, file), `${example}\nexport {}\n`)
+            rememberExample(consumer, example)
+            files.push(file)
+        }
+    }
+    return files
 }
 
 const sourceCommentApi = new API({ cwd: sdk })
@@ -218,22 +250,33 @@ assertExportedOwnerCommentGuards()
 const temporaryRoot = realpathSync(tmpdir())
 const temporary = mkdtempSync(join(temporaryRoot, "fluxerly-package-check-"))
 try {
-    const tarball = join(temporary, "sdk.tgz")
-    const packed = JSON.parse(packageManager(["pack", "--out", tarball, "--json"], sdk))
-    const files = packed.files.map((file) => file.path)
+    const staged = await stageRelease({ version: manifest.version, output: join(temporary, "artifacts") })
+    const tarball = staged.npm.tarball
+    const files = JSON.parse(readFileSync(staged.manifestPath, "utf8")).npm.map((file) => file.path)
     for (const entry of ["index", "effect", "cache", "application", "sharding"]) {
         for (const extension of ["js", "js.map", "d.ts", "d.ts.map"]) {
             assert.ok(files.includes(`dist/${entry}.${extension}`))
         }
     }
-    assert.ok(files.every((file) => file === "package.json" || file.startsWith("dist/") || file.startsWith("src/")))
+    assert.ok(
+        files.every(
+            (file) =>
+                ["package.json", "README.md", "consumer/AGENTS.md", "LICENSE", "CHANGELOG.md"].includes(file) ||
+                file.startsWith("dist/") ||
+                file.startsWith("src/"),
+        ),
+    )
+    assert.ok(files.includes("consumer/AGENTS.md"))
+    assert.ok(files.includes("README.md"))
+    assert.ok(files.includes("LICENSE"))
+    assert.ok(!files.includes("AGENTS.md"), "Contributor instructions must not ship as consumer guidance")
 
     copyFileSync(join(sdk, "tests/hosted-discovery.mjs"), join(temporary, "hosted-discovery.mjs"))
     for (const kind of ["default", "effect"]) {
         const consumer = join(temporary, kind)
         mkdirSync(consumer)
         const dependencies = { [manifest.name]: `file:${tarball.replaceAll("\\", "/")}` }
-        if (kind === "effect") dependencies.effect = manifest.dependencies.effect
+        if (kind === "effect") dependencies.effect = manifest.peerDependencies.effect
         writeFileSync(
             join(consumer, "package.json"),
             JSON.stringify({
@@ -244,9 +287,43 @@ try {
             }),
         )
         writeFileSync(join(consumer, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
-        packageManager(["install", "--offline", "--strict-peer-dependencies"], consumer)
+        packageManager(["install", "--prefer-offline", "--ignore-scripts", "--strict-peer-dependencies"], consumer)
 
         const installed = join(consumer, "node_modules", manifest.name)
+        for (const path of files) {
+            assert.deepEqual(
+                readFileSync(join(installed, path)),
+                readFileSync(join(staged.npm.directory, path)),
+                `Packed bytes differ from staged ${path}`,
+            )
+        }
+        for (const path of ["README.md", "consumer/AGENTS.md"]) {
+            assert.equal(readFileSync(join(installed, path), "utf8"), readFileSync(join(sdk, path), "utf8"))
+        }
+        assert.deepEqual(readFileSync(join(installed, "LICENSE")), readFileSync(join(sdk, "../../LICENSE")))
+        const installedManifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"))
+        assert.ok(!installedManifest.private && !installedManifest.scripts && !installedManifest.devDependencies)
+        assert.deepEqual(installedManifest.peerDependencies, manifest.peerDependencies)
+        assert.deepEqual(installedManifest.peerDependenciesMeta, manifest.peerDependenciesMeta)
+        if (kind === "effect") {
+            const appRequire = createRequire(join(consumer, "package.json"))
+            const sdkRequire = createRequire(join(installed, "package.json"))
+            assert.equal(
+                appRequire.resolve("effect"),
+                sdkRequire.resolve("effect"),
+                "Native consumer must share Effect",
+            )
+        }
+        assert.ok(readFileSync(join(installed, "README.md"), "utf8").includes("`consumer/AGENTS.md`"))
+        const guideExamples = [
+            ...readFileSync(join(installed, "consumer/AGENTS.md"), "utf8").matchAll(/```ts\r?\n([\s\S]*?)```/g),
+        ].map((match) => match[1])
+        assert.equal(guideExamples.length, 2)
+        const guideExample = guideExamples.filter(
+            (example) => example.includes('from "effect"') === (kind === "effect"),
+        )
+        assert.equal(guideExample.length, 1)
+        writeFileSync(join(consumer, "consumer-guide.ts"), guideExample[0])
         assert.deepEqual(JSON.parse(readFileSync(join(installed, "package.json"), "utf8")).imports, manifest.imports)
         assert.deepEqual(JSON.parse(readFileSync(join(installed, "package.json"), "utf8")).engines, manifest.engines)
         const apiErrorExamples = examples(readFileSync(join(sdk, "src", "api-errors.ts"), "utf8")).filter((example) =>
@@ -341,6 +418,16 @@ try {
                 readFileSync(join(sdk, declaration), "utf8"),
             )
             const normalizeComment = (text) => text.replace(/\s+/g, " ").trim()
+            if (entry === "index" || entry === "effect") {
+                const overview = readFileSync(join(sdk, "src", `${entry}.ts`), "utf8").match(/^\/\*\*[\s\S]*?\*\//)?.[0]
+                assert.ok(overview?.includes("@packageDocumentation"), `Missing ${entry} entry-point overview`)
+                assert.ok(
+                    normalizeComment(readFileSync(join(installed, declaration), "utf8")).startsWith(
+                        normalizeComment(overview),
+                    ),
+                    `Entry-point overview missing from packed ${declaration}`,
+                )
+            }
             for (const [owner, comments] of exportedOwnerComments(entry)) {
                 const ownerDeclaration = readFileSync(join(installed, `dist/${owner}.d.ts`), "utf8")
                 const emitted = [...ownerDeclaration.matchAll(/\/\*\*[\s\S]*?\*\//g)].map(([comment]) =>
@@ -359,7 +446,10 @@ try {
             /export type \{ CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions \} from "\.\/cache\.js"/,
         )
         const nativeDeclarations = readFileSync(join(installed, "dist/effect.d.ts"), "utf8")
-        assert.match(nativeDeclarations, /export interface MessageCacheOptions<E = never, R = never>/)
+        assert.match(
+            nativeDeclarations,
+            /export interface MessageCacheOptions<E = never, R = never, M extends MessageCore = Message>/,
+        )
         for (const file of files.filter((file) => file.endsWith(".map"))) {
             const sourceMap = JSON.parse(readFileSync(join(installed, file), "utf8"))
             assert.ok(sourceMap.sources.length > 0)
@@ -372,6 +462,37 @@ try {
         }
 
         if (kind === "default") assert.equal(existsSync(join(consumer, "node_modules/effect")), false)
+        if (kind === "default") {
+            const websiteGuide = readFileSync(join(sdk, "../web/content/guides/quick-start.md"), "utf8")
+            const websiteExamples = [...websiteGuide.matchAll(/```js\r?\n([\s\S]*?)```/g)]
+            assert.equal(
+                websiteExamples.length,
+                1,
+                "Expected one exact website bot block shared by JavaScript and TypeScript",
+            )
+            assert.equal((websiteExamples[0][1].match(/YOUR_BOT_TOKEN/g) ?? []).length, 1)
+            for (const readme of [join(sdk, "../../docs/README.md"), join(installed, "README.md")]) {
+                const markdown = readFileSync(readme, "utf8")
+                const examples = [...markdown.matchAll(/```js\r?\n([\s\S]*?)```/g)]
+                assert.equal(examples.length, 1, `Expected one first-bot example in ${readme}`)
+                assert.equal(
+                    examples[0][1].replaceAll("\r\n", "\n"),
+                    websiteExamples[0][1].replaceAll("\r\n", "\n"),
+                    `README bot must match the executable first-bot guide: ${readme}`,
+                )
+                for (const instruction of ['"type": "module"', "node bot.js", "node bot.ts"]) {
+                    assert.ok(markdown.includes(instruction), `Missing ${instruction} in ${readme}`)
+                }
+            }
+            copyFileSync(join(fixtureDirectory, "website-guide.mjs"), join(consumer, "website-guide.mjs"))
+            for (const filename of ["bot.js", "bot.ts"]) {
+                writeFileSync(
+                    join(consumer, filename),
+                    `${websiteExamples[0][1].replace("YOUR_BOT_TOKEN", "fixture-only")}\nexport { client }\n`,
+                )
+                process.stdout.write(run(process.execPath, ["website-guide.mjs", filename], consumer, 15_000))
+            }
+        }
         copyFileSync(join(fixtureDirectory, `${kind}.mjs`), join(consumer, "consumer.mjs"))
         process.stdout.write(run(process.execPath, ["--enable-source-maps", "consumer.mjs"], consumer, 10_000))
         copyFileSync(join(fixtureDirectory, "sharding-workflow.mjs"), join(consumer, "sharding-workflow.mjs"))
@@ -380,6 +501,8 @@ try {
         )
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
+        if (kind === "effect")
+            copyFileSync(join(fixtureDirectory, "message-fields.ts"), join(consumer, "message-fields.ts"))
         writeFileSync(
             join(consumer, "helper-comments.ts"),
             `export { ${documentedHelpers.join(", ")} } from ${JSON.stringify(kind === "default" ? manifest.name : `${manifest.name}/effect`)}\n`,
@@ -453,6 +576,7 @@ try {
                 "pureHelpersExample",
                 "typedCommandExample",
                 "commandHelpExample",
+                "commandGroupExample",
             ].map((name) => ({
                 name,
                 matches: (example) => example.includes(`function ${name}(`),
@@ -528,6 +652,14 @@ try {
             kind === "default"
                 ? example
                 : example.replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"')
+        writeNamedExampleFixtures(consumer, readFileSync(join(sdk, "src/client.ts"), "utf8"), [
+            {
+                name: "selected-messages",
+                matches: (example) => /function selectedMessagesExample/.test(example),
+                file: () => "selected-messages-example.ts",
+                rewrite: rewriteSharedExample,
+            },
+        ])
         for (const entry of [
             "expressions",
             "messages",
@@ -605,6 +737,7 @@ try {
                 rewrite: rewriteSharedExample,
             },
         ])
+        const additionalExamples = writeAdditionalDocumentationExamples(consumer, kind)
         writeFileSync(
             join(consumer, "tsconfig.json"),
             JSON.stringify({
@@ -620,11 +753,13 @@ try {
                     lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                 },
                 include: ["*.ts"],
-                exclude: ["run-bot-example.ts"],
+                exclude: ["run-bot-example.ts", ...additionalExamples],
             }),
         )
         assertPackedHelperComments(consumer, kind)
         run(process.execPath, [compiler, "-p", "tsconfig.json"], consumer)
+        copyFileSync(join(fixtureDirectory, "consumer-guide.mjs"), join(consumer, "consumer-guide.mjs"))
+        process.stdout.write(run(process.execPath, ["consumer-guide.mjs"], consumer, 15_000))
         copyFileSync(join(fixtureDirectory, "workflow.mjs"), join(consumer, "workflow.mjs"))
         process.stdout.write(run(process.execPath, ["--enable-source-maps", "workflow.mjs", kind], consumer, 15_000))
         writeFileSync(
@@ -644,6 +779,26 @@ try {
             }),
         )
         run(process.execPath, [compiler, "-p", "run-bot-tsconfig.json"], consumer)
+        if (additionalExamples.length > 0) {
+            writeFileSync(
+                join(consumer, "documentation-tsconfig.json"),
+                JSON.stringify({
+                    compilerOptions: {
+                        target: "ES2024",
+                        module: "NodeNext",
+                        types: ["node"],
+                        strict: true,
+                        exactOptionalPropertyTypes: true,
+                        noUncheckedIndexedAccess: true,
+                        noEmit: true,
+                        lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+                    },
+                    files: additionalExamples,
+                }),
+            )
+            run(process.execPath, [compiler, "-p", "documentation-tsconfig.json"], consumer)
+        }
+        console.log(`${kind} additional authored documentation examples passed: ${additionalExamples.length}`)
         const invocation =
             kind === "default"
                 ? "import { createAndReadState } from './out/consumer.js'; if (createAndReadState('fixture-only-not-a-credential') !== 'Disconnected') throw Error('Unexpected state')"
@@ -651,6 +806,33 @@ try {
         run(process.execPath, ["--input-type=module", "--eval", invocation], consumer, 10_000)
         console.log(`${kind} TypeScript 7 packed consumer passed`)
     }
+    const incompatibleEffect = join(temporary, "incompatible-effect")
+    mkdirSync(incompatibleEffect)
+    writeFileSync(join(incompatibleEffect, "package.json"), JSON.stringify({ name: "effect", version: "4.0.0-rc.116" }))
+    const incompatibleConsumer = join(temporary, "incompatible-consumer")
+    mkdirSync(incompatibleConsumer)
+    writeFileSync(
+        join(incompatibleConsumer, "package.json"),
+        JSON.stringify({
+            private: true,
+            type: "module",
+            dependencies: {
+                [manifest.name]: `file:${tarball.replaceAll("\\", "/")}`,
+                effect: `file:${incompatibleEffect.replaceAll("\\", "/")}`,
+            },
+        }),
+    )
+    writeFileSync(join(incompatibleConsumer, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
+    assert.throws(
+        () =>
+            packageManager(
+                ["install", "--prefer-offline", "--ignore-scripts", "--strict-peer-dependencies"],
+                incompatibleConsumer,
+            ),
+        (error) => /peer/i.test(String(error.stdout) + String(error.stderr)),
+        "A different Effect RC must fail strict peer installation rather than silently use separate runtimes",
+    )
+    console.log("Unsupported native Effect RC rejected by strict peer installation")
 } finally {
     sourceCommentApi.close()
     const target = realpathSync(temporary)

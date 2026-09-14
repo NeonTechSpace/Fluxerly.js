@@ -4,7 +4,15 @@ import { afterEach, describe, expect, test, vi } from "vitest"
 import { ConfigurationError, SdkDefect, createClient } from "../src/index.js"
 import { createClient as createEffectClient, type Client } from "../src/effect.js"
 
+const webSocket = vi.hoisted(() =>
+    vi.fn(function () {
+        throw new Error("Unexpected WebSocket creation")
+    }),
+)
+vi.mock("ws", () => ({ default: webSocket }))
+
 afterEach(() => {
+    webSocket.mockClear()
     vi.unstubAllGlobals()
     vi.useRealTimers()
 })
@@ -44,11 +52,7 @@ describe("client creation through both public entry points", () => {
         const fetch = vi.fn(() => {
             throw new Error("Unexpected HTTP call")
         })
-        const webSocket = vi.fn(() => {
-            throw new Error("Unexpected WebSocket creation")
-        })
         vi.stubGlobal("fetch", fetch)
-        vi.stubGlobal("WebSocket", webSocket)
         const messages: unknown[] = []
         const token = "fixture-only-not-a-credential"
         const defaultApi = createClient({ token })

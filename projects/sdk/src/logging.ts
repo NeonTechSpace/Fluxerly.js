@@ -1,31 +1,42 @@
 declare const loggerBrand: unique symbol
 
-/** Opaque default logger integration, created by fromEffectLogger from the SDK's /effect entry point */
+/** An Effect logger adapted for a default-API client's logging.logger setting.
+ * Create it with fromEffectLogger from @neontechspace/fluxerly/effect rather than constructing it yourself
+ */
 export interface DefaultLogger {
+    /** Type-only marker that prevents constructing an integration without the SDK adapter */
     readonly [loggerBrand]: true
 }
 
-/** SDK development output control, separate from operational handler and cache error reporting */
+/** Opt into connection diagnostics without enabling or disabling operational error reports.
+ * Native clients use the executing Effect context's logger and minimum level, not default-API logger settings
+ */
 export interface LoggingOptions {
     /**
-     * Enable Info-level connection attempts, readiness, loss, retry waits, session resets and termination/shutdown diagnostics.
-     * Default false, independent of consumer Effect Debug settings. Minimum-level filtering still applies.
-     * Records use SDK-owned event/phase names, attempt counts, delayMs, identify/resume modes and safe failure classifications.
-     * Connection records include the locally assigned shard ID when more than one shard is configured. They do not report cross-process or whole-bot state.
-     * These are best-effort diagnostics, not a lossless event stream or an acknowledgement of log persistence
+     * Log connection attempts, readiness, loss, retry waits, session resets and shutdown at Info level.
+     * Defaults to false, even when your Effect runtime enables Debug output.
+     * The configured minimum log level can still suppress these records.
+     * Records contain SDK event and phase names, attempt counts, millisecond delays and safe failure categories, not credentials or private payloads.
+     * Multi-shard records identify this client's local shard, not other processes or whole-bot state.
+     * Output is best-effort, not a lossless history or confirmation that a sink stored the record
      */
     readonly development?: boolean
 }
 
-/** Default runtime logging settings, copied at creation without configuring any other client */
+/** Choose the default-API client's minimum log level and optional custom Effect logger.
+ * Settings are copied when this client is created and do not configure any other client or Effect runtime
+ */
 export interface DefaultLoggingOptions extends LoggingOptions {
-    /** Minimum SDK log level, including operational errors. Default Info. None explicitly suppresses output */
+    /** Lowest SDK log level to emit, including operational error reports.
+     * Defaults to Info, while None explicitly suppresses output
+     */
     readonly minimumLevel?: "All" | "Trace" | "Debug" | "Info" | "Warn" | "Error" | "Fatal" | "None"
     /**
-     * Optional fromEffectLogger integration. Omission uses Effect's readable default logger, without extra setup.
-     * Explicitly replaces this client's default logger, without inheriting an unrelated consumer Effect runtime.
-     * Delivery is synchronous. Throwing sinks do not change SDK outcomes, but blocking sinks can delay execution.
-     * Sink flushing, asynchronous delivery and caller-owned context remain outside SDK ownership
+     * Send this client's SDK records to an Effect logger adapted with fromEffectLogger.
+     * Omission uses Effect's readable default logger without extra setup.
+     * A supplied integration replaces only this client's logger and does not inherit an unrelated application's Effect runtime.
+     * The SDK invokes the sink synchronously and isolates thrown sink errors from SDK outcomes.
+     * A blocking sink can still delay execution, and flushing or asynchronous delivery remains your responsibility
      */
     readonly logger?: DefaultLogger
 }

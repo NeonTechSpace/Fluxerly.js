@@ -1,8 +1,81 @@
 import type { PaginationQuery } from "./pagination.js"
 import type { User } from "./users.js"
 
-/** Known Fluxer audit-action values accepted by the audit-log route */
-export const AuditLogActions = Object.freeze({
+/** Event categories for filtering a guild's audit log, such as role changes, bans or invite creation.
+ * Pass a value as AuditLogQuery.actionType. These values describe recorded administrative actions, not gateway events
+ */
+export const AuditLogActions: Readonly<{
+    /** Guild-wide settings changed */
+    readonly GuildUpdate: 1
+    /** A guild channel was created */
+    readonly ChannelCreate: 10
+    /** A guild channel's settings changed */
+    readonly ChannelUpdate: 11
+    /** A guild channel was deleted */
+    readonly ChannelDelete: 12
+    /** A channel-specific role or member permission overwrite was added */
+    readonly ChannelOverwriteCreate: 13
+    /** An existing channel-specific permission overwrite changed */
+    readonly ChannelOverwriteUpdate: 14
+    /** A channel-specific permission overwrite was removed */
+    readonly ChannelOverwriteDelete: 15
+    /** A member was removed from the guild without a ban */
+    readonly MemberKick: 20
+    /** A bulk membership-pruning action was recorded */
+    readonly MemberPrune: 21
+    /** An account was banned from the guild */
+    readonly MemberBanAdd: 22
+    /** An account's guild ban was lifted */
+    readonly MemberBanRemove: 23
+    /** A member's guild-specific settings or moderation state changed */
+    readonly MemberUpdate: 24
+    /** A member's assigned roles changed */
+    readonly MemberRoleUpdate: 25
+    /** A member was moved between voice channels */
+    readonly MemberMove: 26
+    /** A member was disconnected from voice */
+    readonly MemberDisconnect: 27
+    /** A bot was added to the guild */
+    readonly BotAdd: 28
+    /** A guild role was created */
+    readonly RoleCreate: 30
+    /** A guild role's settings changed */
+    readonly RoleUpdate: 31
+    /** A guild role was deleted */
+    readonly RoleDelete: 32
+    /** An invitation code was created */
+    readonly InviteCreate: 40
+    /** An existing invitation's settings changed */
+    readonly InviteUpdate: 41
+    /** An invitation code was revoked */
+    readonly InviteDelete: 42
+    /** A webhook was created */
+    readonly WebhookCreate: 50
+    /** An existing webhook's settings changed */
+    readonly WebhookUpdate: 51
+    /** A webhook was deleted */
+    readonly WebhookDelete: 52
+    /** A custom guild emoji was created */
+    readonly EmojiCreate: 60
+    /** A custom guild emoji's metadata changed */
+    readonly EmojiUpdate: 61
+    /** A custom guild emoji was deleted */
+    readonly EmojiDelete: 62
+    /** A message deletion was recorded, potentially with a consolidated count */
+    readonly MessageDelete: 72
+    /** A bulk message-deletion action was recorded */
+    readonly MessageBulkDelete: 73
+    /** A message was pinned */
+    readonly MessagePin: 74
+    /** A message was unpinned */
+    readonly MessageUnpin: 75
+    /** A custom guild sticker was created */
+    readonly StickerCreate: 90
+    /** A custom guild sticker's metadata changed */
+    readonly StickerUpdate: 91
+    /** A custom guild sticker was deleted */
+    readonly StickerDelete: 92
+}> = Object.freeze({
     GuildUpdate: 1,
     ChannelCreate: 10,
     ChannelUpdate: 11,
@@ -43,7 +116,7 @@ export const AuditLogActions = Object.freeze({
 /** One currently supported Fluxer audit-action value */
 export type AuditLogActionType = (typeof AuditLogActions)[keyof typeof AuditLogActions]
 
-/** Explicit permission-name delta in a role audit-log change */
+/** Permission names added or removed by a recorded role change */
 export interface AuditLogPermissionsDiff {
     /** Permission names added by the change */
     readonly added: readonly string[]
@@ -51,21 +124,27 @@ export interface AuditLogPermissionsDiff {
     readonly removed: readonly string[]
 }
 
-/** One allowlisted JSON value recorded on either side of an audit-log change */
+/** A JSON value the SDK accepts as a recorded setting before or after an audit-log change */
 export type AuditLogChangeValue =
     string | number | boolean | null | readonly string[] | readonly number[] | AuditLogPermissionsDiff
 
-/** One changed audit field, preserving a missing old or new value */
+/** Before-and-after information for one field recorded by an audit entry.
+ * Inspect key to identify the setting, then oldValue and newValue for the recorded values.
+ * An omitted side is unavailable, not equivalent to null or an unchanged value
+ */
 export interface AuditLogChange {
     /** Provider-defined field key, including future field names */
     readonly key: string
-    /** Value before the change; omission is distinct from null */
+    /** Value before the change. Omission is distinct from null */
     readonly oldValue?: AuditLogChangeValue
-    /** Value after the change; omission is distinct from null */
+    /** Value after the change. Omission is distinct from null */
     readonly newValue?: AuditLogChangeValue
 }
 
-/** Context fields that Fluxer supplies only for applicable audit actions */
+/** Action-specific details explaining an audit record, such as the destination channel or affected entity count.
+ * These are received context fields, not request options. Fields remain absent when Fluxer did not supply them.
+ * Their meaning depends on the entry's actionType
+ */
 export interface AuditLogOptions {
     /** Decimal channel ID relevant to the action */
     readonly channelId?: string
@@ -97,7 +176,10 @@ export interface AuditLogOptions {
     readonly uses?: number
 }
 
-/** Frozen remote audit-log entry, not a live record or a permission decision */
+/** One recorded administrative action in a guild, with available actor, target, reason and changed settings.
+ * This frozen record is useful for reviewing activity, not authorizing an action or proving current resource state.
+ * targetId can contain an invite code, and reason can contain caller-authored text. Treat both as potentially sensitive
+ */
 export interface AuditLogEntry {
     /** Decimal audit-entry ID */
     readonly id: string
@@ -131,7 +213,10 @@ export interface AuditLogWebhook {
     readonly avatarHash?: string | null
 }
 
-/** One remote audit-log page. Related users and webhooks are page-local observations, not SDK caches */
+/** A filtered page of administrative records with public user and token-free webhook details referenced by the page.
+ * Match an entry's userId to users when that account was supplied. Related resources are page-local observations,
+ * not cache writes or a complete directory of guild users and webhooks
+ */
 export interface AuditLogPage {
     /** Entries in descending entry-ID order for filtered requests */
     readonly entries: readonly AuditLogEntry[]
@@ -155,12 +240,23 @@ interface AuditLogQueryBase {
     readonly actionType?: AuditLogActionType
 }
 
-/** At least one provider filter required for a non-mutating audit-log read */
+/** Choose an actor filter, action filter or both to read the audit log without changing it */
 type AuditLogFilter =
-    | { readonly userId: string; readonly actionType?: AuditLogActionType }
-    | { readonly userId?: string; readonly actionType: AuditLogActionType }
+    | {
+          /** Only actions recorded for this acting account, identified by decimal user ID */
+          readonly userId: string
+          /** Narrow the actor's records to this AuditLogActions category. Omit to include all their action categories */
+          readonly actionType?: AuditLogActionType
+      }
+    | {
+          /** Narrow this action category to records for one acting account, identified by decimal user ID */
+          readonly userId?: string
+          /** Only records in this AuditLogActions category. Required when no acting-user filter is supplied */
+          readonly actionType: AuditLogActionType
+      }
 
-/** One filtered remote audit-log page request.
+/** Inspect one page of recorded guild activity, filtered by actor, action category or both.
+ * At least one filter is required because an unfiltered provider read can change the log rather than only observe it.
  * Fluxer can delete individual message-delete records and write a replacement when neither filter is supplied
  * @example
  * ```ts
@@ -175,11 +271,15 @@ type AuditLogFilter =
  */
 export type AuditLogQuery = AuditLogQueryBase & AuditLogFilter
 
-/** Bounded newest-to-oldest traversal over filtered audit entries */
+/** Settings for reading filtered audit entries from newest to oldest, with explicit limits */
 interface AuditLogIterationQueryBase extends PaginationQuery {
     /** Exclusive decimal audit-entry cursor selecting older entries */
     readonly before?: string
 }
 
-/** Bounded newest-to-oldest traversal over filtered audit entries */
+/** Read filtered administrative entries from newest to oldest across bounded pages.
+ * maxItems is required through PaginationQuery. Related page users and webhooks are not yielded by this traversal.
+ * Filters prevent Fluxer's unfiltered message-delete consolidation behavior, but concurrent activity can still change
+ * the observed log between pages
+ */
 export type AuditLogIterationQuery = AuditLogIterationQueryBase & AuditLogFilter

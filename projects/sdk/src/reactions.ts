@@ -1,80 +1,111 @@
 import type { MessageReference } from "./messages.js"
 import type { GuildEmoji } from "./expressions.js"
 
-/** One explicit reaction-user page request; no automatic traversal */
+/** Choose one page of users who reacted with a particular emoji.
+ * Pass to messages.fetchReactionUsers. Use iterateReactionUsers to traverse bounded multiple pages.
+ * Unknown properties and invalid limits or IDs are rejected before the request
+ */
 export interface ReactionUsersQuery {
-    /** Maximum users in this page, integer 1–100, default 25 */
+    /** Maximum users requested in this page, an integer from 1 through 100, default 25 */
     readonly limit?: number
-    /** Exclusive decimal user-ID cursor, not a reaction timestamp */
+    /** Return user IDs greater than this decimal ID, excluding the cursor user. Omit to start at the first page */
     readonly after?: string
 }
 
-/** Frozen user projection, not a complete profile, guild member or cached live object */
+/** Account identity returned in a reaction-user page.
+ * This frozen snapshot has no account methods, server membership details or automatically refreshed data
+ */
 export interface ReactionUser {
-    /** Decimal user ID */
+    /** Account ID as a decimal string, not a JavaScript number */
     readonly id: string
-    /** Account username returned by Fluxer */
+    /** Username at the time Fluxer returned this page */
     readonly username: string
-    /** Whether Fluxer marks this user as a bot; an omitted wire flag means false */
+    /** True if Fluxer marked the account as a bot, otherwise false */
     readonly isBot: boolean
 }
 
-/** Frozen page observed from Fluxer; separate requests are not an atomic snapshot */
+/** One frozen page of users who reacted with the requested emoji.
+ * Users are ordered by ascending ID. Concurrent reaction changes can affect later pages.
+ * A sequence of pages is not one consistent snapshot of the reactor list
+ */
 export interface ReactionUsersPage {
-    /** Frozen users in ascending user-ID order, at most the requested limit */
+    /** Users ordered by ascending decimal ID, with no more than the requested limit */
     readonly items: readonly ReactionUser[]
-    /** Whether Fluxer reported a further page at response time */
+    /** True when Fluxer reported more users after this page */
     readonly hasMore: boolean
-    /** Last returned user ID when hasMore is true, otherwise null */
+    /** Cursor to pass as after for the next request. The last returned user ID when hasMore is true, otherwise null */
     readonly nextAfter: string | null
 }
 
-/** Literal Unicode emoji, or a custom emoji's name and decimal ID.
- * Pass Unicode without URL encoding, shortcodes or <:name:id> markup.
- * Custom names are 1–32 ASCII letters, digits or underscores; IDs are decimal strings.
- * GuildEmoji snapshots from client.emojis may be passed directly; no cache lookup or permission inference is performed.
- * Unicode input is bounded to 128 UTF-16 code units; Fluxer validates supported single emoji and permissions
+/** Emoji accepted by reaction operations and reaction collector selection.
+ * Pass literal Unicode such as "👍", not a shortcode, URL-encoded text or <:name:id> markup.
+ * For custom emoji, pass { name, id } or a GuildEmoji returned by client.emojis.
+ * Custom names use 1 through 32 ASCII letters, digits or underscores. IDs are decimal strings.
+ * Unicode input is limited to 128 UTF-16 code units and rejects spaces, control characters and reserved markup characters.
+ * Fluxer checks that the emoji is supported and that the bot may use it. The SDK does not look it up or infer permissions
  */
-export type ReactionEmojiInput = string | { readonly name: string; readonly id: string } | GuildEmoji
+export type ReactionEmojiInput =
+    | string
+    | {
+          /** Custom emoji name, using 1 through 32 ASCII letters, digits or underscores */
+          readonly name: string
+          /** Custom emoji ID as a decimal string */
+          readonly id: string
+      }
+    | GuildEmoji
 
-/** Frozen gateway emoji identity. Missing animated means unknown, not false */
+/** Emoji identity supplied in a reaction event.
+ * This frozen value records the name and any custom ID or animation flag supplied by Fluxer
+ */
 export interface ReactionEmoji {
-    /** Unicode emoji or custom emoji name supplied by Fluxer */
+    /** Literal Unicode emoji text, or the custom emoji name at event time */
     readonly name: string
-    /** Decimal custom emoji ID, absent for Unicode */
+    /** Custom emoji ID as a decimal string. Absent for Unicode emoji */
     readonly id?: string
-    /** Animation flag when supplied by Fluxer; omitted for Unicode */
+    /** Whether a custom emoji is animated, when supplied. Absence means unknown and Unicode emoji omit this field */
     readonly animated?: boolean
 }
 
-/** Frozen reaction target; id is the message ID.
- * Observations are not a complete reactor list or count and may be missed across recovery.
- * Unknown fields, member details and session identifiers are not retained
+/** Message address carried by a reaction event, with optional server context.
+ * id is the message ID, not the reaction or user ID.
+ * Events can be missed during gateway recovery and do not establish current counts or the complete reactor list.
+ * Additional provider data, such as member details and session identifiers, is not retained
  */
 export interface ReactionTarget extends MessageReference {
-    /** Decimal guild ID when supplied, omitted for private channels */
+    /** Owning server ID when supplied. Absence alone does not establish private-channel scope */
     readonly guildId?: string
 }
 
-/** One user's addition or removal, not the identity of a moderator removing another user's reaction */
+/** One reaction addition or removal delivered by Fluxer.
+ * userId identifies the user whose reaction changed, not necessarily the person who removed it
+ */
 export interface MessageReaction extends ReactionTarget {
-    /** Decimal ID of the user whose reaction changed */
+    /** Account ID of the user whose reaction was added or removed */
     readonly userId: string
-    /** Frozen emoji identity */
+    /** Emoji whose reaction changed */
     readonly emoji: ReactionEmoji
 }
 
-/** All users' reactions for one emoji were removed, without listing those users */
+/** Notice that every reaction using one emoji was cleared from a message.
+ * The affected users are not listed
+ */
 export interface MessageReactionEmojiRemoval extends ReactionTarget {
-    /** Frozen identity of the cleared emoji */
+    /** Emoji whose reactions were cleared */
     readonly emoji: ReactionEmoji
 }
 
-/** One server-coalesced addition batch in wire order, without synthetic single-add events.
- * Counts as one subscription payload; its full source JSON counts toward the byte budget.
- * The SDK does not enable reaction debouncing or reconstruct changes the server omitted
+/** Reaction additions grouped by Fluxer into one messageReactionAddMany event.
+ * Entries retain received order. This does not also emit messageReactionAdd for each entry.
+ * Subscribe to both addition events if you need both forms. Reaction collectors already accept both.
+ * A batch counts as one queued event, and its full received JSON counts toward the pending-byte budget.
+ * The SDK neither requests batching nor reconstructs changes Fluxer omitted
  */
 export interface MessageReactionBatch extends ReactionTarget {
-    /** Frozen additions for this message; each nested emoji and entry is frozen */
-    readonly reactions: readonly { readonly userId: string; readonly emoji: ReactionEmoji }[]
+    /** Frozen additions on the target message, in received order */
+    readonly reactions: readonly {
+        /** Account ID whose reaction was added */
+        readonly userId: string
+        /** Emoji used for this addition */
+        readonly emoji: ReactionEmoji
+    }[]
 }

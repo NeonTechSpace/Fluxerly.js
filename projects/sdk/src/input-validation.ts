@@ -1,4 +1,6 @@
-/** Stable SDK-owned constraint for one locally rejected operation input */
+/** The kind of rule a local input failed, such as type, range, format or a relationship between fields.
+ * These categories identify SDK validation, not provider errors or finished user-facing messages
+ */
 export type InputValidationConstraint =
     | "required"
     | "type"
@@ -12,11 +14,12 @@ export type InputValidationConstraint =
     | "size"
 
 /**
- * Safe local-validation facts for an operation failure
- *
- * Paths and explanations are authored by the SDK. The detail never includes a rejected value, an arbitrary caller key,
- * a provider response, or presentation-ready application copy. Applications remain responsible for user-facing text.
- * When a validator supplies detail, it reports the first failed constraint in that operation's existing validation order
+ * Explain a locally rejected input without retaining the value that failed.
+ * Read this detail from an operation error's inputValidation field when it is non-null.
+ * Path names the input field, constraint names the rule, and explanation describes the accepted input.
+ * The SDK reports the first detailed failure it encounters, not a complete list of invalid fields.
+ * Paths and explanations are SDK-authored, with no arbitrary caller keys, rejected values or provider responses.
+ * Write your own user-facing messages rather than displaying this diagnostic as application copy
  *
  * @example
  * ```ts
@@ -27,11 +30,11 @@ export type InputValidationConstraint =
  * ```
  */
 export interface InputValidationDetail {
-    /** Stable SDK-owned field or input path */
+    /** Field or input path the SDK identified as invalid, without copying arbitrary caller keys */
     readonly path: string
-    /** Stable category of the failed constraint */
+    /** Kind of rule the input failed, suitable for application-specific error handling */
     readonly constraint: InputValidationConstraint
-    /** Safe explanation of the accepted shape or relationship */
+    /** Fixed SDK explanation of the accepted input, not the rejected value or ready-made application text */
     readonly explanation: string
 }
 

@@ -1,5 +1,7 @@
 import { once } from "node:events"
 import { createServer } from "node:http"
+import { setImmediate as turn } from "node:timers/promises"
+import { runInNewContext } from "node:vm"
 import { Effect, Exit, Fiber, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
@@ -258,6 +260,102 @@ test("event waits retain typed timeout and safe filter failures", async () => {
         await Effect.runPromise(native.shutdown())
         await Effect.runPromise(Scope.close(scope, Exit.void))
     }
+})
+
+test.each(["default", "native"] as const)(
+    "%s waits contain invalid rejected filter returns across realms and hostile properties",
+    async (mode) => {
+        const server = await fixture()
+        const rejections: unknown[] = []
+        const observe = (reason: unknown) => rejections.push(reason)
+        process.on("unhandledRejection", observe)
+        onTestFinished(() => {
+            process.off("unhandledRejection", observe)
+        })
+        const scope = Scope.makeUnsafe()
+        const defaultApi =
+            mode === "default" ? value(createClient({ token: "fixture-only-not-a-credential" })) : undefined
+        const native =
+            mode === "native"
+                ? await Effect.runPromise(
+                      createNative({ token: "fixture-only-not-a-credential" }).pipe(Scope.provide(scope)),
+                  )
+                : undefined
+        onTestFinished(async () => {
+            if (defaultApi) value(await defaultApi.shutdown())
+            if (native) {
+                await Effect.runPromise(native.shutdown())
+                await Effect.runPromise(Scope.close(scope, Exit.void))
+            }
+        })
+        if (defaultApi) value(await defaultApi.connect())
+        else await Effect.runPromise(native!.connect())
+        for (const foreign of [false, true])
+            for (const hostile of [false, true]) {
+                const seen: string[] = []
+                const filter = (message: import("../src/index.js").Message) => {
+                    seen.push(message.content)
+                    if (message.content === "probe") return false
+                    const reason = new Error("private rejected wait filter")
+                    const rejected = foreign
+                        ? (runInNewContext("Promise.reject(reason)", { reason }) as Promise<never>)
+                        : Promise.reject(reason)
+                    if (hostile)
+                        for (const key of ["then", "catch"])
+                            Object.defineProperty(rejected, key, {
+                                get() {
+                                    throw new Error("private filter property")
+                                },
+                            })
+                    return rejected as never
+                }
+                const waiting = defaultApi
+                    ? defaultApi
+                          .waitFor("messageCreate", { filter, timeoutMs: 1_000 })
+                          .then((result) => (result.isErr() ? result.error : result.value))
+                    : Effect.runPromise(
+                          Effect.result(native!.waitFor("messageCreate", { filter, timeoutMs: 1_000 })),
+                      ).then((result) => (result._tag === "Failure" ? result.failure : result.success))
+                await waitForFilter((content, id) => server.dispatch(content, id), seen)
+                server.dispatch("invalid", "200")
+                const error = await waiting
+                expect(error).toMatchObject({ _tag: "EventWaitError", reason: "filter" })
+                expect(JSON.stringify(error)).not.toContain("private")
+                await turn()
+                expect(rejections).toEqual([])
+                const stopped = [...seen]
+                server.dispatch("after-failure", "201")
+                await turn()
+                expect(seen).toEqual(stopped)
+            }
+        expect((defaultApi ?? native)!.state).toBe("Connected")
+    },
+)
+
+test("event registration rejects unknown names and prototype keys in both public styles", async () => {
+    const defaultApi = value(createClient({ token: "fixture-only-not-a-credential" }))
+    onTestFinished(async () => {
+        value(await defaultApi.shutdown())
+    })
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const native = yield* createNative({ token: "fixture-only-not-a-credential" })
+                for (const event of ["unknown", "toString", "constructor", "__proto__", undefined, 1]) {
+                    const registered = defaultApi.events(event as never)
+                    expect(registered.isErr() && registered.error).toMatchObject({
+                        _tag: "ConfigurationError",
+                        field: "event",
+                    })
+                    const waited = yield* Effect.result(native.waitFor(event as never))
+                    expect(waited._tag === "Failure" && waited.failure).toMatchObject({
+                        _tag: "ConfigurationError",
+                        field: "event",
+                    })
+                }
+            }),
+        ),
+    )
 })
 
 test("event wait cancellation releases intake before later dispatch", async () => {

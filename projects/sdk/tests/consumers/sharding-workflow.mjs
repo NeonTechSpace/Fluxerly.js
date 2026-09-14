@@ -160,6 +160,11 @@ async function fixture({ automaticReady }) {
         countRequests,
         memberRequests,
         ready,
+        emit(guildId, event, data) {
+            const identified = identifies.find(({ connection }) => connection.shardId === shardForGuild(guildId))
+            assert.ok(identified)
+            dispatch(identified.connection, event, { ...data, guild_id: guildId })
+        },
         replyMembers(request) {
             const { guild_id: guildId, nonce } = request.command.d
             dispatch(request.connection, "GUILD_MEMBERS_CHUNK", {
@@ -263,6 +268,7 @@ async function connectedWorkflow() {
                 token: "fixture-only",
                 instance: { url: remote.origin, allowInsecure: true },
                 sharding: { totalShards },
+                messageFields: [],
             })._unsafeUnwrap()
             ;(await client.connect())._unsafeUnwrap()
         } else {
@@ -273,6 +279,7 @@ async function connectedWorkflow() {
                     token: "fixture-only",
                     instance: { url: remote.origin, allowInsecure: true },
                     sharding: { totalShards },
+                    messageFields: [],
                 }).pipe(runtime.Scope.provide(scope)),
             )
             await runtime.Effect.runPromise(client.connect())
@@ -289,6 +296,52 @@ async function connectedWorkflow() {
             remote.identifies.map(({ connection }) => connection.shardId).sort((left, right) => left - right),
             [0, 1],
         )
+        for (const [index, guildId] of guildIds.entries()) {
+            const target = { id: "10", channelId: String(20 + index) }
+            const options = { guildId, idleMs: 250 }
+            const open = (operation) =>
+                kind === "default"
+                    ? operation._unsafeUnwrap()
+                    : runtime.Effect.runPromise(operation.pipe(runtime.Scope.provide(scope)))
+            const messages = await open(client.messages.collect(target.channelId, { ...options, maxMessages: 2 }))
+            const reactions = await open(client.messages.collectReactions(target, { ...options, maxReactions: 2 }))
+            remote.emit(guildId, "MESSAGE_CREATE", {
+                id: target.id,
+                channel_id: target.channelId,
+                content: "packed idle observation",
+                author: { id: "30", username: "fixture", bot: true },
+                embeds: [{ type: "rich", title: "Unselected wire embed" }],
+            })
+            remote.emit(guildId, "MESSAGE_REACTION_ADD", {
+                message_id: target.id,
+                channel_id: target.channelId,
+                user_id: "30",
+                emoji: { name: "✅" },
+            })
+            const wait = async (collector) =>
+                kind === "default"
+                    ? (await collector.waitForClose())._unsafeUnwrap()
+                    : runtime.Effect.runPromise(collector.waitForClose())
+            const [messageResult, reactionResult] = await Promise.all([wait(messages), wait(reactions)])
+            assert.equal(messageResult.reason, "idle")
+            assert.deepEqual(Object.keys(messageResult.messages[0]).sort(), [
+                "author",
+                "channelId",
+                "content",
+                "guildId",
+                "id",
+            ])
+            assert.equal(messageResult.messages[0].guildId, guildId)
+            assert.deepEqual(
+                messageResult.messages.map(({ id }) => id),
+                [target.id],
+            )
+            assert.equal(reactionResult.reason, "idle")
+            assert.deepEqual(
+                reactionResult.reactions.map(({ userId }) => userId),
+                ["30"],
+            )
+        }
         await countsAcrossShards(client, remote, runtime)
         await membersOnEveryShard(client, remote, runtime)
         if (kind === "default") (await client.shutdown())._unsafeUnwrap()

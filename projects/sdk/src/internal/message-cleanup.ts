@@ -16,33 +16,33 @@ import {
     type MessageCleanupStopReason,
 } from "#sdk/message-cleanup"
 import { MessageOperationError } from "#sdk/message-errors"
-import type { Message, MessageOperationOptions } from "#sdk/messages"
+import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
 import type { ClientOwner } from "./client.js"
 import { mapFailureCause } from "./effect-failures.js"
 import { identifier, record } from "./message.js"
 
 const maximum = 10_000
 // The owner is the weak key, so an application-held plan cannot retain its producing client
-const ownerPlans = new WeakMap<ClientOwner, WeakSet<MessageCleanupPlan>>()
-const consumedPlans = new WeakSet<MessageCleanupPlan>()
+const ownerPlans = new WeakMap<object, WeakSet<MessageCleanupPlan<MessageCore>>>()
+const consumedPlans = new WeakSet<MessageCleanupPlan<MessageCore>>()
 
 interface PreviewOptions {
     readonly timeoutMs?: number
     readonly signal?: AbortSignal
 }
 
-interface ValidSelection {
+interface ValidSelection<M extends MessageCore> {
     readonly authorId: string | undefined
-    readonly filter: ((message: Message) => boolean) | undefined
+    readonly filter: ((message: M) => boolean) | undefined
     readonly maxScanned: number
     readonly maxSelected: number
 }
 
 const freezeIds = (ids: readonly string[]) => Object.freeze([...ids])
 const freezeBatches = (batches: readonly MessageCleanupBatch[]) => Object.freeze([...batches])
-const selectedIds = (messages: readonly Message[]) => freezeIds(messages.map((message) => message.id))
+const selectedIds = (messages: readonly MessageCore[]) => freezeIds(messages.map((message) => message.id))
 
-function ownPlan(owner: ClientOwner, plan: MessageCleanupPlan): void {
+function ownPlan<M extends MessageCore>(owner: ClientOwner<M>, plan: MessageCleanupPlan<M>): void {
     let plans = ownerPlans.get(owner)
     if (!plans) {
         plans = new WeakSet()
@@ -51,7 +51,8 @@ function ownPlan(owner: ClientOwner, plan: MessageCleanupPlan): void {
     plans.add(plan)
 }
 
-const ownsPlan = (owner: ClientOwner, plan: MessageCleanupPlan): boolean => ownerPlans.get(owner)?.has(plan) === true
+const ownsPlan = <M extends MessageCore>(owner: ClientOwner<M>, plan: MessageCleanupPlan<M>): boolean =>
+    ownerPlans.get(owner)?.has(plan) === true
 
 function error(
     phase: "preview" | "cleanup",
@@ -149,7 +150,7 @@ function validOptions(value: unknown, progress: boolean): PreviewOptions | Input
     }
 }
 
-function selection(value: unknown): ValidSelection | InputValidationFailure {
+function selection<M extends MessageCore>(value: unknown): ValidSelection<M> | InputValidationFailure {
     if (!record(value)) return inputValidationFailure("selection", "type", "Cleanup selection must be an object")
     if (Object.keys(value).some((key) => !["authorId", "filter", "maxScanned", "maxSelected"].includes(key)))
         return inputValidationFailure(
@@ -187,7 +188,7 @@ function selection(value: unknown): ValidSelection | InputValidationFailure {
         )
     return {
         authorId: value.authorId,
-        filter: value.filter as ((message: Message) => boolean) | undefined,
+        filter: value.filter as ((message: M) => boolean) | undefined,
         maxScanned: value.maxScanned,
         maxSelected: value.maxSelected,
     }
@@ -198,7 +199,10 @@ function remaining(deadline: number, signal: AbortSignal | undefined): MessageOp
     return timeoutMs > 0 ? { timeoutMs, ...(signal === undefined ? {} : { signal }) } : undefined
 }
 
-function matches(selected: ValidSelection, message: Message): Effect.Effect<boolean, MessageCleanupError> {
+function matches<M extends MessageCore>(
+    selected: ValidSelection<M>,
+    message: M,
+): Effect.Effect<boolean, MessageCleanupError> {
     if (selected.authorId !== undefined && message.author.id !== selected.authorId) return Effect.succeed(false)
     if (!selected.filter) return Effect.succeed(true)
     return Effect.suspend(() => {
@@ -253,14 +257,14 @@ const batch = (batchIndex: number, ids: readonly string[]): MessageCleanupBatch 
     Object.freeze({ batchIndex, messageIds: freezeIds(ids) })
 
 /** Builds an owned, immutable, exact message selection without submitting a deletion */
-export function previewCleanup(
-    owner: ClientOwner,
+export function previewCleanup<M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
     channelId: string,
-    suppliedSelection: MessageCleanupSelection,
+    suppliedSelection: MessageCleanupSelection<M>,
     suppliedOptions?: MessageOperationOptions,
-): Effect.Effect<MessageCleanupPlan, MessageCleanupError> {
+): Effect.Effect<MessageCleanupPlan<M>, MessageCleanupError> {
     return Effect.suspend(() => {
-        const selected = selection(suppliedSelection)
+        const selected = selection<M>(suppliedSelection)
         const requestOptions = validOptions(suppliedOptions, false)
         const invalid = (failure: InputValidationFailure) =>
             Effect.fail(error("preview", "input", "notDispatched", 0, [], [], null, null, null, failure.detail))
@@ -270,7 +274,7 @@ export function previewCleanup(
         if (requestOptions instanceof InputValidationFailure) return invalid(requestOptions)
         const deadline = performance.now() + (requestOptions.timeoutMs ?? 30_000)
         return Effect.gen(function* () {
-            const messages: Message[] = []
+            const messages: M[] = []
             let scannedCount = 0
             let before: string | undefined
             let stopReason: MessageCleanupStopReason = "historyExhausted"
@@ -323,7 +327,7 @@ export function previewCleanup(
                 before = page.at(-1)!.id
             }
             if (scannedCount === selected.maxScanned && messages.length < selected.maxSelected) stopReason = "scanLimit"
-            const plan: MessageCleanupPlan = Object.freeze({
+            const plan: MessageCleanupPlan<M> = Object.freeze({
                 channelId,
                 selectedMessages: Object.freeze([...messages]),
                 scannedCount,
@@ -336,9 +340,9 @@ export function previewCleanup(
 }
 
 /** Submit an owned preview's exact IDs sequentially through deleteMany, without rescanning or replaying an unknown batch */
-export function cleanup(
-    owner: ClientOwner,
-    plan: MessageCleanupPlan,
+export function cleanup<M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
+    plan: MessageCleanupPlan<M>,
     suppliedOptions?: MessageCleanupOptions,
 ): Effect.Effect<MessageCleanupReport, MessageCleanupError> {
     return Effect.suspend(() => {

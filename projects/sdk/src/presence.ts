@@ -1,7 +1,10 @@
 import { operationErrorMessage } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** A bot's visible session status. `offline` is intentionally excluded because Fluxer normalizes it to invisible while connected */
+/** The bot's visible status while connected, with dnd meaning do not disturb.
+ * Use invisible to hide online status, not to disconnect the client.
+ * offline is excluded because Fluxer normalizes it to invisible on a connected session
+ */
 export type PresenceStatus = "online" | "idle" | "dnd" | "invisible"
 
 /** One custom-status emoji. The variants cannot be combined */
@@ -15,7 +18,9 @@ export type CustomStatusEmoji =
           readonly name: string
       }
 
-/** Optional custom status fields. Text is 1–128 UTF-16 code units, expiry is a future ISO-8601 timestamp, and Fluxer validates emoji availability and Unicode semantics */
+/** Text, emoji and optional expiration for the bot's custom status.
+ * Fluxer makes the final checks for emoji availability, Unicode emoji semantics and whether expiration is still in the future
+ */
 export interface CustomStatusInput {
     /** Status text, from 1 through 128 UTF-16 code units */
     readonly text?: string
@@ -26,26 +31,33 @@ export interface CustomStatusInput {
 }
 
 /**
- * The latest desired bot presence. `customStatus: null` requests clearing the custom status, while omission preserves it at Fluxer.
- * Accepted input is retained only in this client process and fans out to every live locally owned shard after READY or RESUMED.
- * Local acceptance is not an atomic multi-shard provider acknowledgement and does not confirm that another user observed the update
+ * Set the status this bot should publish on its gateway connections.
+ * Use `customStatus: null` to request clearing the custom status.
+ * Omission preserves this client's latest custom-status request, or leaves the provider value unchanged if there is no retained request.
+ * The client copies and retains the latest accepted input, replacing earlier pending updates.
+ * It publishes those settings on ready local shards and restores them after READY or RESUMED.
+ * Acceptance confirms local configuration only, not atomic publication across shards or observation by another user.
+ * Shutdown releases the saved settings and pending local timers
  */
 export interface PresenceInput {
-    /** The status to retain and publish */
+    /** Visible status to publish on the bot's live gateway connections */
     readonly status: PresenceStatus
     /** New custom status, null to clear it, or omission to retain the latest custom-status request made by this client */
     readonly customStatus?: CustomStatusInput | null
 }
 
-/** Locally invalid or over-budget presence request. A member selection for a guild not assigned to this client is input, not a silently retained request */
+/** The SDK rejected a status update or member-presence selection before changing its saved settings.
+ * input includes invalid values or a guild assigned to a shard this client does not own.
+ * limit means the member selection exceeds a local count or encoded-byte budget
+ */
 export class PresenceError extends Error {
-    /** Stable discriminant for default Result failures */
+    /** Error tag for identifying PresenceError in a Result */
     readonly _tag = "PresenceError"
     /** SDK-owned local input detail, or null for local limits and non-input failures */
     readonly inputValidation: InputValidationDetail | null
 
     constructor(
-        /** The rejected operation phase, without retaining the input value */
+        /** Whether local validation failed or the selected members exceeded a local budget */
         readonly reason: "input" | "limit" = "input",
         /** Safe local input detail. It never retains rejected values, caller keys, credentials, or provider data */
         inputValidation: InputValidationDetail | null = null,

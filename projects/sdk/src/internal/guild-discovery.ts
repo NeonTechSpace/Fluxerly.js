@@ -156,7 +156,7 @@ export function discoverySearch(
         return inputValidationFailure(
             "query.query",
             "length",
-            "Discovery query must contain at most 100 Unicode code points",
+            "Discovery query must contain at most 100 UTF-16 code units",
         )
     if (input?.categoryId !== undefined && !integer(input.categoryId, 8))
         return inputValidationFailure(
@@ -171,14 +171,10 @@ export function discoverySearch(
         return inputValidationFailure(
             "query.primaryLanguage",
             "format",
-            "Discovery primary language must be a 2 through 35 code point language tag",
+            "Discovery primary language must be a 2 through 35 UTF-16 code unit language tag",
         )
     if (input?.tag !== undefined && !text(input.tag, 0, 30))
-        return inputValidationFailure(
-            "query.tag",
-            "length",
-            "Discovery tag must contain at most 30 Unicode code points",
-        )
+        return inputValidationFailure("query.tag", "length", "Discovery tag must contain at most 30 UTF-16 code units")
     if (input?.sortBy !== undefined && !["memberCount", "onlineCount", "relevance"].includes(input.sortBy))
         return inputValidationFailure(
             "query.sortBy",
@@ -188,7 +184,7 @@ export function discoverySearch(
     if (input?.limit !== undefined && (!integer(input.limit, 48) || input.limit === 0))
         return inputValidationFailure("query.limit", "range", "Discovery limit must be an integer from 1 through 48")
     if (input?.offset !== undefined && !integer(input.offset))
-        return inputValidationFailure("query.offset", "range", "Discovery offset must be a nonnegative 32-bit integer")
+        return inputValidationFailure("query.offset", "range", "Discovery offset must be a nonnegative safe integer")
     const limit = input?.limit ?? 24
     const offset = input?.offset ?? 0
     const parameters = new URLSearchParams({ limit: String(limit), offset: String(offset) })

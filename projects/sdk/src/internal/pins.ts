@@ -1,4 +1,6 @@
 import type { ChannelPinsUpdate, MessagePinsPage, MessagePin } from "#sdk/pins"
+import type { MessageCore } from "#sdk/messages"
+import type { MessageDecoder } from "./message-fields.js"
 import { inputValidationFailure } from "#sdk/input-validation"
 import { decodeMessage, identifier, record } from "./message.js"
 
@@ -32,7 +34,19 @@ export function decodePinsPage(
     value: unknown,
     channel: string,
     query: { readonly limit: number; readonly params: URLSearchParams },
-): MessagePinsPage | undefined {
+): MessagePinsPage | undefined
+export function decodePinsPage<M extends MessageCore>(
+    value: unknown,
+    channel: string,
+    query: { readonly limit: number; readonly params: URLSearchParams },
+    decode: MessageDecoder<M>,
+): MessagePinsPage<M> | undefined
+export function decodePinsPage(
+    value: unknown,
+    channel: string,
+    query: { readonly limit: number; readonly params: URLSearchParams },
+    decode: MessageDecoder<MessageCore> = decodeMessage,
+): MessagePinsPage<MessageCore> | undefined {
     if (
         !record(value) ||
         !Array.isArray(value.items) ||
@@ -41,18 +55,18 @@ export function decodePinsPage(
         (value.has_more && !value.items.length)
     )
         return undefined
-    const items: MessagePin[] = []
+    const items: MessagePin<MessageCore>[] = []
     const ids = new Set<string>()
     const before = query.params.get("before")
     let previous = before === null ? Infinity : Date.parse(before)
     for (const item of value.items) {
         if (!record(item) || !timestamp(item.pinned_at)) return undefined
-        const message = decodeMessage(item.message)
+        const message = decode(item.message)
         const time = Date.parse(item.pinned_at)
         if (
             !message ||
             message.channelId !== channel ||
-            message.pinned === false ||
+            (record(item.message) && item.message.pinned === false) ||
             ids.has(message.id) ||
             time > previous
         )

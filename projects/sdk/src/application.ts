@@ -5,8 +5,9 @@ import { freezeInputValidationDetail, type InputValidationDetail } from "./input
 import type { MessageOperationOptions } from "./messages.js"
 
 /**
- * Frozen allowlisted observation of the application authenticated by this bot token.
- * It deliberately omits owner identity, redirect URIs, verification keys, client secrets, and nested bot fields
+ * Basic application details returned by application.fetchCurrent for this client's bot token.
+ * Use id to build an installation link and the bot flags to inspect current installation settings.
+ * This frozen result is not cached and includes no owner identity, redirect URIs, verification keys, client secrets or nested bot account
  */
 export interface BotApplication {
     /** Decimal application ID, suitable for links.installation */
@@ -26,29 +27,35 @@ export interface BotApplication {
 /** Per-call deadline for a current-application read, separate from gateway startup */
 export interface BotApplicationOperationOptions extends MessageOperationOptions {}
 
-/** Default cancellation affects this read only and never changes the application */
+/** Cancellation in the default API affects this read only and never changes the application */
 export interface DefaultBotApplicationOperationOptions extends BotApplicationOperationOptions, OperationOptions {}
 
 /** Current-application operation identified by safe failure metadata */
 export type BotApplicationOperation = "application.fetchCurrent"
 
-/** Expected current-application failure without credentials, private fields, or upstream response bodies */
+/** The SDK could not read the current bot application.
+ * The read failed local checks, transport, its deadline or provider response handling.
+ * Metadata includes no credentials, private application fields or upstream response bodies.
+ * This read cannot modify the application, even when its request outcome is unknown
+ */
 export class BotApplicationOperationError extends Error {
     /** Stable expected-failure discriminator */
     readonly _tag = "BotApplicationOperationError"
-    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    /** Safe local validation facts when the SDK can identify a failed input rule, otherwise null */
     readonly inputValidation: InputValidationDetail | null
 
     constructor(
         /** Requested operation */
         readonly operation: BotApplicationOperation,
-        /** HTTP failures retain status, never a provider response body */
+        /** Input validation, full local capacity, HTTP 404 or another rejection, network failure, invalid response, deadline expiry or rate limit */
         readonly reason: "input" | "busy" | "notFound" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
-        /** GET failures are never an uncertain mutation */
+        /** notDispatched means no service request started, rejected means an observed rejection, and unknown means the request outcome is uncertain.
+         * This is a read, so unknown does not mean the application may have changed
+         */
         readonly outcome: "notDispatched" | "rejected" | "unknown",
-        /** HTTP status when received */
+        /** HTTP status when received, otherwise null */
         readonly status: number | null = null,
-        /** Provider retry delay in milliseconds when available */
+        /** Provider retry delay in milliseconds when usable, otherwise null */
         readonly retryAfterMs: number | null = null,
         /** Reviewed provider rejection detail, or null when no safe classification is available */
         readonly apiError: ApiErrorDetail | null = null,
@@ -71,5 +78,7 @@ export class BotApplicationOperationError extends Error {
     }
 }
 
-/** Native interruption remains in the Effect cause; default calls additionally return CancelledError */
+/** Expected current-application failures shared by both entry points.
+ * Native interruption remains in the Effect cause, while default API calls additionally return CancelledError
+ */
 export type BotApplicationOperationFailure = BotApplicationOperationError | ClientClosedError

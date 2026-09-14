@@ -1,0 +1,65 @@
+name: Docs preview
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  group: docs-preview
+  cancel-in-progress: false
+  queue: max
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: website
+      url: ${{ vars.CLOUDFLARE_PREVIEW_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+      - name: Read verified release snapshots
+        id: snapshots
+        run: node web/scripts/fetch-releases.mjs
+        working-directory: projects
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Build and check preview content
+        id: workspace
+        run: pnpm check
+        working-directory: projects
+      - name: Record the checked source
+        id: source
+        shell: bash
+        run: |
+          source="$(git rev-parse HEAD)"
+          printf 'DOCS_SOURCE_COMMIT=%s\n' "$source" >> "$GITHUB_ENV"
+          printf '{"sourceCommit":"%s"}\n' "$source" > projects/web/dist/deployment.json
+      - name: Deploy and verify Preview only
+        id: deploy
+        run: node scripts/preview-deploy.mjs
+        working-directory: projects/web
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+          CLOUDFLARE_PREVIEW_URL: ${{ vars.CLOUDFLARE_PREVIEW_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Summarize Preview delivery
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_KIND: preview
+          SUMMARY_STEPS: ${{ toJSON(steps) }}
+          SUMMARY_DETAILS: >-
+            {"sourceCommit": ${{ toJSON(env.DOCS_SOURCE_COMMIT) }}, "previewUrl": ${{ toJSON(vars.CLOUDFLARE_PREVIEW_URL) }}}
+        run: |
+          if [ -f .github/scripts/workflow-summary.mjs ]; then
+            node .github/scripts/workflow-summary.mjs
+          else
+            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
+          fi

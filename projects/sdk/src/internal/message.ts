@@ -11,7 +11,9 @@ import type {
     MessageContextReference,
     MessageSnapshot,
     MessageSticker,
+    MessageField,
 } from "#sdk/messages"
+import type { MessageObservation } from "./message-fields.js"
 import { MessageError } from "#sdk/message-errors"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
@@ -37,7 +39,13 @@ const writableFlags = (value: unknown): value is number =>
     value <= 2_147_483_647 &&
     (value & ~writableMessageFlags) === 0
 
-export function decodeMessage(value: unknown): Message | undefined {
+export function decodeMessage(value: unknown): Message | undefined
+export function decodeMessage(
+    value: unknown,
+    fields: ReadonlySet<MessageField> | undefined,
+): MessageObservation | undefined
+/** Selection changes construction only. Every recognized wire field keeps the full decoder's validation rules */
+export function decodeMessage(value: unknown, fields?: ReadonlySet<MessageField>): MessageObservation | undefined {
     if (!record(value) || !identifier(value.id) || !identifier(value.channel_id) || typeof value.content !== "string")
         return undefined
     if (
@@ -62,17 +70,18 @@ export function decodeMessage(value: unknown): Message | undefined {
         (author.bot !== undefined && typeof author.bot !== "boolean")
     )
         return undefined
-    const embeds = decodeEmbeds(value.embeds)
-    const attachments = decodeAttachments(value.attachments)
-    const stickers = decodeStickers(value.stickers)
+    const selected = (field: MessageField) => fields === undefined || fields.has(field)
+    const embeds = decodeEmbeds(value.embeds, selected("embeds"))
+    const attachments = decodeAttachments(value.attachments, selected("attachments"))
+    const stickers = decodeStickers(value.stickers, selected("stickers"))
     if (embeds === undefined || attachments === undefined || stickers === undefined) return undefined
-    const mentions = decodeMentions(value.mentions)
-    const mentionRoles = decodeIdentifiers(value.mention_roles)
-    const mentionChannels = decodeMentionChannels(value.mention_channels)
-    const reactions = decodeReactionSummaries(value.reactions)
-    const messageReference = decodeMessageReference(value.message_reference)
-    const messageSnapshots = decodeMessageSnapshots(value.message_snapshots)
-    const referencedMessage = decodeReferencedMessage(value.referenced_message)
+    const mentions = decodeMentions(value.mentions, selected("mentions"))
+    const mentionRoles = decodeIdentifiers(value.mention_roles, selected("mentionRoleIds"))
+    const mentionChannels = decodeMentionChannels(value.mention_channels, selected("mentionChannels"))
+    const reactions = decodeReactionSummaries(value.reactions, selected("reactions"))
+    const messageReference = decodeMessageReference(value.message_reference, selected("messageReference"))
+    const messageSnapshots = decodeMessageSnapshots(value.message_snapshots, selected("messageSnapshots"))
+    const referencedMessage = decodeReferencedMessage(value.referenced_message, selected("referencedMessage"))
     if (
         mentions === undefined ||
         mentionRoles === undefined ||
@@ -87,18 +96,20 @@ export function decodeMessage(value: unknown): Message | undefined {
         id: value.id,
         channelId: value.channel_id,
         content: value.content,
-        ...(value.nonce === undefined ? {} : { nonce: value.nonce }),
-        ...(value.webhook_id == null ? {} : { webhookId: value.webhook_id }),
-        ...(value.pinned === undefined ? {} : { pinned: value.pinned }),
-        ...(value.timestamp === undefined ? {} : { createdAt: value.timestamp }),
-        ...(value.edited_timestamp === undefined ? {} : { editedAt: value.edited_timestamp }),
-        ...(value.type === undefined ? {} : { type: value.type }),
-        ...(value.flags === undefined ? {} : { flags: value.flags }),
+        ...(!selected("nonce") || value.nonce === undefined ? {} : { nonce: value.nonce }),
+        ...(!selected("webhookId") || value.webhook_id == null ? {} : { webhookId: value.webhook_id }),
+        ...(!selected("pinned") || value.pinned === undefined ? {} : { pinned: value.pinned }),
+        ...(!selected("createdAt") || value.timestamp === undefined ? {} : { createdAt: value.timestamp }),
+        ...(!selected("editedAt") || value.edited_timestamp === undefined ? {} : { editedAt: value.edited_timestamp }),
+        ...(!selected("type") || value.type === undefined ? {} : { type: value.type }),
+        ...(!selected("flags") || value.flags === undefined ? {} : { flags: value.flags }),
         ...(value.guild_id === undefined ? {} : { guildId: value.guild_id }),
-        ...(value.mention_everyone === undefined ? {} : { mentionedEveryone: value.mention_everyone }),
-        embeds,
-        attachments,
-        stickers,
+        ...(!selected("mentionedEveryone") || value.mention_everyone === undefined
+            ? {}
+            : { mentionedEveryone: value.mention_everyone }),
+        ...(embeds === true ? {} : { embeds }),
+        ...(attachments === true ? {} : { attachments }),
+        ...(stickers === true ? {} : { stickers }),
         ...(mentions.value === undefined ? {} : { mentions: mentions.value }),
         ...(mentionRoles.value === undefined ? {} : { mentionRoleIds: mentionRoles.value }),
         ...(mentionChannels.value === undefined ? {} : { mentionChannels: mentionChannels.value }),
@@ -111,11 +122,13 @@ export function decodeMessage(value: unknown): Message | undefined {
 }
 
 type Observed<A> = { readonly value: A | undefined }
+const unobserved: Observed<never> = Object.freeze({ value: undefined })
 
-function decodeStickers(value: unknown): readonly MessageSticker[] | undefined {
-    const rawStickers = value ?? []
+function decodeStickers(value: unknown, construct = true): readonly MessageSticker[] | true | undefined {
+    if (value === undefined || value === null) return construct ? Object.freeze([]) : true
+    const rawStickers = value
     if (!Array.isArray(rawStickers)) return undefined
-    const stickers: MessageSticker[] = []
+    const stickers: MessageSticker[] | undefined = construct ? [] : undefined
     for (const sticker of rawStickers) {
         if (
             !record(sticker) ||
@@ -124,15 +137,15 @@ function decodeStickers(value: unknown): readonly MessageSticker[] | undefined {
             typeof sticker.animated !== "boolean"
         )
             return undefined
-        stickers.push(Object.freeze({ id: sticker.id, name: sticker.name, animated: sticker.animated }))
+        if (stickers) stickers.push(Object.freeze({ id: sticker.id, name: sticker.name, animated: sticker.animated }))
     }
-    return Object.freeze(stickers)
+    return stickers ? Object.freeze(stickers) : true
 }
 
-function decodeMentions(value: unknown): Observed<readonly MessageMention[]> | undefined {
-    if (value === undefined) return { value: undefined }
+function decodeMentions(value: unknown, construct = true): Observed<readonly MessageMention[]> | undefined {
+    if (value === undefined) return unobserved
     if (!Array.isArray(value)) return undefined
-    const mentions: MessageMention[] = []
+    const mentions: MessageMention[] | undefined = construct ? [] : undefined
     for (const mention of value) {
         if (
             !record(mention) ||
@@ -141,34 +154,42 @@ function decodeMentions(value: unknown): Observed<readonly MessageMention[]> | u
             (mention.bot !== undefined && typeof mention.bot !== "boolean")
         )
             return undefined
-        mentions.push(Object.freeze({ id: mention.id, username: mention.username, isBot: mention.bot === true }))
+        if (mentions)
+            mentions.push(Object.freeze({ id: mention.id, username: mention.username, isBot: mention.bot === true }))
     }
-    return { value: Object.freeze(mentions) }
+    return mentions ? { value: Object.freeze(mentions) } : unobserved
 }
 
-function decodeIdentifiers(value: unknown): Observed<readonly string[]> | undefined {
-    if (value === undefined) return { value: undefined }
-    return Array.isArray(value) && value.every(identifier) ? { value: Object.freeze([...value]) } : undefined
+function decodeIdentifiers(value: unknown, construct = true): Observed<readonly string[]> | undefined {
+    if (value === undefined) return unobserved
+    if (!Array.isArray(value) || !value.every(identifier)) return undefined
+    return construct ? { value: Object.freeze([...value]) } : unobserved
 }
 
-function decodeMentionChannels(value: unknown): Observed<readonly MessageChannelMention[] | null> | undefined {
-    if (value === undefined) return { value: undefined }
-    if (value === null) return { value: null }
+function decodeMentionChannels(
+    value: unknown,
+    construct = true,
+): Observed<readonly MessageChannelMention[] | null> | undefined {
+    if (value === undefined) return unobserved
+    if (value === null) return construct ? { value: null } : unobserved
     if (!Array.isArray(value)) return undefined
-    const channels: MessageChannelMention[] = []
+    const channels: MessageChannelMention[] | undefined = construct ? [] : undefined
     for (const channel of value) {
         if (!record(channel) || !identifier(channel.id) || typeof channel.name !== "string" || !int32(channel.type))
             return undefined
-        channels.push(Object.freeze({ id: channel.id, name: channel.name, type: channel.type }))
+        if (channels) channels.push(Object.freeze({ id: channel.id, name: channel.name, type: channel.type }))
     }
-    return { value: Object.freeze(channels) }
+    return channels ? { value: Object.freeze(channels) } : unobserved
 }
 
-function decodeReactionSummaries(value: unknown): Observed<readonly MessageReactionSummary[] | null> | undefined {
-    if (value === undefined) return { value: undefined }
-    if (value === null) return { value: null }
+function decodeReactionSummaries(
+    value: unknown,
+    construct = true,
+): Observed<readonly MessageReactionSummary[] | null> | undefined {
+    if (value === undefined) return unobserved
+    if (value === null) return construct ? { value: null } : unobserved
     if (!Array.isArray(value)) return undefined
-    const reactions: MessageReactionSummary[] = []
+    const reactions: MessageReactionSummary[] | undefined = construct ? [] : undefined
     for (const reaction of value) {
         if (!record(reaction) || !record(reaction.emoji) || !count(reaction.count)) return undefined
         const emoji = reaction.emoji
@@ -179,24 +200,28 @@ function decodeReactionSummaries(value: unknown): Observed<readonly MessageReact
             (reaction.me !== undefined && reaction.me !== null && typeof reaction.me !== "boolean")
         )
             return undefined
-        reactions.push(
-            Object.freeze({
-                emoji: Object.freeze({
-                    name: emoji.name,
-                    ...(emoji.id === undefined ? {} : { id: emoji.id }),
-                    ...(emoji.animated === undefined ? {} : { animated: emoji.animated }),
+        if (reactions)
+            reactions.push(
+                Object.freeze({
+                    emoji: Object.freeze({
+                        name: emoji.name,
+                        ...(emoji.id === undefined ? {} : { id: emoji.id }),
+                        ...(emoji.animated === undefined ? {} : { animated: emoji.animated }),
+                    }),
+                    count: reaction.count,
+                    ...(reaction.me === undefined ? {} : { me: reaction.me }),
                 }),
-                count: reaction.count,
-                ...(reaction.me === undefined ? {} : { me: reaction.me }),
-            }),
-        )
+            )
     }
-    return { value: Object.freeze(reactions) }
+    return reactions ? { value: Object.freeze(reactions) } : unobserved
 }
 
-function decodeMessageReference(value: unknown): Observed<MessageContextReference | null> | undefined {
-    if (value === undefined) return { value: undefined }
-    if (value === null) return { value: null }
+function decodeMessageReference(
+    value: unknown,
+    construct = true,
+): Observed<MessageContextReference | null> | undefined {
+    if (value === undefined) return unobserved
+    if (value === null) return construct ? { value: null } : unobserved
     if (
         !record(value) ||
         !identifier(value.message_id) ||
@@ -205,6 +230,7 @@ function decodeMessageReference(value: unknown): Observed<MessageContextReferenc
         (value.type !== undefined && !int32(value.type))
     )
         return undefined
+    if (!construct) return unobserved
     return {
         value: Object.freeze({
             id: value.message_id,
@@ -215,20 +241,23 @@ function decodeMessageReference(value: unknown): Observed<MessageContextReferenc
     }
 }
 
-function decodeMessageSnapshots(value: unknown): Observed<readonly MessageSnapshot[] | null> | undefined {
-    if (value === undefined) return { value: undefined }
-    if (value === null) return { value: null }
+function decodeMessageSnapshots(
+    value: unknown,
+    construct = true,
+): Observed<readonly MessageSnapshot[] | null> | undefined {
+    if (value === undefined) return unobserved
+    if (value === null) return construct ? { value: null } : unobserved
     if (!Array.isArray(value)) return undefined
-    const snapshots: MessageSnapshot[] = []
+    const snapshots: MessageSnapshot[] | undefined = construct ? [] : undefined
     for (const snapshot of value) {
-        const decoded = decodeMessageSnapshot(snapshot)
+        const decoded = decodeMessageSnapshot(snapshot, construct)
         if (!decoded) return undefined
-        snapshots.push(decoded)
+        if (snapshots && decoded !== true) snapshots.push(decoded)
     }
-    return { value: Object.freeze(snapshots) }
+    return snapshots ? { value: Object.freeze(snapshots) } : unobserved
 }
 
-function decodeMessageSnapshot(value: unknown): MessageSnapshot | undefined {
+function decodeMessageSnapshot(value: unknown, construct = true): MessageSnapshot | true | undefined {
     if (
         !record(value) ||
         !timestamp(value.timestamp) ||
@@ -238,12 +267,12 @@ function decodeMessageSnapshot(value: unknown): MessageSnapshot | undefined {
         (value.edited_timestamp !== undefined && value.edited_timestamp !== null && !timestamp(value.edited_timestamp))
     )
         return undefined
-    const mentionUserIds = decodeSnapshotField(value.mentions, decodeSnapshotIdentifiers)
-    const mentionRoleIds = decodeSnapshotField(value.mention_roles, decodeSnapshotIdentifiers)
-    const mentionChannels = decodeSnapshotField(value.mention_channels, decodeSnapshotMentionChannels)
-    const embeds = decodeSnapshotField(value.embeds, decodeEmbeds)
-    const attachments = decodeSnapshotField(value.attachments, decodeAttachments)
-    const stickers = decodeSnapshotField(value.stickers, decodeStickers)
+    const mentionUserIds = decodeSnapshotField(value.mentions, decodeSnapshotIdentifiers, construct)
+    const mentionRoleIds = decodeSnapshotField(value.mention_roles, decodeSnapshotIdentifiers, construct)
+    const mentionChannels = decodeSnapshotField(value.mention_channels, decodeSnapshotMentionChannels, construct)
+    const embeds = decodeSnapshotField(value.embeds, decodeEmbeds, construct)
+    const attachments = decodeSnapshotField(value.attachments, decodeAttachments, construct)
+    const stickers = decodeSnapshotField(value.stickers, decodeStickers, construct)
     if (
         mentionUserIds === undefined ||
         mentionRoleIds === undefined ||
@@ -253,6 +282,7 @@ function decodeMessageSnapshot(value: unknown): MessageSnapshot | undefined {
         stickers === undefined
     )
         return undefined
+    if (!construct) return true
     return Object.freeze({
         ...(value.content === undefined ? {} : { content: value.content }),
         createdAt: value.timestamp,
@@ -270,28 +300,34 @@ function decodeMessageSnapshot(value: unknown): MessageSnapshot | undefined {
 
 function decodeSnapshotField<A>(
     value: unknown,
-    decode: (value: unknown) => A | undefined,
+    decode: (value: unknown, construct: boolean) => A | true | undefined,
+    construct: boolean,
 ): Observed<A | null> | undefined {
-    if (value === undefined) return { value: undefined }
-    if (value === null) return { value: null }
-    const decoded = decode(value)
-    return decoded === undefined ? undefined : { value: decoded }
+    if (value === undefined) return unobserved
+    if (value === null) return construct ? { value: null } : unobserved
+    const decoded = decode(value, construct)
+    return decoded === undefined ? undefined : decoded === true ? unobserved : { value: decoded }
 }
 
-function decodeSnapshotIdentifiers(value: unknown): readonly string[] | undefined {
-    return Array.isArray(value) && value.every(identifier) ? Object.freeze([...value]) : undefined
+function decodeSnapshotIdentifiers(value: unknown, construct = true): readonly string[] | true | undefined {
+    if (!Array.isArray(value) || !value.every(identifier)) return undefined
+    return construct ? Object.freeze([...value]) : true
 }
 
-function decodeSnapshotMentionChannels(value: unknown): readonly MessageChannelMention[] | undefined {
-    const decoded = decodeMentionChannels(value)
-    return decoded?.value === null || decoded?.value === undefined ? undefined : decoded.value
+function decodeSnapshotMentionChannels(
+    value: unknown,
+    construct = true,
+): readonly MessageChannelMention[] | true | undefined {
+    const decoded = decodeMentionChannels(value, construct)
+    if (decoded === undefined) return undefined
+    return construct ? (decoded.value ?? undefined) : true
 }
 
-function decodeReferencedMessage(value: unknown): Observed<MessageReference | null> | undefined {
-    if (value === undefined) return { value: undefined }
-    if (value === null) return { value: null }
+function decodeReferencedMessage(value: unknown, construct = true): Observed<MessageReference | null> | undefined {
+    if (value === undefined) return unobserved
+    if (value === null) return construct ? { value: null } : unobserved
     if (!record(value) || !identifier(value.id) || !identifier(value.channel_id)) return undefined
-    return { value: Object.freeze({ id: value.id, channelId: value.channel_id }) }
+    return construct ? { value: Object.freeze({ id: value.id, channelId: value.channel_id }) } : unobserved
 }
 
 export function reference(value: unknown): value is MessageReference {
@@ -347,28 +383,30 @@ export function decodeBulkDeletion(value: unknown): MessageBulkDeletion | undefi
     return Object.freeze({ channelId: value.channel_id, ids: Object.freeze([...value.ids]) })
 }
 
+const messageInputKeys: readonly string[] = [
+    "content",
+    "nonce",
+    "embeds",
+    "attachments",
+    "stickerIds",
+    "allowedMentions",
+    "messageReference",
+    "flags",
+]
+
 /** Unknown input fields fail before dispatch; unknown wire response fields are not copied into snapshots */
-export function encodeMessage(channelId: unknown, input: unknown, defaultNonce: string): EncodedBody | MessageError {
+export function encodeMessage(
+    channelId: unknown,
+    input: unknown,
+    defaultNonce: string,
+    replyTarget?: MessageReference,
+): EncodedBody | MessageError {
     const invalid = (failure: InputValidationFailure) =>
         new MessageError("input", "notSent", null, null, null, failure.detail)
     if (!identifier(channelId))
         return invalid(inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings"))
     if (!record(input)) return invalid(inputValidationFailure("input", "type", "Message input must be an object"))
-    if (
-        Object.keys(input).some(
-            (key) =>
-                ![
-                    "content",
-                    "nonce",
-                    "embeds",
-                    "attachments",
-                    "stickerIds",
-                    "allowedMentions",
-                    "messageReference",
-                    "flags",
-                ].includes(key),
-        )
-    )
+    if (Object.keys(input).some((key) => !messageInputKeys.includes(key)))
         return invalid(
             inputValidationFailure(
                 "input",
@@ -422,7 +460,7 @@ export function encodeMessage(channelId: unknown, input: unknown, defaultNonce: 
         )
     const mentions = encodeAllowedMentions(input.allowedMentions)
     if (mentions instanceof InputValidationFailure) return invalid(mentions)
-    const ref = input.messageReference
+    const ref = replyTarget ?? input.messageReference
     if (ref !== undefined && !reference(ref))
         return invalid(
             inputValidationFailure(
@@ -632,16 +670,8 @@ export function replyInput(target: unknown, input: unknown): MessageInput | Mess
                 "Reply input must not provide its own messageReference",
             ),
         )
-    const attachments = encodeAttachments(input.attachments, false)
-    if (attachments instanceof InputValidationFailure) return invalid(attachments)
-    const body = encodeBody(input, attachments.uploadedFilenames)
-    if (body instanceof InputValidationFailure) return invalid(body)
-    if (!body)
-        return invalid(
-            inputValidationFailure("input", "required", "A reply must contain content, an embed, or an attachment"),
-        )
-    // Body presence/types were checked above; send performs complete validation of mentions and unknown keys
-    return { ...input, messageReference: target } as MessageInput
+    // The send owner validates the original structural body in its normal order after accepting the lifetime
+    return input as MessageInput
 }
 
 function encodeBody(input: Record<string, unknown>, uploadedFilenames?: readonly string[]) {

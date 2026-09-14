@@ -75,7 +75,7 @@ function remoteFailure(error: GuildOperationFailure): GuildOperationFailure {
 
 /** Fetches the four independent hierarchy inputs in parallel under one deadline, then evaluates the pure local rule */
 export function fetchHierarchyCheck(
-    owner: ClientOwner,
+    owner: Pick<ClientOwner, "guild">,
     input: MemberReference,
     suppliedOptions?: GuildOperationOptions,
 ): Effect.Effect<boolean, GuildOperationFailure> {

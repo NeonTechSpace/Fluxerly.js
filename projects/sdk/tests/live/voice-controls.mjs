@@ -338,6 +338,14 @@ async function restore() {
     else {
         const current = await freshCurrentState()
         if (journal.phase === "awaiting_rejoin") {
+            if (current.channelId === journal.baseline.channelId) {
+                assert.deepEqual(
+                    { muted: current.muted, deafened: current.deafened },
+                    { muted: journal.baseline.muted, deafened: journal.baseline.deafened },
+                    "Concurrent participant voice-flag change after disconnect; retain recovery journal",
+                )
+                journal.phase = "restoring"
+            }
             journal.current = current
             if (current.channelId !== journal.baseline.channelId) await requireRejoin()
         } else

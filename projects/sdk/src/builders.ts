@@ -3,8 +3,10 @@ import type { EmbedAuthorInput, EmbedFieldInput, EmbedFooterInput, EmbedInput, E
 import type { AllowedMentions, MessageInput, MessageReference } from "./messages.js"
 
 /**
- * Fluent rich-embed construction without a client, request, validation pass or retained output snapshot.
- * Every `build` result is a new plain `EmbedInput`. Mutate that result or continue changing this builder without changing a previous result
+ * Assemble an embed by chaining methods, then pass `build()`'s plain object to a message operation.
+ * Setters change this builder and return it so calls can be chained. Later setters replace earlier values, while field methods append.
+ * Every build returns a fresh object, including copied author, footer, media and field objects.
+ * Building sends nothing and performs no validation. Message operations check lengths, URLs and server limits
  */
 export class EmbedBuilder {
     private titleValue: string | undefined
@@ -18,67 +20,69 @@ export class EmbedBuilder {
     private thumbnailValue: EmbedMediaInput | undefined
     private readonly fieldValues: EmbedFieldInput[] = []
 
-    /** Set the embed title. Existing message-operation validation remains authoritative */
+    /** Replace the title text and return this builder. Message operations enforce the 256-character limit */
     title(value: string): this {
         this.titleValue = value
         return this
     }
 
-    /** Set the embed description. Existing message-operation validation remains authoritative */
+    /** Replace the body text and return this builder. Message operations enforce the 4096-character limit */
     description(value: string): this {
         this.descriptionValue = value
         return this
     }
 
-    /** Set the linked title URL without fetching or validating it */
+    /** Replace the destination opened from the title and return this builder. The URL is not checked or fetched here */
     url(value: string): this {
         this.urlValue = value
         return this
     }
 
-    /** Set the RGB integer used by the existing `EmbedInput` contract */
+    /** Replace the color and return this builder. Use an integer from 0 through 0xffffff, or convert a color with `colors.parse` first */
     color(value: number): this {
         this.colorValue = value
         return this
     }
 
-    /** Set the ISO 8601 timestamp string used by the existing `EmbedInput` contract */
+    /** Replace the embed's timestamp and return this builder. Supply an ISO 8601 string with a timezone, such as `new Date().toISOString()` */
     timestamp(value: string): this {
         this.timestampValue = value
         return this
     }
 
-    /** Replace the author with a copied plain input object */
+    /** Replace the author label and optional links, copy the supplied object, then return this builder */
     author(value: EmbedAuthorInput): this {
         this.authorValue = { ...value }
         return this
     }
 
-    /** Replace the footer with a copied plain input object */
+    /** Replace the footer text and optional icon, copy the supplied object, then return this builder */
     footer(value: EmbedFooterInput): this {
         this.footerValue = { ...value }
         return this
     }
 
-    /** Replace the full-size image with a copied plain input object */
+    /** Replace the full-size image URL and optional alternative text, copy the object, then return this builder. No image is uploaded or fetched */
     image(value: EmbedMediaInput): this {
         this.imageValue = { ...value }
         return this
     }
 
-    /** Replace the thumbnail with a copied plain input object */
+    /** Replace the small image URL and optional alternative text, copy the object, then return this builder. No image is uploaded or fetched */
     thumbnail(value: EmbedMediaInput): this {
         this.thumbnailValue = { ...value }
         return this
     }
 
-    /** Append one field in display order */
+    /** Add a named section after existing fields and return this builder.
+     * `inline` requests side-by-side display when true, it defaults to false when the message is sent
+     */
     field(name: string, value: string, inline?: boolean): this {
         this.fieldValues.push(inline === undefined ? { name, value } : { name, value, inline })
         return this
     }
 
-    /** Append copied field objects in display order */
+    /** Add field objects after existing fields in argument order and return this builder. Copies each object, passing no arguments adds nothing */
     addFields(...values: readonly EmbedFieldInput[]): this {
         this.fieldValues.push(...values.map((value) => ({ ...value })))
         return this
@@ -105,9 +109,10 @@ export class EmbedBuilder {
 }
 
 /**
- * Fluent message-payload construction. A new builder has no selected body, so `build` becomes callable only after
- * content, an embed, an attachment or a sticker is selected. Runtime callers can still construct an empty builder,
- * and message operations remain responsible for rejecting a resulting empty payload
+ * Assemble a message by chaining methods, then send the plain object returned by `build()`.
+ * Methods change the same builder. Content and settings replace earlier values, while embeds, attachments and stickers append.
+ * Building does not send or validate a message. In TypeScript, select content, an embed, an attachment or a sticker before calling build.
+ * JavaScript can build an empty object, but message operations reject it. The HasBody type parameter tracks selection, not valid content
  */
 export class MessageBuilder<HasBody extends boolean = false> {
     declare private readonly hasBodyState: HasBody
@@ -119,22 +124,24 @@ export class MessageBuilder<HasBody extends boolean = false> {
     private messageReferenceValue: MessageReference | undefined
     private flagsValue: number | undefined
 
-    /** Construct an empty builder. A buildable state can arise only from a fluent body-selection method */
+    /** Start with no content or settings. TypeScript callers must use a body-selection method before build, not choose HasBody themselves */
     constructor(..._empty: IsExactly<HasBody, false> extends true ? [] : [never]) {}
 
-    /** Set message content without trimming or validating it */
+    /** Replace the message text and return this builder, now buildable in TypeScript. Empty or invalid text is still checked by the message operation */
     content(value: string): MessageBuilder<true> {
         this.contentValue = value
         return this as unknown as MessageBuilder<true>
     }
 
-    /** Append one embed or a snapshot of another embed builder */
+    /** Add one embed and return this builder, now buildable in TypeScript.
+     * Copies the embed's nested objects and fields now. Later changes to the supplied embed or EmbedBuilder do not change this message
+     */
     embed(value: EmbedInput | EmbedBuilder): MessageBuilder<true> {
         this.embedValues.push(copyEmbed(value instanceof EmbedBuilder ? value.build() : value))
         return this as unknown as MessageBuilder<true>
     }
 
-    /** Append one or more embeds in display order */
+    /** Add one or more embeds in argument order and return this builder, copying each just as `embed` does. Message operations check the final count */
     addEmbeds(
         ...values: readonly [first: EmbedInput | EmbedBuilder, ...rest: (EmbedInput | EmbedBuilder)[]]
     ): MessageBuilder<true> {
@@ -145,7 +152,8 @@ export class MessageBuilder<HasBody extends boolean = false> {
     }
 
     /**
-     * Append one attachment input with copied container metadata and shared caller-owned source references.
+     * Add one attachment, copying its metadata while keeping your original bytes, file or stream source.
+     * Return this builder, now buildable in TypeScript. File, stream and byte references are not copied or read here.
      * The builder and its outputs retain those references. Sending does not clear the builder, and direct operations own copying or consuming their inputs
      */
     attachment(value: AttachmentInput): MessageBuilder<true> {
@@ -153,46 +161,48 @@ export class MessageBuilder<HasBody extends boolean = false> {
         return this as unknown as MessageBuilder<true>
     }
 
-    /** Append one or more attachment inputs with copied metadata and shared caller-owned source references, as with attachment */
+    /** Add one or more attachments in argument order and return this builder. Metadata is copied, but bytes, file and stream sources stay shared just as with `attachment` */
     addAttachments(...values: readonly [first: AttachmentInput, ...rest: AttachmentInput[]]): MessageBuilder<true> {
         this.attachmentValues.push(...values.map((value) => ({ ...value })))
         return this as unknown as MessageBuilder<true>
     }
 
-    /** Append one sticker ID in send order */
+    /** Add a decimal sticker ID after existing stickers and return this builder. The ID and final sticker count are checked when sending */
     sticker(value: string): MessageBuilder<true> {
         this.stickerValues.push(value)
         return this as unknown as MessageBuilder<true>
     }
 
-    /** Append one or more sticker IDs in send order */
+    /** Add one or more decimal sticker IDs in argument order and return this builder. This does not look up or validate the stickers */
     addStickers(...values: readonly [first: string, ...rest: string[]]): MessageBuilder<true> {
         this.stickerValues.push(...values)
         return this as unknown as MessageBuilder<true>
     }
 
-    /** Replace explicit allowed mentions. Omitting this method retains the SDK’s notification-safe default */
+    /** Replace who may be notified by mention text, copy the user/role arrays, then return this builder.
+     * If omitted, message operations keep notifications disabled. This method alone neither inserts mention text nor notifies anyone
+     */
     allowedMentions(value: AllowedMentions): this {
         this.allowedMentionsValue = copyAllowedMentions(value)
         return this
     }
 
-    /** Replace the optional reply reference for `messages.send` */
+    /** Choose the message to reply to when using `messages.send`, copy its reference, then return this builder. No message is fetched */
     reference(value: MessageReference): this {
         this.messageReferenceValue = { ...value }
         return this
     }
 
-    /** Set writable message flags. Existing message-operation validation remains authoritative */
+    /** Replace the numeric message flags and return this builder. Only writable MessageFlags are accepted by message operations */
     flags(value: number): this {
         this.flagsValue = value
         return this
     }
 
     /**
-     * Return a fresh plain `MessageInput` snapshot after a body field is selected. Direct send/reply validation still
-     * owns empty-text, array, attachment and provider-limit decisions. Runtime callers can invoke this method on an
-     * empty builder and receive `{}`, which those message operations reject locally
+     * Return a fresh plain `MessageInput` after selecting content, an embed, an attachment or a sticker.
+     * Sending or replying checks empty text, arrays, attachments and server limits, not this method.
+     * JavaScript can call this on an empty builder and receive `{}`, which message operations reject locally
      */
     readonly build = (() => {
         return {
@@ -215,11 +225,16 @@ export class MessageBuilder<HasBody extends boolean = false> {
 
 type IsExactly<Value, Expected> = [Value] extends [Expected] ? ([Expected] extends [Value] ? true : false) : false
 
-/** Optional plain-payload builders with no client, request, cache or connection ownership */
-export const builders = Object.freeze({
-    /** Start a rich-embed builder */
+/** Start optional chainable builders instead of writing embed and message objects by hand.
+ * Both package entry points return builders immediately, not lazy Effects
+ */
+export const builders: Readonly<{
+    /** Return a new empty EmbedBuilder. Call build to get a plain embed object, no message is sent */
+    embed: () => EmbedBuilder
+    /** Return a new empty MessageBuilder. Select content, an embed, an attachment or a sticker before building */
+    message: () => MessageBuilder<false>
+}> = Object.freeze({
     embed: () => new EmbedBuilder(),
-    /** Start a message builder. Select content, an embed, an attachment or a sticker before building */
     message: () => new MessageBuilder(),
 })
 

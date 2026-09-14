@@ -8,15 +8,17 @@ import {
     type ReactionCollectorResult,
 } from "#sdk/collectors"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
-import type { MessageReference } from "#sdk/messages"
+import type { Message, MessageCore, MessageReference } from "#sdk/messages"
 import type { MessageReaction, MessageReactionBatch, ReactionEmojiInput } from "#sdk/reactions"
 import type { ClientOwner } from "./client.js"
 import { reference, record } from "./message.js"
 import { encodeReactionEmoji } from "./reactions.js"
+import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
 
-type Settings = Required<Omit<ReactionCollectorOptions, "filter" | "emoji" | "guildId">> &
-    Pick<ReactionCollectorOptions, "filter" | "emoji" | "guildId"> &
-    OperationOptions
+type Settings = Required<Omit<ReactionCollectorOptions, "filter" | "emoji" | "guildId" | "idleMs">> &
+    Pick<ReactionCollectorOptions, "filter" | "emoji" | "guildId"> & {
+        readonly idleMs: number | undefined
+    } & OperationOptions
 
 const maximumGuildId = "18446744073709551615"
 
@@ -28,20 +30,6 @@ function guildId(value: unknown): value is string {
     )
 }
 
-function consumeThenable(value: unknown) {
-    if (value === null || (typeof value !== "object" && typeof value !== "function")) return true
-    try {
-        if (value instanceof Promise) void Promise.prototype.then.call(value, undefined, () => undefined)
-        else
-            void Promise.resolve()
-                .then(() => value)
-                .catch(() => undefined)
-    } catch {
-        return false
-    }
-    return true
-}
-
 function settings(target: unknown, options: unknown, defaultApi: boolean): Settings | ConfigurationError {
     if (!reference(target))
         return new ConfigurationError("message", "Message reference must contain decimal id and channelId")
@@ -51,6 +39,7 @@ function settings(target: unknown, options: unknown, defaultApi: boolean): Setti
         maxReactions: 1,
         maxBytes: 4_194_304,
         timeoutMs: 30_000,
+        idleMs: undefined as number | undefined,
         maxPendingMessages: 256,
         maxPendingBytes: 4_194_304,
     }
@@ -73,7 +62,7 @@ function settings(target: unknown, options: unknown, defaultApi: boolean): Setti
             typeof value !== "number" ||
             !Number.isSafeInteger(value) ||
             value <= 0 ||
-            (key === "timeoutMs" && value > 2_147_483_647)
+            ((key === "timeoutMs" || key === "idleMs") && value > 2_147_483_647)
         )
             return new ConfigurationError(
                 key,
@@ -126,6 +115,7 @@ export class ReactionCollector {
     #release: (() => void) | undefined
     #settings: Settings | undefined
     readonly #deadline: number
+    #idleDeadline: number
     #current: MessageReaction[] = []
     #currentIndex = 0
     #busy = false
@@ -138,7 +128,10 @@ export class ReactionCollector {
         return this.#worker?.id === fiberId
     }
 
-    run<E, R>(owner: ClientOwner, handler: (reaction: MessageReaction) => Effect.Effect<unknown, E, R>) {
+    run<E, R, M extends MessageCore>(
+        owner: ClientOwner<M>,
+        handler: (reaction: MessageReaction) => Effect.Effect<unknown, E, R>,
+    ) {
         const collector = this
         return Effect.gen(function* () {
             collector.#untrack = owner.trackReactionCollector(collector)
@@ -201,14 +194,16 @@ export class ReactionCollector {
         private readonly clock: Clock.Clock,
     ) {
         this.#settings = settings
-        this.#deadline = this.#now() + settings.timeoutMs
+        const now = this.#now()
+        this.#deadline = now + settings.timeoutMs
+        this.#idleDeadline = settings.idleMs === undefined ? Infinity : now + settings.idleMs
     }
 
     #now() {
         return Number(this.clock.monotonicTimeNanosUnsafe()) / 1_000_000
     }
 
-    start(owner: ClientOwner, target: MessageReference) {
+    start<M extends MessageCore>(owner: ClientOwner<M>, target: MessageReference) {
         const settings = this.#settings!
         const signal = settings.signal
         const abort = () => this.#finish(Exit.interrupt())
@@ -248,13 +243,13 @@ export class ReactionCollector {
                     if (!this.#expired()) this.#scheduleDeadline()
                 })
             },
-            Math.max(1, Math.ceil(this.#deadline - this.#now())),
+            Math.max(1, Math.ceil(Math.min(this.#deadline, this.#idleDeadline) - this.#now())),
         )
     }
 
     #expired() {
-        if (this.#now() < this.#deadline) return false
-        this.#succeed("timeout")
+        if (this.#now() < Math.min(this.#deadline, this.#idleDeadline)) return false
+        this.#succeed(this.#idleDeadline < this.#deadline ? "idle" : "timeout")
         return true
     }
 
@@ -338,16 +333,19 @@ export class ReactionCollector {
                 } catch {
                     return this.fail(new CollectorError("filter"))
                 }
-                if (!consumeThenable(accepted)) return this.fail(new CollectorError("filter"))
+                discardInvalidCallbackReturn(accepted)
                 if (!this.#active) return
                 if (this.#expired()) return
                 if (typeof accepted !== "boolean") return this.fail(new CollectorError("filter"))
                 if (!accepted) continue
                 const size = Buffer.byteLength(JSON.stringify(message))
+                if (this.#expired()) return
                 if (size > this.#settings!.maxBytes - this.#bytes)
                     return this.fail(new CollectorError("overflow", "maxBytes", this.#settings!.maxBytes))
                 this.#messages.push(message)
                 this.#bytes += size
+                // Renewal only moves the quiet deadline later. The existing timer rechecks it before completing
+                if (this.#settings!.idleMs !== undefined) this.#idleDeadline = this.#now() + this.#settings!.idleMs
                 if (this.#worker) {
                     this.#busy = true
                     Deferred.doneUnsafe(this.#next, Effect.succeed(message))
@@ -402,8 +400,8 @@ export class ReactionCollector {
     }
 }
 
-export function collectReactions<E = never, R = never>(
-    owner: ClientOwner,
+export function collectReactions<E = never, R = never, M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
     target: MessageReference,
     options?: ReactionCollectorOptions,
     defaultApi = false,

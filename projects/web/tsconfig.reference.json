@@ -1,0 +1,11 @@
+{
+    "compilerOptions": {
+        "target": "ES2024",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "strict": true,
+        "lib": ["ES2024", "DOM", "ESNext.Disposable"],
+        "noEmit": true
+    },
+    "include": ["../sdk/dist/index.d.ts", "../sdk/dist/effect.d.ts"]
+}

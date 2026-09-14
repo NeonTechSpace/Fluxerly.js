@@ -118,6 +118,12 @@ test.each(modes)("%s reaction collector validates registration without network w
         { signal: {} },
     ])
         await expect(api.collect(options as any)).rejects.toMatchObject({ _tag: "ConfigurationError" })
+    for (const idleMs of [0, -1, 1.5, NaN, Infinity, "1", null, 2_147_483_648])
+        await expect(api.collect({ idleMs } as any)).rejects.toMatchObject({
+            _tag: "ConfigurationError",
+            field: "idleMs",
+        })
+    await expect(api.collect({ idleMs: 2_147_483_647 })).rejects.toMatchObject({ reason: "notConnected" })
     for (const message of [null, {}, { id: "x", channelId: "20" }, { id: "10", channelId: "020" }])
         await expect(api.collect({}, message as MessageReference)).rejects.toMatchObject({
             _tag: "ConfigurationError",
@@ -414,6 +420,107 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s reaction idle renews accepted batch additions but not excluded input", async (mode) => {
+    await gateway()
+    mockRest(async () => new Response(null, { status: 204 }))
+    const api = await setup(mode)
+    await api.connect()
+    let now = 0
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
+    const filter = vi.fn((reaction: import("../src/index.js").MessageReaction) => reaction.userId === "30")
+    const options = { idleMs: 100, timeoutMs: 1_000, maxReactions: 5, emoji: "✅", filter }
+    const collector = await api.collect(options)
+    options.idleMs = 1
+    now = 50
+    deliverReaction(addition()).deliver()
+    await turn()
+    now = 149
+    deliverReaction(
+        { message_id: "10", channel_id: "20", reactions: [{ user_id: "30", emoji: { name: "✅" } }] },
+        "MESSAGE_REACTION_ADD_MANY",
+    ).deliver()
+    await turn()
+    now = 248
+    deliverReaction(addition("30", "❌")).deliver()
+    deliverReaction(addition("31")).deliver()
+    deliverReaction(addition("30", "✅", "11")).deliver()
+    await turn()
+    expect(filter.mock.calls.map(([reaction]) => reaction.userId)).toEqual(["30", "30", "31"])
+    now = 249
+    deliverReaction(addition()).deliver()
+    const result = await collector.wait()
+    expect(result).toEqual({ reason: "idle", reactions: [observed(), observed()] })
+    await collector.stop()
+    deliverReaction(addition()).deliver()
+    await turn()
+    expect(filter).toHaveBeenCalledTimes(3)
+    expect(await collector.wait()).toBe(result)
+})
+
+test.each(modes)("%s reaction idle timer handles empty collection and an early wakeup after renewal", async (mode) => {
+    await gateway()
+    mockRest(async () => new Response(null, { status: 204 }))
+    const api = await setup(mode)
+    await api.connect()
+    let now = 0
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
+    const empty = await api.collect({ idleMs: 1 })
+    now = 1
+    expect(await empty.wait()).toEqual({ reason: "idle", reactions: [] })
+    const collector = await api.collect({ idleMs: 10, maxReactions: 5 })
+    now = 10
+    deliverReaction(addition()).deliver()
+    await turn()
+    let closed = false
+    const result = collector.wait().then((value) => {
+        closed = true
+        return value
+    })
+    now = 11
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(closed).toBe(false)
+    now = 20
+    expect(await result).toEqual({ reason: "idle", reactions: [observed()] })
+})
+
+test.each(modes)("%s reaction idle preserves earliest deadlines, hard limits and slow-filter checks", async (mode) => {
+    await gateway()
+    mockRest(async () => new Response(null, { status: 204 }))
+    const api = await setup(mode)
+    await api.connect()
+    let now = 0
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
+    for (const [idleMs, timeoutMs, reason] of [
+        [50, 100, "idle"],
+        [100, 50, "timeout"],
+        [50, 50, "timeout"],
+    ] as const) {
+        const collector = await api.collect({ idleMs, timeoutMs })
+        now += 120
+        deliverReaction(addition()).deliver()
+        expect(await collector.wait()).toEqual({ reason, reactions: [] })
+    }
+    const collector = await api.collect({ idleMs: 60, timeoutMs: 100, maxReactions: 5 })
+    now += 50
+    deliverReaction(addition()).deliver()
+    await turn()
+    now += 49
+    deliverReaction(addition()).deliver()
+    await turn()
+    now += 1
+    deliverReaction(addition()).deliver()
+    expect(await collector.wait()).toEqual({ reason: "timeout", reactions: [observed(), observed()] })
+    const slow = await api.collect({
+        idleMs: 50,
+        filter: () => {
+            now += 50
+            return true
+        },
+    })
+    deliverReaction(addition()).deliver()
+    expect(await slow.wait()).toEqual({ reason: "idle", reactions: [] })
+})
+
 test.each(modes)(
     "%s reaction collector isolates invalid filters and keeps failures free of private data",
     async (mode) => {
@@ -470,37 +577,44 @@ test.each(modes)("%s reaction filters contain rejected promises from every realm
     expect(rejections).toEqual([])
 })
 
-test.each(modes)("%s reaction filters contain hostile rejected promise access", async (mode) => {
-    await gateway()
-    mockRest(async () => new Response(null, { status: 204 }))
-    const api = await setup(mode)
-    await api.connect()
-    const privateDetail = "private rejected promise getter"
-    const rejections: [unknown, Promise<unknown>][] = []
-    const observe = (reason: unknown, promise: Promise<unknown>) => rejections.push([reason, promise])
-    process.on("unhandledRejection", observe)
-    onTestFinished(() => {
-        process.off("unhandledRejection", observe)
-    })
-    const collector = await api.collect({
-        filter: () => {
-            const rejected = Promise.reject(new Error(privateDetail))
-            for (const key of ["then", "catch"])
-                Object.defineProperty(rejected, key, {
-                    get() {
-                        throw new Error(privateDetail)
-                    },
-                })
-            return rejected as never
-        },
-    })
-    deliverReaction(addition()).deliver()
-    const error = await collector.wait().catch((cause) => cause)
-    expect(error).toMatchObject({ _tag: "CollectorError", reason: "filter" })
-    expect(JSON.stringify(error)).not.toContain(privateDetail)
-    await turn()
-    expect(rejections).toEqual([])
-})
+test.each(modes.flatMap((mode) => [false, true].map((foreign) => ({ mode, foreign }))))(
+    "$mode reaction filters contain hostile rejected promise access, foreign=$foreign",
+    async ({ mode, foreign }) => {
+        await gateway()
+        mockRest(async () => new Response(null, { status: 204 }))
+        const api = await setup(mode)
+        await api.connect()
+        const privateDetail = "private rejected promise getter"
+        const rejections: [unknown, Promise<unknown>][] = []
+        const observe = (reason: unknown, promise: Promise<unknown>) => rejections.push([reason, promise])
+        process.on("unhandledRejection", observe)
+        onTestFinished(() => {
+            process.off("unhandledRejection", observe)
+        })
+        const collector = await api.collect({
+            filter: () => {
+                const rejected = foreign
+                    ? (runInNewContext("Promise.reject(reason)", {
+                          reason: new Error(privateDetail),
+                      }) as Promise<never>)
+                    : Promise.reject(new Error(privateDetail))
+                for (const key of ["then", "catch"])
+                    Object.defineProperty(rejected, key, {
+                        get() {
+                            throw new Error(privateDetail)
+                        },
+                    })
+                return rejected as never
+            },
+        })
+        deliverReaction(addition()).deliver()
+        const error = await collector.wait().catch((cause) => cause)
+        expect(error).toMatchObject({ _tag: "CollectorError", reason: "filter" })
+        expect(JSON.stringify(error)).not.toContain(privateDetail)
+        await turn()
+        expect(rejections).toEqual([])
+    },
+)
 
 test.each(modes)(
     "%s reaction collector waiter cancellation leaves other observers and collection running",
@@ -1066,7 +1180,7 @@ test.each(modes)("%s releases failed reaction progress callbacks and snapshots a
 
 test.each(
     modes.flatMap((mode) =>
-        ["stop", "timeout", "shutdown", "scope", "recovery", "overflow"]
+        ["stop", "timeout", "idle", "shutdown", "scope", "recovery", "overflow"]
             .filter((reason) => mode === "native" || reason !== "scope")
             .map((reason) => ({ mode, reason })),
     ),
@@ -1108,7 +1222,12 @@ test.each(
                     }),
                 ),
             ),
-        { maxReactions: 10, timeoutMs: reason === "timeout" ? 100 : 10_000, maxPendingMessages: 1 },
+        {
+            maxReactions: 10,
+            timeoutMs: reason === "timeout" ? 100 : 10_000,
+            idleMs: reason === "idle" ? 100 : 5_000,
+            maxPendingMessages: 1,
+        },
     )
     const result = collector.wait().then(
         (r) => {
@@ -1145,9 +1264,57 @@ test.each(
               ? { reason: "connectionLost" }
               : reason === "overflow"
                 ? { reason: "overflow" }
-                : { reason: reason === "timeout" ? "timeout" : "stopped" },
+                : { reason: reason === "timeout" || reason === "idle" ? reason : "stopped" },
     )
 })
+
+test.each(modes)(
+    "%s queued reactions and remaining batch entries cannot postpone idle during a callback",
+    async (mode) => {
+        await gateway()
+        mockRest(async () => new Response(null, { status: 204 }))
+        const api = await setup(mode)
+        await api.connect()
+        let now = 0
+        vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(
+            () => BigInt(now) * 1_000_000n,
+        )
+        const started = Promise.withResolvers<void>()
+        const calls: string[] = []
+        const accept = (reaction: import("../src/index.js").MessageReaction) => {
+            calls.push(reaction.userId)
+            started.resolve()
+        }
+        const collector = await progress(
+            api,
+            async (reaction, signal) => {
+                accept(reaction)
+                await new Promise<void>((resolve) => {
+                    if (signal.aborted) resolve()
+                    else signal.addEventListener("abort", () => resolve(), { once: true })
+                })
+            },
+            (reaction) => Effect.sync(() => accept(reaction)).pipe(Effect.andThen(Effect.never)),
+            { idleMs: 100, maxReactions: 5 },
+        )
+        deliverReaction(
+            {
+                message_id: "10",
+                channel_id: "20",
+                reactions: ["30", "31"].map((user_id) => ({ user_id, emoji: { name: "✅" } })),
+            },
+            "MESSAGE_REACTION_ADD_MANY",
+        ).deliver()
+        await started.promise
+        now = 99
+        deliverReaction(addition("32")).deliver()
+        await turn()
+        now = 100
+        deliverReaction(addition("33")).deliver()
+        expect(await collector.wait()).toEqual({ reason: "idle", reactions: [observed()] })
+        expect(calls).toEqual(["30"])
+    },
+)
 
 test.each(modes)("%s progress never runs before retained-byte admission and releases its handler", async (mode) => {
     await gateway()
@@ -1225,20 +1392,30 @@ test("default collection abort waits for the active progress promise", async () 
     expect(cleaned).toBe(true)
 })
 
-test.each(modes)("%s slow final progress cannot turn an expired deadline into limit success", async (mode) => {
-    await gateway()
-    mockRest(async () => new Response(null, { status: 204 }))
-    const api = await setup(mode)
-    await api.connect()
-    let now = 0
-    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
-    const advance = () => {
-        now = 100
-    }
-    const collector = await progress(api, advance, () => Effect.sync(advance), { timeoutMs: 100 })
-    deliverReaction(addition()).deliver()
-    expect(await collector.wait()).toEqual({ reason: "timeout", reactions: [observed()] })
-})
+test.each(modes.flatMap((mode) => ["timeout", "idle"].map((reason) => ({ mode, reason }))))(
+    "$mode slow final progress cannot turn expired $reason into limit success",
+    async ({ mode, reason }) => {
+        await gateway()
+        mockRest(async () => new Response(null, { status: 204 }))
+        const api = await setup(mode)
+        await api.connect()
+        let now = 0
+        vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(
+            () => BigInt(now) * 1_000_000n,
+        )
+        const advance = () => {
+            now = 100
+        }
+        const collector = await progress(
+            api,
+            advance,
+            () => Effect.sync(advance),
+            reason === "idle" ? { idleMs: 100 } : { timeoutMs: 100 },
+        )
+        deliverReaction(addition()).deliver()
+        expect(await collector.wait()).toEqual({ reason, reactions: [observed()] })
+    },
+)
 
 test("native progress can request client shutdown without joining itself", async () => {
     await gateway()

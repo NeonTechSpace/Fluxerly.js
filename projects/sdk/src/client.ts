@@ -3,35 +3,68 @@ import type { GuildChannel } from "./channels.js"
 import type { GuildEmoji, GuildSticker } from "./expressions.js"
 import type { Guild, GuildMember, GuildRole } from "./guilds.js"
 import type { DefaultLoggingOptions } from "./logging.js"
-import type { Message } from "./messages.js"
+import type { Message, MessageCore, MessageFields, SelectedMessage } from "./messages.js"
 import type { ShardingOptions, ShardState } from "./sharding.js"
 import type { DirectMessageChannel, User } from "./users.js"
 import type { InstanceOptions } from "./instance.js"
 
 /**
- * Options accepted when creating a disconnected client.
- * The selected hosted or self-hosted instance is resolved lazily and independently for this client
+ * Configure a bot client before connecting or making requests.
+ * Creation checks and copies these settings without authenticating the token or opening a connection.
+ * Settings belong to this client and cannot be changed after creation
  */
-export interface ClientOptions {
+export interface ClientOptions<F extends MessageFields | undefined = undefined> {
     /**
-     * Explicit hosted or self-hosted instance selection. Omit it for hosted Fluxer.
-     * Creation validates this root locally without a request. The client reads its unauthenticated well-known document only when REST, gateway, or `instance.resolve` needs it, then retains that immutable endpoint map until shutdown.
-     * HTTPS and WSS are required by default. Set `allowInsecure: true` only for an explicitly selected HTTP/WS local or self-hosted deployment
+     * Choose which optional message fields your application receives.
+     * Omit this setting for full Message output.
+     * An empty array keeps id, channelId, content, author and guildId when the response supplies it
+     *
+     * Excluded fields are absent, not undefined or empty arrays, in this client's REST, event, cache and collector results
+     *
+     * Selecting a field includes its nested values.
+     * For example, messageSnapshots keeps its own media even when top-level media fields are excluded
+     *
+     * This reduces locally constructed objects, not network payloads or server-side data.
+     * The SDK still rejects malformed recognized response fields, even when you exclude them
+     *
+     * Unknown field names and non-arrays fail with ConfigurationError whose field is messageFields.
+     * Including core field names is allowed and does not change the required core
+     *
+     * TypeScript infers exact selections from literal tuples, but makes optional fields optional for arrays whose contents are unknown.
+     * The copied selection lasts for this client's lifetime and does not affect separately created webhook clients or other resource types
+     *
+     * @example
+     * ```ts
+     * import { createClient } from "@neontechspace/fluxerly"
+     * export function selectedMessagesExample(token: string) {
+     *     return createClient({ token, messageFields: ["attachments", "messageReference"] })
+     * }
+     * ```
+     */
+    readonly messageFields?: F
+    /**
+     * Select a self-hosted or other Fluxer instance instead of hosted Fluxer.
+     * Creation checks the root URL without a request.
+     * The first REST, gateway or instance.resolve operation that needs endpoints reads the unauthenticated discovery document.
+     * The client retains those endpoints until shutdown and trusts them for credentialed service requests.
+     * HTTPS and WSS are required unless you explicitly allow HTTP and WS with allowInsecure
      */
     readonly instance?: InstanceOptions
-    /** Client-local upload admission, copied and validated at creation */
+    /** Bound the attachment transfer bytes reserved by queued and active upload operations */
     readonly uploads?: {
         /** Maximum reserved attachment transfer bytes across queued and active operations, as a positive safe integer.
          * Defaults to 104,857,600 (100 MiB), separate from the 4 MiB queued JSON budget.
-         * Reservations use accepted byte-array length, file size or declared stream size and reject with busy before a new operation waits.
+         * The SDK reserves accepted byte-array lengths, file sizes or declared stream sizes before waiting for a request slot.
+         * A new operation fails with busy if its reservation would exceed this limit.
          * Reservations remain held across rate-limit retries and release after transport cleanup.
-         * This does not measure copied heap, caller buffers, metadata or runtime overhead and is not a process-memory ceiling
+         * This excludes caller buffers, metadata and runtime overhead, so it is not a JavaScript heap or process-memory ceiling
          */
         readonly maxBytes?: number
     }
     /**
-     * Client-local logging, copied and validated at creation without invoking a logger.
-     * Development output is off by default, while operational handler/cache/observer errors remain enabled.
+     * Configure this client's log output without changing another client.
+     * Creation copies and checks these settings without invoking a logger.
+     * Connection diagnostics are off by default, while handler, cache-policy and observer error reports remain enabled.
      * SDK messages omit credentials, private payloads and raw upstream errors.
      * Logging does not consume or replace returned operation failures, and adds no background work or stored history
      *
@@ -44,123 +77,157 @@ export interface ClientOptions {
      * ```
      */
     readonly logging?: DefaultLoggingOptions
-    /** Bot credential, checked locally for a non-blank string but not authenticated */
+    /** Bot token used to authenticate requests and gateway connections.
+     * Creation requires a non-blank string, but only Fluxer can establish whether the token is valid
+     */
     readonly token: string
     /**
-     * Optional resource retention, copied and validated at creation. Omission retains no resource snapshots.
-     * Every configured entry, byte and age budget belongs to this client across its locally owned shards. Sharding never multiplies a budget.
-     * A gap on one shard invalidates observations with known scope on that shard. Missing guild scope invalidates conservatively because the SDK keeps no channel-to-guild index
+     * Keep bounded, memory-only resource snapshots for local lookups.
+     * Omit this setting to retain no snapshots, without disabling REST reads or event delivery.
+     * Each category has its own client-wide budget shared across this client's shards, not a budget per shard or guild.
+     * A lost gateway connection clears affected observations even after resume.
+     * When a snapshot lacks enough guild context to identify its shard, the SDK clears it conservatively
      */
     readonly cache?: {
-        /** Public account snapshots from explicit reads and complete user events, never partial message authors.
-         * Local lookups promote LRU recency without renewing observation age. Concurrent reads use latest-admitted retention. Gateway gaps and shutdown release snapshots
+        /** Cache public account profiles from explicit reads and complete user events, not partial message authors.
+         * Local lookups improve eviction priority without renewing age.
+         * When reads overlap, an older read cannot overwrite a newer admitted observation.
+         * Lost gateway connections and shutdown release the SDK's retained snapshots
          */
         readonly users?: boolean | ResourceCacheSettings
-        /** Private conversations from explicit reads and complete channel events, without initial enumeration.
-         * Local lookups promote LRU recency without renewing observation age. Mutations and recipient changes clear private-channel retention; gaps and shutdown release snapshots
+        /** Cache private conversations from explicit reads and complete channel events, without automatically listing them.
+         * Local lookups improve eviction priority without renewing age.
+         * Mutations and recipient changes clear private-conversation snapshots, as do connection gaps and shutdown
          */
         readonly directMessages?: boolean | ResourceCacheSettings
-        /** Guild identity snapshots from explicit reads and guild create/update events, never nested member/role preload.
-         * Guild removal/unavailability clears this guild's resource entries, including channels
+        /** Cache guild details from explicit reads and guild create or update events, without preloading members or roles.
+         * Guild removal or unavailability clears this guild's cached resources, including channels
          */
         readonly guilds?: boolean | ResourceCacheSettings
-        /** Member snapshots from explicit reads/pages and member add/update events.
-         * Member removal evicts one membership. Successful or uncertain role assignment evicts its target rather than guessing a new role set
+        /** Cache individual memberships from explicit reads, REST pages and member add or update events.
+         * Member removal clears that membership.
+         * Successful or uncertain role assignment clears the target rather than guessing its new roles
          */
         readonly members?: boolean | ResourceCacheSettings
-        /** Role snapshots from explicit list/create/edit results and role events, with bigint-aware byte accounting.
-         * Successful or uncertain creation/reordering evicts guild role entries. Edits evict their target, or the guild role set when changing hoistPosition.
-         * Role deletion also evicts guild memberships because assignments can change without individual member events.
-         * Full list reads remove absent roles only without overlapping observations. Partial bulk events replace only supplied roles
+        /** Cache role definitions from explicit list, create or edit results and role events.
+         * Successful or uncertain creation or reordering clears this guild's cached roles.
+         * Edits clear their target, or all this guild's roles when changing hoistPosition.
+         * Role deletion also clears cached memberships because assignments can change without individual member events.
+         * A full list removes missing roles only when no conflicting observation overlaps the read.
+         * Partial bulk events replace only the roles they supply.
+         * Byte accounting represents bigint permission fields as decimal strings
          */
         readonly roles?: boolean | ResourceCacheSettings
-        /** Opt-in bounded emoji metadata retention, disabled by default. Never retains image bytes or creator accounts.
-         * REST reads/writes populate observations; guild expression events invalidate rather than promise a complete list.
-         * Uses ResourceCacheSettings budgets, expiry and LRU behavior. Gaps and shutdown clear observations
+        /** Cache emoji metadata from REST reads and writes, not image bytes or creator accounts.
+         * Guild expression events clear observations rather than reconstructing a complete list.
+         * ResourceCacheSettings controls bounds and expiry, while gaps and shutdown release snapshots
          */
         readonly emojis?: boolean | ResourceCacheSettings
-        /** Opt-in sticker metadata retention with the same ownership, bounds and invalidation rules as emojis */
+        /** Cache sticker metadata, with the same bounds, expiry and invalidation rules as emojis */
         readonly stickers?: boolean | ResourceCacheSettings
-        /** Guild channel snapshots from explicit reads and channel create/update events, with no initial enumeration.
-         * Dispatched channel mutations conservatively clear the entire channel cache, including pending reads.
-         * Bulk ordering events evict the guild rather than retaining potentially unfinished permission copies.
-         * Category updates/deletions evict the guild because child inheritance can change. Visibility loss evicts the channel.
-         * Full list reads remove absent channels only without overlapping observations. This is not a complete guild replica
+        /** Cache guild channels from explicit reads and channel create or update events, without automatically listing them.
+         * Once a channel mutation is dispatched, the SDK clears this client's channel cache and prevents pending reads from restoring it.
+         * Bulk ordering events clear this guild's cached channels rather than storing potentially unfinished permission updates.
+         * Category updates or deletions also clear this guild's channels because children can inherit changed permissions.
+         * Visibility loss clears the affected channel.
+         * A full list removes missing channels only when no conflicting observation overlaps the read.
+         * These snapshots are not a complete copy of the guild's channels
          */
         readonly channels?: boolean | ResourceCacheSettings
         /**
-         * Omitted/false disables message caching. True or an options object enables it.
-         * Memory-only snapshots populate from eligible REST results and gateway events, never automatic history requests.
-         * Updates replace, deletions and uncertain mutations evict, and gateway gaps clear even after successful resume.
-         * Conflicting in-flight observations may cause misses. Shutdown releases this client's retained references
+         * Cache messages encountered in eligible REST results and gateway events, without automatically requesting history.
+         * Omission or false disables this category, while true or an options object enables it.
+         * Updates replace snapshots, while deletions and uncertain mutations remove them.
+         * Lost gateway connections clear affected entries even when the session resumes successfully.
+         * Conflicting in-flight observations can cause misses.
+         * Shutdown releases this client's references, not messages still held by your application
          */
-        readonly messages?: boolean | MessageCacheOptions
+        readonly messages?: boolean | MessageCacheOptions<NoInfer<SelectedMessage<F>>>
     }
-    /** Client-wide startup settings shared by connect and run, not per-call overrides */
+    /** Set the startup deadline and retry limit used by both connect and run */
     readonly connection?: {
         /**
-         * Overall startup budget in milliseconds, including discovery, every assigned shard's READY, retry waits and local Identify spacing.
-         * With multiple shards, this client spaces Identify commands by one second. It does not coordinate an IP-wide or cross-process quota.
-         * Must be a positive safe integer no greater than 2,147,483,647.
-         * Expiry stops connection work, but returning still waits for owned-resource cleanup
+         * Total milliseconds allowed for startup, including instance discovery, retries and every local shard becoming ready.
+         * Must be an integer from 1 through 2,147,483,647.
+         * The SDK spaces new-session Identify commands by one second when this client owns multiple shards.
+         * That wait counts against this deadline, but does not coordinate quotas across processes or an IP address.
+         * Expiry stops startup work, while completion still waits for the SDK's owned-resource cleanup
          * @defaultValue 30000
          */
         readonly startupTimeoutMs?: number
         /**
-         * Maximum startup attempts per assigned shard, including its first, as a positive safe integer.
-         * Only transient failures are retried, and the overall deadline can end startup sooner.
-         * Does not set the established-session recovery attempt limit
+         * Maximum attempts to start each local shard, including its first attempt, as a positive safe integer.
+         * The SDK retries only failures it classifies as transient, and the overall deadline can stop retries sooner.
+         * This does not limit recovery attempts after a session has become ready
          * @defaultValue 3
          */
         readonly maxStartupAttempts?: number
     }
     /**
-     * Optional immutable local gateway-shard assignment. Omit it to retain the default one-connection gateway wire form.
-     * Omitted shardIds assigns every ID in totalShards to this client. Explicit IDs are copied in their supplied order and cannot change during this client's lifetime.
-     * Use explicit, non-overlapping lists when an external process supervisor owns distribution. Shard zero owns direct-message gateway traffic, so a client that handles DMs must own ID zero.
-     * The SDK copies and validates the plan at creation. It does not auto-size, coordinate processes, or reshard a running client.
-     * Supplying one total shard uses the default one-connection gateway wire form, not an Identify shard tuple
+     * Divide guild gateway traffic into numbered connections, called shards, and choose which this client owns.
+     * Omit this setting for one gateway connection, or omit shardIds to assign every shard in totalShards to this client.
+     * Explicit IDs are copied in your supplied order and cannot change during this client's lifetime.
+     * Use non-overlapping ID lists when another supervisor distributes shards across processes.
+     * Shard zero receives direct-message traffic, so a client handling DMs must own ID zero.
+     * The SDK checks the plan but does not choose its size, coordinate processes or change a running shard assignment.
+     * A total of one uses the single-connection Identify format, without a shard tuple
      */
     readonly sharding?: ShardingOptions
 }
 
 /**
- * Current connection status, not an event history.
- * Disconnected permits startup. Connecting lasts until every locally assigned shard is ready at the same time, including initial retries and recovery.
- * Connected means every locally assigned shard is ready. After that point, Recovering means at least one established shard has a gap until every assigned shard is ready again.
- * Healthy-shard work can continue during aggregate Recovering. Closing means permanent cleanup, and Closed cannot restart
+ * The client's current gateway lifecycle state, not a history of events.
+ * Disconnected permits startup, and Connecting includes startup retries until every local shard is ready at the same time.
+ * Connected means every local shard is ready.
+ * Recovering means an established shard has lost readiness and lasts until all local shards are ready again.
+ * Other ready shards can continue work during Recovering.
+ * Closing means permanent cleanup is underway, and Closed requires a new client to connect again
  */
 export type ConnectionState = "Disconnected" | "Connecting" | "Connected" | "Recovering" | "Closing" | "Closed"
 
-/** One local cache category. Categories identify SDK-held observation types, not remote collections or identifiers */
+/** The resource category to inspect or clear in the client's local cache, not a remote resource identifier */
 export type CacheKind =
     "messages" | "guilds" | "members" | "roles" | "channels" | "users" | "directMessages" | "emojis" | "stickers"
 
-/** Frozen projection type retained by each cache category when that category is configured */
-export interface CachedResources {
-    readonly messages: Message
+/** Maps each cache category to the snapshot returned by its local lookup and enumeration methods.
+ * Message snapshots use this client's selected message fields
+ */
+export interface CachedResources<M extends MessageCore = Message> {
+    /** Messages encountered by eligible REST calls or gateway events */
+    readonly messages: M
+    /** Guild identity and settings, without a preloaded member or role list */
     readonly guilds: Guild
+    /** Individual guild memberships */
     readonly members: GuildMember
+    /** Guild role definitions */
     readonly roles: GuildRole
+    /** Guild channels, distinct from private conversations */
     readonly channels: GuildChannel
+    /** Public account profiles, not partial message authors */
     readonly users: User
+    /** Direct-message and group direct-message conversations */
     readonly directMessages: DirectMessageChannel
+    /** Guild emoji metadata, not image bytes */
     readonly emojis: GuildEmoji
+    /** Guild sticker metadata, not image bytes */
     readonly stickers: GuildSticker
 }
 
-/** Bounds one local cache enumeration. Omit limit for 100 snapshots. Values from 1 through 1,000 are accepted */
+/** Limit the snapshots returned by one local cache enumeration, without fetching missing resources */
 export interface CacheEntriesOptions {
+    /** Maximum snapshots to return, from 1 through 1,000, default 100 */
     readonly limit?: number
 }
 
-/** Point-in-time local retention accounting for one cache category */
+/** Current snapshot count and accounted bytes for one local cache category.
+ * These values measure SDK retention, not how many resources exist remotely or how much process memory is used
+ */
 export interface CacheDiagnostic {
     /** Whether this category was configured when the client was created. A Closing/Closed client accepts no further snapshots */
     readonly configured: boolean
-    /** SDK-held observations after expiry pruning, never a remote-resource count or completeness guarantee */
+    /** Snapshots still held by the SDK after expired entries are removed */
     readonly retainedEntries: number
-    /** UTF-8 JSON bytes accounted by this cache, not JavaScript heap, process memory or caller-held projections */
+    /** Accounted UTF-8 JSON bytes of retained snapshots, excluding JavaScript overhead and caller-held copies */
     readonly accountedBytes: number
     /** Configured client-wide entry bound, or null when this category was disabled */
     readonly maxEntries: number | null
@@ -168,66 +235,107 @@ export interface CacheDiagnostic {
     readonly maxBytes: number | null
 }
 
-/** Point-in-time local client occupancy with no token, remote route, resource ID or cached payload */
+/** Inspect this client's current connection state, request occupancy and cache accounting.
+ * These local values do not describe other processes or guarantee that a later request can start or the gateway will stay ready.
+ * Diagnostics include no token, remote route, resource ID or cached payload
+ */
 export interface ClientDiagnostics {
     /** Current aggregate client lifecycle state, not an event history or a readiness promise */
     readonly state: ConnectionState
-    /** Current aggregate heartbeat latency with the same availability rules as ClientState.gatewayLatencyMs */
+    /** Slowest current shard heartbeat round-trip time in milliseconds, or null under ClientState.gatewayLatencyMs availability rules */
     readonly gatewayLatencyMs: number | null
     /** Current locally owned shard state only, in configured local order */
     readonly shards: readonly ShardState[]
-    /** Shared local HTTP scheduler occupancy. Active requests and capacity total the four REST/upload and four media slots. Queued JSON bytes exclude uploads and do not bound heap or process memory */
+    /** Active and queued HTTP work shared by this client's operations.
+     * Active values combine four REST or upload slots with four separate media-download slots.
+     * Queued JSON bytes exclude attachment transfers and do not measure heap or process memory
+     */
     readonly rest: {
+        /** Requests currently using either the REST/upload pool or the media-download pool */
         readonly activeRequests: number
+        /** Combined active-request capacity of those two pools */
         readonly activeCapacity: number
+        /** Requests waiting for a local request slot */
         readonly queuedRequests: number
+        /** Maximum queued requests shared by both pools */
         readonly queuedCapacity: number
+        /** Accounted JSON-body bytes of queued requests, excluding attachment transfer bytes */
         readonly queuedJsonBytes: number
+        /** Maximum accounted JSON-body bytes allowed in the shared queue */
         readonly queuedJsonByteCapacity: number
     }
-    /** SDK-reserved transfer bytes across queued and active work, currently including copied upload inputs but not caller buffers or remote temporary storage */
-    readonly uploads: { readonly reservedBytes: number; readonly byteCapacity: number }
-    /** Shared local gateway count/member-request occupancy, not Fluxer's worker or a distributed quota */
-    readonly gatewayRequests: { readonly activeRequests: number; readonly activeCapacity: number }
-    /** Local cache accounting. Configured bounds survive closure, while released observations disappear from retained counts */
+    /** Attachment transfer reservations across queued and active uploads, not caller buffers or remote temporary storage */
+    readonly uploads: {
+        /** Attachment transfer bytes currently reserved by queued and active work */
+        readonly reservedBytes: number
+        /** Configured maximum transfer-byte reservation for this client */
+        readonly byteCapacity: number
+    }
+    /** Local request slots shared by fresh counts and member streams, not provider worker occupancy or a cross-process quota */
+    readonly gatewayRequests: {
+        /** Logical count requests and member streams currently holding shared local slots */
+        readonly activeRequests: number
+        /** Maximum logical requests allowed concurrently by this client */
+        readonly activeCapacity: number
+    }
+    /** Accounting for each local cache category.
+     * Closure releases retained snapshots but leaves configured capacity values available for inspection
+     */
     readonly caches: Readonly<Record<CacheKind, CacheDiagnostic>>
 }
 
-/** Properties shared by default and native clients */
+/** Observe a client's current gateway state in either API without starting a connection */
 export interface ClientState {
     /** Current connection state, controlled by the SDK rather than the consumer */
     readonly state: ConnectionState
     /**
-     * Maximum current heartbeat round-trip time in milliseconds across every locally owned shard.
-     * Null while the aggregate state is not Connected.
-     * Null until every locally owned shard has an acknowledgement and whenever any shard has no current measurement.
-     * Connection loss, recovery and shutdown clear the affected shard's measurement until its new connection acknowledges.
+     * The slowest current heartbeat round-trip time in milliseconds across this client's gateway shards.
+     * Null unless the client is Connected and every local shard has a current heartbeat acknowledgement.
+     * Connection loss, recovery and shutdown clear the affected shard's measurement until its new connection receives an acknowledgement.
      * Zero is a valid measurement, not a marker for unavailable data
      */
     readonly gatewayLatencyMs: number | null
     /**
-     * Frozen snapshot for every gateway shard owned by this client, in configured local ID order. An unsharded client contains only shard ID zero.
-     * It excludes shards owned by other processes and has no whole-bot or cross-process ordering. Read it to distinguish per-shard recovery and latency from aggregate client values
+     * Frozen connection state and heartbeat measurements for this client's shards, in configured local ID order.
+     * An unsharded client contains only shard ID zero.
+     * Inspect this to identify a recovering shard even while other shards remain ready.
+     * It excludes shards owned by other processes and does not establish whole-bot state or cross-process ordering
      */
     readonly shards: readonly ShardState[]
 }
 
-/** Cancellation belongs to this operation, not the client's connection policy */
+/** Add cancellation to a default-API operation with an AbortController's signal.
+ * Aborting affects this operation's owned work, not unrelated calls
+ */
 export interface OperationOptions {
     /**
-     * A standard AbortSignal, expressed structurally to avoid requiring DOM declarations in consumer projects.
-     * A malformed signal returns ConfigurationError with field signal before work starts; lazy iterators report it on first next.
-     * A throwing signal accessor or listener method is a defect, not an input failure.
-     * An already-aborted signal cancels without acquiring ownership.
-     * Controls startup for connect, the full accepted lifetime for run, and only the observation for waitForClose.
-     * No signal is accepted by shutdown, and completion is never undone by a later abort
+     * Pass an AbortController's signal to cancel this operation and await its required cleanup.
+     * An already-aborted signal cancels before the operation takes ownership.
+     * For connect it controls startup only, so aborting after READY does not close the established connection.
+     * For an accepted run it controls the full client lifetime, but waitForClose cancels only that observer.
+     * Cancellation cannot undo a dispatched server mutation, and a later abort cannot undo completed work.
+     * A malformed signal returns ConfigurationError with field signal before work starts, or on a lazy iterator's first next.
+     * Throwing signal accessors or listener methods are unexpected defects rather than typed input failures.
+     * Shutdown does not accept a signal
      */
     readonly signal?: OperationSignal
 }
 
-/** Dependency-free structural cancellation signal accepted by default operations */
+/** The AbortSignal members used by default-API operations.
+ * A standard AbortController provides this shape without requiring DOM types in your TypeScript project
+ */
 export interface OperationSignal {
+    /** Whether cancellation has already been requested */
     readonly aborted: boolean
-    addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void
+    /** Register the callback that requests operation cancellation when the signal aborts */
+    addEventListener(
+        type: "abort",
+        listener: () => void,
+        options?: {
+            /** Remove this listener automatically after its first abort event */
+            once?: boolean
+        },
+    ): void
+    /** Remove the operation's callback when its observation ends */
     removeEventListener(type: "abort", listener: () => void): void
 }

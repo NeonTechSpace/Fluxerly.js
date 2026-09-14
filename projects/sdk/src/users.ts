@@ -2,20 +2,23 @@ import type { ClientClosedError } from "./errors.js"
 import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type { MessageOperationOptions } from "./messages.js"
-import type { Message } from "./messages.js"
+import type { Message, MessageCore } from "./messages.js"
 import type { OperationOptions } from "./client.js"
 
-/** Frozen public account identity, excluding private fields even when fetched through /users/@me */
+/** Public identity of a Fluxer account, suitable for displaying who sent a message or belongs to a conversation.
+ * This frozen snapshot does not update in place. It excludes private account fields even for users.fetchSelf.
+ * Guild nicknames and guild-specific profile settings are separate from this account-wide identity
+ */
 export interface User {
     /** Decimal account ID */
     readonly id: string
     /** Account username, not unique by itself */
     readonly username: string
-    /** Provider discriminator */
+    /** Provider discriminator used with username to distinguish accounts with the same username */
     readonly discriminator: string
-    /** Global display name, or null */
+    /** Account-wide name shown instead of username where supported, or null when unset */
     readonly displayName: string | null
-    /** Avatar hash, not an image URL */
+    /** Avatar asset hash, not an image URL, or null when no avatar is supplied */
     readonly avatar: string | null
     /** Dominant avatar color, or null */
     readonly avatarColor: number | null
@@ -27,13 +30,19 @@ export interface User {
     readonly flags: number
 }
 
-/** Optional explicit guild context for one remote profile read. It does not request mutuals, relationships, or member hydration */
+/** Choose whether users.fetchProfile also asks for profile customization in one guild.
+ * Omit guildId for the account-wide profile. This request does not list mutual guilds or relationships and does not
+ * fetch a GuildMember for you
+ */
 export interface UserProfileQuery {
-    /** Decimal guild ID whose returned guild-specific profile is projected when Fluxer supplies it */
+    /** Decimal guild ID whose profile settings to include when Fluxer supplies them */
     readonly guildId?: string
 }
 
-/** Frozen allowlisted account or guild-specific profile fields. Undefined bannerColor means Fluxer did not supply it */
+/** Displayable biography, pronouns and visual customization from a profile read.
+ * Null can mean either unset or withheld by profile privacy. These fields alone cannot distinguish those cases.
+ * Undefined bannerColor means Fluxer did not supply it
+ */
 export interface UserProfileFields {
     /** Biography, null when absent or hidden by profile privacy */
     readonly bio: string | null
@@ -47,11 +56,14 @@ export interface UserProfileFields {
     readonly accentColor: number | null
 }
 
-/** Frozen privacy-aware profile observation without relationship, connection, timezone, premium, or cache state */
+/** Result of users.fetchProfile, combining public identity with the profile information Fluxer allowed this caller to see.
+ * Account-wide and guild-specific settings remain separate. The frozen result excludes relationships, connections,
+ * timezone and premium details, and does not populate user or member caches
+ */
 export interface UserProfile {
-    /** Public account identity from this profile response, never a cache hydration */
+    /** Public account identity returned with this profile, without updating the cache */
     readonly user: User
-    /** Account-wide allowlisted profile fields */
+    /** Account-wide profile fields the SDK includes */
     readonly profile: UserProfileFields
     /** Explicit guild-context profile fields, or null when Fluxer did not supply them. Null does not establish membership */
     readonly guildProfile: UserProfileFields | null
@@ -59,7 +71,10 @@ export interface UserProfile {
     readonly isLimited: boolean
 }
 
-/** Frozen private-channel observation, not proof that a message can be delivered */
+/** A one-to-one direct message or group conversation outside a guild.
+ * Pass id to the messages API to address this conversation. The frozen snapshot describes returned settings and
+ * recipients, not current access or proof that a later message can be delivered
+ */
 export interface DirectMessageChannel {
     /** Decimal channel ID, accepted by the existing messages API */
     readonly id: string
@@ -79,7 +94,10 @@ export interface DirectMessageChannel {
     readonly lastMessageId: string | null
 }
 
-/** Explicit group updates. Omitted fields remain unchanged; Fluxer enforces membership and ownership */
+/** Rename a group conversation, change its icon or nicknames, or transfer its ownership.
+ * Omitted fields remain unchanged. This does not create a group or add recipients. Fluxer enforces membership and
+ * ownership, and an error after dispatch does not prove that earlier changes were rolled back
+ */
 export interface DirectMessageGroupEdit {
     /** Group name, 1–100 code points, or null to clear it */
     readonly name?: string | null
@@ -91,7 +109,7 @@ export interface DirectMessageGroupEdit {
     readonly nicknames?: Readonly<Record<string, string | null>> | null
 }
 
-/** IDs accompanying a private-channel recipient change; no automatic user fetch */
+/** IDs accompanying a private-channel recipient change. No automatic user fetch */
 export interface DirectMessageRecipientChange {
     /** Affected private channel */
     readonly channelId: string
@@ -99,18 +117,24 @@ export interface DirectMessageRecipientChange {
     readonly userId: string
 }
 
-/** Frozen latest-message batch result for explicitly selected private channels */
-export interface DirectMessageLatestMessages {
+/** Latest-message lookup results for the private channel IDs you selected.
+ * Look in messages for returned IDs and omittedChannelIds for requested IDs missing from the response.
+ * A returned null is a different result from an omitted ID and does not establish why no message was returned
+ */
+export interface DirectMessageLatestMessages<M extends MessageCore = Message> {
     /** Returned entries keyed by requested channel ID. Null is ambiguous and does not prove an empty channel or access denial */
-    readonly messages: Readonly<Record<string, Message | null>>
+    readonly messages: Readonly<Record<string, M | null>>
     /** Requested IDs omitted by Fluxer, in input order. Omission is distinct from a returned null */
     readonly omittedChannelIds: readonly string[]
 }
 
-/** Request deadlines include queueing, rate waits and transport cleanup */
+/** Request deadline settings shared with message operations.
+ * timeoutMs defaults to 30,000 milliseconds across local queueing, rate waits, retries and transport.
+ * Cleanup is awaited after the deadline and can make completion take longer
+ */
 export interface UserOperationOptions extends MessageOperationOptions {}
 
-/** Default operations begin immediately; abort interrupts only this operation and does not roll back remote changes */
+/** Default API operations begin immediately. Abort interrupts only this operation and does not roll back remote changes */
 export interface DefaultUserOperationOptions extends UserOperationOptions, OperationOptions {}
 
 /** User/private-conversation operation named by safe failure metadata */
@@ -128,24 +152,34 @@ export type UserOperation =
     | "directMessages.close"
     | "directMessages.removeRecipient"
 
-/** Expected user/private-channel failure without upstream bodies or private input values */
+/** Expected failure from account reads or private-conversation operations.
+ * Inspect operation to identify the failed step and outcome before repeating a write. Metadata excludes private
+ * input values and upstream bodies. Default API methods return this error in an Err, while Effect-native methods fail
+ * in the typed error channel
+ */
 export class UserOperationError extends Error {
     /** Stable failure discriminator */
     readonly _tag = "UserOperationError"
-    /** SDK-owned local input detail, or null for non-input and unattributable failures */
+    /** Safe explanation of the locally invalid property, or null when no input problem could be identified */
     readonly inputValidation: InputValidationDetail | null
     constructor(
         /** Requested operation */
         readonly operation: UserOperation,
-        /** HTTP failures retain status, not the provider's response body */
+        /** input is local validation failure, busy is full local request capacity, notFound is HTTP 404, and rejected is an API rejection.
+         * network is transport failure, response is unusable success data, timeout is an expired deadline,
+         * and rateLimit means a required provider wait could not be completed. HTTP failures retain status, not bodies
+         */
         readonly reason: "input" | "busy" | "notFound" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
-        /** Unknown writes may already have applied; do not blindly repeat a group edit, close, or recipient removal */
+        /** notDispatched means no request was submitted, rejected means an API rejection was observed,
+         * and unknown means the remote result is uncertain. Unknown writes may already have applied, so reconcile
+         * before repeating a group edit, close or recipient removal. A rejection does not prove rollback
+         */
         readonly outcome: "notDispatched" | "rejected" | "unknown",
         /** HTTP status when received */
         readonly status: number | null = null,
         /** Provider retry delay in milliseconds when available */
         readonly retryAfterMs: number | null = null,
-        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        /** Safe classification of why Fluxer rejected the request, or null when the response could not be classified */
         readonly apiError: ApiErrorDetail | null = null,
         inputValidation: InputValidationDetail | null = null,
     ) {
@@ -166,5 +200,5 @@ export class UserOperationError extends Error {
     }
 }
 
-/** Default interruption additionally returns CancelledError; native interruption remains in the Effect cause */
+/** Cancellation in the default API additionally returns CancelledError. Native interruption remains in the Effect cause */
 export type UserOperationFailure = UserOperationError | ClientClosedError

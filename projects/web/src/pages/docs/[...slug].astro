@@ -1,0 +1,57 @@
+---
+import { render, type CollectionEntry } from 'astro:content'
+import { Docs } from '../../components/Docs'
+import Layout from '../../components/Layout.astro'
+import { source } from '../../lib/source'
+import versions from '../../../content/versions.json'
+import { parseVersion } from '../../../scripts/versions.mjs'
+
+export async function getStaticPaths() {
+  return source.getPages().map((page) => ({
+    params: { slug: page.slugs.join('/') },
+    props: { entry: page.data.entry },
+  }))
+}
+interface Props { entry: CollectionEntry<'docs'> }
+const { entry } = Astro.props
+const { Content, headings } = await render(entry)
+const version = Astro.params.slug!.split('/')[0]!
+const channel = version === 'dev' ? 'canary' : parseVersion(version).channel
+const channelTabs = versions.targets.map((target) => ({
+  label: target.label,
+  url: source.getPage([target.version, ...Astro.params.slug!.split('/').slice(1)])?.url ?? `/docs/${target.version}/`,
+  active: channel === (target.version === 'dev' ? 'canary' : parseVersion(target.version).channel),
+}))
+const toc = headings.map((h) => ({ depth: h.depth, title: h.text === 'Remarks' ? 'Usage details' : h.text, url: `#${h.slug}` }))
+---
+<Layout title={entry.data.title}>
+  <Docs tree={source.getPageTree()} pathname={Astro.url.pathname} params={Astro.params}
+    page={{ toc, footer: { enabled: Astro.params.slug!.split('/')[1] !== 'api' } }} version={version} channelTabs={channelTabs} client:load>
+    <div class="version-label">{version === 'dev' ? 'Canary · Unreleased' : `SDK ${version}`}</div>
+    <h1>{entry.data.title}</h1>
+    <aside class="preview-notice" aria-label="Important preview notice">
+      <strong>IMPORTANT</strong>
+      <span>This is a quick preview build of the docs, not the final website or documentation</span>
+    </aside>
+    {entry.data.description && <p class="description">{entry.data.description}</p>}
+    <div class="prose docs-content flex-1" data-api-reference={Astro.params.slug!.split('/')[1] === 'api' || undefined}><Content /></div>
+  </Docs>
+</Layout>
+
+<style>
+  .preview-notice {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.75rem;
+    margin-block: 1.25rem;
+    padding: 0.8rem 1rem;
+    border: 1px solid #74623d;
+    border-radius: 0.5rem;
+    background: #292318;
+    color: #eee2c7;
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+  .preview-notice strong { color: #f4cf84; font-size: 0.75rem; letter-spacing: 0.04em; }
+</style>

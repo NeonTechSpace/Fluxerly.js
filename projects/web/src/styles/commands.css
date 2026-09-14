@@ -1,0 +1,61 @@
+.command-block {
+    margin-block: 1.5rem;
+    min-width: 0;
+    border: 1px solid var(--color-fd-border);
+    border-radius: 0.65rem;
+    background: var(--color-fd-card);
+    overflow: hidden;
+}
+.command-block .command-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem 1rem;
+    padding: 0.8rem 1rem;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+.command-block .command-controls label {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--color-fd-muted-foreground);
+}
+.command-block select,
+.command-block button {
+    min-height: 2rem;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--color-fd-border);
+    border-radius: 0.35rem;
+    background: var(--color-fd-muted);
+    color: var(--color-fd-foreground);
+    font: inherit;
+}
+.command-block select:disabled {
+    opacity: 0.75;
+}
+.command-block button:not(:disabled) {
+    cursor: pointer;
+}
+.command-block [data-command-copy-status] {
+    color: var(--color-fd-muted-foreground);
+    font-size: 0.8rem;
+}
+.docs-content .command-block pre {
+    margin: 0;
+    border: 0;
+    border-top: 1px solid var(--color-fd-border);
+    border-radius: 0;
+}
+.docs-content .command-block [data-command-note],
+.docs-content .command-block .command-no-script {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    color: var(--color-fd-muted-foreground);
+}
+.command-block [hidden] {
+    display: none !important;
+}

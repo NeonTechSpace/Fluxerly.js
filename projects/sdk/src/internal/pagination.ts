@@ -1,7 +1,7 @@
 import { Effect, Stream } from "effect"
 import { ClientClosedError } from "#sdk/errors"
 import { PaginationError, type PaginationOperation } from "#sdk/pagination"
-import type { MessageOperationOptions } from "#sdk/messages"
+import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
 import type { OperationOptions } from "#sdk/client"
 import type { ClientOwner } from "./client.js"
 import { encodeHistory, record, reference } from "./message.js"
@@ -69,7 +69,7 @@ export class Pagination<A, E> {
     done = false
 
     constructor(
-        private readonly owner: ClientOwner,
+        private readonly owner: Pick<ClientOwner<MessageCore>, "subscribe" | "state">,
         private readonly operation: PaginationOperation,
         private readonly settings: Settings,
         private readonly source: Source<A, E>,
@@ -148,7 +148,7 @@ export class Pagination<A, E> {
 }
 
 function prepare<A, E>(
-    owner: ClientOwner,
+    owner: Pick<ClientOwner<MessageCore>, "subscribe" | "state">,
     operation: PaginationOperation,
     query: unknown,
     options: unknown,
@@ -234,7 +234,7 @@ function prepare<A, E>(
         const source = build(settings)
         return source instanceof InputValidationFailure
             ? invalid(source)
-            : Effect.succeed(new Pagination(owner, operation, settings, source))
+            : Effect.succeed(new Pagination<A, E>(owner, operation, settings, source))
     })
 }
 
@@ -243,8 +243,8 @@ const cursorQuery = (key: "before" | "after", cursor: string | undefined, limit:
     ...(cursor === undefined ? {} : { [key]: cursor }),
 })
 
-export const historyPagination = (
-    owner: ClientOwner,
+export const historyPagination = <M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
     channelId: string,
     query: unknown,
     options?: MessageOperationOptions,
@@ -260,8 +260,8 @@ export const historyPagination = (
         }
     })
 
-export const memberPagination = (
-    owner: ClientOwner,
+export const memberPagination = <M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
     guildId: string,
     query: unknown,
     options?: MessageOperationOptions,
@@ -281,7 +281,11 @@ export const memberPagination = (
         }
     })
 
-export const guildPagination = (owner: ClientOwner, query: unknown, options?: MessageOperationOptions) =>
+export const guildPagination = <M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
+    query: unknown,
+    options?: MessageOperationOptions,
+) =>
     prepare(
         owner,
         "guilds.iterate",
@@ -313,8 +317,8 @@ export const guildPagination = (owner: ClientOwner, query: unknown, options?: Me
         true,
     )
 
-export const reactionUserPagination = (
-    owner: ClientOwner,
+export const reactionUserPagination = <M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
     target: unknown,
     emoji: unknown,
     query: unknown,
@@ -347,8 +351,8 @@ export const reactionUserPagination = (
         }
     })
 
-export const pinPagination = (
-    owner: ClientOwner,
+export const pinPagination = <M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
     channelId: string,
     query: unknown,
     options?: MessageOperationOptions,
@@ -357,7 +361,7 @@ export const pinPagination = (
         const validated = encodePinsQuery(channelId, cursorQuery("before", settings.cursor, settings.pageSize))
         if (validated instanceof InputValidationFailure) return validated
         return {
-            identity: (item: import("#sdk/pins").MessagePin) => item.message.id,
+            identity: (item: import("#sdk/pins").MessagePin<M>) => item.message.id,
             load: (cursor, limit) =>
                 owner
                     .fetchPins(channelId, cursorQuery("before", cursor, limit), settings.options)
@@ -365,8 +369,8 @@ export const pinPagination = (
         }
     })
 
-export const auditLogPagination = (
-    owner: ClientOwner,
+export const auditLogPagination = <M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
     guildId: string,
     query: unknown,
     options?: MessageOperationOptions,

@@ -1,17 +1,34 @@
 import type { PrefixCommandMetadata } from "./commands.js"
 
-/** Explicit presentation choices for local help generation, without attaching or connecting a client */
+/**
+ * Choose the text prefix, page length and visible entries for `router.help`.
+ * Help reads registered metadata only, without connecting a client, executing commands or sending messages.
+ * You choose which returned pages to send and how to handle mention parsing
+ */
 export interface CommandHelpOptions {
-    /** Nonempty display prefix. The router never invokes its configured prefix resolver to generate help */
+    /** Nonempty well-formed prefix to display, such as `!`. This can differ from dispatch prefixes and does not call the prefix resolver */
     readonly prefix: string
-    /** Positive safe integer UTF-16 code-unit ceiling per page. No default or provider-limit lookup */
+    /** Positive safe integer maximum page length in JavaScript string units (UTF-16 code units). Required, with no default or provider-limit lookup */
     readonly maxLength: number
+    /** Choose a group by its registered names, not aliases, such as `["admin"]`.
+     * Omit or use `[]` for root entries.
+     * A selected group shows itself and its immediate children, not deeper descendants.
+     * Missing groups fail with ConfigurationError
+     */
+    readonly group?: readonly string[]
     /**
-     * Optional synchronous visibility predicate, called once per command in registration order until a failure.
-     * Defaults to including every registered command. It receives frozen metadata, not messages, candidates or handlers.
-     * This is presentation policy, not authorization. Guards and cooldowns are never evaluated.
-     * Throws and non-boolean returns fail with fixed ConfigurationError details without the thrown value.
-     * Promises are not supported or awaited. Keep this callback short because synchronous work cannot be interrupted
+     * Return true to show an entry or false to hide it, for example `(entry) => entry.name !== "internal"`.
+     * Omitted means show each considered entry. Receives frozen metadata, with `kind: "group"` identifying groups
+     *
+     * Root help checks immediate entries once each in sibling registration order.
+     * A group selection checks ancestors first, then the selected group and its immediate children, at most once per entry.
+     * A hidden ancestor or selected group returns `[]` without inspecting later entries.
+     * An included empty group remains visible, even if its children are hidden
+     *
+     * Hiding help does not prevent execution. No guard or cooldown is evaluated
+     *
+     * Throws or non-boolean returns fail with fixed ConfigurationError details that omit the callback's thrown value.
+     * Promises are not supported or awaited. Keep this synchronous callback short because it cannot be interrupted while running
      */
     readonly include?: (command: PrefixCommandMetadata) => boolean
 }

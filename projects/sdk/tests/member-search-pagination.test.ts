@@ -45,6 +45,14 @@ async function setup(mode: (typeof modes)[number]) {
             defaultApi
                 ? defaultApi.members.iterateSearch("200", filters, limits)
                 : native!.members.iterateSearch("200", filters, limits),
+        search: async (query: MemberSearchQuery) => {
+            if (defaultApi) {
+                const result = await defaultApi.members.search("200", query)
+                if (result.isErr()) throw result.error
+                return result.value
+            }
+            return Effect.runPromise(native!.members.search("200", query))
+        },
     }
 }
 
@@ -123,5 +131,79 @@ test.each(modes)("%s rejects invalid traversal before requests", async (mode) =>
     await expect(collect(api.iterate({}, { maxItems: 2, pageSize: null } as never))).rejects.toMatchObject({
         reason: "input",
     })
+    const forbidden = new (class {
+        get query() {
+            return "fixture"
+        }
+        get limit() {
+            return 1
+        }
+    })()
+    await expect(collect(api.iterate(forbidden, { maxItems: 1 }))).rejects.toMatchObject({ reason: "input" })
+    const oversized = new Array<string>(11)
+    Object.defineProperty(oversized, Symbol.iterator, {
+        value: () => {
+            throw new Error("Oversized filters must be rejected before iteration")
+        },
+    })
+    const filters = new (class {
+        get roleIds() {
+            return oversized
+        }
+    })()
+    await expect(api.search(filters)).rejects.toMatchObject({
+        reason: "input",
+        inputValidation: { path: "query.roleIds[]" },
+    })
+    await expect(collect(api.iterate(filters, { maxItems: 1 }))).rejects.toMatchObject({
+        reason: "input",
+        inputValidation: { path: "query.roleIds[]" },
+    })
     expect(fetch).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s search and traversal preserve structural filters at consumption", async (mode) => {
+    const api = await setup(mode)
+    const sent: Record<string, unknown>[] = []
+    const roles = ["401"]
+    Object.defineProperty(roles, "0", { enumerable: false })
+    Object.defineProperty(roles, "toJSON", { value: () => ["999"] })
+    let query = "initial"
+    const filters = new (class {
+        get query() {
+            return query
+        }
+        get roleIds() {
+            return roles
+        }
+        get offset() {
+            return 2
+        }
+    })()
+    Object.defineProperty(filters, "isBot", { value: false })
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body))
+        sent.push(body)
+        if (sent.length === 2) {
+            query = "later"
+            roles[0] = "403"
+        }
+        return page([String(300 + sent.length)], 4)
+    })
+    const source = api.iterate(filters, { maxItems: 2, pageSize: 1 })
+    expect(sent).toEqual([])
+    query = "accepted"
+    roles[0] = "402"
+    await api.search(filters)
+    expect(await collect(source)).toHaveLength(2)
+    expect(sent).toEqual([
+        { query: "accepted", limit: 25, offset: 2, role_ids: ["402"], is_bot: false },
+        { query: "accepted", limit: 1, offset: 2, role_ids: ["402"], is_bot: false },
+        { query: "accepted", limit: 1, offset: 3, role_ids: ["402"], is_bot: false },
+    ])
+    expect(await collect(source)).toHaveLength(2)
+    expect(sent.slice(3)).toEqual([
+        { ...sent[1], query: "later", role_ids: ["403"] },
+        { ...sent[2], query: "later", role_ids: ["403"] },
+    ])
 })

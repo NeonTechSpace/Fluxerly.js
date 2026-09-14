@@ -113,6 +113,12 @@ test.each(modes)("%s rejects malformed invite input without requests or private 
         await expect(settle(client.invites.fetch(code))).rejects.toMatchObject({
             reason: "input",
             outcome: "notDispatched",
+            inputValidation: {
+                path: "code",
+                constraint: "format",
+                explanation:
+                    "Invite code must be nonempty well-formed text without whitespace, control characters or URL path/query/fragment separators, and cannot be . or ..",
+            },
         })
     }
     for (const input of [
@@ -135,6 +141,18 @@ test.each(modes)("%s rejects malformed invite input without requests or private 
         reason: "input",
     })
     expect(fetch).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s accepts plain invite codes beyond 128 characters without an invented local cap", async (mode) => {
+    const client = await setup(mode)
+    const code = "x".repeat(129)
+    const fetch = vi.fn(async (url: string) => {
+        expect(new URL(url).pathname).toBe(`/v1/invites/${code}`)
+        return Response.json({ ...wire(), code })
+    })
+    stubFetchWithHostedDiscovery(fetch)
+    expect((await settle(client.invites.fetch(code))).code).toBe(code)
+    expect(fetch).toHaveBeenCalledTimes(1)
 })
 
 test.each(modes)("%s rejects mismatched invite responses and duplicate management entries", async (mode) => {

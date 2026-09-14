@@ -1,0 +1,30 @@
+---
+import { ClientRouter } from 'astro:transitions'
+import '@fontsource-variable/outfit'
+import '../styles/global.css'
+import '../styles/commands.css'
+import '../styles/examples.css'
+const { title } = Astro.props
+---
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{title} | Fluxerly.js</title>
+    <ClientRouter />
+  </head>
+  <body>
+    <slot />
+    <script>
+      import { setupCommandPreferences } from './command-preferences'
+      import { setupReferencePreviews } from './reference-previews'
+      import { setupExamplePreferences } from './example-preferences'
+      setupCommandPreferences()
+      setupReferencePreviews()
+      setupExamplePreferences()
+    </script>
+  </body>
+</html>

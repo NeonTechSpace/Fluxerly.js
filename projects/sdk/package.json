@@ -1,9 +1,35 @@
 {
     "name": "@neontechspace/fluxerly",
+    "description": "A JavaScript and TypeScript SDK for building Fluxer bots on Node.js",
+    "homepage": "https://github.com/NeonTechSpace/Fluxerly.js",
+    "bugs": {
+        "url": "https://github.com/NeonTechSpace/Fluxerly.js/issues"
+    },
+    "keywords": [
+        "fluxer",
+        "fluxer-api",
+        "fluxer-bot",
+        "fluxer-sdk",
+        "bot",
+        "bot-development",
+        "sdk",
+        "api-client",
+        "javascript",
+        "typescript",
+        "nodejs",
+        "websocket",
+        "effect",
+        "effect-ts"
+    ],
     "version": "0.0.0",
     "private": true,
     "type": "module",
     "license": "Apache-2.0",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/NeonTechSpace/Fluxerly.js.git",
+        "directory": "projects/sdk"
+    },
     "engines": {
         "node": ">=24.11.0"
     },
@@ -25,18 +51,24 @@
     },
     "files": [
         "dist",
-        "src"
+        "src",
+        "consumer/AGENTS.md",
+        "LICENSE",
+        "CHANGELOG.md"
     ],
     "scripts": {
         "format": "prettier --write .",
         "format:check": "prettier --check .",
-        "build": "tsc -p tsconfig.json",
+        "build": "node scripts/build.mjs",
+        "packages:prepare": "node scripts/packages.mjs",
+        "test:packaging": "node --test tests/packaging-check.mjs",
         "test": "vitest run",
         "test:types": "tsc -p tsconfig.test.json",
         "test:public-contract": "node tests/public-client-contract.mjs",
         "test:upstream:guild-features": "pnpm run build && node tests/upstream-guild-features.mjs",
         "test:experiment:effect-transport": "tsc -p tsconfig.experiment.json && vitest run --config vitest.experiments.config.ts tests/experiments/effect-transport",
         "test:package": "node tests/package-check.mjs",
+        "test:npm": "node tests/npm-package-check.mjs",
         "test:live": "node tests/live/sandbox.mjs",
         "test:live:sdk": "pnpm run build && node tests/live/sdk.mjs default && node tests/live/sdk.mjs effect",
         "test:live:application": "pnpm run build && node tests/live/sdk.mjs default --application && node tests/live/sdk.mjs effect --application",
@@ -52,6 +84,8 @@
         "test:live:event-waits": "pnpm run build && node tests/live/command-conveniences.mjs default waits && node tests/live/command-conveniences.mjs effect waits",
         "test:live:command-arguments": "pnpm run build && node tests/live/command-conveniences.mjs default arguments && node tests/live/command-conveniences.mjs effect arguments",
         "test:live:command-help": "pnpm run build && node tests/live/command-conveniences.mjs default help && node tests/live/command-conveniences.mjs effect help",
+        "test:live:command-groups": "pnpm run build && node tests/live/command-conveniences.mjs default groups && node tests/live/command-conveniences.mjs effect groups",
+        "test:live:message-fields": "pnpm run build && node tests/live/command-conveniences.mjs default fields && node tests/live/command-conveniences.mjs effect fields",
         "test:live:consumer-features": "pnpm run build && node tests/live/consumer-features.mjs default && node tests/live/consumer-features.mjs effect",
         "test:live:consumer-operations": "pnpm run build && node tests/live/consumer-operations.mjs default && node tests/live/consumer-operations.mjs effect",
         "test:live:member-chunks": "pnpm run build && node tests/live/member-chunks.mjs default && node tests/live/member-chunks.mjs effect",
@@ -104,16 +138,20 @@
         "test:cache:memory": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/cache-memory.mjs",
         "test:cache:workload": "pnpm run build && node tests/cache-workload.mjs default && node tests/cache-workload.mjs effect",
         "test:rest:queue": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/rest-queue-workload.mjs default && node --expose-gc --max-old-space-size=512 tests/rest-queue-workload.mjs effect",
-        "check": "pnpm run format:check && pnpm run build && pnpm run test:public-contract && pnpm run test:types && pnpm run test && pnpm run test:package"
+        "check": "pnpm run format:check && pnpm run build && pnpm run test:public-contract && pnpm run test:types && pnpm run test && pnpm run test:packaging && pnpm run test:package"
     },
     "dependencies": {
-        "effect": "4.0.0-rc.115",
         "neverthrow": "8.2.0",
         "ws": "8.21.3"
+    },
+    "peerDependencies": {
+        "effect": "4.0.0-rc.115"
     },
     "devDependencies": {
         "@types/node": "24.13.3",
         "@types/ws": "8.18.1",
+        "effect": "4.0.0-rc.115",
+        "npm": "11.19.0",
         "prettier": "3.9.6",
         "typescript": "7.0.2",
         "vitest": "5.0.0"

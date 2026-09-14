@@ -1,19 +1,33 @@
 import { err, ok, type Result } from "neverthrow"
 import { HelperError } from "./helpers.js"
 
-/** Red, green and blue integer channels, each from 0 through 255 */
+/** A three-item array of red, green and blue amounts, in that order. Each must be an integer from 0 through 255 */
 export type RgbColor = readonly [red: number, green: number, blue: number]
 
-/** An integer from 0 through 0xffffff, exactly six hexadecimal digits with optional #, or an RGB tuple. No CSS names, shorthand, alpha or whitespace */
+/** A color accepted by `colors.parse`: A number from 0 through 0xffffff, six hexadecimal digits such as `"#ff8800"`, or `[255, 136, 0] */
 export type ColorInput = number | string | RgbColor
 
 function validColor(value: unknown): value is number {
     return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffff
 }
 
-/** Pure RGB conversion for message/embed and role configuration, without network work or CSS parsing */
-export const colors = Object.freeze({
-    /** Validate and convert ColorInput to its numeric RGB value without clamping, rounding or string coercion. Malformed inputs fail with HelperError and are not retained */
+/** Convert colors locally before using them in an embed or role. Methods return a Result immediately, with a value on success or HelperError on failure */
+export const colors: Readonly<{
+    /** Convert a six-digit hexadecimal string, RGB array or color number to the integer used by embeds and roles.
+     * The leading `#` is optional. CSS names, three-digit shorthand, alpha channels and surrounding whitespace fail.
+     * Values are never rounded or clamped. An invalid input returns HelperError rather than a replacement color
+     */
+    parse(value: ColorInput): Result<number, HelperError>
+    /** Turn a color integer into a lowercase six-digit string such as `"#000001"`.
+     * Accepts only integers from 0 through 0xffffff, not the strings or arrays accepted by `parse`.
+     * Invalid numbers return HelperError
+     */
+    toHex(value: number): Result<string, HelperError>
+    /** Separate a color integer into a new frozen `[red, green, blue]` array, each from 0 through 255.
+     * Accepts only integers from 0 through 0xffffff. Invalid numbers return HelperError
+     */
+    toRgb(value: number): Result<RgbColor, HelperError>
+}> = Object.freeze({
     parse(value: ColorInput): Result<number, HelperError> {
         if (validColor(value)) return ok(value)
         if (typeof value === "string" && /^#?[0-9a-fA-F]{6}$/u.test(value))
@@ -28,13 +42,11 @@ export const colors = Object.freeze({
             return ok((value[0]! << 16) | (value[1]! << 8) | value[2]!)
         return err(new HelperError("colors.parse", "color"))
     },
-    /** Format a valid numeric RGB value as lowercase #rrggbb, preserving leading zeroes. Out-of-range or noninteger input fails */
     toHex(value: number): Result<string, HelperError> {
         return validColor(value)
             ? ok(`#${value.toString(16).padStart(6, "0")}`)
             : err(new HelperError("colors.toHex", "color"))
     },
-    /** Return a new frozen [red, green, blue] tuple for a valid numeric RGB value. Out-of-range or noninteger input fails */
     toRgb(value: number): Result<RgbColor, HelperError> {
         return validColor(value)
             ? ok(Object.freeze([(value >> 16) & 255, (value >> 8) & 255, value & 255] as const))
