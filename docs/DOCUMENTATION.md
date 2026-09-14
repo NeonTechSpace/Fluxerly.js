@@ -165,8 +165,8 @@ Use the deploy step's logs if provider readback fails, because a failed step doe
 The exact Preview hostname is not established by the repository's production website link.
 Do not infer or invent it
 
-Associate the chosen hostname with the selected Pages project and route it to the `docs-preview` Preview branch.
-That branch must not be the Pages Production branch.
+Associate the chosen hostname with the selected Pages project and route it to the `preview` Preview branch.
+Keep `main` as the Pages Production branch for the real website, separate from Preview delivery.
 For a Git-connected project, disable production deployments and keep its Production branch settings consistent
 
 Configure environment reviewers and deployment rules before supplying credentials.
@@ -175,7 +175,7 @@ Do not change repository visibility or deploy Production as part of Preview deli
 ## Preview readback and recovery
 
 The deploy script (`projects/web/scripts/preview-deploy.mjs`) validates project identity, hostname association, branch settings, built noindex headers and the checked source marker before upload.
-It uses Wrangler to deploy only the `docs-preview` branch.
+It uses Wrangler to deploy only the `preview` branch, independently of the GitHub environment named `website`.
 It then verifies the provider deployment identity and Preview environment, source commit, public documentation route, noindex response header and served source marker.
 Readback is bounded and retries transient reads, including provider rate-limit delays
 

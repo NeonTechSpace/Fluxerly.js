@@ -43,7 +43,7 @@ test("Temporary deployment rejects a production hostname and unsafe configuratio
         CLOUDFLARE_PAGES_PROJECT: "test-docs",
         CLOUDFLARE_PREVIEW_URL: "https://preview.example.test",
     }
-    assert.equal(previewSettings(env).branch, "docs-preview")
+    assert.equal(previewSettings(env).branch, "preview")
     assert.throws(() => previewSettings({ ...env, CLOUDFLARE_PREVIEW_URL: "https://example.test" }))
     assert.throws(() => previewSettings({ ...env, CLOUDFLARE_PREVIEW_URL: "https://preview.example.test/path" }))
     assert.throws(() => previewSettings({ ...env, CLOUDFLARE_API_TOKEN: "" }))

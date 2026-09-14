@@ -29,7 +29,7 @@ export function previewSettings(env) {
         url.port
     )
         throw new Error("The preview URL must be an HTTPS preview.* origin")
-    return { account, project, token, origin: url.origin, branch: "docs-preview" }
+    return { account, project, token, origin: url.origin, branch: "preview" }
 }
 
 const webRoot = fileURLToPath(new URL("../", import.meta.url))

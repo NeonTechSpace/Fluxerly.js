@@ -18,7 +18,7 @@ const deployment = {
     project_name: "test-docs",
     environment: "preview",
     production_branch: "main",
-    deployment_trigger: { metadata: { branch: "docs-preview", commit_hash: source, commit_dirty: false } },
+    deployment_trigger: { metadata: { branch: "preview", commit_hash: source, commit_dirty: false } },
     latest_stage: { name: "deploy", status: "success" },
 }
 const json = (result, status = 200, headers = {}) => new Response(JSON.stringify(result), { status, headers })
@@ -103,12 +103,12 @@ test("Project, Production and Git-auto-production mismatches fail before upload"
         { ...project, name: "wrong-project" },
         { ...project, id: undefined },
         { ...project, production_branch: undefined },
-        { ...project, production_branch: "docs-preview" },
+        { ...project, production_branch: "preview" },
         { ...project, source: { config: { production_branch: "main", production_deployments_enabled: true } } },
         { ...project, source: { config: { production_branch: "main" } } },
         {
             ...project,
-            source: { config: { production_branch: "docs-preview", production_deployments_enabled: false } },
+            source: { config: { production_branch: "preview", production_deployments_enabled: false } },
         },
         { ...project, domains: ["wrong.example.com"] },
     ]
@@ -145,7 +145,7 @@ test("Orchestration uploads once to the explicit Preview branch and verifies the
     })
     assert.deepEqual(
         calls.filter(([kind]) => kind === "upload"),
-        [["upload", "test-docs", env.CLOUDFLARE_ACCOUNT_ID, "docs-preview", source]],
+        [["upload", "test-docs", env.CLOUDFLARE_ACCOUNT_ID, "preview", source]],
     )
     for (const [, url, init] of calls.filter(([kind]) => kind === "fetch")) {
         assert.equal(init.redirect, "error")
@@ -176,8 +176,8 @@ test("Uploaded identity mismatches and provider terminal failure are never accep
         { ...deployment, project_id: "wrong" },
         { ...deployment, project_name: "wrong" },
         { ...deployment, environment: "production" },
-        { ...deployment, production_branch: "docs-preview" },
-        ...[{ branch: "main" }, { commit_hash: "b".repeat(40) }, { commit_dirty: true }].map((metadata) => ({
+        { ...deployment, production_branch: "preview" },
+        ...[{ branch: "main" }, { branch: "docs-preview" }, { commit_hash: "b".repeat(40) }, { commit_dirty: true }].map((metadata) => ({
             ...deployment,
             deployment_trigger: { metadata: { ...deployment.deployment_trigger.metadata, ...metadata } },
         })),
