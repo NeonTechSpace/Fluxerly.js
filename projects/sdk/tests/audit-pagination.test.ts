@@ -95,8 +95,51 @@ test.each(modes)("%s starts audit traversal lazily, copies filters and releases 
     expect(api.requests.every((url) => url.searchParams.get("user_id") === "40")).toBe(true)
 })
 
+test.each(modes)("%s reads inherited and non-enumerable audit cursors", async (mode) => {
+    const api = await fixture(mode)
+    class AuditQuery {
+        readonly userId = "40"
+        readonly maxItems = 1
+        get before() {
+            return "12"
+        }
+    }
+    expect(await collect(api.iterate(new AuditQuery()))).toMatchObject([{ id: "11" }])
+    expect(api.requests.map((url) => url.searchParams.get("before"))).toEqual(["12"])
+
+    api.requests.length = 0
+    const query = Object.defineProperty({ userId: "40", maxItems: 1 }, "before", { value: "12" })
+    expect(await collect(api.iterate(query))).toMatchObject([{ id: "11" }])
+    expect(api.requests.map((url) => url.searchParams.get("before"))).toEqual(["12"])
+})
+
+test.each(modes)("%s honors inherited and non-enumerable audit page caps", async (mode) => {
+    const api = await fixture(mode)
+    class AuditQuery {
+        readonly userId = "40"
+        readonly maxItems = 5
+        get maxPages() {
+            return 1
+        }
+    }
+    await expect(collect(api.iterate(new AuditQuery()))).rejects.toMatchObject({ reason: "pageLimit" })
+    expect(api.requests).toHaveLength(1)
+
+    api.requests.length = 0
+    const query = Object.defineProperty({ userId: "40", maxItems: 5 }, "maxPages", { value: 1 })
+    await expect(collect(api.iterate(query))).rejects.toMatchObject({ reason: "pageLimit" })
+    expect(api.requests).toHaveLength(1)
+})
+
 test.each(modes)("%s rejects unfiltered and invalid audit traversals before dispatch", async (mode) => {
     const api = await fixture(mode)
+    class InvalidPageCapQuery {
+        readonly userId = "40"
+        readonly maxItems = 2
+        get maxPages() {
+            return 0
+        }
+    }
     for (const query of [
         { maxItems: 2 },
         { userId: "40", maxItems: 0 },
@@ -105,6 +148,8 @@ test.each(modes)("%s rejects unfiltered and invalid audit traversals before disp
         { userId: "bad", maxItems: 2 },
         { actionType: -1, maxItems: 2 },
         { userId: "40", maxItems: 2, before: "bad" },
+        new InvalidPageCapQuery(),
+        Object.defineProperty({ userId: "40", maxItems: 2 }, "before", { value: "bad" }),
     ])
         await expect(collect(api.iterate(query as AuditLogIterationQuery))).rejects.toMatchObject({
             _tag: "PaginationError",

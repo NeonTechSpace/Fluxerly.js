@@ -2,7 +2,7 @@
 
 This guide is for maintainers editing, checking and delivering SDK documentation.
 The website builds locally with Astro, React and Fumadocs.
-It contains a handwritten quickstart and a generated public API reference, not a second manually maintained API catalog
+It contains handwritten guides and a generated public API reference
 
 Temporary public delivery is Preview only.
 The permanent cinematic site remains deferred until the first stable SDK release
@@ -12,7 +12,8 @@ The permanent cinematic site remains deferred until the first stable SDK release
 Apply [documentation placement](/docs/TECHNOLOGY.md#documentation-placement) before adding prose
 
 - Edit caller-visible member behavior in public SDK source comments
-- Edit the handwritten quickstart (`projects/web/content/guides/quick-start.md`) for the learning path and its runnable example
+- Edit handwritten website guides in the ordered source inventory at `projects/web/content/guides/meta.json`. Every listed Markdown guide is generated for the unreleased documentation version
+- Use short `navTitle` frontmatter for sidebar labels and `title` for article headings and search. Group related pages with Fumadocs separators in the navigation inventory
 - Edit website components (`projects/web/src/components/`) and styles (`projects/web/src/styles/global.css`) for rendering
 - Author release fragments through Changesets, which owns the SDK changelog rendered by the website
 - Keep setup, verification and release operations in repository Markdown
@@ -33,7 +34,7 @@ Choose that reading flow before applying punctuation. Omit the final period only
 
 Use a blank line between Markdown paragraphs and an empty comment line between JSDoc paragraphs. Source wrapping and hard line breaks do not end a paragraph. The prose renderer (`projects/web/scripts/prose.mjs`) preserves standard Markdown boundaries, including those inside lists, quotes and generated API descriptions, rather than repairing missing source boundaries
 
-Protocol names, numeric values and uppercase code constants receive consistent emphasis in prose, while code and existing links keep their own styling
+Technical vocabulary, numeric values and uppercase code constants receive consistent emphasis in prose, while code and existing links keep their own styling
 
 The signature highlighter (`projects/web/scripts/signature-colors.mjs`) uses TypeScript syntax colours for linked signatures, return types and inline code without replacing their links or changing copied text
 
@@ -48,7 +49,7 @@ Do not hand-edit generated Markdown, declarations or output under `content/docs/
 Use a fenced `command` block with JSON metadata for package installation and executable guide commands.
 The command renderer (`projects/web/scripts/command-blocks.mjs`) owns the supported `install`, `add`, `list` and `run` variants
 
-The generator fills SDK and Effect versions from the selected release and SDK manifest before taking a snapshot.
+The generator reads the guide inventory and fills SDK and Effect versions from the selected release and SDK manifest before taking a snapshot.
 Unpublished Canary installation uses an explicit `VERSION` placeholder, never a claimed registry release
 
 Each block offers registry and package-manager selectors.
@@ -92,6 +93,10 @@ pnpm docs:dev
 `docs:dev` builds the SDK before reference generation and local Astro development.
 For non-interactive validation, run `pnpm check`.
 The aggregate check includes the SDK, release tooling tests and website build, typecheck and local tests
+
+The packed-consumer check compiles every fenced JavaScript or TypeScript guide example in a separate module.
+It selects the packed default or Effect entry point from the authored import.
+JavaScript examples use `checkJs: false`, while TypeScript examples compile strictly
 
 For rendered checks, install Chromium with `pnpm --filter fluxerly-docs exec playwright install chromium`.
 Run `pnpm --filter fluxerly-docs test:browser` for the development documentation.

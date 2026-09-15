@@ -50,7 +50,9 @@ export interface CreatedWebhook {
     readonly credentials: WebhookCredentials
 }
 
-/** Settings for a webhook that will post messages to the channel selected in the create call */
+/** Settings for a webhook that will post messages to the channel selected in the create call.
+ * Fields are sampled once when create starts, then validated and encoded from that snapshot
+ */
 export interface WebhookCreate {
     /** Default sender name, with 1–80 Unicode code points and at least one non-whitespace character */
     readonly name: string
@@ -61,7 +63,8 @@ export interface WebhookCreate {
 /**
  * Changes to an existing webhook made through a bot client's webhooks.edit operation.
  * Supply at least one setting. Omitted settings stay unchanged.
- * Moving the destination channel requires bot authentication and cannot be done by a token-only webhook client
+ * Moving the destination channel requires bot authentication and cannot be done by a token-only webhook client.
+ * Fields are sampled once when edit starts, then validated and encoded from that snapshot
  */
 export interface WebhookEdit {
     /** New default sender name, with 1–80 Unicode code points and at least one non-whitespace character */
@@ -123,7 +126,8 @@ export type WebhookMessageInput =
 
 /**
  * Change a webhook's default name or avatar through its token-only client.
- * Supply at least one setting. Omitted settings stay unchanged, and moving channels requires a bot client instead
+ * Supply at least one setting. Omitted settings stay unchanged, and moving channels requires a bot client instead.
+ * Fields are sampled once when edit starts, then validated and encoded from that snapshot
  */
 export interface WebhookTokenEdit {
     /** New default sender name, with 1–80 Unicode code points and at least one non-whitespace character */

@@ -7,6 +7,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
 import {
     createClient,
+    format,
     type EventName,
     type ReactionEmojiInput,
     type ReactionUsersQuery,
@@ -16,7 +17,7 @@ import {
     type MessageReference,
     SdkDefect,
 } from "../src/index.js"
-import { createClient as createNative } from "../src/effect.js"
+import { createClient as createNative, format as nativeFormat } from "../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "", sequence: 1, sockets: [] as import("ws").WebSocket[] }))
@@ -163,11 +164,14 @@ test.each(modes)("%s rejects malformed emoji selectors locally using the shared 
         1,
         "",
         "%F0%9F%91%8D",
-        "<:party:50>",
+        "<:party:bad>",
+        "<a:party:50> trailing",
         "\ud800",
         { id: "50" },
         { name: "party", id: "bad" },
         { name: "party", id: "50", extra: true },
+        { name: "party", id: "50", animated: "yes" },
+        { name: "👍", animated: true },
     ]) {
         await expect(api.collect({ emoji } as any)).rejects.toMatchObject({
             _tag: "ConfigurationError",
@@ -175,6 +179,43 @@ test.each(modes)("%s rejects malformed emoji selectors locally using the shared 
         })
     }
     expect(requests).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s captures custom emoji identity before reaction dispatch", async (mode) => {
+    const calls: string[] = []
+    mockRest(async (url, init) => {
+        calls.push(`${init.method} ${new URL(url).pathname}`)
+        return new Response(null, { status: 204 })
+    })
+    const api = await setup(mode)
+    let nameReads = 0
+    let idReads = 0
+    const changingEmoji = {
+        get name() {
+            return ++nameReads === 1 ? "party" : "renamed"
+        },
+        get id() {
+            return ++idReads === 1 ? "50" : "51"
+        },
+    }
+    await api.add(changingEmoji)
+    expect([nameReads, idReads]).toEqual([1, 1])
+    expect(calls).toEqual(["PUT /v1/channels/20/messages/10/reactions/party%3A50/@me"])
+
+    const firstInvalid = {
+        get name() {
+            return "party"
+        },
+        get id() {
+            return "not-an-id"
+        },
+    }
+    await expect(api.add(firstInvalid)).rejects.toMatchObject({
+        operation: "addReaction",
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(calls).toHaveLength(1)
 })
 
 test.each(modes.flatMap((mode) => [false, true].map((custom) => ({ mode, custom }))))(
@@ -950,6 +991,26 @@ test.each(modes)(
             })
         await expect(api.users("%invalid")).rejects.toMatchObject({ reason: "input" })
         expect(calls).toBe(0)
+        let afterReads = 0
+        const changingAfter = {
+            get after() {
+                return ++afterReads === 1 ? "30" : "bad"
+            },
+        }
+        body = { items: [], has_more: false, next_after: null }
+        expect(await api.users("👍", changingAfter)).toEqual({ items: [], hasMore: false, nextAfter: null })
+        expect(afterReads).toBe(1)
+        const firstInvalid = {
+            get after() {
+                return "bad"
+            },
+        }
+        await expect(api.users("👍", firstInvalid)).rejects.toMatchObject({
+            operation: "fetchReactionUsers",
+            reason: "input",
+            outcome: "notDispatched",
+        })
+        expect(calls).toBe(1)
         const user = { id: "31", username: "one" }
         for (const invalid of [
             null,
@@ -1653,6 +1714,79 @@ async function gateway() {
     }
 }
 
+test.each(modes)("%s reuses emoji markup, parsed values and snapshots across reaction workflows", async (mode) => {
+    await gateway()
+    const calls: [string, string][] = []
+    mockRest(async (url, init) => {
+        if (url.endsWith("/guilds/40/emojis")) return Response.json([{ id: "50", name: "party", animated: true }])
+        if (url.endsWith("/emojis/50/metadata"))
+            return Response.json({ guild_id: "40", id: "50", name: "party", animated: true, allow_cloning: false })
+        calls.push([new URL(url).pathname, init.method!])
+        return init.method === "GET"
+            ? Response.json({ items: [], has_more: false, next_after: null })
+            : new Response(null, { status: 204 })
+    })
+    const api = await setup(mode)
+    await api.connect()
+    const fetched = api.defaultApi
+        ? unwrap(await api.defaultApi.emojis.fetchAll("40"))[0]!
+        : (await Effect.runPromise(api.native!.emojis.fetchAll("40")))[0]!
+    const parsed = api.defaultApi
+        ? unwrap(format.parseCustomEmoji("<a:party:50>"))
+        : await Effect.runPromise(nativeFormat.parseCustomEmoji("<a:party:50>"))
+    const metadata = api.defaultApi
+        ? unwrap(await api.defaultApi.emojis.fetchMetadata("50"))
+        : await Effect.runPromise(api.native!.emojis.fetchMetadata("50"))
+    const incoming = await api.collect()
+    deliverReaction({ ...addition(), emoji: { name: "party", id: "50", animated: true } }).deliver()
+    const received = (await incoming.wait()).reactions[0]!.emoji
+    const inputs: readonly ReactionEmojiInput[] = [
+        "<:party:50>",
+        "<a:party:50>",
+        parsed,
+        fetched,
+        metadata,
+        received,
+        { name: "👍" },
+    ]
+    for (const emoji of inputs) {
+        const unicode = typeof emoji === "object" && emoji.id === undefined
+        const encoded = encodeURIComponent(unicode ? "👍" : "party:50")
+        const path = `/v1/channels/20/messages/10/reactions/${encoded}`
+        calls.length = 0
+        await api.add(emoji)
+        await api.remove(emoji)
+        await api.moderate("removeUserReaction", emoji)
+        await api.moderate("clearReaction", emoji)
+        expect((await api.users(emoji)).items).toEqual([])
+        const users: unknown[] = []
+        if (api.defaultApi) {
+            for await (const user of api.defaultApi.messages.iterateReactionUsers(target, emoji, { maxItems: 10 }))
+                users.push(user)
+        } else {
+            users.push(
+                ...(await Effect.runPromise(
+                    Stream.runCollect(api.native!.messages.iterateReactionUsers(target, emoji, { maxItems: 10 })),
+                )),
+            )
+        }
+        expect(users).toEqual([])
+        expect(calls).toEqual([
+            [path + "/@me", "PUT"],
+            [path + "/@me", "DELETE"],
+            [path + "/31", "DELETE"],
+            [path, "DELETE"],
+            [path + "/users", "GET"],
+            [path + "/users", "GET"],
+        ])
+        const collector = await api.collect({ emoji })
+        deliverReaction({ ...addition(), emoji: { name: "party", id: "51" } }).deliver()
+        const selected = unicode ? { name: "👍" } : { name: "renamed", id: "50" }
+        deliverReaction({ ...addition(), emoji: selected }).deliver()
+        expect((await collector.wait()).reactions.map((reaction) => reaction.emoji)).toEqual([selected])
+    }
+})
+
 test.each(modes)("%s encodes own reactions, leaves message cache intact and synthesizes no events", async (mode) => {
     const calls: [string, string][] = []
     mockRest(async (url, init) => {
@@ -1680,7 +1814,7 @@ test.each(modes)("%s encodes own reactions, leaves message cache intact and synt
     ])
     expect(await api.get()).toBe(cached)
     expect(events).toEqual([])
-    for (const invalid of ["", "%F0%9F%91%8D", "<:party:45>", "a/b", "\ud800", { name: "party", id: "bad" }, null])
+    for (const invalid of ["", "%F0%9F%91%8D", "<:party:bad>", "a/b", "\ud800", { name: "party", id: "bad" }, null])
         await expect(api.add(invalid as ReactionEmojiInput)).rejects.toMatchObject({
             _tag: "MessageOperationError",
             operation: "addReaction",

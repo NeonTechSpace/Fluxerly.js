@@ -21,6 +21,15 @@ export type ExpressionUpdate<K extends ExpressionKind> = Readonly<{
 const text = (value: unknown, min: number, max: number): value is string =>
     typeof value === "string" && [...value].length >= min && [...value].length <= max
 
+function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const count = value.length
+    if (count > maximum) return undefined
+    const items = new Array<unknown>(count)
+    for (let index = 0; index < count; index++) items[index] = value[index]
+    return Object.freeze(items)
+}
+
 export function decodeExpression<K extends ExpressionKind>(
     kind: K,
     value: unknown,
@@ -163,6 +172,7 @@ function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = 
                 "Expression image must be valid base64 no larger than 524,288 bytes",
             )
     }
+    let tags: readonly string[] | undefined
     if (kind === "stickers") {
         if (value.description !== undefined && value.description !== null && !text(value.description, 1, 500))
             return inputValidationFailure(
@@ -170,22 +180,20 @@ function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = 
                 "length",
                 "Sticker description must be null or contain 1 through 500 Unicode code points",
             )
-        if (
-            value.tags !== undefined &&
-            (!Array.isArray(value.tags) ||
-                value.tags.length > 10 ||
-                !Array.from(value.tags).every((tag) => text(tag, 1, 30)))
-        )
+        const rawTags = value.tags
+        const snapshot = rawTags === undefined ? undefined : snapshotArray(rawTags, 10)
+        if (rawTags !== undefined && (!snapshot || !snapshot.every((tag) => text(tag, 1, 30))))
             return inputValidationFailure(
                 path("tags[]"),
                 "format",
                 "Sticker tags must contain at most ten entries of 1 through 30 Unicode code points",
             )
+        tags = snapshot as readonly string[] | undefined
     }
     return {
         name: value.name,
         ...(create ? { image: value.image } : {}),
-        ...(kind === "stickers" ? { description: value.description ?? null, tags: value.tags ?? [] } : {}),
+        ...(kind === "stickers" ? { description: value.description ?? null, tags: tags ?? [] } : {}),
     }
 }
 
@@ -244,12 +252,13 @@ export function expressionBatch<K extends ExpressionKind>(
     const audit = auditSettings(options)
     if (base instanceof InputValidationFailure) return base
     if (audit instanceof InputValidationFailure) return audit
-    if (!Array.isArray(inputs))
+    const itemsInput = snapshotArray(inputs, 50)
+    if (!itemsInput && !Array.isArray(inputs))
         return inputValidationFailure("inputs", "type", "Expression batch input must be an array")
-    if (inputs.length < 1 || inputs.length > 50)
+    if (!itemsInput || itemsInput.length < 1)
         return inputValidationFailure("inputs", "length", "Expression batch input must contain 1 through 50 entries")
-    const items = Array.from(inputs, (item) => encode(kind, item, true, "inputs[]"))
-    const count = inputs.length
+    const items = itemsInput.map((item) => encode(kind, item, true, "inputs[]"))
+    const count = itemsInput.length
     const failed = items.find((item): item is InputValidationFailure => item instanceof InputValidationFailure)
     if (failed) return failed
     return {

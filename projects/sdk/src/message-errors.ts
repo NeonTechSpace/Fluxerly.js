@@ -16,7 +16,7 @@ export class EventOverflowError extends Error {
          */
         readonly capacity: number,
     ) {
-        super(`Message subscription exceeded its pending ${limit} budget`)
+        super(`Event subscription exceeded its pending ${limit} budget`)
         this.name = this._tag
     }
 }
@@ -28,7 +28,7 @@ export class EventReadBusyError extends Error {
     /** Discriminator for identifying an overlapping pending read */
     readonly _tag = "EventReadBusyError"
     constructor() {
-        super("A message read is already pending for this subscription")
+        super("An event read is already pending for this subscription")
         this.name = this._tag
     }
 }

@@ -3,11 +3,12 @@ import type { MessageCore } from "#sdk/messages"
 import type { MessageDecoder } from "./message-fields.js"
 import { inputValidationFailure } from "#sdk/input-validation"
 import { decodeMessage, identifier, record } from "./message.js"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 const timestamp = (value: unknown): value is string =>
     typeof value === "string" &&
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
-    Number.isFinite(Date.parse(value))
+    validCalendarTimestamp(value)
 
 export function encodePinsQuery(channel: unknown, query: unknown) {
     const input = query === undefined ? {} : query
@@ -16,17 +17,19 @@ export function encodePinsQuery(channel: unknown, query: unknown) {
     if (!record(input)) return inputValidationFailure("query", "type", "Pin query must be an object")
     if (Object.keys(input).some((key) => key !== "limit" && key !== "before"))
         return inputValidationFailure("query", "allowedFields", "Pin query may contain only limit and before")
-    const limit = input.limit === undefined ? 50 : input.limit
+    const limitInput = input.limit
+    const before = input.before
+    const limit = limitInput === undefined ? 50 : limitInput
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 50)
         return inputValidationFailure("query.limit", "range", "Pin limit must be an integer from 1 through 50")
-    if (input.before !== undefined && !timestamp(input.before))
+    if (before !== undefined && !timestamp(before))
         return inputValidationFailure(
             "query.before",
             "format",
             "Pin cursor must be an ISO 8601 timestamp with timezone",
         )
     const params = new URLSearchParams({ limit: String(limit) })
-    if (input.before !== undefined) params.set("before", input.before as string)
+    if (before !== undefined) params.set("before", before)
     return { limit, params }
 }
 
@@ -86,8 +89,13 @@ export function decodePinsUpdate(value: unknown): ChannelPinsUpdate | undefined 
     if (
         !record(value) ||
         !identifier(value.channel_id) ||
+        (value.guild_id !== undefined && !identifier(value.guild_id)) ||
         (value.last_pin_timestamp !== null && !timestamp(value.last_pin_timestamp))
     )
         return undefined
-    return Object.freeze({ channelId: value.channel_id, lastPinTimestamp: value.last_pin_timestamp })
+    return Object.freeze({
+        channelId: value.channel_id,
+        lastPinTimestamp: value.last_pin_timestamp,
+        ...(value.guild_id === undefined ? {} : { guildId: value.guild_id as string }),
+    })
 }

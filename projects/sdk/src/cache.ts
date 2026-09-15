@@ -62,7 +62,7 @@ export interface MessageCacheSettings<M extends MessageCore = Message> {
      */
     readonly maxEntries?: number
     /** Maximum UTF-8 JSON bytes of retained messages with this client's selected fields, as a positive safe integer.
-     * Defaults to 8,388,608 (8 MiB), excluding runtime overhead and caller-held copies rather than measuring exact process memory
+     * Defaults to 8,388,608 (8 MiB) and excludes runtime overhead and caller-held copies
      */
     readonly maxBytes?: number
     /**

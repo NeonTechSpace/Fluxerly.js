@@ -70,6 +70,7 @@ function options(value: unknown): AuditLogOptions | undefined {
         (value.channel_id !== undefined && typeof value.channel_id !== "string") ||
         (value.count !== undefined && !finite(value.count)) ||
         (value.delete_member_days !== undefined && typeof value.delete_member_days !== "string") ||
+        (value.delete_message_seconds !== undefined && !finite(value.delete_message_seconds)) ||
         (value.id !== undefined && typeof value.id !== "string") ||
         (value.integration_type !== undefined && !finite(value.integration_type)) ||
         (value.message_id !== undefined && typeof value.message_id !== "string") ||
@@ -87,6 +88,7 @@ function options(value: unknown): AuditLogOptions | undefined {
         ...(value.channel_id === undefined ? {} : { channelId: value.channel_id }),
         ...(value.count === undefined ? {} : { count: value.count }),
         ...(value.delete_member_days === undefined ? {} : { deleteMemberDays: value.delete_member_days }),
+        ...(value.delete_message_seconds === undefined ? {} : { deleteMessageSeconds: value.delete_message_seconds }),
         ...(value.id === undefined ? {} : { id: value.id }),
         ...(value.integration_type === undefined ? {} : { integrationType: value.integration_type }),
         ...(value.message_id === undefined ? {} : { messageId: value.message_id }),
@@ -130,7 +132,16 @@ export function decodeAuditLogEntry(value: unknown): AuditLogEntry | undefined {
     if (!record(value) || value.options === undefined) return entry(value)
     if (!record(value.options)) return undefined
     const normalized: Record<string, unknown> = { ...value.options }
-    for (const key of ["count", "integration_type", "members_removed", "type", "max_age", "max_uses", "uses"]) {
+    for (const key of [
+        "count",
+        "delete_message_seconds",
+        "integration_type",
+        "members_removed",
+        "type",
+        "max_age",
+        "max_uses",
+        "uses",
+    ]) {
         const item = normalized[key]
         if (typeof item !== "string") continue
         const parsed = Number(item)

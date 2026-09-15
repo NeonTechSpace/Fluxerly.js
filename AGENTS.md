@@ -22,3 +22,9 @@ Use repository-root-relative paths starting with `/` for local links and images 
 Include the root-relative document path before heading fragments, even for same-document links.
 Keep external URLs and URI schemes unchanged.
 This repository rule overrides generic document-relative link guidance and does not change source-code imports
+
+# Public prose
+
+Use impersonal wording in repository docs, website copy, public API comments and displayed example messages. Preserve exact code identifiers, protocol paths and third-party quotations
+
+Do not start prose sentences with lowercase identifiers or command flags. Rephrase around them rather than changing their spelling

@@ -9,6 +9,7 @@ import { decodeGuild, type GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 const text = (value: unknown, minimum: number, maximum: number): value is string =>
     typeof value === "string" && [...value].length >= minimum && [...value].length <= maximum
@@ -21,8 +22,17 @@ const nullableIdentifier = (value: unknown): value is string | null => value ===
 const timestamp = (value: unknown): value is string =>
     typeof value === "string" &&
     /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(value) &&
-    Number.isFinite(Date.parse(value))
+    validCalendarTimestamp(value)
 const guildFeatureToggles = new Set<GuildFeatureToggle>(Object.values(GuildFeatureToggles))
+
+function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const count = value.length
+    if (count > maximum) return undefined
+    const items = new Array<unknown>(count)
+    for (let index = 0; index < count; index++) items[index] = value[index]
+    return Object.freeze(items)
+}
 
 /** Builds the bot-permitted guild settings patch; REST owns dispatch, retry, audit headers and cache invalidation */
 export function guildEdit(
@@ -31,11 +41,13 @@ export function guildEdit(
     options?: ModerationOptions,
 ): GuildRequest<Guild> | InputValidationFailure {
     const audit = auditSettings(options)
-    const rawFeatureToggles = record(input) ? input.featureToggles : undefined
-    const featureToggles = Array.isArray(rawFeatureToggles) ? Array.from(rawFeatureToggles) : undefined
     if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     if (!record(input)) return inputValidationFailure("input", "type", "Guild settings input must be an object")
     if (audit instanceof InputValidationFailure) return audit
+    const rawFeatureToggles = input.featureToggles
+    const messageHistoryCutoff = input.messageHistoryCutoff
+    const featureToggles =
+        rawFeatureToggles === undefined ? undefined : snapshotArray(rawFeatureToggles, guildFeatureToggles.size)
     if (
         Object.keys(input).some(
             (key) =>
@@ -148,22 +160,17 @@ export function guildEdit(
     )
         return inputValidationFailure("splashCardAlignment", "allowedValue", "Splash card alignment must be 0, 1, or 2")
     if (
-        input.featureToggles !== undefined &&
-        (!Array.isArray(input.featureToggles) ||
-            featureToggles!.length > guildFeatureToggles.size ||
-            !featureToggles!.every((feature) => guildFeatureToggles.has(feature)) ||
-            new Set(featureToggles).size !== featureToggles!.length)
+        rawFeatureToggles !== undefined &&
+        (!featureToggles ||
+            !featureToggles.every((feature) => guildFeatureToggles.has(feature as GuildFeatureToggle)) ||
+            new Set(featureToggles).size !== featureToggles.length)
     )
         return inputValidationFailure(
             "featureToggles[]",
             "allowedValue",
             "Feature toggles must be unique supported values",
         )
-    if (
-        input.messageHistoryCutoff !== undefined &&
-        input.messageHistoryCutoff !== null &&
-        !timestamp(input.messageHistoryCutoff)
-    )
+    if (messageHistoryCutoff !== undefined && messageHistoryCutoff !== null && !timestamp(messageHistoryCutoff))
         return inputValidationFailure(
             "messageHistoryCutoff",
             "format",
@@ -187,7 +194,7 @@ export function guildEdit(
         explicit_content_filter: input.explicitContentFilter,
         splash_card_alignment: input.splashCardAlignment,
         features: featureToggles,
-        message_history_cutoff: input.messageHistoryCutoff,
+        message_history_cutoff: messageHistoryCutoff,
     })
     if (json === "{}") return inputValidationFailure("input", "required", "Guild settings input must contain a change")
     if (Buffer.byteLength(json) > 4_194_304)

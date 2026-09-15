@@ -11,12 +11,13 @@ import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import type { Message, MessageCore, MessageReference } from "#sdk/messages"
 import type { MessageReaction, MessageReactionBatch, ReactionEmojiInput } from "#sdk/reactions"
 import type { ClientOwner } from "./client.js"
-import { reference, record } from "./message.js"
-import { encodeReactionEmoji } from "./reactions.js"
+import { record, snapshotReference } from "./message.js"
+import { resolveReactionEmoji } from "./reactions.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
 
 type Settings = Required<Omit<ReactionCollectorOptions, "filter" | "emoji" | "guildId" | "idleMs">> &
-    Pick<ReactionCollectorOptions, "filter" | "emoji" | "guildId"> & {
+    Pick<ReactionCollectorOptions, "filter" | "guildId"> & {
+        readonly emoji?: Exclude<ReturnType<typeof resolveReactionEmoji>, undefined>
         readonly idleMs: number | undefined
     } & OperationOptions
 
@@ -30,9 +31,7 @@ function guildId(value: unknown): value is string {
     )
 }
 
-function settings(target: unknown, options: unknown, defaultApi: boolean): Settings | ConfigurationError {
-    if (!reference(target))
-        return new ConfigurationError("message", "Message reference must contain decimal id and channelId")
+function settings(options: unknown, defaultApi: boolean): Settings | ConfigurationError {
     const input = options === undefined ? {} : options
     if (!record(input)) return new ConfigurationError("collectorOptions", "Collector options must be an object")
     const result = {
@@ -74,11 +73,12 @@ function settings(target: unknown, options: unknown, defaultApi: boolean): Setti
         return new ConfigurationError("filter", "Collector filter must be a function")
     if (input.guildId !== undefined && !guildId(input.guildId))
         return new ConfigurationError("guildId", "Guild ID must be a positive uint64 decimal string")
-    const emoji = input.emoji as ReactionEmojiInput | undefined
-    if (emoji !== undefined && encodeReactionEmoji(emoji) === undefined)
+    const emojiInput = input.emoji as ReactionEmojiInput | undefined
+    const emoji = emojiInput === undefined ? undefined : resolveReactionEmoji(emojiInput)
+    if (emojiInput !== undefined && emoji === undefined)
         return new ConfigurationError(
             "emoji",
-            "Collector emoji must be literal Unicode or a custom name and decimal ID",
+            "Collector emoji must be Unicode, custom emoji markup or an emoji identity",
         )
     if (input.onReaction !== undefined && typeof input.onReaction !== "function")
         return new ConfigurationError("onReaction", "Reaction handler must be a function")
@@ -94,9 +94,7 @@ function settings(target: unknown, options: unknown, defaultApi: boolean): Setti
     return {
         ...result,
         ...(input.guildId === undefined ? {} : { guildId: input.guildId }),
-        ...(emoji === undefined
-            ? {}
-            : { emoji: typeof emoji === "string" ? emoji : { name: emoji.name, id: emoji.id } }),
+        ...(emoji === undefined ? {} : { emoji }),
         ...(input.filter === undefined ? {} : { filter: input.filter as (message: MessageReaction) => boolean }),
         ...(signal === undefined ? {} : { signal: signal as unknown as NonNullable<OperationOptions["signal"]> }),
     }
@@ -409,7 +407,12 @@ export function collectReactions<E = never, R = never, M extends MessageCore = M
 ): Effect.Effect<ReactionCollector, CollectorRegistrationError, R> {
     return Effect.gen(function* () {
         if (owner.state === "Closing" || owner.state === "Closed") return yield* Effect.fail(new ClientClosedError())
-        const config = settings(target, options, defaultApi)
+        const message = snapshotReference(target)
+        if (message === undefined)
+            return yield* Effect.fail(
+                new ConfigurationError("message", "Message reference must contain decimal id and channelId"),
+            )
+        const config = settings(options, defaultApi)
         if (config instanceof ConfigurationError) return yield* Effect.fail(config)
         if (config.signal?.aborted) return yield* Effect.interrupt
         if (config.guildId === undefined) {
@@ -422,7 +425,7 @@ export function collectReactions<E = never, R = never, M extends MessageCore = M
         const clock = yield* Clock.Clock
         const collector = new ReactionCollector(config, clock)
         if (handler) yield* collector.run(owner, handler)
-        collector.start(owner, target)
+        collector.start(owner, message)
         return collector
     })
 }

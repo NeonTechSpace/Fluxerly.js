@@ -26,7 +26,7 @@ TypeScript 6 and earlier are outside the SDK's support policy.
 JavaScript consumers do not need a TypeScript installation
 
 The minimum is Node.js 24.11.0, the [first Node 24 LTS release](https://nodejs.org/en/blog/release/v24.11.0).
-This compatibility floor is separate from the development pin and does not recommend running an old patch instead of current security updates
+Use current security updates within a supported Node.js release line. The development pin is maintained separately from this compatibility floor
 
 ### Versioning and release stages
 
@@ -63,8 +63,8 @@ The first stable public generation is called Epoch 1 and starts at `1000.0.0`, n
 | Breaking API change within Epoch 1 | `1001.0.0` |
 | Next major project generation | `2000.0.0` |
 
-These are policy examples, not published releases.
-The private development manifest remains at `0.0.0` for local package checks, as described under [build and package optimization](/docs/TECHNOLOGY.md#build-and-package-optimization).
+These examples illustrate versioning, not the current release inventory.
+Use the [SDK source manifest](/projects/sdk/package.json) for the checkout's version and [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions.
 The only release channels are Canary, RC and Stable.
 npm maps them to `canary`, `rc` and `latest` distribution tags.
 Release documentation snapshots use the matching exact package version, including its prerelease suffix
@@ -77,10 +77,9 @@ The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and
 
 ### Optional consumer Effect integration
 
-The initial target is Effect 4's release-candidate line, not Effect 3 or a stable Effect 4 release.
-Use an exact prerelease pin for reproducible implementation and validation.
-The package declares Effect as an exact required peer, with the same exact version in development dependencies.
-Native consumers must use the same exact Effect version as the SDK for now, not an arbitrary Effect 4 RC
+The SDK targets Effect 4's release-candidate line with an exact pin for reproducible implementation and validation.
+The package declares Effect as an exact required peer, with the same version in development dependencies.
+Native consumers must use that exact version. Effect 3 and other Effect 4 RCs are incompatible
 
 Modern npm and pnpm install required peers automatically by default.
 Consumers that disable peer installation must install the declared exact Effect version themselves
@@ -91,7 +90,7 @@ Start with TypeScript 7 compiler-only output: Readable ESM JavaScript, public ty
 Keep deliberate public exports and clean package contents.
 Validate the packed artifacts through default JavaScript, TypeScript 7 and native Effect consumers rather than relying only on source imports
 
-The private development package uses version `0.0.0` so it can be packed for local consumer checks.
+The SDK source manifest remains private and records the version used for local package checks and release preparation.
 Its tarball includes readable compiled output, public declarations, JavaScript and declaration maps, and sources for navigation.
 The staged npm package includes the package README, consumer agent guidance and Apache-2.0 license, plus the Changesets changelog when present
 
@@ -105,7 +104,7 @@ No bundler is selected
 Minification is off by default.
 A smaller package must demonstrate enough benefit to justify less readable output and another code transformation.
 A proposed change to that default requires runtime, type, source-map and diagnostic checks.
-Bundling or minification requires a separate decision, not a prerequisite for the selected compiler-only package
+Bundling or minification requires a separate decision
 
 ### Test tooling
 
@@ -177,7 +176,6 @@ Before adding or expanding documentation, choose its owner:
 | Instructions for agents consuming the installed package | [Consumer agent guide](/projects/sdk/consumer/AGENTS.md), discovered through the package README |
 | Cross-component ownership, invariants and coordination that maintainers need beyond documented public members | Concise repository implementation contracts |
 
-Website Markdown and MDX are website source, not a parallel repository manual.
 Keep member behavior in source comments and handwritten guides in website source.
 Link to existing owners instead of repeating API reference, defaults, feature inventories or test assertions.
 Update repository docs only when the milestone changes a maintainer-facing rule, boundary, navigation or procedure

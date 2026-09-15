@@ -157,7 +157,13 @@ test.each(modes)("%s ban lists are remote, frozen and fail without partial resul
     await api.bans()
     expect(calls).toBe(2)
     expect(await api.getMember()).toBeUndefined()
-    for (payload of [[ban, ban], [ban, { ...ban, user: null }], [{ ...ban, expires_at: "invalid" }]])
+    for (payload of [
+        [ban, ban],
+        [ban, { ...ban, user: null }],
+        [{ ...ban, expires_at: "invalid" }],
+        [{ ...ban, banned_at: "2025-02-29T00:00:00Z" }],
+        [{ ...ban, expires_at: "2025-04-31T00:00:00Z" }],
+    ])
         await expect(api.bans()).rejects.toMatchObject({ reason: "response" })
     payload = []
     expect(await api.bans()).toEqual([])
@@ -276,7 +282,9 @@ test.each(modes)(
         expect(initial[0]).toMatchObject({ guildId: "20", permissions: 0n, hoistPosition: null, unicodeEmoji: null })
         await api.roles.create({ name: "fixture" })
         expect(calls.at(-1)).toMatchObject({ method: "POST", body: { name: "fixture", permissions: "0", color: 0 } })
-        const bits = Permissions.ViewChannelMembers | Permissions.ViewChannel | (1n << 63n)
+        const bits = (1n << 63n) - 1n
+        await api.roles.create({ name: "maximum", permissions: bits })
+        expect(calls.at(-1)?.body).toEqual({ name: "maximum", color: 0, permissions: bits.toString() })
         expect((await api.roles.edit({ permissions: bits, hoist: true, hoistPosition: null })).permissions).toBe(bits)
         expect(calls.at(-1)?.body).toEqual({ permissions: bits.toString(), hoist: true, hoist_position: null })
         expect(initial[0]!.permissions).toBe(0n)
@@ -401,6 +409,7 @@ test.each(modes)(
             { name: "x".repeat(101) },
             { name: "ok", color: -1 },
             { name: "ok", permissions: -1n },
+            { name: "ok", permissions: 1n << 63n },
             { name: "ok", permissions: 1n << 64n },
             { name: "ok", permissions: "0" },
             { name: "ok", hoist: true },
@@ -412,6 +421,7 @@ test.each(modes)(
         for (const input of [
             {},
             { permissions: undefined },
+            { permissions: 1n << 63n },
             { hoist: 1 },
             { color: 0x1000000 },
             { hoistPosition: 2 ** 31 },
@@ -567,6 +577,185 @@ test.each(modes)("%s delivers provider-shaped guild lifecycle observations after
         cached: undefined,
     })
     expect(Object.isFrozen(seen[2]!.value)).toBe(true)
+    dispatch("GUILD_CREATE", guildCreate("20", false))
+    await vi.waitFor(() => expect(seen).toHaveLength(4))
+    expect(seen[3]).toEqual({
+        event: "guildCreate",
+        value: expect.objectContaining({ id: "20", name: "fixture", isNewJoin: false }),
+        cached: expect.objectContaining({ id: "20", name: "fixture" }),
+    })
+    expect(Object.isFrozen(seen[3]!.value)).toBe(true)
+})
+
+test.each(modes)("%s projects guild creation availability without polluting guild caches", async (mode) => {
+    const dispatch = await gateway()
+    const { calls } = cacheRest()
+    const api = await setup(mode, resourceCache)
+    let seen: { value: EventMap["guildCreate"]; cached: unknown } | undefined
+    await api.on("guildCreate", (value) => {
+        const cached = api.defaultApi
+            ? unwrap(api.defaultApi.guilds.get(value.id))
+            : Effect.runSync(api.native!.guilds.get(value.id))
+        seen = { value, cached }
+    })
+    await api.connect()
+    dispatch("GUILD_CREATE", {
+        id: "20",
+        unavailable: false,
+        properties: guild,
+        roles: [],
+        channels: [],
+        emojis: [],
+        members: [],
+        member_count: 1,
+        joined_at: null,
+    })
+    await vi.waitFor(() => expect(seen).toBeDefined())
+    expect(seen!.value.isNewJoin).toBe(false)
+    expect(seen!.cached).toEqual(expect.objectContaining({ id: "20", name: "fixture" }))
+    expect(seen!.cached).not.toHaveProperty("isNewJoin")
+    expect(calls).toHaveLength(0)
+    expect(Object.isFrozen(seen!.value)).toBe(true)
+})
+
+test.each(modes)("%s connects from READY across paired cache and hydration states", async (mode) => {
+    for (const { cache, ready } of [
+        { cache: {}, ready: { guilds: [] } },
+        { cache: resourceCache, ready: { guilds: [{ id: "20", unavailable: true }] } },
+    ]) {
+        let releaseHydration!: () => void
+        let hydrationStarted = false
+        const dispatch = await gateway({
+            ready,
+            afterReady: () =>
+                new Promise<void>((resolve) => {
+                    hydrationStarted = true
+                    releaseHydration = resolve
+                }),
+        })
+        let restCalls = 0
+        rest(async () => {
+            restCalls++
+            return Response.json(guild)
+        })
+        const api = await setup(mode, cache)
+        const seen: { value: EventMap["guildCreate"]; cached: unknown }[] = []
+        await api.on("guildCreate", (value) => {
+            const cached = api.defaultApi
+                ? unwrap(api.defaultApi.guilds.get(value.id))
+                : Effect.runSync(api.native!.guilds.get(value.id))
+            seen.push({ value, cached })
+        })
+        const joined = api.defaultApi
+            ? (async () =>
+                  unwrap(
+                      await api.defaultApi!.waitFor("guildCreate", {
+                          filter: (value) => value.isNewJoin,
+                          timeoutMs: 1_000,
+                      }),
+                  ))()
+            : run(
+                  api.native!.waitFor("guildCreate", {
+                      filter: (value) => value.isNewJoin,
+                      timeoutMs: 1_000,
+                  }),
+              )
+        try {
+            const connecting = api.connect()
+            await vi.waitFor(() => expect(hydrationStarted).toBe(true))
+            await connecting
+
+            dispatch("GUILD_CREATE", guildCreate("20", false))
+            await vi.waitFor(() => expect(seen).toHaveLength(1))
+            expect(seen[0]!.value.isNewJoin).toBe(false)
+
+            // A join can arrive while the provider's initial snapshots are still delayed
+            dispatch("GUILD_CREATE", guildCreate("21"))
+            await vi.waitFor(() => expect(seen).toHaveLength(2))
+            expect((await joined).id).toBe("21")
+
+            releaseHydration()
+            dispatch("GUILD_DELETE", { id: "22", unavailable: true })
+            dispatch("GUILD_CREATE", guildCreate("22"))
+            await vi.waitFor(() => expect(seen).toHaveLength(3))
+            expect(seen.map(({ value }) => value.isNewJoin)).toEqual([false, true, true])
+            expect(seen.every(({ value }) => Object.isFrozen(value))).toBe(true)
+            expect(restCalls).toBe(0)
+
+            for (const { value, cached } of seen) {
+                if (cache === resourceCache) {
+                    expect(cached).toEqual(expect.objectContaining({ id: value.id, name: "fixture" }))
+                    expect(cached).not.toHaveProperty("isNewJoin")
+                } else expect(cached).toBeUndefined()
+            }
+
+            const fetched = await api.fetchGuild("20")
+            expect(fetched).not.toHaveProperty("isNewJoin")
+            expect(restCalls).toBe(1)
+        } finally {
+            releaseHydration?.()
+            await api.close()
+        }
+    }
+})
+
+test.each(modes)(
+    "%s classifies joined replay and fresh Identify guild availability",
+    async (mode) => {
+        const dispatch = await gateway({
+            rejectResume: (attempt) => attempt === 2,
+            beforeResume: async (replay, attempt) => {
+                if (attempt === 1) replay("GUILD_CREATE", guildCreate("21"))
+            },
+        })
+        rest(async () => Response.json(guild))
+        const api = await setup(mode)
+        const seen: EventMap["guildCreate"][] = []
+        await api.on("guildCreate", (value) => seen.push(value))
+        const random = vi.spyOn(Math, "random").mockReturnValue(0)
+        try {
+            await api.connect()
+            dispatch("GUILD_CREATE", guildCreate("20", false))
+            await vi.waitFor(() => expect(seen).toHaveLength(1))
+
+            transport.sockets[0]!.terminate()
+            await vi.waitFor(() => expect(seen).toHaveLength(2), { timeout: 5_000 })
+            await vi.waitFor(() => expect(api.state()).toBe("Connected"), { timeout: 5_000 })
+
+            transport.sockets.at(-1)!.terminate()
+            await vi.waitFor(
+                () => expect(dispatch.authenticationModes).toEqual(["identify", "resume", "resume", "identify"]),
+                {
+                    timeout: 5_000,
+                },
+            )
+            await vi.waitFor(() => expect(api.state()).toBe("Connected"), { timeout: 5_000 })
+
+            dispatch("GUILD_CREATE", guildCreate("22", false))
+            await vi.waitFor(() => expect(seen).toHaveLength(3))
+            expect(seen.map((value) => value.isNewJoin)).toEqual([false, true, false])
+        } finally {
+            random.mockRestore()
+        }
+    },
+    12_000,
+)
+
+test.each(modes)("%s rejects non-false guild availability markers before lifecycle delivery", async (mode) => {
+    for (const unavailable of [true, null, "false", 1]) {
+        const dispatch = await gateway()
+        rest(async () => Response.json(guild))
+        const api = await setup(mode, resourceCache)
+        const handler = vi.fn()
+        await api.on("guildCreate", handler)
+        await api.connect()
+        dispatch("GUILD_CREATE", guildCreate("20", unavailable))
+        const closed = api.defaultApi
+            ? (async () => unwrap(await api.defaultApi!.waitForClose()))()
+            : run(api.native!.waitForClose())
+        await expect(closed).rejects.toMatchObject({ reason: "protocol" })
+        expect(handler).not.toHaveBeenCalled()
+    }
 })
 
 test.each(modes)("%s defaults omitted guild deletion availability flags without inferring a cause", async (mode) => {
@@ -1207,6 +1396,17 @@ const member = (id = "30", roles = ["40"]) => ({
     avatar: null,
 })
 const guild = { id: "20", owner_id: "30", name: "fixture", features: ["FUTURE_FEATURE"], icon: null }
+const guildCreate = (id = "20", unavailable?: unknown) => ({
+    id,
+    ...(unavailable === undefined ? {} : { unavailable }),
+    properties: { ...guild, id },
+    roles: [],
+    channels: [],
+    emojis: [],
+    members: [],
+    member_count: 1,
+    joined_at: null,
+})
 const unwrap = <A, E>(value: { isErr(): boolean; value?: A; error?: E }): A => {
     if (value.isErr()) throw value.error
     return value.value!
@@ -1331,37 +1531,67 @@ async function setup(
                 : run(native!.on(event, (value) => Effect.sync(() => handler(value))).pipe(Scope.provide(scope))),
     }
 }
-async function gateway(beforeResume?: () => Promise<void>) {
+type GatewayDispatch = ((event: string, d: unknown) => void) & {
+    readonly authenticationModes: readonly ("identify" | "resume")[]
+}
+interface GatewayOptions {
+    readonly ready?: Readonly<Record<string, unknown>>
+    readonly afterReady?: () => Promise<void>
+    readonly beforeResume?: (dispatch: GatewayDispatch, attempt: number) => Promise<void>
+    readonly rejectResume?: boolean | ((attempt: number) => boolean)
+}
+async function gateway(options: GatewayOptions | (() => Promise<void>) = {}): Promise<GatewayDispatch> {
+    const controls = typeof options === "function" ? { beforeResume: options } : options
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 })
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw Error("Fixture port missing")
     transport.url = `ws://127.0.0.1:${address.port}`
     let seq = 0
+    let resumeAttempts = 0
+    const authenticationModes: ("identify" | "resume")[] = []
+    const dispatch = Object.assign(
+        (event: string, d: unknown) => {
+            for (const socket of server.clients) socket.send(JSON.stringify({ op: 0, s: ++seq, t: event, d }))
+        },
+        { authenticationModes },
+    )
     server.on("connection", (socket) => {
         socket.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 600_000 } }))
         socket.on("message", async (data) => {
             const frame = JSON.parse(data.toString())
             if (frame.op === 1) socket.send(JSON.stringify({ op: 11 }))
-            if (frame.op === 6) await beforeResume?.()
+            if (frame.op === 2) authenticationModes.push("identify")
+            if (frame.op === 6) {
+                authenticationModes.push("resume")
+                resumeAttempts++
+                await controls.beforeResume?.(dispatch, resumeAttempts)
+                const rejectResume =
+                    typeof controls.rejectResume === "function"
+                        ? controls.rejectResume(resumeAttempts)
+                        : controls.rejectResume
+                if (rejectResume) {
+                    socket.close(4007)
+                    return
+                }
+            }
             if (frame.op === 2 || frame.op === 6)
                 socket.send(
                     JSON.stringify({
                         op: 0,
                         s: ++seq,
                         t: frame.op === 2 ? "READY" : "RESUMED",
-                        d: { session_id: "fixture" },
+                        d: frame.op === 2 ? { ...controls.ready, session_id: "fixture" } : { session_id: "fixture" },
                     }),
                 )
+            if (frame.op === 2) await controls.afterReady?.()
         })
     })
     onTestFinished(async () => {
         for (const socket of server.clients) socket.terminate()
         await new Promise<void>((resolve) => server.close(() => resolve()))
     })
-    return (event: string, d: unknown) => {
-        for (const socket of server.clients) socket.send(JSON.stringify({ op: 0, s: ++seq, t: event, d }))
-    }
+    return dispatch
 }
 
 test.each(modes)("%s reads guilds and member pages without connecting or retaining live state", async (mode) => {
@@ -1446,12 +1676,16 @@ test.each(modes)(
             { ...member(), roles: ["40", "40"] },
             { ...member(), nick: 2 },
             { ...member(), joined_at: "no" },
+            { ...member(), joined_at: "2025-02-29T00:00:00Z" },
+            { ...member(), communication_disabled_until: "2025-04-31T00:00:00Z" },
             { ...member(), user: { id: "30" } },
         ])
             await expect(api.member()).rejects.toMatchObject({ reason: "response", status: 200 })
         for (response of [[member("32"), member("31")], [member("30")], [member("31"), member("31")]])
             await expect(api.page({ after: "30", limit: 2 })).rejects.toMatchObject({ reason: "response" })
         response = { ...guild, id: "21" }
+        await expect(api.guild()).rejects.toMatchObject({ reason: "response" })
+        response = { ...guild, message_history_cutoff: "2025-02-29T00:00:00Z" }
         await expect(api.guild()).rejects.toMatchObject({ reason: "response" })
     },
 )

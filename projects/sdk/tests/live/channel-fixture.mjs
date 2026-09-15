@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 
 const markerPattern = /^fluxerly-sdk-channel-[a-f0-9]{32}$/
-const fixtureKeys = new Set(["categoryA", "categoryB", "inheritedChild", "explicitChild"])
+const fixtureKeys = new Set(["categoryA", "categoryB", "inheritedChild", "explicitChild", "voiceTier"])
 
 const markerMatches = (entry, channel) =>
     typeof channel?.name === "string" && (channel.name === entry.name || channel.name.startsWith(`${entry.marker}-`))

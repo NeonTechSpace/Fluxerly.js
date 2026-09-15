@@ -1,7 +1,6 @@
 # SDK contracts
 
 This document defines cross-cutting implementation constraints for SDK contributors.
-These contracts define implementation requirements, not an API inventory.
 Member signatures, defaults and caller-visible behavior belong in public source comments and the website reference.
 See [technology choices](/docs/TECHNOLOGY.md) for tooling and [the repository guide](/docs/REPOSITORY.md) for code and checks
 
@@ -191,7 +190,7 @@ No gateway request path retains a roster or adds a distributed coordinator
 
 ## Logging
 
-Use the shared Effect logger rather than a second logging implementation.
+Use the shared Effect logger.
 Keep explicit SDK development-log opt-in separate from operational handler-error reporting and consumer Debug settings.
 The default runtime owns its logging configuration, while native execution preserves caller logger and tracing context
 
@@ -216,6 +215,10 @@ Validate both public entry points, their execution differences and packed consum
 Cover admission races, readiness, retry limits and server waits, cancellation ownership, retained outcomes and awaited cleanup.
 Check combined failures, handler isolation, diagnostic privacy and native context preservation.
 Verify bounded state delivery, late observers and unavailable/reset latency values
+
+For provider projections, compare the supported fields with a pinned producer schema and implementation. Account for omitted fields explicitly, including privacy exclusions. Trace referenced validators to their definitions before relying on a type name
+
+Test values flowing between public operations: Helper output into request input, received snapshots into related actions, and equivalent default/native workflows. Include malformed JavaScript structures at documented validation boundaries. A fixture copied from the existing SDK shape cannot establish provider completeness
 
 Use separate runtime and consumer type checks, including natural process exit where resource ownership matters.
 Tests must establish the affected behavior rather than merely succeed against fixtures

@@ -26,7 +26,9 @@ export interface CustomStatusInput {
     readonly text?: string
     /** An explicit custom-emoji ID or one Unicode emoji */
     readonly emoji?: CustomStatusEmoji
-    /** Future ISO-8601 expiration time. Fluxer rejects an expiry that passes before it receives the update */
+    /** Future ISO-8601 expiration time. Impossible calendar dates are rejected before retaining the update.
+     * Fluxer rejects an expiry that passes before it receives the update
+     */
     readonly expiresAt?: string
 }
 

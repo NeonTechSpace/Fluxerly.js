@@ -4,7 +4,8 @@ import type { PaginationQuery } from "./pagination.js"
 
 /** Server or channel in which to search messages visible to the bot.
  * Supply at least guildId or channelId, as decimal strings. You may supply both.
- * Search always uses Fluxer's current scope, not a cross-account or historical visibility scope
+ * Search always uses Fluxer's current scope, not a cross-account or historical visibility scope.
+ * The SDK captures the supplied IDs once when the request or traversal starts
  */
 export type MessageSearchContext =
     | {
@@ -37,20 +38,17 @@ export type MessageSearchEmbedType = "image" | "video" | "sound" | "article"
  * This does not read message history or the local cache, and results do not populate the message cache.
  * Omit a filter to leave that criterion unspecified. Fluxer combines and interprets the supplied search criteria.
  * Unknown properties, invalid values and lists exceeding the documented limits are rejected locally.
+ * Filter arrays are copied by index when the operation starts.
  * All ID filters use decimal strings. Text limits count UTF-16 code units, the units used by JavaScript string.length
  */
 export interface MessageSearchQuery {
     /** Maximum indexed messages requested, an integer from 1 through 25, default 25 */
     readonly limit?: number
-    /** Numbered result page, an integer from 1 through 400 with 1 meaning the first page. Defaults to 1, cannot accompany cursor */
+    /** Numbered result page, an integer from 1 through 400 with 1 meaning the first page. Defaults to 1 */
     readonly page?: number
-    /** Continuation value returned by an earlier page, copied as an array of strings.
-     * Pass it unchanged, without interpreting or reordering its entries. It cannot accompany page
-     */
-    readonly cursor?: readonly string[]
-    /** Include message IDs no greater than this decimal ID, including the boundary */
+    /** Include message IDs smaller than this decimal ID */
     readonly maxId?: string
-    /** Include message IDs no smaller than this decimal ID, including the boundary */
+    /** Include message IDs greater than this decimal ID */
     readonly minId?: string
     /** Text for Fluxer to search, from 1 through 1,024 UTF-16 code units, without local trimming */
     readonly content?: string
@@ -142,16 +140,14 @@ export interface MessageSearchResultsPage<M extends MessageCore = Message> {
     readonly indexing: false
     /** Indexed message snapshots using the client's messageFields selection, without extra fetches or cache writes */
     readonly messages: readonly M[]
-    /** Channel context Fluxer supplied, without private recipient lists or permission data */
+    /** Exactly one channel snapshot per distinct channel in messages, without extras, private recipient lists or permission data */
     readonly channels: readonly MessageSearchChannel[]
     /** Indexed match count observed with this response, not a stable count for a multi-page run */
     readonly total: number
     /** Page capacity Fluxer reported for this response, not necessarily the number of returned messages */
     readonly hitsPerPage: number
-    /** Page number reported by Fluxer, starting at 1. Cursor-based responses can report numbers beyond the numbered-request limit */
+    /** Page number Fluxer applied, starting at 1 */
     readonly page: number
-    /** Continuation strings to pass unchanged as query.cursor. Absence means Fluxer supplied no continuation */
-    readonly cursor?: readonly string[]
 }
 
 /** Successful outcome of one messages.search request.
@@ -160,11 +156,15 @@ export interface MessageSearchResultsPage<M extends MessageCore = Message> {
 export type MessageSearchPage<M extends MessageCore = Message> = MessageSearchIndexingPage | MessageSearchResultsPage<M>
 
 /** Limit how many messages and pages messages.iterateSearch can read.
- * Each consumption starts at the first page for the given context and filters, then follows only Fluxer's continuation values.
+ * Each consumption starts at page 1 for the given context and filters, then reads later numbered pages as Fluxer's total requires.
+ * Limits are captured once when that consumption starts.
+ * Fluxer supports at most 400 numbered pages. A remaining result after page 400 fails with PaginationError pageLimit.
  * No background prefetch runs. An indexing response fails traversal with PaginationError reason indexing rather than polling
  */
 export interface MessageSearchIterationLimits extends PaginationQuery {
-    /** Maximum messages per request, an integer from 1 through 25, default 25, reduced to the remaining maxItems allowance */
+    /** Maximum messages per request, an integer from 1 through 25, default 25.
+     * Request capacity is the smaller of this value and maxItems, fixed throughout the scan to preserve page offsets
+     */
     readonly pageSize?: number
 }
 

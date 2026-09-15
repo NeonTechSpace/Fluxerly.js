@@ -3,6 +3,7 @@ import type { MessageDecoder } from "./message-fields.js"
 import type {
     MessageSearchChannel,
     MessageSearchContentType,
+    MessageSearchContext,
     MessageSearchEmbedType,
     MessageSearchPage,
     MessageSearchQuery,
@@ -13,7 +14,6 @@ import { inputValidationFailure } from "#sdk/input-validation"
 const queryKeys = new Set([
     "limit",
     "page",
-    "cursor",
     "maxId",
     "minId",
     "content",
@@ -62,24 +62,35 @@ const authorTypes = new Set(["user", "bot", "webhook"])
 const integer = (value: unknown, minimum: number, maximum: number): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum
 
+function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const count = value.length
+    if (count > maximum) return undefined
+    const items = new Array<unknown>(count)
+    for (let index = 0; index < count; index++) items[index] = value[index]
+    return Object.freeze(items)
+}
+
 function identifiers(value: unknown, maximum: number): readonly string[] | undefined {
-    if (!Array.isArray(value) || value.length > maximum) return undefined
-    const items = Array.from(value)
+    const items = snapshotArray(value, maximum)
+    if (!items) return undefined
     return items.every(identifier) ? Object.freeze(items) : undefined
 }
 
 function texts(value: unknown, maximum: number, length: number): readonly string[] | undefined {
-    if (!Array.isArray(value) || value.length > maximum) return undefined
-    const items = Array.from(value)
-    return items.every((item) => typeof item === "string" && item.length >= 1 && item.length <= length)
+    const items = snapshotArray(value, maximum)
+    if (!items) return undefined
+    return items.every((item): item is string => typeof item === "string" && item.length >= 1 && item.length <= length)
         ? Object.freeze(items)
         : undefined
 }
 
 function literals(value: unknown, maximum: number, allowed: ReadonlySet<string>): readonly string[] | undefined {
-    if (!Array.isArray(value) || value.length > maximum) return undefined
-    const items = Array.from(value)
-    return items.every((item) => typeof item === "string" && allowed.has(item)) ? Object.freeze(items) : undefined
+    const items = snapshotArray(value, maximum)
+    if (!items) return undefined
+    return items.every((item): item is string => typeof item === "string" && allowed.has(item))
+        ? Object.freeze(items)
+        : undefined
 }
 
 /** Copy one strict contextual request into Fluxer's bot-permitted current scope */
@@ -93,12 +104,20 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
             "allowedFields",
             "Message search context may contain only guildId and channelId",
         )
-    if (contextInput.guildId === undefined && contextInput.channelId === undefined)
+    const guildId = contextInput.guildId
+    const channelId = contextInput.channelId
+    if (guildId === undefined && channelId === undefined)
         return inputValidationFailure("context", "required", "Message search context requires guildId or channelId")
-    if (contextInput.guildId !== undefined && !identifier(contextInput.guildId))
+    if (guildId !== undefined && !identifier(guildId))
         return inputValidationFailure("context.guildId", "format", "Guild IDs must be decimal strings")
-    if (contextInput.channelId !== undefined && !identifier(contextInput.channelId))
+    if (channelId !== undefined && !identifier(channelId))
         return inputValidationFailure("context.channelId", "format", "Channel IDs must be decimal strings")
+    const context: MessageSearchContext =
+        guildId === undefined
+            ? Object.freeze({ channelId: channelId! })
+            : channelId === undefined
+              ? Object.freeze({ guildId })
+              : Object.freeze({ guildId, channelId })
     if (!record(supplied)) return inputValidationFailure("query", "type", "Message search query must be an object")
     if (Object.keys(supplied).some((key) => !queryKeys.has(key)))
         return inputValidationFailure(
@@ -110,7 +129,6 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
     const input = Object.fromEntries(Array.from(queryKeys, (key) => [key, supplied[key]]))
     const limit = input.limit === undefined ? 25 : input.limit
     const page = input.page === undefined ? 1 : input.page
-    let cursor = input.cursor
     if (!integer(limit, 1, 25))
         return inputValidationFailure(
             "query.limit",
@@ -123,14 +141,6 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
             "range",
             "Message search page must be an integer from 1 through 400",
         )
-    if (Array.isArray(cursor)) input.cursor = cursor = Object.freeze(Array.from(cursor))
-    if (
-        cursor !== undefined &&
-        (!Array.isArray(cursor) || !Array.from(cursor).every((item) => typeof item === "string"))
-    )
-        return inputValidationFailure("query.cursor[]", "type", "Message search cursor entries must be strings")
-    if (cursor !== undefined && input.page !== undefined)
-        return inputValidationFailure("query", "relationship", "Message search query cannot combine cursor and page")
     if (input.maxId !== undefined && !identifier(input.maxId))
         return inputValidationFailure("query.maxId", "format", "Maximum message ID must be a decimal string")
     if (input.minId !== undefined && !identifier(input.minId))
@@ -312,14 +322,15 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
         return inputValidationFailure("query.includeNsfw", "type", "includeNsfw must be a boolean")
     const list = (value: readonly unknown[] | undefined) => (value === undefined ? undefined : [...value])
     return Object.freeze({
+        context,
         limit,
         query: Object.freeze(input) as MessageSearchQuery,
         json: JSON.stringify({
             scope: "current",
-            ...(contextInput.guildId === undefined ? {} : { context_guild_id: contextInput.guildId }),
-            ...(contextInput.channelId === undefined ? {} : { context_channel_id: contextInput.channelId }),
+            ...(context.guildId === undefined ? {} : { context_guild_id: context.guildId }),
+            ...(context.channelId === undefined ? {} : { context_channel_id: context.channelId }),
             hits_per_page: limit,
-            ...(cursor === undefined ? { page } : { cursor: [...cursor] }),
+            page,
             ...(input.maxId === undefined ? {} : { max_id: input.maxId }),
             ...(input.minId === undefined ? {} : { min_id: input.minId }),
             ...(input.content === undefined ? {} : { content: input.content }),
@@ -430,13 +441,19 @@ export function decodeMessageSearchPage(
         messages.push(message)
     }
     const channels: MessageSearchChannel[] = []
-    const ids = new Set<string>()
+    const channelIds = new Set<string>()
     for (const item of value.channels) {
         const decoded = channel(item)
-        if (!decoded || ids.has(decoded.id)) return undefined
-        ids.add(decoded.id)
+        if (!decoded || channelIds.has(decoded.id)) return undefined
+        channelIds.add(decoded.id)
         channels.push(decoded)
     }
+    const messageChannelIds = new Set(messages.map((message) => message.channelId))
+    if (
+        messageChannelIds.size !== channelIds.size ||
+        Array.from(messageChannelIds).some((channelId) => !channelIds.has(channelId))
+    )
+        return undefined
     return Object.freeze({
         indexing: false,
         messages: Object.freeze(messages),
@@ -444,6 +461,5 @@ export function decodeMessageSearchPage(
         total: value.total,
         hitsPerPage: value.hits_per_page,
         page: value.page,
-        ...(value.cursor === undefined ? {} : { cursor: Object.freeze([...value.cursor]) }),
     })
 }

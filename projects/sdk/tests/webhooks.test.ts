@@ -205,6 +205,63 @@ test.each(modes)("%s manages its webhook through token routes without closing lo
     ])
 })
 
+test.each(modes)("%s uses initially validated shared webhook settings", async (mode) => {
+    const bodies: unknown[] = []
+    stubFetchWithHostedDiscovery(
+        vi.fn(async (_url: string, init: RequestInit) => {
+            bodies.push(JSON.parse(String(init.body)))
+            return Response.json(metadata())
+        }),
+    )
+    const { bot, webhook } = await setup(mode)
+    const switchingName = (initial: string, changed: string) => {
+        let reads = 0
+        return {
+            get name() {
+                return reads++ === 0 ? initial : changed
+            },
+        }
+    }
+    let channelReads = 0
+    const switchingChannel = {
+        name: "Stable",
+        get channelId() {
+            return channelReads++ === 0 ? "300" : "301"
+        },
+    }
+    await settle(bot.webhooks.create("300", switchingName("Created", "Changed")))
+    await settle(bot.webhooks.edit("100", switchingChannel))
+    await settle(webhook.edit(switchingName("Token", "Changed token")))
+    expect(bodies).toEqual([{ name: "Created" }, { name: "Stable", channel_id: "300" }, { name: "Token" }])
+})
+
+test.each(modes)("%s rejects invalid first shared webhook settings without dispatch", async (mode) => {
+    const fetch = vi.fn(async () => Response.json(metadata()))
+    stubFetchWithHostedDiscovery(fetch)
+    const { bot, webhook } = await setup(mode)
+    let channelReads = 0
+    await expect(
+        settle(
+            bot.webhooks.edit("100", {
+                get channelId() {
+                    return channelReads++ === 0 ? "invalid" : "300"
+                },
+            }),
+        ),
+    ).rejects.toMatchObject({ reason: "input", outcome: "notDispatched", inputValidation: { path: "channelId" } })
+    let nameReads = 0
+    await expect(
+        settle(
+            webhook.edit({
+                get name() {
+                    return nameReads++ === 0 ? " " : "Valid"
+                },
+            }),
+        ),
+    ).rejects.toMatchObject({ reason: "input", outcome: "notDispatched", inputValidation: { path: "name" } })
+    expect(fetch).not.toHaveBeenCalled()
+})
+
 test.each(modes)("%s encodes tagged webhook reply and forward references", async (mode) => {
     const bodies: Record<string, unknown>[] = []
     let status = 200

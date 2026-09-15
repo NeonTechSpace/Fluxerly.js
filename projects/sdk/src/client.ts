@@ -97,7 +97,8 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
         readonly users?: boolean | ResourceCacheSettings
         /** Cache private conversations from explicit reads and complete channel events, without automatically listing them.
          * Local lookups improve eviction priority without renewing age.
-         * Mutations and recipient changes clear private-conversation snapshots, as do connection gaps and shutdown
+         * Mutations and recipient changes discard earlier snapshots. An uncontended response with a complete conversation
+         * can then become the new snapshot. Connection gaps and shutdown release retained snapshots
          */
         readonly directMessages?: boolean | ResourceCacheSettings
         /** Cache guild details from explicit reads and guild create or update events, without preloading members or roles.
@@ -106,7 +107,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
         readonly guilds?: boolean | ResourceCacheSettings
         /** Cache individual memberships from explicit reads, REST pages and member add or update events.
          * Member removal clears that membership.
-         * Successful or uncertain role assignment clears the target rather than guessing its new roles
+         * Successful or uncertain role assignment clears the target
          */
         readonly members?: boolean | ResourceCacheSettings
         /** Cache role definitions from explicit list, create or edit results and role events.
@@ -119,7 +120,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
          */
         readonly roles?: boolean | ResourceCacheSettings
         /** Cache emoji metadata from REST reads and writes, not image bytes or creator accounts.
-         * Guild expression events clear observations rather than reconstructing a complete list.
+         * Guild expression events clear observations.
          * ResourceCacheSettings controls bounds and expiry, while gaps and shutdown release snapshots
          */
         readonly emojis?: boolean | ResourceCacheSettings
@@ -127,7 +128,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
         readonly stickers?: boolean | ResourceCacheSettings
         /** Cache guild channels from explicit reads and channel create or update events, without automatically listing them.
          * Once a channel mutation is dispatched, the SDK clears this client's channel cache and prevents pending reads from restoring it.
-         * Bulk ordering events clear this guild's cached channels rather than storing potentially unfinished permission updates.
+         * Bulk ordering events clear this guild's cached channels because permission updates may still be in progress.
          * Category updates or deletions also clear this guild's channels because children can inherit changed permissions.
          * Visibility loss clears the affected channel.
          * A full list removes missing channels only when no conflicting observation overlaps the read.

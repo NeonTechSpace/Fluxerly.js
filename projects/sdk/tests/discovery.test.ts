@@ -352,6 +352,51 @@ test.each(modes)("%s rejects invalid applications and empty patches before dispa
     expect(fetch).not.toHaveBeenCalled()
 })
 
+test.each(modes)("%s snapshots bounded discovery tags from indexed values", async (mode) => {
+    const client = await setup(mode)
+    const bodies: unknown[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(wire())
+    })
+    const tags = ["TypeScript"]
+    Object.defineProperty(tags, Symbol.iterator, {
+        value: () => {
+            throw Error("Discovery writes must not consume caller iterators")
+        },
+    })
+
+    await settle(client.discovery.apply("200", { description: "Fixture community description", categoryId: 4, tags }))
+    expect(bodies).toEqual([
+        { description: "Fixture community description", category_type: 4, custom_tags: ["typescript"] },
+    ])
+
+    let indexedReads = 0
+    const invalid = ["TypeScript"]
+    Object.defineProperty(invalid, "0", {
+        get: () => {
+            indexedReads++
+            return "bad!tag"
+        },
+    })
+    Object.defineProperty(invalid, Symbol.iterator, {
+        value: () => {
+            throw Error("Discovery writes must reject indexed invalid values without iterating")
+        },
+    })
+    await expect(
+        settle(
+            client.discovery.apply("200", {
+                description: "Fixture community description",
+                categoryId: 4,
+                tags: invalid,
+            }),
+        ),
+    ).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    expect(indexedReads).toBe(1)
+    expect(bodies).toHaveLength(1)
+})
+
 test.each(modes)("%s rejects malformed collections and cross-guild application responses", async (mode) => {
     const client = await setup(mode)
     let response: unknown
@@ -368,6 +413,8 @@ test.each(modes)("%s rejects malformed collections and cross-guild application r
     for (const app of [
         wire({ guild_id: "201" }),
         wire({ applied_at: "not-a-date" }),
+        wire({ applied_at: "2025-02-29T00:00:00Z" }),
+        wire({ reviewed_at: "2025-04-31T00:00:00Z" }),
         wire({ custom_tags: [42] }),
         wire({ review_reason: 42 }),
     ]) {

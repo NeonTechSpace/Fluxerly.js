@@ -43,7 +43,16 @@ async function postSafely(proof) {
     }
 }
 
-const clientOptions = { connection: { startupTimeoutMs: 35_000, maxStartupAttempts: 1 } }
+class ChildSettings {
+    get connection() {
+        return { startupTimeoutMs: 35_000, maxStartupAttempts: 1 }
+    }
+    get instance() {
+        return { url: "https://fluxer.app" }
+    }
+}
+
+const clientOptions = Object.defineProperty(new ChildSettings(), "cache", { value: { users: true } })
 
 async function runDefault() {
     const { supervisor } = await import("@neontechspace/fluxerly")
@@ -56,13 +65,17 @@ async function runDefault() {
         try {
             const self = await client.users.fetchSelf()
             if (self.isErr()) await postSafely({ kind: "failed", shardId: assignment.shardIds[0] })
-            else
+            else {
+                const cached = client.users.get(self.value.id)
+                assert.ok(cached.isOk())
+                assert.equal(cached.value?.id, self.value.id)
                 await postSafely({
                     kind: "connected",
                     shardId: assignment.shardIds[0],
                     state: client.state,
                     userId: self.value.id,
                 })
+            }
         } catch {
             await postSafely({ kind: "failed", shardId: assignment.shardIds[0] })
         } finally {
@@ -114,14 +127,18 @@ async function runEffect() {
                         Stream.runForEach(() =>
                             client.users.fetchSelf().pipe(
                                 Effect.flatMap((self) =>
-                                    Effect.promise(() =>
-                                        postSafely({
-                                            kind: "connected",
-                                            shardId: assignment.shardIds[0],
-                                            state: client.state,
-                                            userId: self.id,
-                                        }),
-                                    ),
+                                    Effect.gen(function* () {
+                                        const cached = yield* client.users.get(self.id)
+                                        assert.equal(cached?.id, self.id)
+                                        return yield* Effect.promise(() =>
+                                            postSafely({
+                                                kind: "connected",
+                                                shardId: assignment.shardIds[0],
+                                                state: client.state,
+                                                userId: self.id,
+                                            }),
+                                        )
+                                    }),
                                 ),
                                 Effect.catch(() =>
                                     Effect.promise(() =>

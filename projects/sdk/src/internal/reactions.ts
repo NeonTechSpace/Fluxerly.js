@@ -1,5 +1,6 @@
 import type { ReactionEmoji, ReactionEmojiInput, ReactionTarget, ReactionUser, ReactionUsersPage } from "#sdk/reactions"
 import { inputValidationFailure } from "#sdk/input-validation"
+import { format } from "#sdk/helpers"
 import { identifier, record } from "./message.js"
 
 export function encodeReactionUsersQuery(query: unknown) {
@@ -7,16 +8,17 @@ export function encodeReactionUsersQuery(query: unknown) {
     if (!record(input)) return inputValidationFailure("query", "type", "Reaction user query must be an object")
     if (Object.keys(input).some((key) => key !== "limit" && key !== "after"))
         return inputValidationFailure("query", "allowedFields", "Reaction user query may contain only limit and after")
-    const limit = input.limit === undefined ? 25 : input.limit
+    const limitInput = input.limit
+    const after = input.after
+    const limit = limitInput === undefined ? 25 : limitInput
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)
         return inputValidationFailure(
             "query.limit",
             "range",
             "Reaction user limit must be an integer from 1 through 100",
         )
-    if (input.after !== undefined && !identifier(input.after))
+    if (after !== undefined && !identifier(after))
         return inputValidationFailure("query.after", "format", "Reaction user cursor must be a decimal ID string")
-    const after = input.after as string | undefined
     const params = new URLSearchParams({ limit: String(limit) })
     if (after !== undefined) params.set("after", after)
     return { limit, after, params }
@@ -65,16 +67,50 @@ const name = (value: unknown): value is string =>
     value.isWellFormed() &&
     !/[\x00-\x20\x7f]/.test(value)
 
-export function encodeReactionEmoji(value: ReactionEmojiInput): string | undefined {
-    if (typeof value === "string") return name(value) && !/[%/:<>]/.test(value) ? encodeURIComponent(value) : undefined
+export function resolveReactionEmoji(
+    value: ReactionEmojiInput,
+): string | { readonly name: string; readonly id: string } | undefined {
+    if (typeof value === "string") {
+        if (!value.startsWith("<")) return name(value) && !/[%/:<>]/.test(value) ? value : undefined
+        const parsed = format.parseCustomEmoji(value)
+        if (parsed.isErr()) return undefined
+        value = parsed.value
+    }
     if (!record(value)) return undefined
-    const snapshot =
-        "guildId" in value && "animated" in value && identifier(value.guildId) && typeof value.animated === "boolean"
-    if (Object.keys(value).some((key) => !["name", "id", ...(snapshot ? ["guildId", "animated"] : [])].includes(key)))
+    const hasGuildId = "guildId" in value
+    const hasAnimated = "animated" in value
+    const guildId = hasGuildId ? value.guildId : undefined
+    const animated = hasAnimated ? value.animated : undefined
+    const snapshot = hasGuildId && hasAnimated && identifier(guildId) && typeof animated === "boolean"
+    const allowCloning = snapshot ? value.allowCloning : undefined
+    const metadata = snapshot && typeof allowCloning === "boolean"
+    if (
+        Object.keys(value).some(
+            (key) =>
+                ![
+                    "name",
+                    "id",
+                    "animated",
+                    ...(snapshot ? ["guildId"] : []),
+                    ...(metadata ? ["allowCloning"] : []),
+                ].includes(key),
+        )
+    )
         return undefined
-    return typeof value.name === "string" && /^[A-Za-z0-9_]{1,32}$/.test(value.name) && identifier(value.id)
-        ? encodeURIComponent(`${value.name}:${value.id}`)
+    const id = value.id
+    if (animated !== undefined && (typeof animated !== "boolean" || id === undefined)) return undefined
+    const nameValue = value.name
+    if (id === undefined) return name(nameValue) && !/[%/:<>]/.test(nameValue) ? nameValue : undefined
+    return typeof nameValue === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(nameValue) && identifier(id)
+        ? { name: nameValue, id }
         : undefined
+}
+
+export function encodeReactionEmoji(value: ReactionEmojiInput): string | undefined {
+    const emoji = resolveReactionEmoji(value)
+    return emoji === undefined
+        ? undefined
+        : encodeURIComponent(typeof emoji === "string" ? emoji : `${emoji.name}:${emoji.id}`)
 }
 
 function emoji(value: unknown): ReactionEmoji | undefined {

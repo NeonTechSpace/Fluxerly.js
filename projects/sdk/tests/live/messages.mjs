@@ -685,6 +685,32 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         botId,
     )
     const customPath = encodeURIComponent(`${emoji.name}:${emoji.id}`)
+    const staticMarkup = `<:${emoji.name}:${emoji.id}>`
+    const animatedMarkup = `<a:${emoji.name}:${emoji.id}>`
+    stage = "reaction_emoji_sdk_readback"
+    const rawEmojis = await api("GET", `/guilds/${guildId}/emojis`)
+    assert.equal(rawEmojis.status, 200)
+    assert.ok(Array.isArray(rawEmojis.data))
+    const rawEmoji = rawEmojis.data.find((item) => item.id === emoji.id)
+    assert.ok(rawEmoji)
+    const fetched = (await ops.fetchEmojis()).find((item) => item.id === emoji.id)
+    assert.ok(fetched)
+    assert.equal(fetched.guildId, guildId)
+    assert.equal(fetched.name, rawEmoji.name)
+    assert.equal(fetched.animated, rawEmoji.animated === true)
+    const rawMetadata = await api("GET", `/emojis/${emoji.id}/metadata`)
+    assert.equal(rawMetadata.status, 200)
+    const metadata = await ops.fetchEmojiMetadata(emoji.id)
+    assert.equal(metadata.guildId, rawMetadata.data?.guild_id)
+    assert.equal(metadata.id, rawMetadata.data?.id)
+    assert.equal(metadata.name, rawMetadata.data?.name)
+    assert.equal(metadata.animated, rawMetadata.data?.animated === true)
+    assert.equal(metadata.allowCloning, rawMetadata.data?.allow_cloning)
+    const parsedStatic = await ops.parseCustomEmoji(staticMarkup)
+    const parsedAnimated = await ops.parseCustomEmoji(animatedMarkup)
+    assert.deepEqual(parsedStatic, { name: emoji.name, id: emoji.id })
+    assert.deepEqual(parsedAnimated, { name: emoji.name, id: emoji.id, animated: true })
+    report(stage, true)
     const message = await ops.send({ content: "SDK reaction verification" })
     const received = []
     const stops = []
@@ -707,6 +733,63 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         assert.equal(result.status, 200)
         assert.ok(Array.isArray(result.data))
         return result.data.map((user) => user.id)
+    }
+    const assertReactionUsers = async (input, path) => {
+        const page = await ops.users(message, input, { limit: 1 })
+        const raw = await api("GET", `/channels/${channelId}/messages/${message.id}/reactions/${path}/users?limit=1`)
+        assert.equal(raw.status, 200)
+        assert.deepEqual(page, {
+            items: raw.data.items.map((user) => ({
+                id: user.id,
+                username: user.username,
+                isBot: user.bot === true,
+            })),
+            hasMore: raw.data.has_more,
+            nextAfter: raw.data.next_after,
+        })
+        assert.deepEqual(
+            page.items.map((user) => user.id),
+            [botId],
+        )
+        assert.ok(Object.isFrozen(page) && Object.isFrozen(page.items) && Object.isFrozen(page.items[0]))
+        assert.deepEqual(await ops.users(message, input, { after: botId }), {
+            items: [],
+            hasMore: false,
+            nextAfter: null,
+        })
+    }
+    const assertCustomInput = async (label, input) => {
+        stage = `reaction_${label}_reuse`
+        const selected = await collect({
+            emoji: input,
+            filter: (reaction) => reaction.userId === botId,
+        })
+        await ops.add(message, input)
+        const added = await wait("messageReactionAdd", (value) => value.userId === botId && value.emoji.id === emoji.id)
+        assert.equal(added.emoji.name, emoji.name)
+        assert.deepEqual(await reactors(customPath), [botId])
+        const collected = await selected.wait()
+        assert.equal(collected.reason, "limit")
+        assert.equal(collected.reactions.length, 1)
+        assert.equal(collected.reactions[0].id, message.id)
+        assert.equal(collected.reactions[0].channelId, channelId)
+        assert.equal(collected.reactions[0].userId, botId)
+        assert.equal(collected.reactions[0].emoji.id, emoji.id)
+        assert.ok(
+            Object.isFrozen(collected) &&
+                Object.isFrozen(collected.reactions) &&
+                Object.isFrozen(collected.reactions[0]),
+        )
+        await assertReactionUsers(input, customPath)
+        await ops.remove(message, input)
+        const removed = await wait(
+            "messageReactionRemove",
+            (value) => value.userId === botId && value.emoji.id === emoji.id,
+        )
+        assert.equal(removed.emoji.name, emoji.name)
+        assert.deepEqual(await reactors(customPath), [])
+        report(stage, true)
+        return added.emoji
     }
     try {
         for (const event of [
@@ -732,66 +815,29 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         await stopped.stop()
         assert.deepEqual(await stopped.wait(), { reason: "stopped", reactions: [] })
         report(stage, true)
-        const selected = await collect({
-            emoji,
-            filter: (reaction) => reaction.userId === botId,
-        })
         stage = "unicode_reaction_add_readback"
         await ops.add(message, "👍")
         const added = await wait("messageReactionAdd", (value) => value.emoji.name === "👍")
         assert.equal(added.userId, botId)
         assert.deepEqual(await reactors(encodeURIComponent("👍")), [botId])
         report(stage, true)
+        const receivedEmoji = await assertCustomInput("static_markup", staticMarkup)
+        for (const [label, input] of [
+            ["animated_markup", animatedMarkup],
+            ["parsed_static", parsedStatic],
+            ["parsed_animated", parsedAnimated],
+            ["fetched", fetched],
+            ["metadata", metadata],
+            ["received", receivedEmoji],
+        ])
+            await assertCustomInput(label, input)
         stage = "custom_reaction_add_readback"
-        await ops.add(message, emoji)
+        await ops.add(message, staticMarkup)
         assert.equal((await wait("messageReactionAdd", (value) => value.emoji.id === emoji.id)).userId, botId)
         assert.deepEqual(await reactors(customPath), [botId])
         report(stage, true)
-        stage = "reaction_collector_selected_custom_addition"
-        const collected = await selected.wait()
-        assert.equal(collected.reason, "limit")
-        assert.equal(collected.reactions.length, 1)
-        assert.equal(collected.reactions[0].id, message.id)
-        assert.equal(collected.reactions[0].channelId, channelId)
-        assert.equal(collected.reactions[0].userId, botId)
-        assert.equal(collected.reactions[0].emoji.id, emoji.id)
-        assert.ok(
-            Object.isFrozen(collected) &&
-                Object.isFrozen(collected.reactions) &&
-                Object.isFrozen(collected.reactions[0]),
-        )
-        report(stage, true)
         stage = "reaction_users_page_readback"
-        for (const [input, path] of [
-            ["👍", encodeURIComponent("👍")],
-            [emoji, customPath],
-        ]) {
-            const page = await ops.users(message, input, { limit: 1 })
-            const raw = await api(
-                "GET",
-                `/channels/${channelId}/messages/${message.id}/reactions/${path}/users?limit=1`,
-            )
-            assert.equal(raw.status, 200)
-            assert.deepEqual(page, {
-                items: raw.data.items.map((user) => ({
-                    id: user.id,
-                    username: user.username,
-                    isBot: user.bot === true,
-                })),
-                hasMore: raw.data.has_more,
-                nextAfter: raw.data.next_after,
-            })
-            assert.deepEqual(
-                page.items.map((user) => user.id),
-                [botId],
-            )
-            assert.ok(Object.isFrozen(page) && Object.isFrozen(page.items) && Object.isFrozen(page.items[0]))
-            assert.deepEqual(await ops.users(message, input, { after: botId }), {
-                items: [],
-                hasMore: false,
-                nextAfter: null,
-            })
-        }
+        await assertReactionUsers("👍", encodeURIComponent("👍"))
         report(stage, true)
         stage = "own_reaction_remove"
         const guild = (await api("GET", `/guilds/${guildId}`)).data
@@ -1027,6 +1073,7 @@ async function verifyPins(ops, channelId, interrupt) {
         assert.equal((await wait(updates, (item) => item.id === first.id && item.pinned === true)).pinned, true)
         const notice = await wait(notices, () => true)
         assert.ok(Object.isFrozen(notice))
+        assert.equal(notice.guildId, guildId)
         assert.equal(typeof notice.lastPinTimestamp, "string")
         await ops.pin(first)
         assert.equal((await page({})).items.length, 1)
@@ -1048,7 +1095,7 @@ async function verifyPins(ops, channelId, interrupt) {
         assert.equal((await read(first)).content, first.content)
         assert.equal((await read(second)).pinned, true)
         await wait(updates, (item) => item.id === first.id && item.pinned === false)
-        await wait(notices, () => true)
+        assert.equal((await wait(notices, () => true)).guildId, guildId)
         assert.deepEqual(
             (await page({})).items.map((item) => item.message.id),
             [second.id],
@@ -1482,6 +1529,21 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         )
         assert.equal(createdCategoryB.name, categoryB.name)
         assert.equal((await rawChannel(categoryB.id)).name, categoryB.name)
+        report(stage, true)
+
+        stage = "voice_channel_bitrate_tier_readback"
+        const voice = await createFixture("voiceTier", { type: 2, bitrate: 384_000 })
+        assertSnapshot(voice, voice.id, 2)
+        const voiceRaw = await rawChannel(voice.id)
+        assert.equal(voice.bitrate, voiceRaw.bitrate)
+        assert.ok(Number.isInteger(voice.bitrate) && voice.bitrate >= 8_000 && voice.bitrate <= 384_000)
+        const editedVoice = await ops.edit(voice.id, { bitrate: 384_000 })
+        assertSnapshot(editedVoice, voice.id, 2)
+        const editedVoiceRaw = await rawChannel(voice.id)
+        assert.equal(editedVoice.bitrate, editedVoiceRaw.bitrate)
+        assert.ok(
+            Number.isInteger(editedVoice.bitrate) && editedVoice.bitrate >= 8_000 && editedVoice.bitrate <= 384_000,
+        )
         report(stage, true)
 
         stage = "channel_permission_overwrites"
@@ -2161,16 +2223,20 @@ function verifyClearRejection(error) {
 async function verifyMessageSearch(ops, channelId) {
     stage = "message_search_seed"
     const content = `search-${randomUUID()}`
-    const created = await api("POST", `/channels/${channelId}/messages`, {
-        content,
-        allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
-    })
-    assert.equal(created.status, 200)
-    assert.match(created.data?.id ?? "", /^\d+$/)
-    assert.equal(created.data?.channel_id, channelId)
-    const target = { id: created.data.id, channelId }
-    // The raw test-owned seed was created while disconnected, so only an indexed hit could incorrectly hydrate it
-    assert.equal(await ops.get(target), undefined)
+    const targets = []
+    for (let index = 0; index < 3; index++) {
+        const created = await api("POST", `/channels/${channelId}/messages`, {
+            content: `${content} ${index}`,
+            allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+        })
+        assert.equal(created.status, 200)
+        assert.match(created.data?.id ?? "", /^\d+$/)
+        assert.equal(created.data?.channel_id, channelId)
+        const target = { id: created.data.id, channelId }
+        // Raw test-owned seeds were created while disconnected, so indexed hits must not hydrate them
+        assert.equal(await ops.get(target), undefined)
+        targets.push(target)
+    }
 
     const attempts = 12
     let sawIndexing = false
@@ -2186,7 +2252,9 @@ async function verifyMessageSearch(ops, channelId) {
             if (attempt < attempts) await sleep(1_000)
             continue
         }
-        const found = page.messages.some((message) => message.id === target.id && message.channelId === channelId)
+        const found = targets.every((target) =>
+            page.messages.some((message) => message.id === target.id && message.channelId === channelId),
+        )
         if (!found) {
             if (attempt < attempts) {
                 await sleep(1_000)
@@ -2196,16 +2264,31 @@ async function verifyMessageSearch(ops, channelId) {
             assert.fail("Hosted search returned ready pages without the journaled test message")
         }
         stage = "message_search_cache_exclusion"
-        assert.equal(await ops.get(target), undefined)
+        for (const target of targets) assert.equal(await ops.get(target), undefined)
+        assert.deepEqual(
+            page.channels.map((channel) => channel.id),
+            [channelId],
+        )
+        const second = await ops.search({ channelId }, { content, limit: 2, page: 2 })
+        assert.equal(second.indexing, false)
+        assert.equal(second.page, 2)
+        assert.equal(second.hitsPerPage, 2)
+        assert.equal(second.messages.length, 1)
+        assert.ok(targets.some((target) => target.id === second.messages[0].id))
         stage = "message_search_traversal"
         const seen = []
-        for await (const message of ops.iterate({ channelId }, { content }, { maxItems: 25, maxPages: 2 })) {
-            assert.ok(seen.length < 25)
+        for await (const message of ops.iterate(
+            { channelId },
+            { content },
+            { maxItems: 3, maxPages: 2, pageSize: 2 },
+        )) {
+            assert.ok(seen.length < 3)
             seen.push(message)
         }
-        assert.ok(seen.some((message) => message.id === target.id && message.channelId === channelId))
-        assert.equal(await ops.get(target), undefined)
-        report("message_search_page_and_traversal", true)
+        assert.deepEqual(seen.map((message) => message.id).sort(), targets.map((target) => target.id).sort())
+        assert.ok(seen.every((message) => message.channelId === channelId))
+        for (const target of targets) assert.equal(await ops.get(target), undefined)
+        report("message_search_numbered_pages_and_traversal", true)
         return
     }
     stage = sawIndexing ? "message_search_indexing_timeout" : "message_search_owned_hit_timeout"
@@ -2282,6 +2365,7 @@ function observeMessageChanges(channelId) {
             stage = "live_message_delete_event"
             await api("DELETE", `/channels/${channelId}/messages/${seeds[0].id}`)
             const deleted = await waitFor("messageDelete", (message) => message.id === seeds[0].id)
+            assert.equal(deleted.guildId, guildId)
             if ("content" in deleted) assert.equal(deleted.content, updated.content)
             if ("authorId" in deleted) assert.equal(deleted.authorId, botId)
             assert.equal((await api("GET", `/channels/${channelId}/messages/${deleted.id}`)).status, 404)
@@ -2295,6 +2379,7 @@ function observeMessageChanges(channelId) {
             const result = await api("POST", `/channels/${channelId}/messages/bulk-delete`, { message_ids: ids })
             assert.equal(result.status, 204)
             const batch = await waitFor("messageDeleteBulk", (batch) => ids.every((id) => batch.ids.includes(id)))
+            assert.equal(batch.guildId, guildId)
             assert.deepEqual([...batch.ids].sort(), [...ids].sort())
             assert.ok(Object.isFrozen(batch.ids))
             for (const id of ids) assert.equal((await api("GET", `/channels/${channelId}/messages/${id}`)).status, 404)
@@ -2931,7 +3016,7 @@ try {
     if (forceRecovery) gatewayProbe = observeGateway()
     stage = "sdk_receive_and_reply"
     if (mode === "default") {
-        const { builders, commands, createClient } = await import("@neontechspace/fluxerly")
+        const { builders, commands, createClient, format } = await import("@neontechspace/fluxerly")
         const created = createClient({
             token,
             ...(cache || typing || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
@@ -3450,6 +3535,13 @@ try {
                             unwrap(client.messages.removeUserReaction(target, emoji, userId)),
                         clearEmoji: (target, emoji) => unwrap(client.messages.clearReaction(target, emoji)),
                         clearAll: (target) => unwrap(client.messages.clearReactions(target)),
+                        fetchEmojis: () => unwrap(client.emojis.fetchAll(guildId)),
+                        fetchEmojiMetadata: (id) => unwrap(client.emojis.fetchMetadata(id)),
+                        parseCustomEmoji: (value) => {
+                            const parsed = format.parseCustomEmoji(value)
+                            assert.ok(parsed.isOk())
+                            return parsed.value
+                        },
                         reads: async (target) => ({
                             message: await unwrap(client.messages.fetch(target)),
                             history: await unwrap(
@@ -3712,7 +3804,7 @@ try {
         }
     } else {
         const { Deferred, Effect, Exit, Fiber, Scope, Stream } = await import("effect")
-        const { builders, commands, createClient } = await import("@neontechspace/fluxerly/effect")
+        const { builders, commands, createClient, format } = await import("@neontechspace/fluxerly/effect")
         const effectScope = Scope.makeUnsafe()
         let exit
         try {
@@ -4274,6 +4366,9 @@ try {
                                         run(client.messages.removeUserReaction(target, emoji, userId)),
                                     clearEmoji: (target, emoji) => run(client.messages.clearReaction(target, emoji)),
                                     clearAll: (target) => run(client.messages.clearReactions(target)),
+                                    fetchEmojis: () => run(client.emojis.fetchAll(guildId)),
+                                    fetchEmojiMetadata: (id) => run(client.emojis.fetchMetadata(id)),
+                                    parseCustomEmoji: (value) => run(format.parseCustomEmoji(value)),
                                     reads: async (target) => ({
                                         message: await run(client.messages.fetch(target)),
                                         history: await run(

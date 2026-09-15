@@ -11,7 +11,7 @@ import type { ShardState } from "#sdk/sharding"
 import { guildShardId, type ShardPlan } from "./sharding.js"
 import type { CachePolicyErrorReport } from "#sdk/cache"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
-import { identifier, record, reference, replyInput } from "./message.js"
+import { identifier, record, replyInput, snapshotReference } from "./message.js"
 import { MessageCache } from "./cache.js"
 import { GuildCache, type ResourceKind, type Resources } from "./guild-cache.js"
 import { ChannelCache } from "./channel-cache.js"
@@ -565,9 +565,22 @@ export class ClientOwner<M extends MessageCore = Message> {
                 if (request.noCache)
                     return yield* owner.rest.user(token, operation, () => request, { timeoutMs: remaining })
                 const generation = owner.userCache.begin(request.resource, request.method !== "GET")
-                const value = yield* owner.rest
+                return yield* owner.rest
                     .user(token, operation, () => request, { timeoutMs: remaining })
                     .pipe(
+                        Effect.tap((value) =>
+                            Effect.sync(() =>
+                                owner.userCache.complete(
+                                    request.resource,
+                                    generation,
+                                    (value === undefined ? [] : Array.isArray(value) ? value : [value]) as readonly (
+                                        User | DirectMessageChannel
+                                    )[],
+                                    request.replace,
+                                    request.method !== "GET",
+                                ),
+                            ),
+                        ),
                         Effect.onExit((exit) =>
                             Effect.sync(() => {
                                 if (exit._tag === "Failure") {
@@ -578,14 +591,6 @@ export class ClientOwner<M extends MessageCore = Message> {
                             }),
                         ),
                     )
-                if (value !== undefined)
-                    owner.userCache.complete(
-                        request.resource,
-                        generation,
-                        (Array.isArray(value) ? value : [value]) as readonly (User | DirectMessageChannel)[],
-                        request.replace,
-                    )
-                return value
             })
         })
     }
@@ -731,11 +736,13 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     reply(target: MessageReference, input: MessageInput, options?: SendOptions) {
         return Effect.suspend(() => {
-            const body = replyInput(target, input)
-            if (body instanceof MessageError) return Effect.fail(body)
+            const request = replyInput(target, input)
+            if (request instanceof MessageError) return Effect.fail(request)
             return this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? (this.reports?.start() ?? Effect.void).pipe(
-                      Effect.andThen(this.rest.reply(this.#configuration.token, target, body, options)),
+                      Effect.andThen(
+                          this.rest.reply(this.#configuration.token, request.target, request.input, options),
+                      ),
                   )
                 : Effect.fail(new ClientClosedError())
         })
@@ -1024,7 +1031,8 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend((): Effect.Effect<M | undefined, ClientClosedError | MessageOperationError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
-            if (!reference(target))
+            const reference = snapshotReference(target)
+            if (reference === undefined)
                 return Effect.fail(
                     new MessageOperationError(
                         "get",
@@ -1040,7 +1048,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                         ).detail,
                     ),
                 )
-            return Effect.succeed(this.cache?.get(target))
+            return Effect.succeed(this.cache?.get(reference))
         })
     }
 
@@ -1522,7 +1530,9 @@ export class ClientOwner<M extends MessageCore = Message> {
                     }
                     if (exit && Exit.isFailure(exit) && Cause.hasDies(exit.cause)) {
                         Deferred.doneUnsafe(owner.#terminal, exit)
-                        return yield* Effect.die(exit.cause)
+                        return yield* Effect.failCause(
+                            Cause.fromReasons<never>(exit.cause.reasons.filter((reason) => reason._tag !== "Fail")),
+                        )
                     }
                     Deferred.doneUnsafe(owner.#terminal, Effect.void)
                 }).pipe(Effect.onExit((exit) => Deferred.done(owner.#shutdown, exit)))

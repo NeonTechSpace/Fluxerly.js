@@ -23,7 +23,15 @@ import type {
 } from "#sdk/messages"
 import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "#sdk/attachments"
 import { AttachmentDownloadError } from "#sdk/attachments"
-import { encodeEdit, encodeForward, encodeHistory, encodeMessage, identifier, record, reference } from "./message.js"
+import {
+    encodeEdit,
+    encodeForward,
+    encodeHistory,
+    encodeMessage,
+    identifier,
+    record,
+    snapshotReference,
+} from "./message.js"
 import type { MessageDecoder } from "./message-fields.js"
 import type { MessageCache, CacheRequest } from "./cache.js"
 import type { EncodedBody } from "./attachments.js"
@@ -459,6 +467,14 @@ async function readApiError(
     let result: ApiErrorDetail | null = null
     let retryAfterMs: number | null = null
     let global = false
+    let cleanupDefect: unknown | null = null
+    const recordCleanupDefect = () => {
+        const defect = new ApiErrorBodyCleanupError()
+        cleanupDefect =
+            cleanupDefect === null
+                ? defect
+                : new AggregateError([cleanupDefect, defect], "API error response cleanup failed")
+    }
     try {
         while (!cancelBody) {
             const next = await Promise.race([reader.read(), cancelled, timedOut])
@@ -493,14 +509,17 @@ async function readApiError(
     } finally {
         if (timer !== undefined) clearTimeout(timer)
         if (cancel !== undefined) signal.removeEventListener("abort", cancel)
-        reader.releaseLock()
+        try {
+            reader.releaseLock()
+        } catch {
+            recordCleanupDefect()
+        }
     }
-    let cleanupDefect: unknown | null = null
     if (cancelBody) {
         try {
             await body.cancel()
         } catch {
-            cleanupDefect = new ApiErrorBodyCleanupError()
+            recordCleanupDefect()
         }
     }
     return { detail: result, retryAfterMs, global, cleanupDefect }
@@ -1525,7 +1544,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 token,
                 {
                     method: "POST",
-                    channel: context.channelId ?? context.guildId!,
+                    channel: encoded.context.channelId ?? encoded.context.guildId!,
                     bucket: "search",
                     cache: false,
                     path: "/search/messages",
@@ -1574,7 +1593,8 @@ export class RestOwner<M extends MessageCore = Message> {
     ): Effect.Effect<void, MessageOperationFailure> {
         return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            if (!reference(target))
+            const ref = snapshotReference(target)
+            if (ref === undefined)
                 return Effect.fail(
                     localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
                 )
@@ -1582,7 +1602,6 @@ export class RestOwner<M extends MessageCore = Message> {
                 return Effect.fail(
                     localInputFailure("attachmentId", "format", "Attachment IDs must be decimal strings"),
                 )
-            const ref = { channelId: target.channelId, id: target.id }
             return this.#execute(
                 token,
                 {
@@ -1696,7 +1715,8 @@ export class RestOwner<M extends MessageCore = Message> {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const encoded = encodeReactionEmoji(emoji)
             const page = encodeReactionUsersQuery(query)
-            if (!reference(target))
+            const ref = snapshotReference(target)
+            if (ref === undefined)
                 return Effect.fail(
                     localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
                 )
@@ -1714,9 +1734,9 @@ export class RestOwner<M extends MessageCore = Message> {
                 token,
                 {
                     method: "GET",
-                    channel: target.channelId,
+                    channel: ref.channelId,
                     bucket: "reaction",
-                    path: `/channels/${target.channelId}/messages/${target.id}/reactions/${encoded}/users?${page.params}`,
+                    path: `/channels/${ref.channelId}/messages/${ref.id}/reactions/${encoded}/users?${page.params}`,
                     body: undefined,
                     status: 200,
                     decode: async (response, _instance, signal) => {
@@ -1777,7 +1797,8 @@ export class RestOwner<M extends MessageCore = Message> {
     ): Effect.Effect<void, MessageOperationFailure> {
         return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            if (!reference(target))
+            const ref = snapshotReference(target)
+            if (ref === undefined)
                 return Effect.fail(
                     localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
                 )
@@ -1785,10 +1806,10 @@ export class RestOwner<M extends MessageCore = Message> {
                 token,
                 {
                     method: operation === "pin" ? "PUT" : "DELETE",
-                    channel: target.channelId,
-                    target: target.id,
+                    channel: ref.channelId,
+                    target: ref.id,
                     bucket: "pins",
-                    path: `/channels/${target.channelId}/pins/${target.id}`,
+                    path: `/channels/${ref.channelId}/pins/${ref.id}`,
                     body: undefined,
                     status: 204,
                     decode: async () => {},
@@ -1809,7 +1830,8 @@ export class RestOwner<M extends MessageCore = Message> {
         return Effect.suspend((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const encoded = operation === "clearReactions" ? "" : encodeReactionEmoji(emoji as ReactionEmojiInput)
-            if (!reference(target))
+            const ref = snapshotReference(target)
+            if (ref === undefined)
                 return Effect.fail(
                     localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
                 )
@@ -1833,9 +1855,9 @@ export class RestOwner<M extends MessageCore = Message> {
                 token,
                 {
                     method: operation === "addReaction" ? "PUT" : "DELETE",
-                    channel: target.channelId,
+                    channel: ref.channelId,
                     bucket: "reaction",
-                    path: `/channels/${target.channelId}/messages/${target.id}/reactions${suffix}`,
+                    path: `/channels/${ref.channelId}/messages/${ref.id}/reactions${suffix}`,
                     body: undefined,
                     status: 204,
                     decode: async () => {},
@@ -1856,11 +1878,11 @@ export class RestOwner<M extends MessageCore = Message> {
     ): Effect.Effect<A, MessageOperationFailure> {
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
-            if (!reference(target))
+            const ref = snapshotReference(target)
+            if (ref === undefined)
                 return Effect.fail(
                     localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
                 )
-            const ref = { channelId: target.channelId, id: target.id }
             const body = operation === "edit" ? encodeEdit(input) : undefined
             if (body instanceof InputValidationFailure)
                 return Effect.fail(new RestFailure("input", "notDispatched", null, null, false, null, body.detail))
@@ -2467,8 +2489,15 @@ export class RestOwner<M extends MessageCore = Message> {
                                       )
                                     : error,
                             ),
+                            Effect.onExit((exit) =>
+                                Effect.sync(() => {
+                                    if (exit._tag === "Failure" && userGeneration !== undefined)
+                                        owner.users!.invalidate("directMessages")
+                                }),
+                            ),
                         )
-                    if (userGeneration !== undefined) owner.users!.complete("directMessages", userGeneration, [channel])
+                    if (userGeneration !== undefined)
+                        owner.users!.complete("directMessages", userGeneration, [channel], false, true)
                     request = {
                         ...request,
                         channel: channel.id,

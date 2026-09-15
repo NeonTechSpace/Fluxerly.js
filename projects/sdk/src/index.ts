@@ -120,6 +120,7 @@ import { calculatePermissions, fetchPermissions } from "#sdk/internal/permission
 import { fetchHierarchyCheck } from "#sdk/internal/role-hierarchy-workflow"
 
 function oauthOwnerOptions(options: DefaultOAuthOperationOptions | undefined) {
+    if (Array.isArray(options)) return options
     if (typeof options !== "object" || options === null || !("signal" in options)) return options
     const { signal: _signal, ...ownerOptions } = options
     return ownerOptions
@@ -280,6 +281,7 @@ import {
 export type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 import { auditLogPage } from "#sdk/internal/audit-logs"
 export type {
+    GuildCreate,
     GuildEmojisUpdate,
     GuildStickersUpdate,
     GuildLifecycleEvents,
@@ -771,7 +773,7 @@ export const commands = defaultCommands
  *
  * The parent can forcibly terminate only children it started after the graceful deadline, and still waits for their exit.
  * No process signal handlers are installed.
- * stdout and stderr are ignored rather than stored.
+ * The child's stdout and stderr are ignored.
  * Optional restart settings limit child replacements and increase the delay exponentially between attempts.
  * childEnvironment, args and execArgv affect the child launch but are omitted from status and failures.
  * This helper does not discover shard counts, coordinate other hosts, preserve replacement sessions or share REST rate limits
@@ -1274,8 +1276,8 @@ export interface Messages<M extends MessageCore = Message> {
      * indexing means Fluxer accepted the search but is not ready.
      * Decide yourself whether and when to try again
      *
-     * Pass the returned cursor unchanged to a later search call.
-     * It is not a message ID
+     * Use page numbers from 1 through 400 for later requests, keeping limit unchanged.
+     * Fluxer does not honor returned cursors, so the SDK exposes no cursor continuation
      *
      * Query arrays are copied when called.
      * Recognized inherited and nonenumerable fields are read too.
@@ -1305,7 +1307,10 @@ export interface Messages<M extends MessageCore = Message> {
      * Pass maxItems.
      * pageSize is 1–25 and maxPages defaults to 100.
      * Each consumption copies the filters, including recognized inherited and nonenumerable fields and their arrays.
-     * The SDK retains one page and requests later pages only as needed, using opaque provider cursors.
+     * The SDK retains one page and requests later numbered pages only as needed.
+     * Request capacity stays at the smaller of pageSize and maxItems throughout the scan; only maxItems hits are delivered.
+     * Reaching maxPages or Fluxer's 400-page ceiling with more matches yields PaginationError pageLimit.
+     * An unexpected echoed page number or capacity yields cursorStalled. Index changes can still skip or repeat observations.
      * An indexing response yields PaginationError with reason indexing rather than polling or claiming an empty result.
      * Search hits do not populate the message cache or trigger full-message fetches.
      * Expected operation, pagination and cancellation failures yield one terminal Err after any delivered hits.
@@ -1323,7 +1328,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     iterateSearch(
         context: MessageSearchContext,
-        filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+        filters: Omit<MessageSearchQuery, "limit" | "page">,
         limits: MessageSearchIterationLimits,
         options?: DefaultMessageSearchOptions,
     ): AsyncIterable<Result<M, MessageOperationFailure | PaginationError | CancelledError | ConfigurationError>>
@@ -1480,7 +1485,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Remove one user's reaction for one emoji, leaving other users and emoji groups unchanged.
      * userId is required as a decimal string.
      * Use the bot's own ID to remove its reaction.
-     * For emoji, pass literal Unicode text or a custom { name, id } as with addReaction
+     * Accepts the same ReactionEmojiInput forms as addReaction
      *
      * Fluxer checks visibility and history access.
      * For another user, the bot must have authored the message or have MANAGE_MESSAGES in its guild
@@ -1544,7 +1549,7 @@ export interface Messages<M extends MessageCore = Message> {
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one page of users who currently have a selected reaction on the message.
-     * For emoji, use literal Unicode text or a custom { name, id }
+     * Accepts the same ReactionEmojiInput forms as addReaction
      *
      * limit defaults to 25 and accepts 1–100.
      * after is an exclusive user-ID cursor.
@@ -1583,7 +1588,8 @@ export interface Messages<M extends MessageCore = Message> {
     ): ResultAsync<ReactionUsersPage, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Add the bot's own reaction to a message.
-     * Pass literal Unicode text such as "👍", or a custom { name, id }.
+     * Pass Unicode such as "👍", custom markup such as "<a:party:123>", a parsed custom emoji, or a received emoji snapshot.
+     * ReactionEmojiInput defines accepted identities and local validation. Custom emoji are encoded as name:id.
      * Fluxer decides emoji availability and permissions.
      * Adding the same own reaction again leaves it present.
      * Success is Ok(undefined) after HTTP 204, without waiting for a gateway event.
@@ -1681,7 +1687,7 @@ export interface Messages<M extends MessageCore = Message> {
      *     if (opened.isErr()) throw opened.error
      *     const collector = opened.value
      *     try {
-     *         const sent = await client.messages.send(channelId, { content: "What should I call you?" })
+     *         const sent = await client.messages.send(channelId, { content: "What name should the bot use?" })
      *         if (sent.isErr()) throw sent.error
      *         const result = await collector.waitForClose()
      *         if (result.isErr()) throw result.error
@@ -2482,6 +2488,7 @@ export interface Emojis {
     ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Upload 1–50 guild emoji in one batch and return separate successes and failures.
+     * The input array is copied by index, then its entries are copied when execution starts.
      * Some uploads can succeed while others fail.
      * No rollback or automatic chunking is performed.
      * Failures named by duplicate emoji names cannot be matched reliably to input positions.
@@ -2587,6 +2594,7 @@ export interface Stickers {
     ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Upload 1–50 guild stickers in one batch and return separate successes and failures.
+     * The input array is copied by index, then its entries are copied when execution starts.
      * Some uploads can succeed while others fail.
      * No rollback or automatic chunking is performed.
      * Failures named by duplicate sticker names cannot be matched reliably to input positions.
@@ -3117,6 +3125,7 @@ export interface Channels {
      * Omitting permissionOverwrites inherits the selected parent category's overwrites.
      * An empty [] creates no explicit overwrites, which does not make a channel private.
      * Explicit overwrites use Fluxer's required feature opt-in for ViewChannelMembers.
+     * Each allow and deny mask must be from 0n through 9_223_372_036_854_775_807n; invalid masks fail before dispatch.
      * The example denies ViewChannel to everyone and grants access to the named bot.
      * Your application manages the created channel afterward.
      * For an uncertain create result, use fetchAll before deciding whether to create again.
@@ -3150,6 +3159,7 @@ export interface Channels {
      * Use reorder to change a parent or position.
      * Channel type cannot be edited here.
      * Omitted permissionOverwrites keeps the old list.
+     * Each replacement allow and deny mask must be from 0n through 9_223_372_036_854_775_807n.
      * [] clears it.
      * Explicit replacement handles setting and clearing ViewChannelMembers through Fluxer's required feature opt-in
      */
@@ -3185,6 +3195,7 @@ export interface Channels {
     /**
      * Replace one explicit role or member permission overwrite.
      * Supply the target ID and raw bigint allow and deny flags.
+     * Each mask must be from 0n through 9_223_372_036_854_775_807n; larger received masks cannot be written unchanged.
      * HTTP 204 returns Ok(undefined).
      * Fluxer requires ManageRoles and uses a feature opt-in to set or clear ViewChannelMembers.
      * No target fetch or inherited-permission calculation is performed
@@ -3283,7 +3294,7 @@ export interface Members {
      * [] clears assigned roles.
      * Do not include the implicit everyone role
      *
-     * IDs are copied when called, without fetching or merging the old roles.
+     * IDs are copied by index when called, without fetching or merging the old roles.
      * Fluxer requires ManageRoles and checks hierarchy.
      * This can overwrite concurrent role changes
      *
@@ -3765,6 +3776,7 @@ export interface Roles {
     /**
      * Create a role with a name, optional color and permission flags.
      * permissions defaults to 0n, rather than copying the everyone role's grants.
+     * Supplied permissions must be from 0n through 9_223_372_036_854_775_807n.
      * Explicit permissions use Fluxer's feature opt-in for ViewChannelMembers.
      * The result reports the actual server grants, which can differ from your request.
      * Use a separate edit to change hoist or mentionable settings.
@@ -3793,6 +3805,7 @@ export interface Roles {
      * Change only the role fields you supply and return the server's snapshot.
      * Empty inputs and unknown fields fail locally.
      * permissions replaces all raw grants rather than adding flags.
+     * The replacement must be from 0n through 9_223_372_036_854_775_807n; larger received masks cannot be written unchanged.
      * The replacement can set or clear ViewChannelMembers.
      * The everyone role accepts only color and permissions.
      * Other supplied fields fail, even in a mixed input
@@ -4366,7 +4379,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * No signal is accepted that could abandon cleanup, and this method never exits your application.
      * Create a new client to connect again.
      * Success is Ok(undefined) after cleanup.
-     * Unexpected SDK or cleanup failures reject with SdkDefect
+     * Unexpected SDK or cleanup failures reject with SdkDefect.
+     * Its sanitized reasons retain interruption and defect classifications without exposing raw cleanup values
      */
     shutdown(): ResultAsync<void, never>
     /**
@@ -4927,9 +4941,10 @@ export interface DirectMessages<M extends MessageCore = Message> {
     ): ResultAsync<readonly DirectMessageChannel[], UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the latest messages for 1–100 distinct private channel IDs you select.
+     * IDs are copied by index when called.
      * This does not enumerate conversations or fill a cache.
      * A null message is ambiguous.
-     * omittedChannelIds separately lists IDs not returned by Fluxer.
+     * The omittedChannelIds field separately lists IDs not returned by Fluxer.
      * Do not treat omission as null, an empty channel or denied access.
      * The batch uses POST and is not retried after a dispatched uncertain failure, even though it reads data
      */
@@ -5952,7 +5967,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                 ) => execute(owner.searchMessages(context, query, options), "search", options),
                 iterateSearch: (
                     context: MessageSearchContext,
-                    filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+                    filters: Omit<MessageSearchQuery, "limit" | "page">,
                     limits: MessageSearchIterationLimits,
                     options?: DefaultMessageSearchOptions,
                 ) =>
@@ -6156,9 +6171,13 @@ export function createClient<const F extends MessageFields | undefined = undefin
                         if (reporter !== undefined && typeof reporter !== "function")
                             return Effect.fail(new ConfigurationError("onError", "Error reporter must be a function"))
                         let reporting = false
-                        const reportFailure = (kind: string) => {
+                        const reportFailure = (kind: string, reporterFailed = false) => {
                             Effect.runSyncExit(
-                                owner.logging.provide(Effect.logError(`Fluxerly message subscription ${kind} failure`)),
+                                owner.logging.provide(
+                                    Effect.logError(
+                                        `Fluxerly event subscription ${event} ${kind} failure${reporterFailed ? " (error reporter also failed)" : ""}`,
+                                    ),
+                                ),
                             )
                         }
                         return owner.events
@@ -6180,7 +6199,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                                               reporting = true
                                               void Promise.resolve()
                                                   .then(() => reporter(report))
-                                                  .catch(() => reportFailure(`${report.kind}; reporter`))
+                                                  .catch(() => reportFailure(report.kind, true))
                                                   .finally(() => {
                                                       reporting = false
                                                   })
@@ -6317,6 +6336,7 @@ export interface OAuthClient {
     ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Revoke an access or refresh token, with an optional token-type hint.
+     * The token and hint are captured once, then validated and transmitted from that snapshot.
      * A lost response can still mean the token was revoked
      */
     revoke(
@@ -6414,7 +6434,7 @@ export const oauth: Readonly<{
      * Create a standalone OAuth client with a clientId and server-held clientSecret.
      * Creation checks configuration synchronously without requests and copies the secret until shutdown.
      * Invalid settings return ConfigurationError.
-     * Unexpected creation failures throw SdkDefect
+     * Unexpected creation failures throw SdkDefect with operation oauth.create and without configuration details
      */
     create(config: OAuthConfig): Result<OAuthClient, ConfigurationError>
     /**
@@ -6426,7 +6446,7 @@ export const oauth: Readonly<{
 }> = Object.freeze({
     create(config: OAuthConfig): Result<OAuthClient, ConfigurationError> {
         const scope = Scope.makeUnsafe()
-        const created = fromExit(Effect.runSyncExit(makeOAuthOwner(config, scope)), "oauth.authorizationUrl")
+        const created = fromExit(Effect.runSyncExit(makeOAuthOwner(config, scope)), "oauth.create")
         if (created.isErr()) return err(created.error as ConfigurationError)
         const owner = created.value
         return ok(

@@ -80,6 +80,7 @@ export interface DiscoveryApplicationInput {
      */
     readonly primaryLanguage?: string
     /** Up to ten tags, each 2–30 UTF-16 code units before and after normalization.
+     * Entries are copied by index when the operation starts.
      * Start each tag with a letter or digit, followed by letters, digits, spaces, hyphens, underscores, plus or ampersand.
      * The SDK trims and lowercases tags, collapses whitespace and removes duplicates like Fluxer.
      * Omission on apply means an empty tag list

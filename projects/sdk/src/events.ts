@@ -91,6 +91,41 @@ export interface GuildStickersUpdate {
     readonly items: readonly GuildSticker[]
 }
 
+/** A frozen guild-availability observation with event-specific join metadata.
+ * It retains the Guild fields without adding lifecycle state to REST results or cached Guild snapshots.
+ * Subscribe before connect to observe the startup availability burst. connect does not wait for that burst
+ *
+ * Join classification requires a Fluxer bot gateway implementing the unavailable-marker distinction.
+ * Older or custom instances that omit the marker for startup snapshots cannot be classified reliably.
+ * The SDK does not detect that support or infer joins from readiness, elapsed time or cache contents.
+ * A supplied marker other than false is invalid for an available snapshot and fails the gateway as a protocol error
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ *
+ * export function waitForGuildJoin(client: Client) {
+ *     return client.waitFor("guildCreate", { filter: (guild) => guild.isNewJoin, timeoutMs: 30_000 })
+ * }
+ * ```
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly/effect"
+ *
+ * export function waitForGuildJoinEffect(client: Client) {
+ *     return client.waitFor("guildCreate", { filter: (guild) => guild.isNewJoin, timeoutMs: 30_000 })
+ * }
+ * ```
+ */
+export interface GuildCreate extends Guild {
+    /** True when the outer GUILD_CREATE omits unavailable, false when it supplies literal false.
+     * On a supporting bot gateway, true identifies the first create for a guild joined during this session
+     * and absent from READY. It remains true if temporary unavailability preceded that first create.
+     * Startup and recovery snapshots carry false, including a fresh Identify's membership baseline.
+     * A retained join dispatch may replay during Resume, so this is not an exactly-once notification
+     */
+    readonly isNewJoin: boolean
+}
+
 /** Payload types for server availability, configuration and visibility events.
  * A create event can mean an existing server became available, rather than a new server was created
  * @example
@@ -103,8 +138,11 @@ export interface GuildStickersUpdate {
  * ```
  */
 export interface GuildLifecycleEvents {
-    /** Server data became available. Updates the enabled server cache, but does not fetch or retain nested members, roles or channels */
-    readonly guildCreate: Guild
+    /** Server data became available, including startup hydration, recovery and joins.
+     * Use isNewJoin for the provider's join distinction, subject to GuildCreate's gateway-support and replay limits.
+     * Updates the enabled server cache before delivery, but does not fetch or retain nested members, roles or channels
+     */
+    readonly guildCreate: GuildCreate
     /** Current server configuration, not previous-and-current values or a patch to merge */
     readonly guildUpdate: Guild
     /** Server visibility ended or became temporarily unavailable, without establishing deletion or the bot's membership outcome.
@@ -301,7 +339,9 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
     readonly guildMemberRemove: import("./guilds.js").MemberReference
     /** A delivered presence observation, without custom-status text, account data, retained state or automatic member subscriptions */
     readonly presenceUpdate: PresenceUpdate
-    /** A channel's pins changed, without identifying the message or fetching the list. The timestamp may stay unchanged after unpin */
+    /** A channel's pins changed, with guild context only when supplied and without fetching the list.
+     * Does not identify the message. The timestamp may stay unchanged after unpin
+     */
     readonly channelPinsUpdate: ChannelPinsUpdate
     /** A short-lived typing notice, subject to Fluxer's delivery filtering. It is not an account presence snapshot or cache entry */
     readonly typingStart: TypingStart
@@ -314,9 +354,12 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      * Replaces the enabled message-cache observation rather than merging absent metadata from an older snapshot
      */
     readonly messageUpdate: M
-    /** One deleted message's channel and message IDs, plus only the optional context Fluxer supplied. Evicts its enabled message-cache entry */
+    /** One deleted message's channel and message IDs, plus supplied guild ID, text and author ID when available.
+     * Evicts its enabled message-cache entry without reconstructing missing context
+     */
     readonly messageDelete: MessageDeletion
-    /** Deleted message IDs grouped by channel. Listen to this and messageDelete to observe both deletion forms.
+    /** Deleted message IDs grouped by channel, with guild context only when supplied.
+     * Listen to this and messageDelete to observe both deletion forms.
      * Evicts the listed enabled message-cache entries
      */
     readonly messageDeleteBulk: MessageBulkDeletion
@@ -377,6 +420,7 @@ export interface HandlerOptions extends EventBufferOptions {
 
 /** Safe notification that an event callback failed or its waiting queue overflowed.
  * No message bodies, credentials or original callback errors are exposed.
+ * When no error hook is configured or it fails, fallback diagnostics identify the event and failure kind.
  * To inspect your original failure, catch it inside a default API callback or use Effect.tapCause inside a native handler.
  * The SDK error hook does not provide access to the raw exception
  */

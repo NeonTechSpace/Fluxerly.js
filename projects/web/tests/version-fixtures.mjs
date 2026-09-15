@@ -4,7 +4,7 @@ import { createRequire } from "node:module"
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { build } from "astro"
-import { filesIn, generate, webRoot } from "../scripts/generate.mjs"
+import { authoredGuideNavigation, authoredGuides, filesIn, generate, webRoot } from "../scripts/generate.mjs"
 import { validateSnapshot } from "../scripts/versions.mjs"
 
 const require = createRequire(import.meta.url)
@@ -61,6 +61,10 @@ try {
         await writeFile(join(released, `${version}.json`), bytes, { flag: "wx" })
     }
     await generate({ releasesDirectory: released })
+    const guidePages = (await authoredGuides()).map((guide) => guide.slug)
+    const developmentMeta = JSON.parse(await readFile(join(webRoot, "content/docs/dev/meta.json"), "utf8"))
+    assert.deepEqual(developmentMeta.pages, await authoredGuideNavigation())
+    for (const guide of guidePages) await readFile(join(webRoot, "content/docs/dev", `${guide}.md`), "utf8")
     const before = new Map()
     for (const [version] of fixtures) before.set(version, await filesIn(join(webRoot, "content/docs", version)))
     // A clean regeneration discards stale development output, never the release snapshot source

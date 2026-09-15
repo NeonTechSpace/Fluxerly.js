@@ -142,7 +142,7 @@ export interface AuditLogChange {
 }
 
 /** Action-specific details explaining an audit record, such as the destination channel or affected entity count.
- * These are received context fields, not request options. Fields remain absent when Fluxer did not supply them.
+ * Context fields remain absent when Fluxer did not supply them.
  * Their meaning depends on the entry's actionType
  */
 export interface AuditLogOptions {
@@ -152,6 +152,8 @@ export interface AuditLogOptions {
     readonly count?: number
     /** Legacy whole-day deletion value recorded for a member ban */
     readonly deleteMemberDays?: string
+    /** Seconds of messages deleted for a member ban, present only when Fluxer recorded a positive duration */
+    readonly deleteMessageSeconds?: number
     /** Decimal overwrite target or other action-specific ID */
     readonly id?: string
     /** Provider integration-type value */
@@ -177,8 +179,8 @@ export interface AuditLogOptions {
 }
 
 /** One recorded administrative action in a guild, with available actor, target, reason and changed settings.
- * This frozen record is useful for reviewing activity, not authorizing an action or proving current resource state.
- * targetId can contain an invite code, and reason can contain caller-authored text. Treat both as potentially sensitive
+ * The record is frozen. Fetch current resources when a decision depends on their present state.
+ * The targetId field can contain an invite code, and reason can contain caller-authored text. Treat both as potentially sensitive
  */
 export interface AuditLogEntry {
     /** Decimal audit-entry ID */

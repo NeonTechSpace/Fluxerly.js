@@ -12,6 +12,7 @@ import type {
 import type { GuildRequest } from "./guilds.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max
@@ -21,7 +22,7 @@ const nullableText = (value: unknown): value is string | null => value === null 
 const timestamp = (value: unknown): value is string =>
     typeof value === "string" &&
     /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(value) &&
-    Number.isFinite(Date.parse(value))
+    validCalendarTimestamp(value)
 const nullableTime = (value: unknown): value is string | null => value === null || timestamp(value)
 
 function application(value: unknown, guildId: string): DiscoveryApplication | undefined {
@@ -261,12 +262,17 @@ function body(input: DiscoveryApplicationInput | DiscoveryApplicationEdit, patch
         (!text(input.primaryLanguage, 2, 35) || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(input.primaryLanguage))
     )
         return inputValidationFailure("primaryLanguage", "format", "Primary language must be a valid language tag")
+    const rawTags = input.tags
     let tags: string[] | undefined
-    if (input.tags !== undefined) {
-        if (!Array.isArray(input.tags) || input.tags.length > 10)
+    if (rawTags !== undefined) {
+        if (!Array.isArray(rawTags))
+            return inputValidationFailure("tags", "length", "Discovery tags must be an array with at most ten entries")
+        const count = rawTags.length
+        if (count > 10)
             return inputValidationFailure("tags", "length", "Discovery tags must be an array with at most ten entries")
         tags = []
-        for (const tag of input.tags) {
+        for (let index = 0; index < count; index++) {
+            const tag = rawTags[index]
             if (!text(tag, 2, 30))
                 return inputValidationFailure("tags[]", "length", "Discovery tags must contain 2 through 30 characters")
             const normalized = tag.trim().toLowerCase().replace(/\s+/g, " ")

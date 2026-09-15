@@ -76,7 +76,7 @@ export interface StickerCreate {
     readonly name: string
     /** Omitted/null means no description. Otherwise 1–500 Unicode code points */
     readonly description?: string | null
-    /** Up to ten tags of 1–30 Unicode code points each. Omitted means empty */
+    /** Up to ten tags of 1–30 Unicode code points each. Omitted means empty. Entries are copied by index when the operation starts */
     readonly tags?: readonly string[]
     /** Base64 image data or image data URI, at most 512 KiB decoded */
     readonly image: string
@@ -96,7 +96,7 @@ export interface StickerEdit {
     readonly name: string
     /** Required replacement description, up to 500 Unicode code points. Empty/null clears it */
     readonly description: string | null
-    /** Required replacement list, at most ten tags of 1–30 Unicode code points. [] clears it */
+    /** Required replacement list, at most ten tags of 1–30 Unicode code points. [] clears it. Entries are copied by index when the operation starts */
     readonly tags: readonly string[]
 }
 

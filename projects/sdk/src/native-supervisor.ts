@@ -27,7 +27,9 @@ export interface NativeSupervisorChildContext {
 export interface NativeSupervisorChildOptions<E = never, R = never> {
     /** Bot token for the client created by child.run. The parent assignment does not supply this credential */
     readonly token: string
-    /** Native client settings copied into the child client. Runtime validation rejects token and sharding overrides */
+    /** Supported native client settings are read by property name and copied before configure, including inherited and
+     * non-enumerable properties. Runtime validation rejects token and sharding overrides
+     */
     readonly clientOptions?: Omit<ClientOptions<E, R>, "token" | "sharding">
     /** Register subscriptions and local application behavior before the helper executes client.run.
      * Finish this Effect when setup is complete, not when the bot stops. Do not execute client.run, connect or shutdown here.
@@ -112,8 +114,8 @@ function rejectChildOverrides<E, R>(options: NativeSupervisorChildOptions<E, R>)
         clientOptions !== undefined &&
         (typeof clientOptions !== "object" ||
             clientOptions === null ||
-            Object.hasOwn(clientOptions, "token") ||
-            Object.hasOwn(clientOptions, "sharding"))
+            "token" in clientOptions ||
+            "sharding" in clientOptions)
     )
         return new ConfigurationError(
             "configuration",
@@ -127,8 +129,18 @@ function childClientOptions<E, R>(
     assignment: SupervisorAssignment,
     bridge: ChildBridge,
 ): ClientOptions<E, R> {
+    const { messageFields, instance, uploads, logging, cache, connection } = options.clientOptions ?? {}
     return attachIdentifyGate(
-        { ...options.clientOptions, token: options.token, sharding: assignment },
+        {
+            ...(messageFields === undefined ? {} : { messageFields }),
+            ...(instance === undefined ? {} : { instance }),
+            ...(uploads === undefined ? {} : { uploads }),
+            ...(logging === undefined ? {} : { logging }),
+            ...(cache === undefined ? {} : { cache }),
+            ...(connection === undefined ? {} : { connection }),
+            token: options.token,
+            sharding: assignment,
+        },
         bridge.identifyGate,
     )
 }

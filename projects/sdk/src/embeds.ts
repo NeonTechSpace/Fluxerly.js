@@ -1,5 +1,5 @@
 /** A rich card to include in a message's embeds array, with optional text, images and named sections.
- * This is an object to send, not a received link preview. Message operations reject unknown keys and null values locally
+ * Message operations reject unknown keys and null values locally
  *
  * Length limits use JavaScript `string.length`, so some emoji count as multiple units, before the server changes any text
  *
@@ -39,7 +39,9 @@ export interface EmbedInput {
     readonly url?: string
     /** RGB integer from 0x000000 through 0xffffff */
     readonly color?: number
-    /** Time shown with the embed, an ISO 8601 string with a timezone such as `new Date().toISOString()`, not a Date or epoch number */
+    /** Time shown with the embed, an ISO 8601 string with a timezone such as `new Date().toISOString()`.
+     * Invalid calendar dates are rejected locally
+     */
     readonly timestamp?: string
     /** Author label and optional links */
     readonly author?: EmbedAuthorInput
@@ -49,7 +51,7 @@ export interface EmbedInput {
     readonly image?: EmbedMediaInput
     /** Small HTTP(S) image or attachment://filename for one same-message uploaded image */
     readonly thumbnail?: EmbedMediaInput
-    /** Up to 25 named sections, in display order */
+    /** Up to 25 named sections, in display order. Entries are copied by index when the operation starts */
     readonly fields?: readonly EmbedFieldInput[]
 }
 

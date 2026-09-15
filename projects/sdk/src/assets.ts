@@ -33,7 +33,7 @@ export const AssetFormats: Readonly<{
 /** One image encoding the hosted Fluxer media proxy can produce */
 export type AssetFormat = (typeof AssetFormats)[keyof typeof AssetFormats]
 
-/** Options for the image URL you want to display, not options for uploading a file.
+/** Choose the format, size and animation requested by an asset URL.
  * Unknown keys or invalid values return AssetUrlError. Options are checked even when the target's image is absent
  */
 export interface AssetUrlOptions {
@@ -358,7 +358,7 @@ export const assets: Readonly<{
         options?: AssetUrlOptions,
     ): Result<string | null, AssetUrlError>
     /** Return the user's custom-avatar URL, or null when their avatar field is null.
-     * Uses only id and avatar, no profile is fetched. An omitted avatar is invalid rather than an instruction to choose a default
+     * Uses only id and avatar. No profile is fetched. An omitted avatar is invalid
      */
     avatar(user: Pick<User, "id" | "avatar">, options?: AssetUrlOptions): Result<string | null, AssetUrlError>
     /** Build Fluxer's static default-avatar URL from a user ID. Static defaults have no media transform query and do not depend on user-profile availability */
@@ -383,8 +383,8 @@ export const assets: Readonly<{
     ): Result<string | null | undefined, AssetUrlError>
     /** Choose an avatar to display for a user in a server. The user id must match member.userId.
      * Normally chooses the member avatar, then the account avatar, then a static default. AvatarUnset instead selects the static default directly.
-     * Returns undefined if profileFlags is omitted, or if avatar is omitted without AvatarUnset, rather than guessing from incomplete data.
-     * Reads guildId, userId, avatar and profileFlags from the member, not banner. Invalid targets or options return AssetUrlError
+     * Returns undefined if profileFlags is omitted or avatar is omitted without AvatarUnset.
+     * Reads guildId, userId, avatar and profileFlags from the member. Invalid targets or options return AssetUrlError
      */
     displayMemberAvatar(
         user: Pick<User, "id" | "avatar">,

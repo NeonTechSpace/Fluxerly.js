@@ -71,28 +71,30 @@ function settings(value: unknown, create: boolean, move: boolean) {
             "allowedFields",
             "Webhook input may contain only name, avatar, and the operation-supported channelId",
         )
-    if ((create || value.name !== undefined) && !name(value.name))
+    const displayName = value.name
+    if ((create || displayName !== undefined) && !name(displayName))
         return inputValidationFailure(
             "name",
             "length",
             "Webhook name must contain 1 through 80 Unicode code points and at least one non-whitespace character",
         )
+    const avatar = value.avatar
     if (
-        value.avatar !== undefined &&
-        value.avatar !== null &&
-        (typeof value.avatar !== "string" ||
-            !/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]*={0,2}$/.test(value.avatar))
+        avatar !== undefined &&
+        avatar !== null &&
+        (typeof avatar !== "string" || !/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]*={0,2}$/.test(avatar))
     )
         return inputValidationFailure("avatar", "format", "Webhook avatar must be null or a base64 image data URI")
-    if (value.channelId !== undefined && !identifier(value.channelId))
+    const channelId = value.channelId
+    if (channelId !== undefined && !identifier(channelId))
         return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
-    if (!create && value.name === undefined && value.avatar === undefined && value.channelId === undefined)
+    if (!create && displayName === undefined && avatar === undefined && channelId === undefined)
         return inputValidationFailure("input", "required", "Webhook edit must contain a change")
     return {
         json: JSON.stringify({
-            ...(value.name === undefined ? {} : { name: value.name }),
-            ...(value.avatar === undefined ? {} : { avatar: value.avatar }),
-            ...(value.channelId === undefined ? {} : { channel_id: value.channelId }),
+            ...(displayName === undefined ? {} : { name: displayName }),
+            ...(avatar === undefined ? {} : { avatar }),
+            ...(channelId === undefined ? {} : { channel_id: channelId }),
         }),
         files: [],
     }

@@ -15,7 +15,7 @@ const positive = (value: unknown): value is number =>
 export function searchMessagePagination<M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     context: MessageSearchContext,
-    filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+    filters: Omit<MessageSearchQuery, "limit" | "page">,
     limits: MessageSearchIterationLimits,
     options?: MessageOperationOptions,
 ) {
@@ -24,12 +24,12 @@ export function searchMessagePagination<M extends MessageCore = Message>(
             Effect.fail(new PaginationError("messages.iterateSearch", "input", failure.detail))
         if (!record(filters))
             return invalid(inputValidationFailure("filters", "type", "Message search filters must be an object"))
-        if ("limit" in filters || "page" in filters || "cursor" in filters)
+        if ("limit" in filters || "page" in filters)
             return invalid(
                 inputValidationFailure(
                     "filters",
                     "allowedFields",
-                    "Message search iteration filters cannot contain limit, page, or cursor",
+                    "Message search iteration filters cannot contain limit or page",
                 ),
             )
         if (!record(limits))
@@ -42,7 +42,10 @@ export function searchMessagePagination<M extends MessageCore = Message>(
                     "Message search limits may contain only maxItems, maxPages, and pageSize",
                 ),
             )
-        if (!positive(limits.maxItems))
+        const maxItems = limits.maxItems
+        const pageSizeInput = limits.pageSize
+        const maxPagesInput = limits.maxPages
+        if (!positive(maxItems))
             return invalid(
                 inputValidationFailure("limits.maxItems", "range", "maxItems must be a positive safe integer"),
             )
@@ -56,8 +59,9 @@ export function searchMessagePagination<M extends MessageCore = Message>(
                     "Native message search options may contain only timeoutMs",
                 ),
             )
-        const pageSize = limits.pageSize === undefined ? 25 : limits.pageSize
-        const maxPages = limits.maxPages === undefined ? 100 : limits.maxPages
+        const timeoutMs = options?.timeoutMs
+        const pageSize = pageSizeInput === undefined ? 25 : pageSizeInput
+        const requestedMaxPages = maxPagesInput === undefined ? 100 : maxPagesInput
         if (!positive(pageSize) || pageSize > 25)
             return invalid(
                 inputValidationFailure(
@@ -66,11 +70,11 @@ export function searchMessagePagination<M extends MessageCore = Message>(
                     "pageSize must be a positive safe integer no greater than 25",
                 ),
             )
-        if (!positive(maxPages))
+        if (!positive(requestedMaxPages))
             return invalid(
                 inputValidationFailure("limits.maxPages", "range", "maxPages must be a positive safe integer"),
             )
-        if (options?.timeoutMs !== undefined && (!positive(options.timeoutMs) || options.timeoutMs > 2_147_483_647))
+        if (timeoutMs !== undefined && (!positive(timeoutMs) || timeoutMs > 2_147_483_647))
             return invalid(
                 inputValidationFailure(
                     "options.timeoutMs",
@@ -80,63 +84,48 @@ export function searchMessagePagination<M extends MessageCore = Message>(
             )
         const validated = encodeMessageSearch(context, filters)
         if (validated instanceof InputValidationFailure) return invalid(validated)
-        const encoded = JSON.parse(validated.json) as {
-            readonly context_guild_id?: string
-            readonly context_channel_id?: string
-        }
-        const copiedContext: MessageSearchContext =
-            encoded.context_guild_id !== undefined
-                ? encoded.context_channel_id === undefined
-                    ? { guildId: encoded.context_guild_id }
-                    : { guildId: encoded.context_guild_id, channelId: encoded.context_channel_id }
-                : { channelId: encoded.context_channel_id! }
+        const copiedContext = validated.context
         const copiedFilters = validated.query
-        const requestOptions = options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }
+        const requestOptions = timeoutMs === undefined ? {} : { timeoutMs }
+        const requestLimit = Math.min(pageSize, maxItems)
+        const maxPages = Math.min(requestedMaxPages, 400)
         return Effect.succeed(
             new Pagination(
                 owner,
                 "messages.iterateSearch",
                 {
-                    maxItems: limits.maxItems,
+                    maxItems,
                     maxPages,
                     pageSize,
-                    cursor: undefined,
+                    cursor: "1",
                     options: requestOptions,
                 },
                 {
                     identity: (message: M) => message.id,
-                    advances: (previous, next) => previous !== next,
-                    load: (cursor, limit) =>
+                    advances: (previous, next) => Number(next) > Number(previous),
+                    load: (cursor) =>
                         Effect.gen(function* () {
-                            let pageCursor: readonly string[] | undefined
-                            if (cursor !== undefined) {
-                                try {
-                                    const decoded: unknown = JSON.parse(cursor)
-                                    if (!Array.isArray(decoded) || !decoded.every((item) => typeof item === "string"))
-                                        return yield* Effect.fail(
-                                            new PaginationError("messages.iterateSearch", "cursorStalled"),
-                                        )
-                                    pageCursor = decoded
-                                } catch {
-                                    return yield* Effect.fail(
-                                        new PaginationError("messages.iterateSearch", "cursorStalled"),
-                                    )
-                                }
-                            }
+                            const requestedPage = Number(cursor)
+                            if (!Number.isSafeInteger(requestedPage) || requestedPage < 1 || requestedPage > 400)
+                                return yield* Effect.fail(new PaginationError("messages.iterateSearch", "pageLimit"))
                             const page = yield* owner.searchMessages(
                                 copiedContext,
                                 {
                                     ...copiedFilters,
-                                    limit,
-                                    ...(pageCursor === undefined ? { page: 1 } : { cursor: pageCursor }),
+                                    limit: requestLimit,
+                                    page: requestedPage,
                                 },
                                 requestOptions,
                             )
                             if (page.indexing)
                                 return yield* Effect.fail(new PaginationError("messages.iterateSearch", "indexing"))
+                            if (page.page !== requestedPage || page.hitsPerPage !== requestLimit)
+                                return yield* Effect.fail(
+                                    new PaginationError("messages.iterateSearch", "cursorStalled"),
+                                )
                             return {
                                 items: page.messages,
-                                next: page.cursor === undefined ? null : JSON.stringify(page.cursor),
+                                next: page.total > requestedPage * requestLimit ? String(requestedPage + 1) : null,
                             }
                         }),
                 },

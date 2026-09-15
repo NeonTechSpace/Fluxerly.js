@@ -253,9 +253,38 @@ test.each(modes)("%s sends stickers without text, replies and projects frozen st
     expect((await api.history())[0]?.stickers).toEqual([{ id: "502", name: "Fixture", animated: false }])
     expect((await api.get())?.stickers).toEqual([{ id: "502", name: "Fixture", animated: false }])
     expect((await api.edit({ content: "Caption" })).stickers).toEqual([{ id: "502", name: "Fixture", animated: false }])
+    const iteratorStickers = ["501"]
+    Object.defineProperty(iteratorStickers, Symbol.iterator, {
+        value: function* () {
+            yield "501"
+            yield "502"
+            yield "503"
+            yield "504"
+        },
+    })
+    const iteratorSent = await api.send({ stickerIds: iteratorStickers })
+    expect(server.requests.at(-1)?.body.sticker_ids).toEqual(["501"])
+    expect(iteratorSent.stickers.map((sticker) => sticker.id)).toEqual(["501"])
+    const alternatingStickers = ["501"]
+    let stickerReads = 0
+    Object.defineProperty(alternatingStickers, 0, {
+        get: () => (stickerReads++ === 0 ? "501" : "not-an-id"),
+        enumerable: true,
+    })
+    const alternatingSent = await api.send({ stickerIds: alternatingStickers })
+    expect(server.requests.at(-1)?.body.sticker_ids).toEqual(["501"])
+    expect(alternatingSent.stickers.map((sticker) => sticker.id)).toEqual(["501"])
+    expect(stickerReads).toBe(1)
+    const iteratorMaskedSticker = ["not-an-id"]
+    Object.defineProperty(iteratorMaskedSticker, Symbol.iterator, {
+        value: function* () {
+            yield "501"
+        },
+    })
     const before = server.requests.length
     for (const stickerIds of [[], null, Array(1), ["../501"], [501], ["1", "2", "3", "4"]])
         await expect(api.send({ stickerIds } as MessageInput)).rejects.toBeDefined()
+    await expect(api.send({ stickerIds: iteratorMaskedSticker } as MessageInput)).rejects.toBeDefined()
     await expect(api.edit({ content: "No replacement", stickerIds: ["501"] } as EditMessageInput)).rejects.toBeDefined()
     expect(server.requests).toHaveLength(before)
     for (const stickers of [null, undefined, []]) {
@@ -266,6 +295,19 @@ test.each(modes)("%s sends stickers without text, replies and projects frozen st
         server.set({ ...wire(), stickers })
         await expect(api.fetch()).rejects.toBeDefined()
     }
+})
+
+test.each(modes)("%s rejects maximal sparse sticker arrays before reading indexed entries", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    const stickerIds = new Array(2 ** 32 - 1)
+    Object.defineProperty(stickerIds, 0, {
+        get: () => {
+            throw Error("Oversized sticker arrays must not read entries")
+        },
+    })
+    await expect(api.send({ stickerIds } as MessageInput)).rejects.toBeDefined()
+    expect(server.requests).toEqual([])
 })
 
 test.each(modes)("%s receives sticker-only gateway changes without retaining extra fields", async (mode) => {
@@ -313,6 +355,45 @@ test.each(modes)(
         expect(server.requests.map((r) => r.method)).not.toContain("GET")
     },
 )
+
+test.each(modes)("%s reads direct embed fields only from indexed array entries", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    const fields = [{ name: "Indexed", value: "field" }]
+    Object.defineProperty(fields, Symbol.iterator, {
+        value: function* () {
+            for (let index = 0; index < 26; index++) yield { name: `Iterator ${index}`, value: "field" }
+        },
+    })
+    const input = { embeds: [{ fields }] }
+    await api.send(input)
+    await api.reply(input)
+    await api.edit(input)
+    expect(server.requests.map((request) => request.body.embeds?.[0]?.fields)).toEqual([
+        [{ name: "Indexed", value: "field" }],
+        [{ name: "Indexed", value: "field" }],
+        [{ name: "Indexed", value: "field" }],
+    ])
+    const iteratorMaskedField = [{ name: "Indexed", value: 1 }]
+    Object.defineProperty(iteratorMaskedField, Symbol.iterator, {
+        value: function* () {
+            yield { name: "Indexed", value: "field" }
+        },
+    })
+    const before = server.requests.length
+    await expect(
+        api.send({ embeds: [{ fields: iteratorMaskedField }] } as unknown as MessageInput),
+    ).rejects.toBeDefined()
+    expect(server.requests).toHaveLength(before)
+})
+
+test.each(modes)("%s preserves valid leap-day offset and 24:00 embed timestamps", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    const timestamp = "2024-02-29T24:00:00+14:00"
+    await api.send({ embeds: [{ timestamp }] })
+    expect(server.requests[0]?.body.embeds?.[0]?.timestamp).toBe(timestamp)
+})
 
 test.each(modes)(
     "%s projects received-only metadata through fetch/history/cache and freezes every nested object",
@@ -379,6 +460,7 @@ test.each(modes)(
             [{ type: "rich", children: [{ type: "x" }, { type: "y" }] }],
             [{ type: "rich", video: { url: "x", flags: 0, width: -1 } }],
             [{ type: "rich", timestamp: "yesterday" }],
+            [{ type: "rich", timestamp: "2025-02-29T00:00:00.000Z" }],
         ]) {
             server.set(wire(bad))
             await expect(api.fetch()).rejects.toBeDefined()
@@ -398,6 +480,7 @@ test.each(modes)("%s rejects invalid input before dispatch without exposing priv
         { color: 0x1000000 },
         { color: 0.5 },
         { timestamp: "yesterday" },
+        { timestamp: "2025-02-29T00:00:00.000Z" },
         { url: "javascript:alert(1)" },
         { image: { url: "attachment://file.png" } },
         { author: { name: "" } },

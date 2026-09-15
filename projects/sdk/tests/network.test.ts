@@ -189,6 +189,120 @@ test("default observer errors use the configured logger with development disable
     expect(JSON.stringify(captured.entries)).not.toContain("private-observer-sentinel")
 })
 
+test.each(["default", "native"] as const)(
+    "%s generic-event handler fallbacks identify the event without callback data",
+    async (mode) => {
+        const server = await fixture()
+        const captured = capturedLogs()
+        const reports: { event: string; kind: string }[] = []
+        if (mode === "default") {
+            const client = defaultApi(undefined, { logger: fromEffectLogger(captured.logger) })
+            expect(
+                client
+                    .on("typingStart", () => {
+                        throw new Error("private-handler-marker")
+                    })
+                    .isOk(),
+            ).toBe(true)
+            expect(
+                client
+                    .on(
+                        "typingStart",
+                        () => {
+                            throw new Error("private-handler-marker")
+                        },
+                        {
+                            onError: (report) => {
+                                reports.push({ event: report.event, kind: report.kind })
+                                throw new Error("private-reporter-marker")
+                            },
+                        },
+                    )
+                    .isOk(),
+            ).toBe(true)
+            expect((await client.connect()).isOk()).toBe(true)
+        } else {
+            const scope = Scope.makeUnsafe()
+            const client = await Effect.runPromise(
+                createNative({ token: "fixture-only-not-a-credential" }).pipe(Scope.provide(scope)),
+            )
+            onTestFinished(async () => {
+                await Effect.runPromise(client.shutdown())
+                await Effect.runPromise(Scope.close(scope, Exit.void))
+            })
+            await Effect.runPromise(
+                client
+                    .on("typingStart", () => Effect.fail(new Error("private-handler-marker")))
+                    .pipe(Scope.provide(scope), Effect.withLogger(captured.logger)),
+            )
+            await Effect.runPromise(
+                client
+                    .on("typingStart", () => Effect.fail(new Error("private-handler-marker")), {
+                        onError: (report) =>
+                            Effect.sync(() => {
+                                reports.push({ event: report.event, kind: report.kind })
+                                throw new Error("private-reporter-marker")
+                            }),
+                    })
+                    .pipe(Scope.provide(scope), Effect.withLogger(captured.logger)),
+            )
+            await Effect.runPromise(client.connect())
+        }
+        server.sockets[0]!.send(
+            JSON.stringify({
+                op: 0,
+                s: 2,
+                t: "TYPING_START",
+                d: { channel_id: "924151", user_id: "924152", timestamp: 1 },
+            }),
+        )
+        await vi.waitFor(() => expect(captured.entries).toHaveLength(2))
+        expect(reports).toEqual([{ event: "typingStart", kind: "handler" }])
+        const messages = captured.entries.map((entry) => String(entry.message))
+        expect(messages.filter((message) => message.includes("typingStart"))).toHaveLength(2)
+        expect(messages.filter((message) => message.includes("handler"))).toHaveLength(2)
+        expect(messages.filter((message) => message.includes("reporter"))).toHaveLength(1)
+        const serialized = JSON.stringify(captured.entries)
+        for (const privateValue of ["private-handler-marker", "private-reporter-marker", "924151", "924152"])
+            expect(serialized).not.toContain(privateValue)
+    },
+)
+
+test("non-message pull subscriptions use generic event errors", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const busySource = client.events("typingStart")._unsafeUnwrap()
+    const controller = new AbortController()
+    const reading = busySource.next({ signal: controller.signal })
+    const busy = (await busySource.next())._unsafeUnwrapErr()
+    expect(busy._tag).toBe("EventReadBusyError")
+    expect(busy.message).toMatch(/\bevent\b/i)
+    expect(busy.message).not.toMatch(/\bmessage\b/i)
+    controller.abort()
+    expect((await reading).isErr()).toBe(true)
+    busySource.unsubscribe()
+
+    const overflowing = client.events("typingStart", { maxPendingMessages: 1 })._unsafeUnwrap()
+    expect((await client.connect()).isOk()).toBe(true)
+    for (const [sequence, timestamp] of [
+        [2, 1],
+        [3, 2],
+    ])
+        server.sockets[0]!.send(
+            JSON.stringify({
+                op: 0,
+                s: sequence,
+                t: "TYPING_START",
+                d: { channel_id: "924151", user_id: "924152", timestamp },
+            }),
+        )
+    const overflow = (await overflowing.waitForClose())._unsafeUnwrapErr()
+    expect(overflow._tag).toBe("EventOverflowError")
+    if (overflow._tag === "EventOverflowError") expect(overflow.limit).toBe("messages")
+    expect(overflow.message).toMatch(/\bevent\b/i)
+    expect(overflow.message).not.toMatch(/\bmessage\b/i)
+})
+
 test.each([
     [null, "logging"],
     [{ development: "yes" }, "development"],

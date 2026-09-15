@@ -42,23 +42,32 @@ const joinSourceType = (value: unknown): value is GuildMemberJoinSourceType =>
 const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
 
+function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
+    if (!Array.isArray(value)) return undefined
+    const count = value.length
+    if (count > maximum) return undefined
+    const items = new Array<unknown>(count)
+    for (let index = 0; index < count; index++) items[index] = value[index]
+    return Object.freeze(items)
+}
+
 function identifiers(value: unknown, maximum: number): readonly string[] | undefined {
-    if (!Array.isArray(value) || value.length > maximum) return undefined
-    const items = Array.from(value)
+    const items = snapshotArray(value, maximum)
+    if (!items) return undefined
     return items.every(identifier) && new Set(items).size === items.length ? Object.freeze(items) : undefined
 }
 
 function texts(value: unknown, maximum: number): readonly string[] | undefined {
-    if (!Array.isArray(value) || value.length > maximum) return undefined
-    const items = Array.from(value)
+    const items = snapshotArray(value, maximum)
+    if (!items) return undefined
     return items.every((item) => typeof item === "string") && new Set(items).size === items.length
         ? Object.freeze(items)
         : undefined
 }
 
 function joinSourceTypes(value: unknown): readonly GuildMemberJoinSourceType[] | undefined {
-    if (!Array.isArray(value) || value.length > 10) return undefined
-    const items = Array.from(value)
+    const items = snapshotArray(value, 10)
+    if (!items) return undefined
     return items.every(joinSourceType) && new Set(items).size === items.length ? Object.freeze(items) : undefined
 }
 

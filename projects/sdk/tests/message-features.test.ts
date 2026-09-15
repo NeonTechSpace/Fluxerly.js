@@ -54,6 +54,11 @@ function unwrap<A, E>(result: { isErr(): boolean; value?: A; error?: E }): A {
 
 const apiSurfaces = ["default", "native"] as const
 
+function iteratorMasked<T>(indexed: T[], yielded: readonly T[]): T[] {
+    Object.defineProperty(indexed, Symbol.iterator, { value: () => yielded.values() })
+    return indexed
+}
+
 async function forwardSuccess(surface: (typeof apiSurfaces)[number], input: ForwardMessageInput) {
     if (surface === "default") {
         const client = unwrap(createClient({ token: "fixture" }))
@@ -130,6 +135,33 @@ test("forward encodes only an immutable source reference and rejects malformed m
         { source: { id: "10", channelId: "30" }, embedIndices: new Array(1) },
     ])
         expect(encodeForward("20", input, "nonce")).toMatchObject({ _tag: "MessageError", reason: "input" })
+})
+
+test.each(apiSurfaces)("forward snapshots indexed selectors through the %s API", async (surface) => {
+    const requests = fixture()
+    const attachmentIds = iteratorMasked(
+        ["40"],
+        Array.from({ length: 11 }, () => "40"),
+    )
+    const embedIndices = iteratorMasked(
+        [0],
+        Array.from({ length: 11 }, () => 0),
+    )
+    await forwardSuccess(surface, { source: { id: "10", channelId: "30" }, attachmentIds, embedIndices })
+    expect(requests[0]?.body.message_reference).toMatchObject({ attachment_ids: ["40"], embed_indices: [0] })
+
+    const maskedAttachmentIds = iteratorMasked(["invalid"], ["40"])
+    const maskedEmbedIndices = iteratorMasked([-1], [0])
+    for (const input of [
+        { source: { id: "10", channelId: "30" }, attachmentIds: maskedAttachmentIds },
+        { source: { id: "10", channelId: "30" }, embedIndices: maskedEmbedIndices },
+    ])
+        expect(await forwardFailure(surface, input)).toMatchObject({
+            _tag: "MessageError",
+            reason: "input",
+            delivery: "notSent",
+        })
+    expect(requests).toHaveLength(1)
 })
 
 test("received forward snapshots retain nullable response state and freeze every retained layer", () => {
@@ -377,42 +409,93 @@ test.each(apiSurfaces)(
     },
 )
 
-test.each(apiSurfaces)("send rejects sparse allowed mentions before discovery through the %s API", async (surface) => {
-    const requests = fixture()
-    if (surface === "default") {
-        const client = unwrap(createClient({ token: "fixture" }))
-        try {
-            const result = await client.messages.send("20", {
-                content: "sparse",
-                allowedMentions: { users: new Array(1) },
-            })
-            expect(result.isErr() && result.error).toMatchObject({
-                _tag: "MessageError",
-                reason: "input",
-                delivery: "notSent",
-            })
-        } finally {
-            unwrap(await client.shutdown())
-        }
-    } else {
-        await Effect.runPromise(
-            Effect.scoped(
-                Effect.gen(function* () {
-                    const client = yield* createNative({ token: "fixture" })
-                    const failure = yield* client.messages
-                        .send("20", { content: "sparse", allowedMentions: { users: new Array(1) } })
-                        .pipe(Effect.flip)
-                    expect(failure).toMatchObject({
+test.each(apiSurfaces)(
+    "send rejects sparse and iterator-masked allowed mentions before discovery through the %s API",
+    async (surface) => {
+        const requests = fixture()
+        const invalidSelections = [
+            { users: new Array(1) },
+            { users: iteratorMasked(["invalid"], ["30"]) },
+            { roles: iteratorMasked(["invalid"], ["40"]) },
+        ]
+        if (surface === "default") {
+            const client = unwrap(createClient({ token: "fixture" }))
+            try {
+                for (const allowedMentions of invalidSelections) {
+                    const result = await client.messages.send("20", { content: "invalid", allowedMentions })
+                    expect(result.isErr() && result.error).toMatchObject({
                         _tag: "MessageError",
                         reason: "input",
                         delivery: "notSent",
                     })
-                }),
-            ),
-        )
-    }
-    expect(requests).toEqual([])
-})
+                }
+            } finally {
+                unwrap(await client.shutdown())
+            }
+        } else {
+            await Effect.runPromise(
+                Effect.scoped(
+                    Effect.gen(function* () {
+                        const client = yield* createNative({ token: "fixture" })
+                        for (const allowedMentions of invalidSelections) {
+                            const failure = yield* client.messages
+                                .send("20", { content: "invalid", allowedMentions })
+                                .pipe(Effect.flip)
+                            expect(failure).toMatchObject({
+                                _tag: "MessageError",
+                                reason: "input",
+                                delivery: "notSent",
+                            })
+                        }
+                    }),
+                ),
+            )
+        }
+        expect(requests).toEqual([])
+    },
+)
+
+test.each(apiSurfaces)(
+    "send reads allowed mention selections without invoking custom iterators through the %s API",
+    async (surface) => {
+        const requests = fixture()
+        const users = ["30"]
+        const roles = ["40"]
+        Object.defineProperty(users, Symbol.iterator, {
+            value: () => {
+                throw Error("Users iterator must not run")
+            },
+        })
+        Object.defineProperty(roles, Symbol.iterator, {
+            value: () => {
+                throw Error("Roles iterator must not run")
+            },
+        })
+        if (surface === "default") {
+            const client = unwrap(createClient({ token: "fixture" }))
+            try {
+                unwrap(await client.messages.send("20", { content: "mentions", allowedMentions: { users, roles } }))
+            } finally {
+                unwrap(await client.shutdown())
+            }
+        } else {
+            await Effect.runPromise(
+                Effect.scoped(
+                    Effect.gen(function* () {
+                        const client = yield* createNative({ token: "fixture" })
+                        yield* client.messages.send("20", { content: "mentions", allowedMentions: { users, roles } })
+                    }),
+                ),
+            )
+        }
+        expect(requests[0]?.body.allowed_mentions).toEqual({
+            parse: [],
+            users: ["30"],
+            roles: ["40"],
+            replied_user: false,
+        })
+    },
+)
 
 test("flags do not bypass edit body validation", () => {
     expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, content: 42 })).toBeInstanceOf(InputValidationFailure)

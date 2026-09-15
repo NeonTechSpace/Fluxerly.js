@@ -91,6 +91,16 @@ test("default fetch, edit and delete use references without a gateway and return
         content: "  changed  ",
         allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
     })
+    let targetReads = 0
+    const changingTarget = {
+        channelId: "20",
+        get id() {
+            return ++targetReads === 1 ? "10" : "11"
+        },
+    }
+    expect(value(await client.messages.delete(changingTarget))).toBeUndefined()
+    expect(targetReads).toBe(1)
+    expect(server.requests.at(-1)).toMatchObject({ method: "DELETE", path: "/v1/channels/20/messages/10" })
 })
 
 test("native methods are lazy, repeatable effects with matching results and typed missing-target failures", async () => {
@@ -108,6 +118,16 @@ test("native methods are lazy, repeatable effects with matching results and type
                 expect(edited.content).toBe("native")
                 expect(Object.isFrozen(edited.author)).toBe(true)
                 expect(yield* client.messages.delete(edited)).toBeUndefined()
+                let targetReads = 0
+                const changingTarget = {
+                    channelId: "20",
+                    get id() {
+                        return ++targetReads === 1 ? "10" : "11"
+                    },
+                }
+                expect(yield* client.messages.delete(changingTarget)).toBeUndefined()
+                expect(targetReads).toBe(1)
+                expect(server.requests.at(-1)).toMatchObject({ method: "DELETE", path: "/v1/channels/20/messages/10" })
                 server.control.respond = (response) => {
                     response.writeHead(404).end("{}")
                 }

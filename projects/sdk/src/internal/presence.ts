@@ -2,6 +2,7 @@ import type { PresenceUpdate, PresenceUpdateBulk } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import type { CustomStatusEmoji, PresenceInput, PresenceStatus } from "#sdk/presence"
 import { identifier, record } from "./message.js"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 const statuses = new Set<PresenceStatus>(["online", "idle", "dnd", "invisible"])
 const presenceIntervalMs = 4_000
@@ -124,7 +125,7 @@ function customStatus(value: unknown): FrozenCustomStatus | InputValidationFailu
     const expiresAt = value.expiresAt
     if (expiresAt !== undefined && typeof expiresAt !== "string")
         return inputValidationFailure("customStatus.expiresAt", "type", "Must be an ISO-8601 timestamp when supplied")
-    if (typeof expiresAt === "string" && (!iso8601(expiresAt) || !Number.isFinite(Date.parse(expiresAt))))
+    if (typeof expiresAt === "string" && (!iso8601(expiresAt) || !validCalendarTimestamp(expiresAt)))
         return inputValidationFailure("customStatus.expiresAt", "format", "Must be a valid ISO-8601 timestamp")
     if (typeof expiresAt === "string" && Date.parse(expiresAt) <= Date.now())
         return inputValidationFailure("customStatus.expiresAt", "range", "Must be a future timestamp")

@@ -5,7 +5,11 @@ import { z } from "astro/zod"
 export const collections = {
     docs: defineCollection({
         loader: glob({ pattern: "**/*.{md,mdx}", base: "./content/docs" }),
-        schema: z.object({ title: z.string(), description: z.string().optional() }),
+        schema: z.object({
+            title: z.string(),
+            navTitle: z.string().trim().min(1).optional(),
+            description: z.string().optional(),
+        }),
     }),
     meta: defineCollection({
         loader: glob({ pattern: "**/meta.json", base: "./content/docs" }),

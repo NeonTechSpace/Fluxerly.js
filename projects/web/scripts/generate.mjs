@@ -6,8 +6,72 @@ import { channelTargets, defaultVersion, parseVersion, validateSnapshot } from "
 
 export const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdkRoot = resolve(webRoot, "../sdk")
+export const guidesRoot = join(webRoot, "content/guides")
 export const generatedRoot = join(webRoot, "content/docs")
-const frontmatter = (title) => `---\ntitle: ${JSON.stringify(title)}\n---\n\n`
+const frontmatter = (title, navTitle) =>
+    `---\ntitle: ${JSON.stringify(title)}\n${navTitle ? `navTitle: ${JSON.stringify(navTitle)}\n` : ""}---\n\n`
+const guideSlug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const separator = /^(?:---(?:\[[^\]]+\])?.+---|---)$/
+const generatedPages = new Set(["index", "api", "changelog"])
+
+async function readGuideInventory(directory = guidesRoot) {
+    const entries = await readdir(directory, { withFileTypes: true })
+    const guideFiles = new Set()
+    let inventory
+    for (const entry of entries) {
+        if (entry.isSymbolicLink() || !entry.isFile())
+            throw new Error("Authored guides must be flat regular files")
+        if (entry.name === "meta.json") {
+            inventory = join(directory, entry.name)
+            continue
+        }
+        if (!entry.name.endsWith(".md")) throw new Error("Authored guides must be Markdown files")
+        guideFiles.add(entry.name.slice(0, -3))
+    }
+    if (!inventory) throw new Error("Authored guide inventory is missing")
+    let metadata
+    try {
+        metadata = JSON.parse(await readFile(inventory, "utf8"))
+    } catch (error) {
+        throw new Error("Authored guide inventory is invalid", { cause: error })
+    }
+    if (
+        !metadata ||
+        Array.isArray(metadata) ||
+        Object.keys(metadata).length !== 1 ||
+        !Array.isArray(metadata.pages) ||
+        metadata.pages.length === 0
+    )
+        throw new Error("Authored guide inventory must contain one non-empty pages array")
+    const navigation = metadata.pages
+    const listed = new Set()
+    for (const page of navigation) {
+        if (typeof page !== "string")
+            throw new Error("Authored guide inventory contains an unsafe or duplicate slug")
+        if (separator.test(page)) continue
+        if (!guideSlug.test(page) || listed.has(page))
+            throw new Error("Authored guide inventory contains an unsafe or duplicate slug")
+        listed.add(page)
+        if (!guideFiles.has(page) && !generatedPages.has(page))
+            throw new Error(`Authored guide navigation references a missing page: ${page}`)
+    }
+    const unlisted = [...guideFiles].filter((page) => !listed.has(page))
+    if (unlisted.length > 0) throw new Error(`Authored guide is not listed: ${unlisted.sort().join(", ")}.md`)
+    const guides = await Promise.all(
+        navigation
+            .filter((slug) => guideFiles.has(slug))
+            .map(async (slug) => ({ slug, content: await readFile(join(directory, `${slug}.md`), "utf8") })),
+    )
+    return { guides, navigation }
+}
+
+export async function authoredGuides(directory = guidesRoot) {
+    return (await readGuideInventory(directory)).guides
+}
+
+export async function authoredGuideNavigation(directory = guidesRoot) {
+    return (await readGuideInventory(directory)).navigation
+}
 
 export async function filesIn(directory, prefix = "") {
     const files = []
@@ -23,6 +87,8 @@ export async function filesIn(directory, prefix = "") {
 export async function generateVersion(version, output) {
     if (version !== "dev") parseVersion(version)
     await mkdir(output, { recursive: true })
+    const { guides, navigation } = await readGuideInventory()
+    const manifest = JSON.parse(await readFile(join(sdkRoot, "package.json"), "utf8"))
     const app = await Application.bootstrapWithPlugins({
         name: "Fluxerly API",
         entryPoints: [join(sdkRoot, "dist/index.d.ts"), join(sdkRoot, "dist/effect.d.ts")].map((path) =>
@@ -81,7 +147,8 @@ ${version === "dev" ? "These docs preview unreleased Canary code. There is no pu
 ## Start your bot
 
 Follow [Start your first bot](/docs/${version}/quick-start/) to install the SDK and make a bot that replies to !ping.
-The guide uses JavaScript, with no TypeScript setup or Effect knowledge required
+Continue through the [cookbook](/docs/${version}/messages/) to add messages, commands, events, history, permissions and recovery.
+For an Effect application, start with [your first Effect bot](/docs/${version}/effect-first-bot/)
 
 ## Find a method
 
@@ -90,18 +157,18 @@ Use search to jump to a name such as \`createClient\`
 
 See the [changelog](/docs/${version}/changelog/) for version history
 `
-    await writeFile(join(output, "index.md"), frontmatter("Build a Fluxer bot") + intro)
-    const guide = await readFile(join(webRoot, "content/guides/quick-start.md"), "utf8")
-    const manifest = JSON.parse(await readFile(join(sdkRoot, "package.json"), "utf8"))
+    await writeFile(join(output, "index.md"), frontmatter("Build a Fluxer bot", "Overview") + intro)
     const installation =
         (version === "dev" ? "" : `This installs SDK **${version}**, matching these docs\n`) +
         `\n\`\`\`command\n${JSON.stringify({ kind: "install", package: manifest.name, version })}\n\`\`\`\n`
-    await writeFile(
-        join(output, "quick-start.md"),
-        guide.replaceAll("{{version}}", version)
-            .replace("{{installation}}", installation)
-            .replaceAll("{{effect-version}}", manifest.peerDependencies.effect),
-    )
+    for (const guide of guides)
+        await writeFile(
+            join(output, `${guide.slug}.md`),
+            guide.content
+                .replaceAll("{{version}}", version)
+                .replaceAll("{{installation}}", installation)
+                .replaceAll("{{effect-version}}", manifest.peerDependencies.effect),
+        )
     let changelog
     try {
         changelog = await readFile(join(sdkRoot, "CHANGELOG.md"), "utf8")
@@ -121,7 +188,7 @@ See the [changelog](/docs/${version}/changelog/) for version history
         JSON.stringify({
             title: version === "dev" ? "Canary" : version,
             root: "version",
-            pages: ["index", "quick-start", "api", "changelog"],
+            pages: navigation,
         }),
     )
     await writeFile(join(output, "api/meta.json"), JSON.stringify({ title: "API reference" }))

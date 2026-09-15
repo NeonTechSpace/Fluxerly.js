@@ -37,6 +37,34 @@ test("Example language follows guide filenames, execution, navigation, reload an
     await expect(page.locator("[data-command-code]").filter({ hasText: "node bot.js" })).toHaveCount(1)
 })
 
+test("Messages guide defaults to JavaScript and copies each selected language faithfully", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"])
+    await page.goto("/docs/dev/messages/")
+    const examples = page.locator(".docs-content [data-example-block]")
+    const first = examples.first()
+    await expect(first).toBeVisible()
+    expect(await examples.count()).toBeGreaterThan(1)
+    const selector = first.getByRole("combobox", { name: "Example language" })
+    await expect(selector).toHaveValue("js")
+    const javascript = await first.locator('[data-example-variant="js"] code').textContent()
+    await first.getByRole("button", { name: "Copy", exact: true }).click()
+    await expect(first.locator("[data-example-copy-status]")).toHaveText("Copied")
+    expect((await page.evaluate(() => navigator.clipboard.readText())).replaceAll("\r\n", "\n"))
+        .toBe(javascript?.replaceAll("\r\n", "\n"))
+
+    await selector.selectOption("ts")
+    for (const example of await examples.all()) {
+        await expect(example.getByRole("combobox", { name: "Example language" })).toHaveValue("ts")
+        await expect(example.locator('[data-example-variant="js"]')).toBeHidden()
+        await expect(example.locator('[data-example-variant="ts"]')).toBeVisible()
+    }
+    const typescript = await first.locator('[data-example-variant="ts"] code').textContent()
+    await first.getByRole("button", { name: "Copy", exact: true }).click()
+    await expect(first.locator("[data-example-copy-status]")).toHaveText("Copied")
+    expect((await page.evaluate(() => navigator.clipboard.readText())).replaceAll("\r\n", "\n"))
+        .toBe(typescript?.replaceAll("\r\n", "\n"))
+})
+
 test("Canonical API TypeScript retains types that the executable JavaScript variant removes", async ({ page }) => {
     await page.goto("/docs/dev/api/variables/js-ts.text/")
     const example = page.locator("[data-example-block]").first()
@@ -54,12 +82,19 @@ test("Canonical API TypeScript retains types that the executable JavaScript vari
     await expect(example.locator('[data-example-variant="ts"] code')).toContainText("bits: bigint, content: string")
 })
 
-test("Global language preference never hides the Effect-native TypeScript example", async ({ page }) => {
+test("Global JavaScript preference never changes the native Effect guide examples", async ({ page }) => {
     await page.addInitScript((key) => localStorage.setItem(key, "js"), preferenceKey)
     await page.goto("/docs/dev/api/modules/Effect/")
     await expect(page.locator("[data-example-language]")).toHaveCount(0)
     await expect(page.locator(".docs-content pre").first()).toBeVisible()
     await expect(page.locator(".docs-content pre").first()).toContainText("Effect")
+    for (const slug of ["effect-first-bot", "effect-workflows"]) {
+        await page.goto(`/docs/dev/${slug}/`)
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible()
+        await expect(page.locator("[data-example-language]")).toHaveCount(0)
+        await expect(page.locator("[data-example-block]")).toHaveCount(0)
+        await expect(page.locator(".docs-content pre:visible").first()).toBeVisible()
+    }
 })
 
 test("Example preferences synchronize between open pages", async ({ page, context }) => {

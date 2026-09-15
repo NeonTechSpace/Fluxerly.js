@@ -281,6 +281,7 @@ export interface GuildEdit {
     readonly splashCardAlignment?: GuildSplashCardAlignment
     /**
      * Complete desired set of bot-toggleable features, replacing every prior toggle in GuildFeatureToggles.
+     * Entries are copied by index when the operation starts.
      * Include CloneEmojiEnabled and CloneStickerEnabled to allow cloning from this guild. Omitting them disables
      * that permission. Keep them in the list when changing another toggle if cloning should remain enabled.
      * Deprecated CLONE_EMOJI_DISABLED and CLONE_STICKER_DISABLED values are rejected, not inverted or translated.
@@ -291,6 +292,7 @@ export interface GuildEdit {
     readonly featureToggles?: readonly GuildFeatureToggle[]
     /**
      * ISO 8601 UTC cutoff for members without Read Message History, or null to disable their historical access.
+     * Impossible calendar dates are rejected before dispatch.
      * Fluxer rejects timestamps before guild creation or in the future
      */
     readonly messageHistoryCutoff?: string | null
@@ -532,7 +534,7 @@ export interface GuildRole extends RoleReference {
     readonly color: number
     /** Server hierarchy position. Positions can tie, including newly created roles */
     readonly position: number
-    /** Raw grants, including unknown future bits. Convert to a decimal string before JSON serialization */
+    /** Raw grants from Fluxer, including unknown future bits, as an unsigned 64-bit bigint */
     readonly permissions: bigint
     /** Whether members with this role are displayed as a separate group in the member list */
     readonly hoist: boolean
@@ -553,7 +555,7 @@ export interface RoleCreate {
     readonly name: string
     /** RGB integer 0–16,777,215, default 0 */
     readonly color?: number
-    /** Unsigned 64-bit bigint, default 0n: Unlike raw Fluxer, never inherit everyone's grants implicitly. Explicit ViewChannelMembers replacements are advertised to Fluxer by the SDK */
+    /** Bigint from 0n through 9_223_372_036_854_775_807n, default 0n: Unlike raw Fluxer, never inherit everyone's grants implicitly. Explicit ViewChannelMembers replacements are advertised to Fluxer by the SDK */
     readonly permissions?: bigint
 }
 
@@ -566,7 +568,7 @@ export interface RoleEdit {
     readonly name?: string
     /** RGB integer 0–16,777,215 */
     readonly color?: number
-    /** Replace raw grants with this unsigned 64-bit bigint, not an incremental grant. Explicit ViewChannelMembers replacements are advertised to Fluxer by the SDK */
+    /** Replace raw grants with a bigint from 0n through 9_223_372_036_854_775_807n, not an incremental grant. Explicit ViewChannelMembers replacements are advertised to Fluxer by the SDK */
     readonly permissions?: bigint
     /** Display members separately */
     readonly hoist?: boolean

@@ -16,6 +16,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { API } from "typescript/unstable/sync"
 import { stageRelease } from "../scripts/packages.mjs"
+import { authoredGuides } from "../../web/scripts/generate.mjs"
 
 const sdk = fileURLToPath(new URL("../", import.meta.url))
 const fixtureDirectory = fileURLToPath(new URL("./consumers/", import.meta.url))
@@ -87,6 +88,104 @@ function writeAdditionalDocumentationExamples(consumer, kind) {
         }
     }
     return files
+}
+
+const guideLanguages = new Map([
+    ["js", "js"],
+    ["javascript", "js"],
+    ["ts", "ts"],
+    ["typescript", "ts"],
+])
+
+function guideCodeBlocks(guides) {
+    const blocks = []
+    for (const guide of guides) {
+        const lines = guide.content.split(/\r?\n/)
+        for (let line = 0; line < lines.length; line++) {
+            const opening = lines[line].match(/^ {0,3}(`{3,}|~{3,})[ \t]*(js|javascript|ts|typescript)[ \t]*$/i)
+            if (!opening) continue
+            const language = guideLanguages.get(opening[2].toLowerCase())
+            const fence = new RegExp(`^ {0,3}${opening[1][0]}{${opening[1].length},}[ \\t]*$`)
+            const end = lines.findIndex((candidate, index) => index > line && fence.test(candidate))
+            if (end < 0) throw new Error(`Unclosed ${language} guide example in ${guide.slug}`)
+            blocks.push({
+                guide: guide.slug,
+                language,
+                source: lines.slice(line + 1, end).join("\n"),
+                line: line + 1,
+            })
+            line = end
+        }
+    }
+    return blocks
+}
+
+function guideImportSpecifiers(source) {
+    // Authored guide snippets use single-line static ESM imports. The packed tsc
+    // checks own complete syntax and type validation after this entry-point selection
+    return new Set(
+        [...source.matchAll(/^\s*import(?:\s+type)?(?:\s+[^"'\r\n]+?\s+from)?\s*["']([^"'\r\n]+)["']/gm)].map(
+            (match) => match[1],
+        ),
+    )
+}
+
+function guideImportKind(example) {
+    const imports = guideImportSpecifiers(example.source)
+    const entries = new Set(
+        [...imports].flatMap((specifier) =>
+            specifier === manifest.name ? ["default"] : specifier === `${manifest.name}/effect` ? ["effect"] : [],
+        ),
+    )
+    if (entries.size !== 1)
+        throw new Error(`Guide example must import one public SDK entry point: ${example.guide}:${example.line}`)
+    return entries.values().next().value
+}
+
+function topLevelConstPrograms(source) {
+    return [...source.matchAll(/^const\s+program\s*=/gm)]
+}
+
+const websiteGuides = await authoredGuides()
+const authoredGuideExamples = guideCodeBlocks(websiteGuides).map((example) => ({
+    ...example,
+    kind: guideImportKind(example),
+}))
+const guideExampleCounts = Object.fromEntries(
+    ["default", "effect"].map((kind) => [
+        kind,
+        authoredGuideExamples.filter((example) => example.kind === kind).length,
+    ]),
+)
+console.log(
+    `Authored website guide coverage: ${authoredGuideExamples.length} fenced JavaScript or TypeScript examples across ${websiteGuides.length} inventoried guides (${guideExampleCounts.default} default, ${guideExampleCounts.effect} Effect). JavaScript uses checkJs false and TypeScript is strict`,
+)
+
+function writeAuthoredGuideExamples(consumer, kind) {
+    const javascript = []
+    const typescript = []
+    for (const [index, example] of authoredGuideExamples.entries()) {
+        if (example.kind !== kind) continue
+        const file = `authored-guide-${example.guide}-${index + 1}.${example.language}`
+        writeFileSync(join(consumer, file), example.source)
+        const files = example.language === "js" ? javascript : typescript
+        files.push(file)
+    }
+    return { javascript, typescript }
+}
+
+function completeEffectStarter() {
+    const starters = authoredGuideExamples.filter((example) => {
+        if (example.guide !== "effect-first-bot" || example.language !== "ts" || example.kind !== "effect") return false
+        const programs = topLevelConstPrograms(example.source)
+        return (
+            guideImportSpecifiers(example.source).has(`${manifest.name}/effect`) &&
+            programs.length === 1 &&
+            (example.source.match(/YOUR_BOT_TOKEN/g) ?? []).length === 1
+        )
+    })
+    assert.equal(starters.length, 1, "Expected one complete authored Effect starter")
+    return starters[0]
 }
 
 const sourceCommentApi = new API({ cwd: sdk })
@@ -453,11 +552,15 @@ try {
         for (const file of files.filter((file) => file.endsWith(".map"))) {
             const sourceMap = JSON.parse(readFileSync(join(installed, file), "utf8"))
             assert.ok(sourceMap.sources.length > 0)
-            for (const source of sourceMap.sources) {
+            for (const [index, source] of sourceMap.sources.entries()) {
                 const resolved = resolve(installed, dirname(file), sourceMap.sourceRoot ?? "", source)
                 const packedPath = relative(installed, resolved)
                 assert.ok(!isAbsolute(packedPath) && packedPath !== ".." && !packedPath.startsWith(`..${sep}`))
                 assert.ok(existsSync(resolved))
+                if (file.endsWith(".js.map")) {
+                    assert.ok(Array.isArray(sourceMap.sourcesContent))
+                    assert.equal(sourceMap.sourcesContent[index], readFileSync(resolved, "utf8"))
+                }
             }
         }
 
@@ -492,6 +595,13 @@ try {
                 )
                 process.stdout.write(run(process.execPath, ["website-guide.mjs", filename], consumer, 15_000))
             }
+        }
+        if (kind === "effect") {
+            const starter = completeEffectStarter()
+            const filename = "effect-website-guide.ts"
+            writeFileSync(join(consumer, filename), starter.source.replace("YOUR_BOT_TOKEN", "fixture-only"))
+            copyFileSync(join(fixtureDirectory, "effect-website-guide.mjs"), join(consumer, "effect-website-guide.mjs"))
+            process.stdout.write(run(process.execPath, ["effect-website-guide.mjs", filename], consumer, 15_000))
         }
         copyFileSync(join(fixtureDirectory, `${kind}.mjs`), join(consumer, "consumer.mjs"))
         process.stdout.write(run(process.execPath, ["--enable-source-maps", "consumer.mjs"], consumer, 10_000))
@@ -738,6 +848,7 @@ try {
             },
         ])
         const additionalExamples = writeAdditionalDocumentationExamples(consumer, kind)
+        const authoredGuideFixtures = writeAuthoredGuideExamples(consumer, kind)
         writeFileSync(
             join(consumer, "tsconfig.json"),
             JSON.stringify({
@@ -753,7 +864,12 @@ try {
                     lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                 },
                 include: ["*.ts"],
-                exclude: ["run-bot-example.ts", ...additionalExamples],
+                exclude: [
+                    "run-bot-example.ts",
+                    "effect-website-guide.ts",
+                    ...additionalExamples,
+                    ...authoredGuideFixtures.typescript,
+                ],
             }),
         )
         assertPackedHelperComments(consumer, kind)
@@ -799,6 +915,49 @@ try {
             run(process.execPath, [compiler, "-p", "documentation-tsconfig.json"], consumer)
         }
         console.log(`${kind} additional authored documentation examples passed: ${additionalExamples.length}`)
+        if (authoredGuideFixtures.typescript.length > 0) {
+            writeFileSync(
+                join(consumer, "authored-guide-typescript-tsconfig.json"),
+                JSON.stringify({
+                    compilerOptions: {
+                        target: "ES2024",
+                        module: "NodeNext",
+                        types: ["node"],
+                        strict: true,
+                        exactOptionalPropertyTypes: true,
+                        noUncheckedIndexedAccess: true,
+                        noEmit: true,
+                        lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+                    },
+                    files: authoredGuideFixtures.typescript,
+                }),
+            )
+            run(process.execPath, [compiler, "-p", "authored-guide-typescript-tsconfig.json"], consumer)
+        }
+        if (authoredGuideFixtures.javascript.length > 0) {
+            writeFileSync(
+                join(consumer, "authored-guide-javascript-tsconfig.json"),
+                JSON.stringify({
+                    compilerOptions: {
+                        target: "ES2024",
+                        module: "NodeNext",
+                        types: ["node"],
+                        strict: true,
+                        exactOptionalPropertyTypes: true,
+                        noUncheckedIndexedAccess: true,
+                        allowJs: true,
+                        checkJs: false,
+                        noEmit: true,
+                        lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+                    },
+                    files: authoredGuideFixtures.javascript,
+                }),
+            )
+            run(process.execPath, [compiler, "-p", "authored-guide-javascript-tsconfig.json"], consumer)
+        }
+        console.log(
+            `${kind} authored website guide examples passed: ${authoredGuideFixtures.javascript.length} JavaScript and ${authoredGuideFixtures.typescript.length} TypeScript`,
+        )
         const invocation =
             kind === "default"
                 ? "import { createAndReadState } from './out/consumer.js'; if (createAndReadState('fixture-only-not-a-credential') !== 'Disconnected') throw Error('Unexpected state')"

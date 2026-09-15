@@ -1,5 +1,25 @@
 import { test, expect } from "@playwright/test"
+import { existsSync, readFileSync } from "node:fs"
 import AxeBuilder from "@axe-core/playwright"
+
+const guidesDirectory = new URL("../../content/guides/", import.meta.url)
+const guideInventory = JSON.parse(readFileSync(new URL("meta.json", guidesDirectory), "utf8")) as { pages: string[] }
+const frontmatter = (source: string, name: string) => new RegExp(`^${name}:\\s*(.+)$`, "m").exec(source)?.[1].trim()
+const authoredGuides = guideInventory.pages.flatMap((slug) => {
+    const file = new URL(`${slug}.md`, guidesDirectory)
+    if (!existsSync(file)) return []
+    const source = readFileSync(file, "utf8")
+    const title = frontmatter(source, "title")
+    if (!title) throw new Error(`Guide ${slug} has no title`)
+    return [{
+        slug,
+        title,
+        navTitle: frontmatter(source, "navTitle"),
+        examples: slug === "quick-start" ? 4 : source.split(/\r?\n/).filter((line) => /^```\S+$/.test(line)).length,
+    }]
+})
+
+const navigationGroups = ["Getting started", "Bot guides", "Operations", "Effect", "Reference"]
 
 for (const width of [390, 1440, 1920]) {
     test(`Readable guide and reference at ${width}px`, async ({ page }, info) => {
@@ -111,7 +131,8 @@ test("API navigation stays compact on a deep symbol without losing reference acc
     await expect(sidebar.getByRole("link", { name: "API reference", exact: true })).toBeVisible()
     await expect(sidebar.getByRole("link", { name: "JavaScript & TypeScript", exact: true })).toBeVisible()
     await expect(sidebar.getByRole("link", { name: "Effect-native", exact: true })).toBeVisible()
-    expect(await sidebar.getByRole("link").count()).toBeLessThanOrEqual(7)
+    const referenceNavigation = sidebar.locator(".reference-nav")
+    await expect(referenceNavigation.getByRole("link")).toHaveCount(3)
     await expect(sidebar.getByRole("button", { name: "Interfaces", exact: true })).toHaveCount(0)
     await sidebar.getByRole("link", { name: "JavaScript & TypeScript", exact: true }).click()
     await expect(page.getByRole("heading", { level: 1, name: "JavaScript & TypeScript", exact: true })).toBeVisible()
@@ -120,6 +141,84 @@ test("API navigation stays compact on a deep symbol without losing reference acc
     await page.goto("/docs/dev/api/modules/js-ts/#classes")
     await expect(page.locator(".docs-content").getByRole("link", { name: "AssetUrlError", exact: true })).toBeVisible()
 })
+
+for (const width of [390, 1440]) {
+    test(`Grouped sidebar uses short labels without truncation at ${width}px`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 })
+        await page.goto("/docs/dev/quick-start/")
+        const sidebar = page.locator(width < 768 ? "#nd-sidebar-mobile" : "#nd-sidebar")
+        if (width < 768) {
+            const trigger = page.getByRole("button", { name: "Open Sidebar", exact: true })
+            await trigger.focus()
+            await page.keyboard.press("Enter")
+            await expect(sidebar).toHaveAttribute("data-state", "open")
+            await expect(sidebar.getByRole("button", { name: "Close Sidebar", exact: true }))
+                .toHaveAttribute("aria-expanded", "true")
+        }
+        for (const group of navigationGroups) await expect(sidebar.getByText(group, { exact: true })).toBeVisible()
+        for (const item of [
+            { name: "Overview", href: "/docs/dev" },
+            { name: "API reference", href: "/docs/dev/api" },
+            { name: "JavaScript & TypeScript", href: "/docs/dev/api/modules/js-ts" },
+            { name: "Effect-native", href: "/docs/dev/api/modules/Effect" },
+            { name: "Changelog", href: "/docs/dev/changelog" },
+        ]) {
+            const link = sidebar.getByRole("link", { name: item.name, exact: true })
+            await expect(link).toHaveAttribute("href", item.href)
+            expect(await link.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
+        }
+        const navigableGuide = authoredGuides.find((guide) => guide.navTitle && guide.navTitle !== guide.title)
+        expect(navigableGuide).toBeDefined()
+        for (const guide of authoredGuides) {
+            expect(guide.navTitle, `${guide.slug} has a short sidebar label`).toBeTruthy()
+            const link = sidebar.getByRole("link", { name: guide.navTitle!, exact: true })
+            await expect(link).toHaveAttribute("href", `/docs/dev/${guide.slug}`)
+            expect(await link.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
+        }
+        const selected = sidebar.getByRole("link", { name: navigableGuide!.navTitle!, exact: true })
+        await selected.click()
+        await expect(page).toHaveURL(new RegExp(`/docs/dev/${navigableGuide!.slug}/?$`))
+        await expect(page.getByRole("heading", { level: 1, name: navigableGuide!.title, exact: true })).toBeVisible()
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    })
+}
+
+for (const width of [390, 1440]) {
+    test(`Authored guide inventory renders at ${width}px`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 })
+        const errors: string[] = []
+        page.on("pageerror", (error) => errors.push(error.message))
+        page.on("response", (response) => {
+            if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`)
+        })
+
+        expect(authoredGuides.length).toBeGreaterThan(0)
+        if (width === 1440) {
+            await page.goto("/docs/dev/quick-start/")
+            const sidebar = page.locator("#nd-sidebar")
+            for (const guide of authoredGuides) {
+                expect(guide.navTitle, `${guide.slug} has a short sidebar label`).toBeTruthy()
+                await expect(sidebar.getByRole("link", { name: guide.navTitle!, exact: true }))
+                    .toHaveAttribute("href", `/docs/dev/${guide.slug}`)
+            }
+        }
+
+        for (const guide of authoredGuides) {
+            await page.goto(`/docs/dev/${guide.slug}/`)
+            await expect(page.getByRole("heading", { level: 1, name: guide.title, exact: true })).toBeVisible()
+            await expect(page.locator(".docs-content pre:visible"), `Every ${guide.slug} example is visible`)
+                .toHaveCount(guide.examples)
+            expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+        }
+        await page.goto("/docs/dev/messages/")
+        await expect(page.locator(".docs-content .prose-keyword").filter({ hasText: "API" }).first()).toBeVisible()
+        await expect(page.locator(".docs-content .prose-keyword").filter({ hasText: "SDK" }).first()).toBeVisible()
+        await page.goto("/docs/dev/effect-first-bot/")
+        for (const keyword of ["Node.js", "ESM", "TypeScript"])
+            await expect(page.locator(".docs-content .prose-keyword").filter({ hasText: keyword }).first()).toBeVisible()
+        expect(errors).toEqual([])
+    })
+}
 
 test("Inline command choices synchronize, survive navigation and reload, and copy the displayed command", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"])

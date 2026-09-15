@@ -464,7 +464,7 @@ export class EventBus<M extends MessageCore = Message> {
                     return yield* Effect.fail(new ConfigurationError("onError", "Error reporter must be a function"))
                 const source = yield* bus.open(event, options)
                 const report = (kind: HandlerErrorReport["kind"]) => {
-                    const fallback = Effect.logError(`Fluxerly message subscription ${kind} failure`).pipe(
+                    const fallback = Effect.logError(`Fluxerly event subscription ${event} ${kind} failure`).pipe(
                         Effect.catchCause(() => Effect.void),
                     )
                     return onError
@@ -472,7 +472,7 @@ export class EventBus<M extends MessageCore = Message> {
                               Effect.asVoid,
                               Effect.catchCause(() =>
                                   Effect.logError(
-                                      `Fluxerly message subscription ${kind} failure; error reporter also failed`,
+                                      `Fluxerly event subscription ${event} ${kind} failure (error reporter also failed)`,
                                   ).pipe(Effect.catchCause(() => Effect.void)),
                               ),
                           )

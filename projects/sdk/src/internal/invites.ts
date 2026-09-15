@@ -5,13 +5,14 @@ import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 const hostedInvite = "https://fluxer.gg"
 
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max
 const timestamp = (value: unknown): value is string =>
-    typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && Number.isFinite(Date.parse(value))
+    typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && validCalendarTimestamp(value)
 const codeValue = (value: unknown): value is string =>
     typeof value === "string" &&
     value.length > 0 &&

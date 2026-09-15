@@ -2,13 +2,14 @@ import type { Message, MessageCore } from "./messages.js"
 
 /** Choose one page of pins for messages.fetchPins.
  * Pages follow pin times, not message creation times. Use iteratePins for bounded multi-page traversal.
- * Invalid timestamps, limits and unknown properties are rejected before the request
+ * Fields are captured once. Invalid timestamps, limits and unknown properties are rejected before the request
  */
 export interface MessagePinsQuery {
     /** Maximum pins requested in this page, an integer from 1 through 50, default 50 */
     readonly limit?: number
     /** Pin-time cursor as an ISO 8601 timestamp with a timezone, such as "2026-01-01T00:00:00Z".
-     * Select older pin times. Omit to use Fluxer's current-time default
+     * Select older pin times. Omit to use Fluxer's current-time default.
+     * Impossible calendar dates are rejected before dispatch
      */
     readonly before?: string
 }
@@ -44,6 +45,10 @@ export interface MessagePinsPage<M extends MessageCore = Message> {
 export interface ChannelPinsUpdate {
     /** Affected channel ID as a decimal string */
     readonly channelId: string
+    /** Guild ID when Fluxer supplies it. Omission means no guild context was supplied, not a confirmed private channel.
+     * No channel lookup or cache inference supplies this field
+     */
+    readonly guildId?: string
     /** Last-pin time supplied by Fluxer as an ISO 8601 string, or null.
      * This value can stay unchanged after an unpin, so it is not a unique change cursor
      */

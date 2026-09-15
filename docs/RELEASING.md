@@ -1,8 +1,8 @@
 # Releasing
 
 This guide is for maintainers preparing an SDK release from reviewed source.
-The repository is public, but no SDK version is published on npm yet.
-Local packaging, Changesets authoring and release planning are available
+It covers local packaging, Changesets authoring, immutable candidates and publication.
+Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions and distribution tags
 
 ## Registry publication contract
 
@@ -35,12 +35,12 @@ The wrapper permits fragment authoring and status, not direct Changesets version
 
 Inspect a source-only proposal with `pnpm release:plan --channel canary`.
 Planning does not compare published npm package bytes or prove that a release is publishable.
-The initial local manifest version `0.0.0` is not a release
+A version in the source manifest does not establish publication
 
 ## Version and content rules
 
 [Epoch Semantic Versioning](/docs/TECHNOLOGY.md#versioning-and-release-stages) defines compatibility and readiness separately.
-The local `0.0.0` placeholder enters `1000.0.0-canary.N`, then RC, then stable `1000.0.0`.
+The planner reads the current version from the [SDK source manifest](/projects/sdk/package.json).
 Canary, RC and Stable are the only release channels.
 The planner starts a new prerelease counter at zero.
 An explicit higher epoch is a multiple of 1000 and requires a major fragment.
@@ -215,9 +215,9 @@ Install it only on `Fluxerly.js`.
 In the `package` environment, set the `RELEASE_APP_CLIENT_ID` variable and `RELEASE_APP_PRIVATE_KEY` secret.
 Keep the private key out of repository and organization secrets, source, artifacts and logs
 
-Permit only the `main` branch to enter `package`, require a maintainer reviewer and disable administrator approval bypass.
-The single-maintainer setup allows self-approval.
-Review the candidate's selected source before approving, because the workflow branch restriction does not constrain its independent source selection
+Permit only the `main` branch to enter `package` and keep administrator approval bypass disabled.
+The environment has no required-reviewer approval step.
+Review the candidate's selected source before dispatching publication, because the workflow branch restriction does not constrain its independent source selection
 
 The reconciliation job creates a short-lived, repository-scoped token with Contents write only after npm metadata confirms the candidate version exists.
 The token authenticates only the GitHub announcement step, and the pinned token action revokes it when the job finishes.

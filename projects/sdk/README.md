@@ -24,13 +24,17 @@ Keep the file private while it contains your token
 ```js
 import { createClient } from "@neontechspace/fluxerly"
 
-const created = createClient({ token: "YOUR_BOT_TOKEN" })
+const created = createClient({
+    token: "YOUR_BOT_TOKEN",
+})
 if (created.isErr()) throw created.error
 const client = created.value
 
 client.on("messageCreate", async (message) => {
     if (message.content === "!ping") {
-        await client.messages.reply(message, { content: "Pong!" })
+        await client.messages.reply(message, {
+            content: "Pong!",
+        })
     }
 })
 

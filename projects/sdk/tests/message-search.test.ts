@@ -21,7 +21,10 @@ const wire = (id = "10") => ({
 
 const page = (messages: unknown[] = [wire()], extra: Record<string, unknown> = {}) => ({
     messages,
-    channels: [{ id: "20", guild_id: "40", name: "general", type: 0, recipients: [{ id: "private" }] }],
+    channels:
+        messages.length === 0
+            ? []
+            : [{ id: "20", guild_id: "40", name: "general", type: 0, recipients: [{ id: "private" }] }],
     total: messages.length,
     hits_per_page: 25,
     page: 1,
@@ -116,6 +119,36 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s captures one validated search context before dispatch", async (mode) => {
+    const client = await setup(mode)
+    const bodies: unknown[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(page([], { total: 0 }))
+    })
+    let reads = 0
+    const changingContext = {
+        get guildId() {
+            return ++reads === 1 ? "40" : "99"
+        },
+    }
+    await settle(client.messages.search(changingContext))
+    expect(reads).toBe(1)
+    expect(bodies).toEqual([{ scope: "current", context_guild_id: "40", hits_per_page: 25, page: 1 }])
+
+    const firstInvalid = {
+        get guildId() {
+            return "invalid"
+        },
+    }
+    await expect(settle(client.messages.search(firstInvalid))).rejects.toMatchObject({
+        operation: "search",
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(bodies).toHaveLength(1)
+})
+
 test.each(modes)("%s cancellation interrupts search without retrying or polling", async (mode) => {
     const client = await setup(mode)
     const fetch = vi.fn()
@@ -157,7 +190,7 @@ test.each(modes)(
             invalid = error
         }
         fetch.mockResolvedValueOnce(
-            Response.json({ messages: [wire()], channels: [], total: 1, hits_per_page: 0, page: 1 }),
+            Response.json({ messages: [wire()], channels: [], total: 1, hits_per_page: 25, page: 1 }),
         )
         try {
             await settle(client.messages.search({ channelId: "20" }, { content: "private query" }))
@@ -189,28 +222,75 @@ test.each(modes)("%s rejects sparse search filters before discovery", async (mod
     expect(fetch).not.toHaveBeenCalled()
 })
 
-test.each(modes)("%s preserves an empty provider cursor without inventing a page cursor", async (mode) => {
+test.each(modes)("%s snapshots bounded search filters from indexed values", async (mode) => {
+    const client = await setup(mode)
+    const bodies: unknown[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(page())
+    })
+    const channelIds = ["20"]
+    Object.defineProperty(channelIds, Symbol.iterator, {
+        value: () => {
+            throw Error("Search must not consume caller iterators")
+        },
+    })
+
+    await settle(client.messages.search({ channelId: "20" }, { channelIds }))
+    expect(bodies).toEqual([
+        { scope: "current", context_channel_id: "20", hits_per_page: 25, page: 1, channel_id: ["20"] },
+    ])
+
+    let indexedReads = 0
+    const invalid = ["20"]
+    Object.defineProperty(invalid, "0", {
+        get: () => {
+            indexedReads++
+            return "invalid"
+        },
+    })
+    Object.defineProperty(invalid, Symbol.iterator, {
+        value: () => {
+            throw Error("Search must reject indexed invalid values without iterating")
+        },
+    })
+    await expect(settle(client.messages.search({ channelId: "20" }, { channelIds: invalid }))).rejects.toMatchObject({
+        operation: "search",
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(indexedReads).toBe(1)
+    expect(bodies).toHaveLength(1)
+})
+
+test.each(modes)("%s ignores provider cursors rather than exposing a false continuation contract", async (mode) => {
     const client = await setup(mode)
     const sent: unknown[] = []
     stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         sent.push(JSON.parse(String(init.body)))
-        return Response.json(page([], { total: 0 }))
+        return Response.json(page([], { total: 0, cursor: [] }))
     })
-    const result = await settle(client.messages.search({ channelId: "20" }, { cursor: [] }))
+    const result = await settle(client.messages.search({ channelId: "20" }))
     expect(result).toMatchObject({ indexing: false, messages: [], total: 0 })
-    expect(sent).toEqual([{ scope: "current", context_channel_id: "20", hits_per_page: 25, cursor: [] }])
+    expect(result).not.toHaveProperty("cursor")
+    expect(sent).toEqual([{ scope: "current", context_channel_id: "20", hits_per_page: 25, page: 1 }])
 })
 
-test.each(modes)("%s projects nameless DM channels and cursor pages beyond request page 400", async (mode) => {
+test.each(modes)("%s projects nameless DM channels and enforces numbered page bounds", async (mode) => {
     const client = await setup(mode)
     stubFetchWithHostedDiscovery(async () =>
-        Response.json(page([], { channels: [{ id: "20", type: 1 }], total: 0, page: 401 })),
+        Response.json(page([wire()], { channels: [{ id: "20", type: 1 }], total: 1, page: 400 })),
     )
-    const result = await settle(client.messages.search({ channelId: "20" }))
+    const result = await settle(client.messages.search({ channelId: "20" }, { page: 400 }))
     if (result.indexing) throw new Error("Expected result page")
-    expect(result).toMatchObject({ page: 401, channels: [{ id: "20", type: 1 }] })
+    expect(result).toMatchObject({ page: 400, channels: [{ id: "20", type: 1 }] })
     expect(result.channels[0]).not.toHaveProperty("name")
     expect(result.channels[0]).not.toHaveProperty("guildId")
+    await expect(settle(client.messages.search({ channelId: "20" }, { page: 401 }))).rejects.toMatchObject({
+        operation: "search",
+        reason: "input",
+        outcome: "notDispatched",
+    })
 })
 
 test.each(modes)(

@@ -15,11 +15,10 @@ export function validateVersion(version) {
 
 export function packageManifest(version) {
     const manifest = JSON.parse(readFileSync(join(sdk, "package.json"), "utf8"))
-    assert.deepEqual(Object.keys(manifest.exports).toSorted(), [".", "./effect"])
-    for (const entry of Object.values(manifest.exports)) {
-        assert.ok(entry.import.startsWith("./dist/") && entry.import.endsWith(".js"))
-        assert.equal(entry.types, entry.import.replace(/\.js$/, ".d.ts"))
-    }
+    assert.deepEqual(manifest.exports, {
+        ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+        "./effect": { types: "./dist/effect.d.ts", import: "./dist/effect.js" },
+    })
     assert.deepEqual(Object.keys(manifest.imports), ["#sdk/*"])
     assert.equal(manifest.imports["#sdk/*"].default, "./dist/*.js")
     const { private: _, scripts: __, devDependencies: ___, ...published } = manifest

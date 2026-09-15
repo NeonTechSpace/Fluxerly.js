@@ -229,6 +229,8 @@ test.each(modes)("%s rejects unsupported, malformed and empty guild-setting patc
         { featureToggles: ["CLONE_EMOJI_DISABLED"] },
         { featureToggles: ["CLONE_STICKER_DISABLED"] },
         { messageHistoryCutoff: "2026-09-09" },
+        { messageHistoryCutoff: "2025-02-29T00:00:00Z" },
+        { messageHistoryCutoff: "2024-04-31T00:00:00Z" },
         { name: "" },
         { icon: "not-an-image" },
     ])
@@ -240,6 +242,71 @@ test.each(modes)("%s rejects unsupported, malformed and empty guild-setting patc
         })
     await expect(api.edit({ name: "valid" }, { auditReason: "\n" })).rejects.toMatchObject({ reason: "input" })
     expect(calls).toBe(0)
+})
+
+test.each(modes)("%s preserves valid UTC calendar cutoffs in requests and responses", async (mode) => {
+    const bodies: unknown[] = []
+    rest((_url, init) => {
+        const body = JSON.parse(String(init.body))
+        bodies.push(body)
+        return Response.json(guild(body))
+    })
+    const api = await setup(mode)
+    for (const value of ["2000-02-29T00:00:00Z", "2024-04-30T24:00:00Z", "2024-02-29T00:00:00.123456789Z"]) {
+        expect((await api.edit({ messageHistoryCutoff: value })).messageHistoryCutoff).toBe(value)
+        expect(bodies.at(-1)).toEqual({ message_history_cutoff: value })
+    }
+    let reads = 0
+    const input = {
+        get messageHistoryCutoff() {
+            return reads++ === 0 ? "2024-02-29T00:00:00Z" : "2025-02-29T00:00:00Z"
+        },
+    }
+    expect((await api.edit(input)).messageHistoryCutoff).toBe("2024-02-29T00:00:00Z")
+    expect(reads).toBe(1)
+    const calls = bodies.length
+    await expect(api.edit(input)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    expect(bodies).toHaveLength(calls)
+})
+
+test.each(modes)("%s snapshots bounded guild feature toggles from indexed values", async (mode) => {
+    const bodies: unknown[] = []
+    rest((_url, init) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(guild())
+    })
+    const api = await setup(mode)
+    const featureToggles = [GuildFeatureToggles.HideOwnerCrown]
+    Object.defineProperty(featureToggles, Symbol.iterator, {
+        value: () => {
+            throw Error("Guild settings must not consume caller iterators")
+        },
+    })
+
+    await api.edit({ featureToggles })
+    expect(bodies).toEqual([{ features: ["HIDE_OWNER_CROWN"] }])
+
+    let indexedReads = 0
+    const invalid = ["HIDE_OWNER_CROWN"]
+    Object.defineProperty(invalid, "0", {
+        get: () => {
+            indexedReads++
+            return "unsupported"
+        },
+    })
+    Object.defineProperty(invalid, Symbol.iterator, {
+        value: () => {
+            throw Error("Guild settings must reject indexed invalid values without iterating")
+        },
+    })
+    await expect(api.edit({ featureToggles: invalid } as GuildEdit)).rejects.toMatchObject({
+        _tag: "GuildOperationError",
+        operation: "guilds.edit",
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(indexedReads).toBe(1)
+    expect(bodies).toHaveLength(1)
 })
 
 test.each(modes)(

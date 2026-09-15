@@ -162,8 +162,8 @@ function rejectChildOverrides(options: DefaultSupervisorChildOptions): Configura
         clientOptions !== undefined &&
         (typeof clientOptions !== "object" ||
             clientOptions === null ||
-            Object.hasOwn(clientOptions, "token") ||
-            Object.hasOwn(clientOptions, "sharding"))
+            "token" in clientOptions ||
+            "sharding" in clientOptions)
     )
         return new ConfigurationError(
             "configuration",
@@ -177,8 +177,18 @@ function childClientOptions(
     assignment: SupervisorAssignment,
     bridge: ChildBridge,
 ): ClientOptions {
+    const { messageFields, instance, uploads, logging, cache, connection } = options.clientOptions ?? {}
     return attachIdentifyGate(
-        { ...options.clientOptions, token: options.token, sharding: assignment },
+        {
+            ...(messageFields === undefined ? {} : { messageFields }),
+            ...(instance === undefined ? {} : { instance }),
+            ...(uploads === undefined ? {} : { uploads }),
+            ...(logging === undefined ? {} : { logging }),
+            ...(cache === undefined ? {} : { cache }),
+            ...(connection === undefined ? {} : { connection }),
+            token: options.token,
+            sharding: assignment,
+        },
         bridge.identifyGate,
     )
 }

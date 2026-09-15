@@ -1,7 +1,15 @@
 import { createServer, request as httpRequest } from "node:http"
-import { afterEach, describe, expect, test } from "vitest"
+import { inspect } from "node:util"
+import { afterEach, describe, expect, test, vi } from "vitest"
 import { Cause, Effect, Exit, Fiber, Scope } from "effect"
-import { createClient, oauth as defaultApi } from "../src/index.js"
+import {
+    createClient,
+    oauth as defaultApi,
+    SdkDefect,
+    type OAuthAuthorizationInput,
+    type OAuthCodeExchangeInput,
+    type OAuthConfig,
+} from "../src/index.js"
 import { oauth as native } from "../src/effect.js"
 
 let close: (() => Promise<void>) | undefined
@@ -389,6 +397,113 @@ describe("oauth", () => {
         } finally {
             await defaultClient.value.shutdown()
         }
+    })
+
+    test("uses the initially validated OAuth inputs through both clients", async () => {
+        const { base, requests } = await fixture()
+        const config = {
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        }
+        const authorizationInput = (): OAuthAuthorizationInput => {
+            let reads = 0
+            const scopes: OAuthAuthorizationInput["scopes"] = ["identify"]
+            Object.defineProperty(scopes, "0", {
+                enumerable: true,
+                get: () => (reads++ === 0 ? "identify" : "bot"),
+            })
+            return {
+                redirectUri: "http://localhost/callback",
+                scopes,
+                state: "state",
+                codeChallenge: "a".repeat(43),
+            }
+        }
+        const exchangeInput = (): OAuthCodeExchangeInput => {
+            let reads = 0
+            return {
+                get code() {
+                    return reads++ === 0 ? "validated-code" : "transmitted-code"
+                },
+                redirectUri: "http://localhost/callback",
+                codeVerifier: "a".repeat(43),
+            }
+        }
+        const revokeInput = () => {
+            let reads = 0
+            return {
+                get token() {
+                    return reads++ === 0 ? "validated-token" : "revoked-token"
+                },
+            }
+        }
+        const invalidFirstInput = (): OAuthAuthorizationInput => {
+            let reads = 0
+            const scopes: OAuthAuthorizationInput["scopes"] = ["identify"]
+            Object.defineProperty(scopes, "0", {
+                enumerable: true,
+                get: () => (reads++ === 0 ? "unrecognized" : "identify"),
+            })
+            return {
+                redirectUri: "http://localhost/callback",
+                scopes,
+                state: "state",
+                codeChallenge: "a".repeat(43),
+            }
+        }
+        const defaultClient = defaultApi.create(config)
+        if (defaultClient.isErr()) throw defaultClient.error
+        try {
+            const authorization = await defaultClient.value.authorizationUrl(authorizationInput())
+            expect(new URL(authorization._unsafeUnwrap()).searchParams.get("scope")).toBe("identify")
+
+            expect((await defaultClient.value.exchangeCode(exchangeInput())).isOk()).toBe(true)
+            expect(new URLSearchParams(requests.at(-1)?.body).get("code")).toBe("validated-code")
+
+            expect((await defaultClient.value.revoke(revokeInput())).isOk()).toBe(true)
+            expect(new URLSearchParams(requests.at(-1)?.body).get("token")).toBe("validated-token")
+
+            const requestCount = requests.length
+            expect(await defaultClient.value.authorizationUrl(invalidFirstInput())).toMatchObject({
+                error: { reason: "input", outcome: "notDispatched", inputValidation: { path: "scopes[]" } },
+            })
+            expect(requests).toHaveLength(requestCount)
+        } finally {
+            await defaultClient.value.shutdown()
+        }
+
+        const nativeValues = await Effect.runPromise(
+            Effect.scoped(
+                Effect.gen(function* () {
+                    const client = yield* native.create(config)
+                    const authorization = yield* client.authorizationUrl(authorizationInput())
+                    const exchange = yield* client.exchangeCode(exchangeInput())
+                    const revoke = yield* client.revoke(revokeInput())
+                    return { authorization, exchange, revoke }
+                }),
+            ),
+        )
+        expect(new URL(nativeValues.authorization).searchParams.get("scope")).toBe("identify")
+        expect(nativeValues.exchange.accessToken).toBe("access")
+        expect(new URLSearchParams(requests.at(-2)?.body).get("code")).toBe("validated-code")
+        expect(new URLSearchParams(requests.at(-1)?.body).get("token")).toBe("validated-token")
+
+        const requestCount = requests.length
+        const nativeInvalid = await Effect.runPromise(
+            Effect.scoped(
+                Effect.gen(function* () {
+                    const client = yield* native.create(config)
+                    return yield* Effect.flip(client.authorizationUrl(invalidFirstInput()))
+                }),
+            ),
+        )
+        expect(nativeInvalid).toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+            inputValidation: { path: "scopes[]" },
+        })
+        expect(requests).toHaveLength(requestCount)
     })
 
     test.each([
@@ -927,9 +1042,114 @@ describe("oauth", () => {
         await made.value.shutdown()
     })
 
-    test("returns typed input failures for malformed default options and sparse authorization scopes", async () => {
+    test.each(["clientId", "clientSecret", "instance", "instance.url"] as const)(
+        "preserves unexpected OAuth %s getter failures through both creation APIs",
+        (field) => {
+            const privateSecret = "fixture-only-private OAuth construction secret"
+            const defect = new Error(`fixture-only-private OAuth ${field} construction defect`)
+            const configuration = (): OAuthConfig => {
+                switch (field) {
+                    case "clientId":
+                        return {
+                            get clientId(): never {
+                                throw defect
+                            },
+                            clientSecret: privateSecret,
+                        }
+                    case "clientSecret":
+                        return {
+                            clientId: "1",
+                            get clientSecret(): never {
+                                throw defect
+                            },
+                        }
+                    case "instance":
+                        return {
+                            clientId: "1",
+                            clientSecret: privateSecret,
+                            get instance(): never {
+                                throw defect
+                            },
+                        }
+                    case "instance.url":
+                        return {
+                            clientId: "1",
+                            clientSecret: privateSecret,
+                            instance: {
+                                get url(): never {
+                                    throw defect
+                                },
+                            },
+                        }
+                }
+            }
+            const fetch = vi.fn(() => {
+                throw new Error("OAuth construction must not request")
+            })
+            vi.stubGlobal("fetch", fetch)
+            try {
+                let defaultFailure: unknown
+                try {
+                    defaultApi.create(configuration())
+                } catch (error) {
+                    defaultFailure = error
+                }
+                expect(defaultFailure).toBeInstanceOf(SdkDefect)
+                expect((defaultFailure as SdkDefect).operation).toBe("oauth.create")
+                expect((defaultFailure as SdkDefect).reasons).toEqual([{ kind: "Defect" }])
+                expect(inspect(defaultFailure)).not.toContain(privateSecret)
+                expect(inspect(defaultFailure)).not.toContain(defect.message)
+                expect(JSON.stringify(defaultFailure)).not.toContain(privateSecret)
+                expect(JSON.stringify(defaultFailure)).not.toContain(defect.message)
+
+                const nativeFailure = Effect.runSyncExit(Effect.scoped(native.create(configuration())))
+                expect(Exit.isFailure(nativeFailure)).toBe(true)
+                if (Exit.isFailure(nativeFailure)) {
+                    expect(Cause.hasFails(nativeFailure.cause)).toBe(false)
+                    expect(Cause.hasDies(nativeFailure.cause)).toBe(true)
+                    expect(nativeFailure.cause.reasons).toEqual([expect.objectContaining({ _tag: "Die", defect })])
+                }
+                expect(fetch).not.toHaveBeenCalled()
+            } finally {
+                vi.unstubAllGlobals()
+            }
+        },
+    )
+
+    test.each([
+        ["missing client secret", { clientId: "1" }],
+        ["empty client secret", { clientId: "1", clientSecret: "" }],
+        [
+            "insecure instance without opt-in",
+            { clientId: "1", clientSecret: "secret", instance: { url: "http://example.test" } },
+        ],
+    ] as const)("keeps ordinary OAuth %s configuration failures expected", (_, configuration) => {
+        const defaultFailure = defaultApi.create(configuration as OAuthConfig)
+        expect(defaultFailure).toMatchObject({ error: { _tag: "ConfigurationError" } })
+
+        const nativeFailure = Effect.runSyncExit(Effect.scoped(native.create(configuration as OAuthConfig)))
+        expect(Exit.isFailure(nativeFailure)).toBe(true)
+        if (Exit.isFailure(nativeFailure)) {
+            expect(Cause.hasFails(nativeFailure.cause)).toBe(true)
+            expect(Cause.hasDies(nativeFailure.cause)).toBe(false)
+            expect(nativeFailure.cause.reasons).toEqual([
+                expect.objectContaining({
+                    _tag: "Fail",
+                    error: expect.objectContaining({ _tag: "ConfigurationError" }),
+                }),
+            ])
+        }
+    })
+
+    test("returns typed input failures for malformed operation options and sparse authorization scopes", async () => {
+        const fetch = vi.fn()
+        vi.stubGlobal("fetch", fetch)
         const made = defaultApi.create({ clientId: "1", clientSecret: "secret" })
         if (made.isErr()) throw made.error
+        const scope = Scope.makeUnsafe()
+        const nativeClient = await Effect.runPromise(
+            native.create({ clientId: "1", clientSecret: "secret" }).pipe(Scope.provide(scope)),
+        )
         try {
             const input = {
                 redirectUri: "http://localhost/callback",
@@ -937,17 +1157,34 @@ describe("oauth", () => {
                 state: "state",
                 codeChallenge: defaultApi.createPkce().challenge,
             }
-            for (const options of [null, 3]) {
+            const options: readonly unknown[] = [
+                null,
+                3,
+                [],
+                Object.assign([], { signal: new AbortController().signal }),
+            ]
+            for (const option of options) {
                 // @ts-expect-error Exercise untyped JavaScript input at the public boundary
-                expect(await made.value.authorizationUrl(input, options)).toMatchObject({
-                    error: { reason: "input", outcome: "notDispatched" },
+                expect(await made.value.authorizationUrl(input, option)).toMatchObject({
+                    error: { _tag: "OAuthOperationError", reason: "input", outcome: "notDispatched" },
+                })
+                const nativeOperation =
+                    // @ts-expect-error Exercise untyped JavaScript input at the public boundary
+                    nativeClient.authorizationUrl(input, option)
+                expect(await Effect.runPromise(Effect.flip(nativeOperation))).toMatchObject({
+                    _tag: "OAuthOperationError",
+                    reason: "input",
+                    outcome: "notDispatched",
                 })
             }
             expect(await made.value.authorizationUrl({ ...input, scopes: Array(1) })).toMatchObject({
                 error: { reason: "input", outcome: "notDispatched" },
             })
+            expect(fetch).not.toHaveBeenCalled()
         } finally {
             await made.value.shutdown()
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+            vi.unstubAllGlobals()
         }
     })
 

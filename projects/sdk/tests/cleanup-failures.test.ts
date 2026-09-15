@@ -27,6 +27,222 @@ function responseWithCleanupFailure(status: number, cleanup: unknown, cancelled?
     )
 }
 
+function responseWithReaderReleaseFailure(response: Response, cleanup: unknown, readStarted?: () => void) {
+    const body = response.body
+    if (!body) throw new Error("Expected response body")
+    const getReader = body.getReader.bind(body)
+    vi.spyOn(body, "getReader").mockImplementation(() => {
+        const reader = getReader()
+        const read = reader.read.bind(reader)
+        vi.spyOn(reader, "read").mockImplementation(() => {
+            readStarted?.()
+            return read()
+        })
+        const release = reader.releaseLock.bind(reader)
+        vi.spyOn(reader, "releaseLock").mockImplementation(() => {
+            release()
+            throw cleanup
+        })
+        return reader
+    })
+    return response
+}
+
+const readerCleanupCases = [
+    {
+        name: "reader release fails",
+        cleanupDefectCount: 1,
+        expectedCancellations: 0,
+        create() {
+            const cleanup = new Error("private error-reader release detail")
+            return {
+                response: responseWithReaderReleaseFailure(
+                    Response.json({ message: "rejected" }, { status: 400 }),
+                    cleanup,
+                ),
+                cancellations: () => 0,
+                privateDetails: ["private error-reader release detail"],
+            }
+        },
+    },
+    {
+        name: "body cancellation and reader release fail",
+        cleanupDefectCount: 2,
+        expectedCancellations: 1,
+        create() {
+            const releaseCleanup = new Error("private error-reader release detail")
+            const cancelCleanup = new Error("private error-body cancellation detail")
+            let cancellations = 0
+            const response = new Response(
+                new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new Uint8Array(8_193))
+                    },
+                    cancel() {
+                        cancellations++
+                        throw cancelCleanup
+                    },
+                }),
+                { status: 400, headers: { "content-type": "application/json" } },
+            )
+            return {
+                response: responseWithReaderReleaseFailure(response, releaseCleanup),
+                cancellations: () => cancellations,
+                privateDetails: ["private error-reader release detail", "private error-body cancellation detail"],
+            }
+        },
+    },
+] as const
+
+function expectedRejected400() {
+    return expect.objectContaining({
+        _tag: "MessageOperationError",
+        operation: "fetch",
+        reason: "rejected",
+        outcome: "rejected",
+        status: 400,
+    })
+}
+
+function expectDefaultRejected400WithCleanup(error: unknown, privateDetails: readonly string[]) {
+    expect(error).toBeInstanceOf(SdkDefect)
+    expect(error).toMatchObject({
+        operation: "fetch",
+        reasons: [
+            {
+                kind: "Failure",
+                failure: expectedRejected400(),
+            },
+            { kind: "Defect" },
+        ],
+    })
+    for (const detail of privateDetails) expect(JSON.stringify(error)).not.toContain(detail)
+}
+
+function expectNativeRejected400WithCleanup(exit: Exit.Exit<unknown, unknown>, cleanupDefectCount: number) {
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (!Exit.isFailure(exit)) return
+    const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
+    expect(failure).toMatchObject({ _tag: "Fail", error: expectedRejected400() })
+    const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
+    if (cleanupDefectCount === 1) {
+        expect(defect).toMatchObject({
+            _tag: "Die",
+            defect: expect.objectContaining({ name: "ApiErrorBodyCleanupError" }),
+        })
+        return
+    }
+    expect(defect).toMatchObject({ _tag: "Die", defect: expect.any(AggregateError) })
+    if (defect?._tag === "Die" && defect.defect instanceof AggregateError)
+        expect(defect.defect.errors).toEqual(
+            Array.from({ length: cleanupDefectCount }, () =>
+                expect.objectContaining({ name: "ApiErrorBodyCleanupError" }),
+            ),
+        )
+}
+
+const readerCleanupTestCases = modes.flatMap((mode) => readerCleanupCases.map((cleanup) => ({ mode, ...cleanup })))
+
+test.each(readerCleanupTestCases)(
+    "$mode preserves a 400 rejection when $name",
+    async ({ mode, create, cleanupDefectCount, expectedCancellations }) => {
+        const fixture = create()
+        const fetch = vi.fn(async () => fixture.response)
+        stubFetchWithHostedDiscovery(fetch)
+
+        if (mode === "default") {
+            const client = createClient({ token: "fixture" })._unsafeUnwrap()
+            try {
+                const error = await Promise.resolve(client.messages.fetch(target)).catch((error) => error)
+                expectDefaultRejected400WithCleanup(error, fixture.privateDetails)
+            } finally {
+                await client.shutdown()
+            }
+        } else {
+            const scope = Scope.makeUnsafe()
+            const client = await Effect.runPromise(createNative({ token: "fixture" }).pipe(Scope.provide(scope)))
+            try {
+                const exit = await Effect.runPromiseExit(client.messages.fetch(target))
+                expectNativeRejected400WithCleanup(exit, cleanupDefectCount)
+            } finally {
+                await Effect.runPromise(Scope.close(scope, Exit.void))
+            }
+        }
+        expect(fetch).toHaveBeenCalledTimes(1)
+        expect(fixture.cancellations()).toBe(expectedCancellations)
+    },
+)
+
+test.each(modes)("%s retains caller cancellation and error-reader cleanup failure", async (mode) => {
+    const cleanup = new Error("private cancelled error-reader release detail")
+    let startedReading!: () => void
+    const reading = new Promise<void>((resolve) => {
+        startedReading = resolve
+    })
+    let bodyCancelled!: () => void
+    const cancelled = new Promise<void>((resolve) => {
+        bodyCancelled = resolve
+    })
+    let cancellations = 0
+    const fetch = vi.fn(async () => {
+        const response = new Response(
+            new ReadableStream({
+                cancel() {
+                    cancellations++
+                    bodyCancelled()
+                },
+            }),
+            { status: 400, headers: { "content-type": "application/json" } },
+        )
+        return responseWithReaderReleaseFailure(response, cleanup, startedReading)
+    })
+    stubFetchWithHostedDiscovery(fetch)
+
+    if (mode === "default") {
+        const client = createClient({ token: "fixture" })._unsafeUnwrap()
+        const controller = new AbortController()
+        try {
+            const result = Promise.resolve(client.messages.fetch(target, { signal: controller.signal }))
+            await reading
+            controller.abort()
+            await cancelled
+            const error = await result.catch((error) => error)
+            expect(error).toBeInstanceOf(SdkDefect)
+            expect(error).toMatchObject({
+                operation: "fetch",
+                reasons: expect.arrayContaining([{ kind: "Interruption" }, { kind: "Defect" }]),
+            })
+            expect(JSON.stringify(error)).not.toContain("private cancelled error-reader release detail")
+        } finally {
+            await client.shutdown()
+        }
+    } else {
+        const scope = Scope.makeUnsafe()
+        const client = await Effect.runPromise(createNative({ token: "fixture" }).pipe(Scope.provide(scope)))
+        const controller = new AbortController()
+        try {
+            const result = Effect.runPromiseExit(client.messages.fetch(target), { signal: controller.signal })
+            await reading
+            controller.abort()
+            await cancelled
+            const exit = await result
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit)) {
+                expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+                expect(exit.cause.reasons.find((reason) => reason._tag === "Die")).toMatchObject({
+                    _tag: "Die",
+                    defect: expect.objectContaining({ name: "ApiErrorBodyCleanupError" }),
+                })
+                expect(JSON.stringify(exit)).not.toContain("private cancelled error-reader release detail")
+            }
+        } finally {
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+        }
+    }
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(cancellations).toBe(1)
+})
+
 test.each(modes)("%s preserves REST rejection and response-cleanup defects without a retry", async (mode) => {
     for (const status of [401, 503]) {
         const cleanup = new Error("private REST cleanup detail")

@@ -266,13 +266,15 @@ export function directMessageLatestMessages(
     decode: MessageDecoder<MessageCore> = decodeMessage,
 ): UserValidationResult<DirectMessageLatestMessages<MessageCore>> {
     if (!Array.isArray(ids)) return inputValidationFailure("channelIds", "type", "Channel IDs must be an array")
-    if (ids.length === 0 || ids.length > 100)
+    const count = ids.length
+    if (count === 0 || count > 100)
         return inputValidationFailure("channelIds", "length", "Latest-message reads require 1 through 100 channel IDs")
-    if (Array.from(ids).some((id) => !identifier(id)))
+    const channelIds = new Array<string>(count)
+    for (let index = 0; index < count; index++) channelIds[index] = ids[index]
+    if (channelIds.some((id) => !identifier(id)))
         return inputValidationFailure("channelIds[]", "format", "Channel IDs must be decimal strings")
-    if (new Set(ids).size !== ids.length)
+    if (new Set(channelIds).size !== channelIds.length)
         return inputValidationFailure("channelIds", "unique", "Channel IDs must be unique")
-    const channelIds = [...ids]
     const json = JSON.stringify({ channels: channelIds })
     return {
         majorId: "@me",

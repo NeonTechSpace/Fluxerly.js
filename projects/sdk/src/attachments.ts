@@ -206,7 +206,7 @@ export interface AttachmentReference {
     readonly spoiler?: never
 }
 
-/** Information about a file attached to a received message, not its bytes. Use client.attachments to download or stream it.
+/** Metadata for a file attached to a received message. Use client.attachments to download or stream its bytes.
  * This object is frozen. Its URLs may expire, the SDK does not refresh them or download automatically
  */
 export interface Attachment {
@@ -216,7 +216,7 @@ export interface Attachment {
     readonly filename: string
     /** File size in bytes, not the SDK's retained metadata size */
     readonly size: number
-    /** File URL returned by Fluxer, not a guarantee of current availability */
+    /** File URL returned by Fluxer */
     readonly url?: string
     /** Proxy URL returned by Fluxer */
     readonly proxyUrl?: string

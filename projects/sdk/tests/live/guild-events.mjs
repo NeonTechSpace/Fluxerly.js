@@ -9,8 +9,9 @@ const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const report = (check, details = {}) => console.log(JSON.stringify({ mode, voice, check, ...details }))
 let lock
 let stage = "configuration"
-let restoreVoiceCapture
+let restoreGatewayCapture
 const rawGuildCreate = { value: undefined }
+let listedUnavailableAtReady = false
 
 async function get(path, token) {
     const response = await fetch(`https://api.fluxer.app/v1${path}`, {
@@ -35,6 +36,9 @@ async function waitForGuildCreate(client, guildId, created, unavailable) {
     assert.equal(unavailable.value, undefined, "Sandbox guild is unavailable rather than creating after READY")
     assert.equal(created.value?.id, guildId)
     assert.ok(Object.isFrozen(created.value) && Object.isFrozen(created.value.features))
+    assert.equal(listedUnavailableAtReady, true, "Sandbox was not an unavailable guild placeholder in READY")
+    assert.equal(rawGuildCreate.value?.unavailable, false, "Gateway did not supply the availability marker")
+    assert.equal(created.value.isNewJoin, false, "Startup hydration was classified as a join")
 }
 
 const projectVoiceState = (guildId, state) => ({
@@ -117,13 +121,17 @@ try {
     assert.equal(guild.id, guildId)
     report(stage, { passed: true, clientSecretUsed: false })
 
-    if (voice) {
+    {
         const { default: WebSocket } = await import("ws")
         const originalEmit = WebSocket.prototype.emit
         WebSocket.prototype.emit = function (event, ...args) {
             if (event === "message") {
                 try {
                     const payload = JSON.parse(args[0].toString())
+                    if (payload?.t === "READY")
+                        listedUnavailableAtReady =
+                            payload.d?.guilds?.some((value) => value.id === guildId && value.unavailable === true) ===
+                            true
                     if (payload?.t === "GUILD_CREATE" && payload.d?.id === guildId) rawGuildCreate.value = payload.d
                 } catch {
                     // The SDK remains the owner of protocol validation
@@ -131,7 +139,7 @@ try {
             }
             return Reflect.apply(originalEmit, this, [event, ...args])
         }
-        restoreVoiceCapture = () => {
+        restoreGatewayCapture = () => {
             WebSocket.prototype.emit = originalEmit
         }
     }
@@ -166,7 +174,7 @@ try {
             await waitForGuildCreate(client, guildId, created, unavailable)
             assert.equal(created.value.name, guild.name)
             assert.equal(created.value.ownerId, guild.owner_id)
-            report(stage, { passed: true })
+            report(stage, { passed: true, isNewJoin: created.value.isNewJoin })
             if (voice) {
                 stage = "voice_baseline"
                 const snapshotSupplied = await waitForVoiceSnapshot(client, guildId, voiceSnapshot)
@@ -220,7 +228,7 @@ try {
                     yield* Effect.promise(() => waitForGuildCreate(client, guildId, created, unavailable))
                     assert.equal(created.value.name, guild.name)
                     assert.equal(created.value.ownerId, guild.owner_id)
-                    report(stage, { passed: true })
+                    report(stage, { passed: true, isNewJoin: created.value.isNewJoin })
                     if (voice) {
                         stage = "voice_baseline"
                         const snapshotSupplied = yield* Effect.promise(() =>
@@ -245,7 +253,7 @@ try {
     report(stage, { passed: false })
     process.exitCode = 1
 } finally {
-    restoreVoiceCapture?.()
+    restoreGatewayCapture?.()
     if (lock !== undefined) {
         closeSync(lock)
         unlinkSync(lockPath)

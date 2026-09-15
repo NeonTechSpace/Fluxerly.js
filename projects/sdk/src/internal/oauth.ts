@@ -324,13 +324,21 @@ export class OAuthOwner {
         ) => Effect.Effect<A, OAuthOperationError>,
     ): Effect.Effect<A, OAuthOperationError | ClientClosedError> {
         return Effect.suspend<A, OAuthOperationError | ClientClosedError, never>(() => {
-            const limit = timeout(options?.timeoutMs)
+            if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+                return Effect.fail(
+                    inputError(
+                        operation,
+                        "options",
+                        "format",
+                        "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
+                    ),
+                )
+            const timeoutMs = options?.timeoutMs
+            const limit = timeout(timeoutMs)
             if (
                 options !== undefined &&
-                (typeof options !== "object" ||
-                    options === null ||
-                    Object.keys(options).some((key) => key !== "timeoutMs") ||
-                    (options.timeoutMs !== undefined && limit === undefined))
+                (Object.keys(options).some((key) => key !== "timeoutMs") ||
+                    (timeoutMs !== undefined && limit === undefined))
             )
                 return Effect.fail(
                     inputError(
@@ -398,7 +406,8 @@ export class OAuthOwner {
                         "OAuth authorization input must be an object",
                     ),
                 )
-            if (!redirectUri(input.redirectUri))
+            const redirectUriValue = input.redirectUri
+            if (!redirectUri(redirectUriValue))
                 return Effect.fail(
                     inputError(
                         "oauth.authorizationUrl",
@@ -407,11 +416,13 @@ export class OAuthOwner {
                         "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
                     ),
                 )
-            if (!text(input.state))
+            const state = input.state
+            if (!text(state))
                 return Effect.fail(
                     inputError("oauth.authorizationUrl", "state", "required", "OAuth state must be a non-empty string"),
                 )
-            if (typeof input.codeChallenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(input.codeChallenge))
+            const codeChallenge = input.codeChallenge
+            if (typeof codeChallenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(codeChallenge))
                 return Effect.fail(
                     inputError(
                         "oauth.authorizationUrl",
@@ -420,15 +431,18 @@ export class OAuthOwner {
                         "PKCE code challenge must contain exactly 43 base64url characters",
                     ),
                 )
-            if (!Array.isArray(input.scopes) || input.scopes.length === 0)
+            const scopeInput = input.scopes
+            if (!Array.isArray(scopeInput))
                 return Effect.fail(
                     inputError("oauth.authorizationUrl", "scopes", "length", "OAuth scopes must be a non-empty array"),
                 )
-            if (
-                Array.from(input.scopes).some(
-                    (scope) => !["identify", "email", "guilds", "connections", "bot"].includes(scope),
+            const scopeLength = scopeInput.length
+            if (scopeLength === 0)
+                return Effect.fail(
+                    inputError("oauth.authorizationUrl", "scopes", "length", "OAuth scopes must be a non-empty array"),
                 )
-            )
+            const scopes = Array.from({ length: scopeLength }, (_, index) => scopeInput[index])
+            if (scopes.some((scope) => !["identify", "email", "guilds", "connections", "bot"].includes(scope)))
                 return Effect.fail(
                     inputError(
                         "oauth.authorizationUrl",
@@ -437,12 +451,16 @@ export class OAuthOwner {
                         "OAuth scopes must be identify, email, guilds, connections, or bot",
                     ),
                 )
-            const botScope = input.scopes.includes("bot")
+            const botScope = scopes.includes("bot")
+            const guildId = input.guildId
+            const channelId = input.channelId
+            const permissions = input.permissions
+            const disableGuildSelect = input.disableGuildSelect
             const installationInput =
-                input.guildId !== undefined ||
-                input.channelId !== undefined ||
-                input.permissions !== undefined ||
-                input.disableGuildSelect !== undefined
+                guildId !== undefined ||
+                channelId !== undefined ||
+                permissions !== undefined ||
+                disableGuildSelect !== undefined
             if (installationInput && !botScope)
                 return Effect.fail(
                     inputError(
@@ -452,15 +470,15 @@ export class OAuthOwner {
                         "Bot installation options require the bot scope",
                     ),
                 )
-            if (input.guildId !== undefined && !identifier(input.guildId))
+            if (guildId !== undefined && !identifier(guildId))
                 return Effect.fail(
                     inputError("oauth.authorizationUrl", "guildId", "format", "Guild target must be a decimal ID"),
                 )
-            if (input.channelId !== undefined && !identifier(input.channelId))
+            if (channelId !== undefined && !identifier(channelId))
                 return Effect.fail(
                     inputError("oauth.authorizationUrl", "channelId", "format", "Channel target must be a decimal ID"),
                 )
-            if (input.guildId !== undefined && input.channelId !== undefined)
+            if (guildId !== undefined && channelId !== undefined)
                 return Effect.fail(
                     inputError(
                         "oauth.authorizationUrl",
@@ -470,10 +488,8 @@ export class OAuthOwner {
                     ),
                 )
             if (
-                input.permissions !== undefined &&
-                (typeof input.permissions !== "bigint" ||
-                    input.permissions < 0n ||
-                    input.permissions > maximumPermissionBits)
+                permissions !== undefined &&
+                (typeof permissions !== "bigint" || permissions < 0n || permissions > maximumPermissionBits)
             )
                 return Effect.fail(
                     inputError(
@@ -483,7 +499,7 @@ export class OAuthOwner {
                         "Bot permissions must be an unsigned 64-bit bitfield",
                     ),
                 )
-            if (input.disableGuildSelect !== undefined && typeof input.disableGuildSelect !== "boolean")
+            if (disableGuildSelect !== undefined && typeof disableGuildSelect !== "boolean")
                 return Effect.fail(
                     inputError(
                         "oauth.authorizationUrl",
@@ -493,14 +509,14 @@ export class OAuthOwner {
                     ),
                 )
             const request = {
-                redirectUri: input.redirectUri,
-                scopes: Object.freeze([...input.scopes]),
-                state: input.state,
-                codeChallenge: input.codeChallenge,
-                guildId: input.guildId,
-                channelId: input.channelId,
-                permissions: input.permissions,
-                disableGuildSelect: input.disableGuildSelect,
+                redirectUri: redirectUriValue,
+                scopes: Object.freeze(scopes),
+                state,
+                codeChallenge,
+                guildId,
+                channelId,
+                permissions,
+                disableGuildSelect,
             }
             return this.#run("oauth.authorizationUrl", options, (_api, webapp) =>
                 Effect.sync(() => {
@@ -675,7 +691,8 @@ export class OAuthOwner {
                 return Effect.fail(
                     inputError("oauth.exchangeCode", "input", "type", "OAuth code exchange input must be an object"),
                 )
-            if (!text(input.code))
+            const code = input.code
+            if (!text(code))
                 return Effect.fail(
                     inputError(
                         "oauth.exchangeCode",
@@ -684,7 +701,8 @@ export class OAuthOwner {
                         "Authorization code must be a non-empty string",
                     ),
                 )
-            if (!redirectUri(input.redirectUri))
+            const redirectUriValue = input.redirectUri
+            if (!redirectUri(redirectUriValue))
                 return Effect.fail(
                     inputError(
                         "oauth.exchangeCode",
@@ -693,7 +711,8 @@ export class OAuthOwner {
                         "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
                     ),
                 )
-            if (typeof input.codeVerifier !== "string" || !/^[A-Za-z0-9._~-]{43,128}$/.test(input.codeVerifier))
+            const codeVerifier = input.codeVerifier
+            if (typeof codeVerifier !== "string" || !/^[A-Za-z0-9._~-]{43,128}$/.test(codeVerifier))
                 return Effect.fail(
                     inputError(
                         "oauth.exchangeCode",
@@ -702,7 +721,7 @@ export class OAuthOwner {
                         "PKCE code verifier must contain 43 through 128 unreserved characters",
                     ),
                 )
-            const request = { code: input.code, redirectUri: input.redirectUri, codeVerifier: input.codeVerifier }
+            const request = { code, redirectUri: redirectUriValue, codeVerifier }
             return this.#run("oauth.exchangeCode", options, (api, _webapp, secret, progress) =>
                 this.#request(
                     "oauth.exchangeCode",
@@ -765,15 +784,13 @@ export class OAuthOwner {
         return Effect.suspend(() => {
             if (!record(value))
                 return Effect.fail(inputError("oauth.revoke", "input", "type", "OAuth revoke input must be an object"))
-            if (!text(value.token))
+            const token = value.token
+            if (!text(token))
                 return Effect.fail(
                     inputError("oauth.revoke", "token", "required", "Revoked token must be a non-empty string"),
                 )
-            if (
-                value.tokenTypeHint !== undefined &&
-                value.tokenTypeHint !== "access_token" &&
-                value.tokenTypeHint !== "refresh_token"
-            )
+            const tokenTypeHint = value.tokenTypeHint
+            if (tokenTypeHint !== undefined && tokenTypeHint !== "access_token" && tokenTypeHint !== "refresh_token")
                 return Effect.fail(
                     inputError(
                         "oauth.revoke",
@@ -782,7 +799,7 @@ export class OAuthOwner {
                         "Token type hint must be access_token or refresh_token",
                     ),
                 )
-            const request = { token: value.token, tokenTypeHint: value.tokenTypeHint }
+            const request = { token, tokenTypeHint }
             return this.#run("oauth.revoke", options, (api, _webapp, secret, progress) =>
                 this.#request(
                     "oauth.revoke",
@@ -914,25 +931,29 @@ export class OAuthOwner {
 }
 
 export function makeOAuthOwner(config: OAuthConfig, scope: Scope.Scope): Effect.Effect<OAuthOwner, ConfigurationError> {
-    return Effect.try({
-        try: () => {
-            if (
-                !record(config) ||
-                Object.keys(config).some((key) => key !== "clientId" && key !== "clientSecret" && key !== "instance") ||
-                !identifier(config.clientId) ||
-                !text(config.clientSecret)
-            )
-                throw new ConfigurationError(
+    return Effect.suspend(() => {
+        if (
+            !record(config) ||
+            Object.keys(config).some((key) => key !== "clientId" && key !== "clientSecret" && key !== "instance")
+        )
+            return Effect.fail(
+                new ConfigurationError(
                     "configuration",
                     "OAuth configuration requires a decimal clientId and nonempty clientSecret",
-                )
-            const configuration = instanceConfiguration(config.instance)
-            if (configuration instanceof ConfigurationError) throw configuration
-            return new OAuthOwner(config.clientId, config.clientSecret, configuration, scope)
-        },
-        catch: (error) =>
-            error instanceof ConfigurationError
-                ? error
-                : new ConfigurationError("configuration", "Invalid OAuth configuration"),
+                ),
+            )
+        const clientId = config.clientId
+        const clientSecret = config.clientSecret
+        if (!identifier(clientId) || !text(clientSecret))
+            return Effect.fail(
+                new ConfigurationError(
+                    "configuration",
+                    "OAuth configuration requires a decimal clientId and nonempty clientSecret",
+                ),
+            )
+        const instance = config.instance
+        const configuration = instanceConfiguration(instance)
+        if (configuration instanceof ConfigurationError) return Effect.fail(configuration)
+        return Effect.sync(() => new OAuthOwner(clientId, clientSecret, configuration, scope))
     })
 }

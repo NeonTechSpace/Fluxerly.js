@@ -1,0 +1,24 @@
+{
+    "pages": [
+        "---Getting started---",
+        "index",
+        "quick-start",
+        "---Bot guides---",
+        "messages",
+        "commands",
+        "events-and-collectors",
+        "emoji-and-stickers",
+        "guilds-and-permissions",
+        "webhooks-and-oauth",
+        "---Operations---",
+        "history-and-cache",
+        "reliability",
+        "logging",
+        "---Effect---",
+        "effect-first-bot",
+        "effect-workflows",
+        "---Reference---",
+        "api",
+        "changelog"
+    ]
+}

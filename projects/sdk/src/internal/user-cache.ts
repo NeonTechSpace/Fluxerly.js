@@ -21,11 +21,23 @@ export class UserCache {
         this.#schedule()
         return ++this.#generation[kind]
     }
-    complete(kind: Kind, generation: number, values: readonly (User | DirectMessageChannel)[], replace = false) {
-        if (this.#closed || generation !== this.#generation[kind]) return
+    complete(
+        kind: Kind,
+        generation: number,
+        values: readonly (User | DirectMessageChannel)[],
+        replace = false,
+        mutation = false,
+    ) {
+        if (this.#closed) return
+        if (generation !== this.#generation[kind]) {
+            // A write that finishes after a cache clear or gateway gap can still have changed Fluxer state
+            if (mutation) this.invalidate(kind)
+            return
+        }
         const settings = this.settings[kind]
         if (!settings) return
-        if (replace) this.#entries[kind].clear()
+        // Mutations clear earlier snapshots. A complete, uncontended response may become the new observation
+        if (mutation || replace) this.#entries[kind].clear()
         for (const value of values) {
             this.#entries[kind].delete(value.id)
             const bytes = Buffer.byteLength(JSON.stringify(value))

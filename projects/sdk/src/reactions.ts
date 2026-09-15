@@ -3,7 +3,7 @@ import type { GuildEmoji } from "./expressions.js"
 
 /** Choose one page of users who reacted with a particular emoji.
  * Pass to messages.fetchReactionUsers. Use iterateReactionUsers to traverse bounded multiple pages.
- * Unknown properties and invalid limits or IDs are rejected before the request
+ * Fields are captured once. Unknown properties and invalid limits or IDs are rejected before the request
  */
 export interface ReactionUsersQuery {
     /** Maximum users requested in this page, an integer from 1 through 100, default 25 */
@@ -38,21 +38,18 @@ export interface ReactionUsersPage {
 }
 
 /** Emoji accepted by reaction operations and reaction collector selection.
- * Pass literal Unicode such as "👍", not a shortcode, URL-encoded text or <:name:id> markup.
- * For custom emoji, pass { name, id } or a GuildEmoji returned by client.emojis.
- * Custom names use 1 through 32 ASCII letters, digits or underscores. IDs are decimal strings.
+ * Pass literal Unicode such as `"👍"`, custom markup such as `"<:party:123>"` or `"<a:party:123>"`,
+ * a `{ name, id, animated? }` value, or a `GuildEmoji` returned by `client.emojis`.
+ * Values returned by `format.parseCustomEmoji`, `emojis.fetchMetadata` and reaction events can be reused directly
+ *
+ * Custom names use 1 through 32 ASCII letters, digits, underscores or hyphens. IDs are decimal strings.
+ * Markup must occupy the whole string. Shortcodes such as `:wave:` and URL-encoded text are rejected.
+ * Custom animation flags are optional and do not change the request identity or collector match
+ *
  * Unicode input is limited to 128 UTF-16 code units and rejects spaces, control characters and reserved markup characters.
  * Fluxer checks that the emoji is supported and that the bot may use it. The SDK does not look it up or infer permissions
  */
-export type ReactionEmojiInput =
-    | string
-    | {
-          /** Custom emoji name, using 1 through 32 ASCII letters, digits or underscores */
-          readonly name: string
-          /** Custom emoji ID as a decimal string */
-          readonly id: string
-      }
-    | GuildEmoji
+export type ReactionEmojiInput = string | ReactionEmoji | GuildEmoji
 
 /** Emoji identity supplied in a reaction event.
  * This frozen value records the name and any custom ID or animation flag supplied by Fluxer
@@ -67,7 +64,7 @@ export interface ReactionEmoji {
 }
 
 /** Message address carried by a reaction event, with optional server context.
- * id is the message ID, not the reaction or user ID.
+ * The `id` field is the message ID.
  * Events can be missed during gateway recovery and do not establish current counts or the complete reactor list.
  * Additional provider data, such as member details and session identifiers, is not retained
  */
@@ -77,7 +74,7 @@ export interface ReactionTarget extends MessageReference {
 }
 
 /** One reaction addition or removal delivered by Fluxer.
- * userId identifies the user whose reaction changed, not necessarily the person who removed it
+ * The `userId` field identifies the user whose reaction changed. Another account can perform the removal
  */
 export interface MessageReaction extends ReactionTarget {
     /** Account ID of the user whose reaction was added or removed */

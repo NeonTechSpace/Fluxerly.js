@@ -17,13 +17,26 @@ const wire = (id: string) => ({
     attachments: [],
     stickers: [],
 })
-const page = (ids: string[], cursor?: readonly string[]) =>
+const page = (
+    ids: string[],
+    {
+        page: pageNumber = 1,
+        total = ids.length,
+        hitsPerPage = 25,
+        cursor,
+    }: {
+        readonly page?: number
+        readonly total?: number
+        readonly hitsPerPage?: number
+        readonly cursor?: readonly string[]
+    } = {},
+) =>
     Response.json({
         messages: ids.map(wire),
-        channels: [],
-        total: 10,
-        hits_per_page: 25,
-        page: 1,
+        channels: ids.length === 0 ? [] : [{ id: "20", type: 0 }],
+        total,
+        hits_per_page: hitsPerPage,
+        page: pageNumber,
         ...(cursor === undefined ? {} : { cursor }),
     })
 
@@ -46,20 +59,22 @@ async function setup(mode: (typeof modes)[number]) {
     })
     return {
         iterate: (
-            filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+            filters: Omit<MessageSearchQuery, "limit" | "page">,
             limits: MessageSearchIterationLimits,
+            options?: { readonly timeoutMs?: number },
         ) =>
             defaultApi
-                ? defaultApi.messages.iterateSearch({ channelId: "20" }, filters, limits)
-                : native!.messages.iterateSearch({ channelId: "20" }, filters, limits),
+                ? defaultApi.messages.iterateSearch({ channelId: "20" }, filters, limits, options)
+                : native!.messages.iterateSearch({ channelId: "20" }, filters, limits, options),
         iterateIn: (
             context: Parameters<NonNullable<typeof defaultApi>["messages"]["iterateSearch"]>[0],
-            filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+            filters: Omit<MessageSearchQuery, "limit" | "page">,
             limits: MessageSearchIterationLimits,
+            options?: { readonly timeoutMs?: number },
         ) =>
             defaultApi
-                ? defaultApi.messages.iterateSearch(context, filters, limits)
-                : native!.messages.iterateSearch(context, filters, limits),
+                ? defaultApi.messages.iterateSearch(context, filters, limits, options)
+                : native!.messages.iterateSearch(context, filters, limits, options),
         search: (
             context: Parameters<NonNullable<typeof defaultApi>["messages"]["search"]>[0],
             query?: MessageSearchQuery,
@@ -96,13 +111,15 @@ async function read<A>(value: Result<A, unknown> | Effect.Effect<A, unknown>): P
     return result.value!
 }
 
-test.each(modes)("%s search traversal is lazy, bounded, cursor-based and cache-free", async (mode) => {
+test.each(modes)("%s search traversal is lazy, numbered, bounded, and cache-free", async (mode) => {
     const api = await setup(mode)
     const sent: Record<string, unknown>[] = []
     stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         const body = JSON.parse(String(init.body))
         sent.push(body)
-        return body.cursor === undefined ? page(["10", "11"], ["opaque", "one"]) : page(["11", "12"])
+        return body.page === 1
+            ? page(["10", "11"], { page: 1, total: 4, hitsPerPage: 2, cursor: ["ignored"] })
+            : page(["12", "13"], { page: 2, total: 4, hitsPerPage: 2, cursor: ["ignored"] })
     })
     const source = api.iterate({ content: "todo" }, { maxItems: 3, pageSize: 2 })
     expect(sent).toEqual([])
@@ -110,25 +127,35 @@ test.each(modes)("%s search traversal is lazy, bounded, cursor-based and cache-f
     expect(messages.map((message) => message.id)).toEqual(["10", "11", "12"])
     expect(sent).toEqual([
         { scope: "current", context_channel_id: "20", hits_per_page: 2, page: 1, content: "todo" },
-        { scope: "current", context_channel_id: "20", hits_per_page: 1, cursor: ["opaque", "one"], content: "todo" },
+        { scope: "current", context_channel_id: "20", hits_per_page: 2, page: 2, content: "todo" },
     ])
     expect(await read(api.get())).toBeUndefined()
 })
 
-test.each(modes)("%s stops indexing, repeated opaque cursors and page budgets without hidden polling", async (mode) => {
+test.each(modes)("%s stops indexing, malformed progress, and page budgets without hidden polling", async (mode) => {
     const api = await setup(mode)
-    const fetch = vi.fn(async () => Response.json({ indexing: true }))
+    const fetch = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ indexing: true }))
     stubFetchWithHostedDiscovery(fetch)
     await expect(collect(api.iterate({}, { maxItems: 2 }))).rejects.toMatchObject({ reason: "indexing" })
     expect(fetch).toHaveBeenCalledTimes(1)
 
     fetch.mockReset()
-    fetch.mockResolvedValueOnce(page(["10"], ["same"])).mockResolvedValueOnce(page(["11"], ["same"]))
+    fetch.mockResolvedValueOnce(page(["10"], { page: 2, total: 2, hitsPerPage: 2 }))
     await expect(collect(api.iterate({}, { maxItems: 3 }))).rejects.toMatchObject({ reason: "cursorStalled" })
 
     fetch.mockReset()
-    fetch.mockResolvedValueOnce(page(["10"], ["next"]))
+    fetch.mockResolvedValueOnce(page(["10"], { total: 4, hitsPerPage: 3 }))
     await expect(collect(api.iterate({}, { maxItems: 3, maxPages: 1 }))).rejects.toMatchObject({ reason: "pageLimit" })
+
+    fetch.mockReset()
+    fetch.mockImplementation(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body))
+        return page([String(body.page)], { page: body.page, total: 401, hitsPerPage: 1 })
+    })
+    await expect(collect(api.iterate({}, { maxItems: 401, maxPages: 401, pageSize: 1 }))).rejects.toMatchObject({
+        reason: "pageLimit",
+    })
+    expect(fetch).toHaveBeenCalledTimes(400)
 })
 
 test.each(modes)("%s rejects invalid traversal settings before dispatch", async (mode) => {
@@ -137,7 +164,10 @@ test.each(modes)("%s rejects invalid traversal settings before dispatch", async 
     stubFetchWithHostedDiscovery(fetch)
     await expect(collect(api.iterate({}, { maxItems: 0 }))).rejects.toMatchObject({ reason: "input" })
     await expect(collect(api.iterate({}, { maxItems: 1, pageSize: 26 }))).rejects.toMatchObject({ reason: "input" })
-    await expect(collect(api.iterate({ cursor: ["wrong"] } as never, { maxItems: 1 }))).rejects.toMatchObject({
+    await expect(collect(api.iterate({}, { maxItems: 1, maxPages: Number.POSITIVE_INFINITY }))).rejects.toMatchObject({
+        reason: "input",
+    })
+    await expect(collect(api.iterate({ page: 1 } as never, { maxItems: 1 }))).rejects.toMatchObject({
         reason: "input",
     })
     const forbidden = {}
@@ -178,6 +208,54 @@ test.each(modes)("%s rejects invalid traversal context before dispatch", async (
     expect(fetch).not.toHaveBeenCalled()
 })
 
+test.each(modes)("%s captures traversal scope, budgets and timeout once per consumption", async (mode) => {
+    const api = await setup(mode)
+    const sent: Record<string, unknown>[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body))
+        sent.push(body)
+        return page([String(body.page)], {
+            page: body.page,
+            total: 4,
+            hitsPerPage: body.hits_per_page,
+        })
+    })
+    let contextReads = 0
+    const changingContext = {
+        get guildId() {
+            return ++contextReads === 1 ? "40" : "99"
+        },
+    }
+    let maxItemReads = 0
+    const changingLimits = {
+        get maxItems() {
+            return ++maxItemReads === 1 ? 3 : 50
+        },
+    }
+    let timeoutReads = 0
+    const changingOptions = {
+        get timeoutMs() {
+            return ++timeoutReads === 1 ? 1_000 : 2_147_483_648
+        },
+    }
+
+    expect(
+        (await collect(api.iterateIn(changingContext, {}, changingLimits, changingOptions))).map(
+            (message) => message.id,
+        ),
+    ).toEqual(["1", "2"])
+    expect([contextReads, maxItemReads, timeoutReads]).toEqual([1, 1, 1])
+    expect(sent).toEqual([
+        { scope: "current", context_guild_id: "40", hits_per_page: 3, page: 1 },
+        { scope: "current", context_guild_id: "40", hits_per_page: 3, page: 2 },
+    ])
+
+    await expect(collect(api.iterateIn({ guildId: "40" }, {}, { maxItems: 0 }))).rejects.toMatchObject({
+        reason: "input",
+    })
+    expect(sent).toHaveLength(2)
+})
+
 test.each(modes)("%s search and traversal retain validated getter context and input snapshots", async (mode) => {
     const api = await setup(mode)
     const sent: Record<string, unknown>[] = []
@@ -188,7 +266,12 @@ test.each(modes)("%s search and traversal retain validated getter context and in
         sent.push(body)
         requests += 1
         if (requests === 2) filters.content = "mutated"
-        return body.cursor === undefined ? page([String(requests)], ["next"]) : page([String(requests)])
+        return page([String(requests)], {
+            page: body.page,
+            total: 2,
+            hitsPerPage: body.hits_per_page,
+            cursor: ["ignored"],
+        })
     })
     const context = new (class {
         get guildId() {
@@ -204,7 +287,7 @@ test.each(modes)("%s search and traversal retain validated getter context and in
     expect(sent).toEqual([
         { scope: "current", context_guild_id: "10", hits_per_page: 25, page: 1 },
         { scope: "current", context_guild_id: "10", hits_per_page: 1, page: 1, content: "original" },
-        { scope: "current", context_guild_id: "10", hits_per_page: 1, cursor: ["next"], content: "original" },
+        { scope: "current", context_guild_id: "10", hits_per_page: 1, page: 2, content: "original" },
     ])
 })
 
@@ -231,7 +314,12 @@ test.each(modes)("%s search and traversal preserve structural filters at consump
             content = "later"
             phrases[0] = "later"
         }
-        return body.cursor === undefined ? page([String(sent.length)], ["next"]) : page([String(sent.length)])
+        return page([String(sent.length)], {
+            page: body.page,
+            total: 2,
+            hitsPerPage: body.hits_per_page,
+            cursor: ["ignored"],
+        })
     })
     const source = api.iterate(filters, { maxItems: 2, pageSize: 1 })
     expect(sent).toEqual([])
@@ -263,7 +351,7 @@ test.each(modes)("%s search and traversal preserve structural filters at consump
             scope: "current",
             context_channel_id: "20",
             hits_per_page: 1,
-            cursor: ["next"],
+            page: 2,
             content: "accepted",
             exact_phrases: ["accepted"],
             pinned: false,

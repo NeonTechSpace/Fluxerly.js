@@ -265,10 +265,12 @@ test.each(modes)("%s preserves supplied metadata from pin pages without hydratio
 })
 
 test.each(modes)("%s rejects invalid pin inputs and malformed pages without partial results", async (mode) => {
+    const urls: string[] = []
     let calls = 0,
         body: unknown = { items: [], has_more: false }
-    rest(async () => {
+    rest(async (url) => {
         calls++
+        urls.push(url)
         return Response.json(body)
     })
     const api = await fixture(mode)
@@ -280,6 +282,9 @@ test.each(modes)("%s rejects invalid pin inputs and malformed pages without part
         { after: "10" },
         { before: "10" },
         { before: "2026-09-08" },
+        { before: "2025-02-29T00:00:00Z" },
+        { before: "2024-04-31T00:00:00+02:00" },
+        { before: "1900-02-29T00:00:00Z" },
     ])
         await expect(api.pins(query as any)).rejects.toMatchObject({
             operation: "fetchPins",
@@ -294,6 +299,26 @@ test.each(modes)("%s rejects invalid pin inputs and malformed pages without part
                 reason: "input",
             })
     expect(calls).toBe(0)
+    let beforeReads = 0
+    const changingBefore = {
+        get before() {
+            return ++beforeReads === 1 ? "2024-02-29T00:00:00Z" : "bad"
+        },
+    }
+    expect(await api.pins(changingBefore)).toEqual({ items: [], hasMore: false, nextBefore: null })
+    expect(beforeReads).toBe(1)
+    expect(urls.at(-1)).toContain("before=2024-02-29T00%3A00%3A00Z")
+    const firstInvalid = {
+        get before() {
+            return "bad"
+        },
+    }
+    await expect(api.pins(firstInvalid)).rejects.toMatchObject({
+        operation: "fetchPins",
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(calls).toBe(1)
     for (const invalid of [
         null,
         [],
@@ -302,6 +327,7 @@ test.each(modes)("%s rejects invalid pin inputs and malformed pages without part
         { items: [pin(), pin()], has_more: false },
         { items: [pin("10"), pin("11", "2026-09-09T00:00:00Z")], has_more: false },
         { items: [pin("10", "invalid")], has_more: false },
+        { items: [pin("10", "2025-02-29T00:00:00Z")], has_more: false },
         { items: [{ ...pin(), message: { ...wire(), channel_id: "21" } }], has_more: false },
         { items: [{ ...pin(), message: wire("10", false) }], has_more: false },
         { items: [{ ...pin(), message: { ...wire(), pinned: "true" } }], has_more: false },
@@ -320,6 +346,9 @@ test.each(modes)("%s rejects invalid pin inputs and malformed pages without part
     })
     body = { items: [], has_more: false }
     expect(await api.pins()).toEqual({ items: [], hasMore: false, nextBefore: null })
+    for (const before of ["2000-02-29T00:00:00Z", "2024-02-29T24:00:00+14:00", "2024-04-30T12:00:00.123456789Z"]) {
+        expect(await api.pins({ before })).toEqual({ items: [], hasMore: false, nextBefore: null })
+    }
     await api.close()
     await expect(api.pins()).rejects.toMatchObject({ _tag: "ClientClosedError" })
     await expect(api.mutate("pin")).rejects.toMatchObject({ _tag: "ClientClosedError" })
@@ -443,14 +472,14 @@ test.each(modes)(
         dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: null, private: "discard" })
         expect(await read).toEqual({ channelId: "20", lastPinTimestamp: null })
         const stamp = "2026-09-08T12:00:00.000Z"
-        dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: stamp })
+        dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: stamp, guild_id: "99" })
         dispatch("MESSAGE_UPDATE", wire("10", true))
         await vi.waitFor(() => expect(updated).toHaveLength(1))
         expect(updated[0].pinned).toBe(true)
         expect((await api.get())?.pinned).toBe(true)
         expect(received).toEqual([
             { channelId: "20", lastPinTimestamp: null },
-            { channelId: "20", lastPinTimestamp: stamp },
+            { channelId: "20", lastPinTimestamp: stamp, guildId: "99" },
         ])
         expect(received.every(Object.isFrozen)).toBe(true)
         dispatch("MESSAGE_UPDATE", wire("10", false))
@@ -483,14 +512,23 @@ test.each(modes)("%s pin event overflow is subscription-local and subscriptions 
     await vi.waitFor(() => expect(received).toHaveLength(3))
 })
 
-test.each(modes)("%s malformed pin notifications fail protocol validation without partial delivery", async (mode) => {
+test.each(
+    modes.flatMap((mode) =>
+        [
+            { channel_id: "20", last_pin_timestamp: 1 },
+            { channel_id: "20", last_pin_timestamp: "2025-02-29T00:00:00Z" },
+            { channel_id: "20", last_pin_timestamp: null, guild_id: null },
+            { channel_id: "20", last_pin_timestamp: null, guild_id: "invalid" },
+        ].map((body) => ({ mode, body })),
+    ),
+)("$mode malformed pin notifications fail protocol validation without partial delivery", async ({ mode, body }) => {
     const dispatch = await gateway()
     rest(async () => Response.json(wire()))
     const api = await fixture(mode)
     await api.connect()
     const handler = vi.fn()
     await api.on("channelPinsUpdate", handler)
-    dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: 1 })
+    dispatch("CHANNEL_PINS_UPDATE", body)
     await expect(api.closed()).rejects.toMatchObject({ reason: "protocol" })
     expect(handler).not.toHaveBeenCalled()
 })

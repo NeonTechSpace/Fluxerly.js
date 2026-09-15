@@ -25,16 +25,17 @@ export const ChannelType: Readonly<{
 /** Channel-specific grants and denials for one role or member.
  * A bit absent from both allow and deny leaves that permission to the other applicable roles and overwrites.
  * Use Permissions constants and bigint bitwise operators to build the bitfields. This is one explicit overwrite,
- * not the member's final permissions. SDK writes advertise ViewChannelMembers replacements to Fluxer
+ * not the member's final permissions. SDK writes accept values through 9_223_372_036_854_775_807n and advertise
+ * ViewChannelMembers replacements to Fluxer. Received values can use the full unsigned 64-bit range
  */
 export interface PermissionOverwrite {
     /** Decimal role or member ID */
     readonly id: string
     /** Whether id identifies a role or a guild member */
     readonly type: "role" | "member"
-    /** Permissions explicitly granted here, as an unsigned 64-bit bigint. 0n grants nothing explicitly */
+    /** Permissions explicitly granted here. Writes accept 0n through 9_223_372_036_854_775_807n; responses can use unsigned 64-bit values. 0n grants nothing explicitly */
     readonly allow: bigint
-    /** Permissions explicitly denied here, as an unsigned 64-bit bigint. 0n denies nothing explicitly */
+    /** Permissions explicitly denied here. Writes accept 0n through 9_223_372_036_854_775_807n; responses can use unsigned 64-bit values. 0n denies nothing explicitly */
     readonly deny: bigint
 }
 
@@ -99,7 +100,9 @@ export interface ChannelCreateBase {
     readonly url?: string | null
     /** Parent category, with null or omission creating a top-level channel */
     readonly parentId?: string | null
-    /** Voice audio bitrate in bits per second, integer 8,000–320,000 or null, default 64,000 for voice channels */
+    /** Voice audio bitrate in bits per second, integer 8,000–384,000 or null, default 64,000 for voice channels.
+     * Fluxer clamps the requested value to the guild's enabled bitrate tier. Read the returned channel for the applied value
+     */
     readonly bitrate?: number | null
     /** Maximum voice users from 0 through 99, with 0 unlimited and the voice default */
     readonly userLimit?: number | null
@@ -131,7 +134,7 @@ export interface VoiceChannelCreate extends ChannelCreateBase {
     readonly type: typeof ChannelType.Voice
 }
 
-/** Create a category to group guild channels, rather than a message conversation */
+/** Create a category to group guild channels */
 export interface CategoryChannelCreate extends ChannelCreateBase {
     /** Category channel type */
     readonly type: typeof ChannelType.Category
@@ -158,7 +161,9 @@ export interface ChannelEdit {
     readonly topic?: string | null
     /** Absolute link-channel URL, or null to clear. No URL is fetched by this request */
     readonly url?: string | null
-    /** Voice bitrate in bits per second, integer 8,000–320,000, or null */
+    /** Voice bitrate in bits per second, integer 8,000–384,000, or null.
+     * Fluxer clamps the requested value to the guild's enabled bitrate tier. Read the returned channel for the applied value
+     */
     readonly bitrate?: number | null
     /** Maximum voice users, integer 0–99, or null. Zero requests unlimited users */
     readonly userLimit?: number | null

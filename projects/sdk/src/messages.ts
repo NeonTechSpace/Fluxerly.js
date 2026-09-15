@@ -4,6 +4,7 @@ import type { Attachment, AttachmentInput, AttachmentReference } from "./attachm
 
 /** Address a message using its channel ID and message ID.
  * Pass this plain object to message operations without fetching the message first.
+ * The SDK captures and validates both IDs once when an operation starts.
  * It holds no client and makes no request by itself
  */
 export interface MessageReference {
@@ -218,6 +219,10 @@ export interface MessageSticker {
  * The SDK does not fetch or reconstruct missing details from its cache
  */
 export interface MessageDeletion extends MessageReference {
+    /** Guild ID when Fluxer supplies it. Omission means no guild context was supplied, not a confirmed private channel.
+     * No channel lookup or cache inference supplies this field
+     */
+    readonly guildId?: string
     /** Deleted text when supplied. Absence means unavailable, null is preserved, and "" means known empty text */
     readonly content?: string | null
     /** Deleted message's author ID, only when supplied by Fluxer */
@@ -230,12 +235,16 @@ export interface MessageDeletion extends MessageReference {
 export interface MessageBulkDeletion {
     /** Channel ID shared by the deleted messages */
     readonly channelId: string
+    /** Guild ID when Fluxer supplies it. Omission means no guild context was supplied, not a confirmed private channel.
+     * No channel lookup or cache inference supplies this field
+     */
+    readonly guildId?: string
     /** Deleted decimal message IDs in received order, not necessarily chronological or guaranteed to arrive exactly once */
     readonly ids: readonly string[]
 }
 
 /** Choose which existing mentions may notify users when sending, replying or editing.
- * All notification categories are disabled unless explicitly enabled.
+ * All notification categories are disabled unless explicitly enabled. ID arrays are copied by index when the operation starts.
  * These settings permit notifications but do not insert mention text or bypass Fluxer's permissions
  */
 export interface AllowedMentions {
@@ -297,7 +306,7 @@ export type MessageBody = (
       }
 ) & {
     /** Sticker IDs to send, at most three decimal strings in display order.
-     * Omit or use [] for no stickers. The SDK copies IDs before dispatch without uploading or looking up images.
+     * Omit or use [] for no stickers. The SDK copies IDs by index before dispatch without uploading or looking up images.
      * Fluxer checks sticker availability and external-sticker permissions
      */
     readonly stickerIds?: readonly string[]
@@ -333,7 +342,7 @@ type Body<A> =
  * Supply nonempty text, embeds, new files or sticker IDs. Unknown properties are rejected locally.
  * Notifications are off by default. Use allowedMentions to permit specific existing mentions to notify.
  * An attachment:// embed image or thumbnail must name one matching new image upload in this request.
- * Use messages.forward, rather than this input, to copy a source message into an immutable forward
+ * Use messages.forward to copy a source message into an immutable forward
  */
 export type MessageInput = MessageBody & {
     /** Correlation nonce chosen by your application, or omit for one SDK-generated nonce per send execution.
@@ -357,7 +366,7 @@ export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions" | "f
  * Fluxer captures the source. The SDK does not fetch it, check access beforehand or upload new content.
  * Omit both media selectors to copy source text and media.
  * A nonempty selector copies only selected media and omits source text.
- * Empty selectors behave like omitted selectors, not a request for text-only forwarding
+ * Empty selectors behave like omitted selectors. Selector arrays are copied by index when the operation starts
  */
 export interface ForwardMessageInput {
     /** Application-chosen correlation nonce, or omit for one SDK-generated nonce per forward execution.

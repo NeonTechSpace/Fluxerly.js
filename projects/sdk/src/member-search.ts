@@ -31,8 +31,9 @@ export type GuildMemberJoinSourceType = (typeof GuildMemberJoinSourceTypes)[keyo
  * The search index can lag behind current membership and profile changes. Search results are partial
  * records, not the SDK cache or complete GuildMember snapshots.
  * Fluxer requires a member-management permission for every search.
- * Join-source and source-invite filters require ManageGuild. The SDK checks that permission before sending filters.
- * Fluxer would silently ignore. Timestamps use whole Unix seconds. Unknown keys and values outside the documented
+ * Join-source and source-invite filters require ManageGuild. The SDK checks that permission before sending these
+ * filters, which Fluxer would otherwise silently ignore. Filter arrays are copied by index when the operation starts.
+ * Timestamps use whole Unix seconds. Unknown keys and values outside the documented
  * bounds fail locally before the POST. The provider can return an empty, non-indexing page when its search service is
  * unavailable
  *

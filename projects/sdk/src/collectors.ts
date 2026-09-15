@@ -87,7 +87,7 @@ export interface ReactionCollectorOptions extends EventBufferOptions {
      */
     readonly guildId?: string
     /** Collect only this emoji, or omit to accept any emoji.
-     * Use literal Unicode such as "👍", or a custom { name, id } value. The SDK copies it at registration.
+     * Use any ReactionEmojiInput, including Unicode, custom markup and parsed or received emoji. The SDK normalizes and copies it at registration.
      * Unicode text must match exactly, including skin tone and variation selectors. Custom emoji match by ID even after renaming.
      * A custom input still needs a valid name. Invalid input fails registration with ConfigurationError field emoji, without a request.
      * Matching runs before filter and onReaction, but after the event enters the queue, so other emoji can still fill the pending queue
@@ -155,7 +155,7 @@ export class CollectorError extends Error {
     /** Literal error tag for identifying CollectorError */
     readonly _tag = "CollectorError"
     /** Describe a collector failure, optionally identifying the budget and capacity that were exceeded.
-     * Normally received from a collector rather than constructed by an application. Construction does not stop a collector
+     * Collector errors are normally received from a collector. Construction does not stop a collector
      */
     constructor(
         /** notConnected means registration lacked a connected gateway scope, connectionLost means that scope later recovered or disconnected.

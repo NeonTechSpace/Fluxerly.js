@@ -114,6 +114,46 @@ test.each(modes)("%s rejects invalid full role sets before dispatch", async (mod
     expect(fetch).not.toHaveBeenCalled()
 })
 
+test.each(modes)("%s snapshots bounded role sets from indexed values", async (mode) => {
+    const bodies: unknown[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(wireMember())
+    })
+    const api = await setup(mode)
+    const roleIds = ["40"]
+    Object.defineProperty(roleIds, Symbol.iterator, {
+        value: () => {
+            throw Error("Role replacement must not consume caller iterators")
+        },
+    })
+
+    await api.setRoles(target, roleIds)
+    expect(bodies).toEqual([{ roles: ["40"] }])
+
+    let indexedReads = 0
+    const invalid = ["40"]
+    Object.defineProperty(invalid, "0", {
+        get: () => {
+            indexedReads++
+            return "invalid"
+        },
+    })
+    Object.defineProperty(invalid, Symbol.iterator, {
+        value: () => {
+            throw Error("Role replacement must reject indexed invalid values without iterating")
+        },
+    })
+    await expect(api.setRoles(target, invalid)).rejects.toMatchObject({
+        _tag: "GuildOperationError",
+        operation: "members.setRoles",
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(indexedReads).toBe(1)
+    expect(bodies).toHaveLength(1)
+})
+
 test.each(modes)("%s copies role IDs at its default or native execution boundary", async (mode) => {
     const bodies: unknown[] = []
     stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {

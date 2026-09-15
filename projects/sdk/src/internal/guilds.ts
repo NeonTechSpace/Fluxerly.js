@@ -17,12 +17,13 @@ import type {
     RoleHoistPosition,
     RoleReference,
 } from "#sdk/guilds"
-import type { VoiceState, VoiceStateSnapshot } from "#sdk/events"
+import type { GuildCreate, VoiceState, VoiceStateSnapshot } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
 import type { ResourceRequest } from "./guild-cache.js"
 import type { ChannelCacheRequest } from "./channel-cache.js"
 import type { InstanceEndpointContext } from "./instance.js"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 /** Validated request description; the shared REST owner retains admission, cleanup and rate state */
 export interface GuildRequest<A> {
@@ -71,7 +72,7 @@ const imageDataUri = (value: unknown): value is string =>
 const timestamp = (value: unknown): value is string =>
     typeof value === "string" &&
     /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(value) &&
-    Number.isFinite(Date.parse(value))
+    validCalendarTimestamp(value)
 
 export const guildEvents = {
     GUILD_MEMBER_ADD: "guildMemberAdd",
@@ -111,6 +112,13 @@ export function decodeGuildEvent(event: keyof typeof guildEvents, value: unknown
 
 /** Decodes the documented complete snapshot/update forms without retaining gateway collections */
 export function decodeGuildLifecycleEvent(event: keyof typeof guildLifecycleEvents, value: unknown) {
+    if (event === "GUILD_CREATE") {
+        if (!record(value) || (Object.hasOwn(value, "unavailable") && value.unavailable !== false)) return undefined
+        const guild = decodeGuildSnapshot(value)
+        return guild
+            ? Object.freeze({ ...guild, isNewJoin: !Object.hasOwn(value, "unavailable") } satisfies GuildCreate)
+            : undefined
+    }
     if (event === "GUILD_DELETE") {
         if (
             !record(value) ||
@@ -133,7 +141,7 @@ export function decodeGuildLifecycleEvent(event: keyof typeof guildLifecycleEven
             (value.guild_id !== undefined && (!identifier(value.guild_id) || value.guild_id !== value.id)))
     )
         return undefined
-    return event === "GUILD_CREATE" ? decodeGuildSnapshot(value) : decodeGuild(value)
+    return decodeGuild(value)
 }
 
 /** Decodes a complete nested GUILD_CREATE snapshot while leaving its collections unretained */
@@ -276,7 +284,7 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         new Set(value.roles).size !== value.roles.length ||
         typeof value.joined_at !== "string" ||
         !/^\d{4}-\d\d-\d\dT/.test(value.joined_at) ||
-        !Number.isFinite(Date.parse(value.joined_at)) ||
+        !validCalendarTimestamp(value.joined_at) ||
         !nullableText(value.nick) ||
         !nullableText(value.avatar) ||
         !nullableText(value.banner) ||
@@ -291,7 +299,7 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
             value.communication_disabled_until !== null &&
             (typeof value.communication_disabled_until !== "string" ||
                 !/^\d{4}-\d\d-\d\dT/.test(value.communication_disabled_until) ||
-                !Number.isFinite(Date.parse(value.communication_disabled_until))))
+                !validCalendarTimestamp(value.communication_disabled_until)))
     )
         return undefined
     return Object.freeze({
@@ -478,9 +486,10 @@ export function memberRolesSet(
     if (!positiveIdentifier(target.userId))
         return inputValidationFailure("target.userId", "format", "User IDs must be positive decimal strings")
     if (!Array.isArray(roleIds)) return inputValidationFailure("roleIds", "type", "Role IDs must be an array")
-    if (roleIds.length > 250)
-        return inputValidationFailure("roleIds", "length", "A member role set may contain at most 250 IDs")
-    const roles = [...roleIds]
+    const count = roleIds.length
+    if (count > 250) return inputValidationFailure("roleIds", "length", "A member role set may contain at most 250 IDs")
+    const roles = new Array<string>(count)
+    for (let index = 0; index < count; index++) roles[index] = roleIds[index]
     if (!roles.every(positiveIdentifier))
         return inputValidationFailure("roleIds[]", "format", "Role IDs must be positive decimal strings")
     if (new Set(roles).size !== roles.length)
@@ -560,8 +569,12 @@ export function memberRole(target: MemberReference, roleId: string, add: boolean
     }
 }
 
-const permission = (value: unknown): value is bigint =>
-    typeof value === "bigint" && value >= 0n && value <= 18_446_744_073_709_551_615n
+const maxUnsignedPermission = 18_446_744_073_709_551_615n
+const maxWritablePermission = 9_223_372_036_854_775_807n
+const unsignedPermission = (value: unknown): value is bigint =>
+    typeof value === "bigint" && value >= 0n && value <= maxUnsignedPermission
+const writablePermission = (value: unknown): value is bigint =>
+    typeof value === "bigint" && value >= 0n && value <= maxWritablePermission
 
 export function decodeRole(value: unknown, guildId: string): GuildRole | undefined {
     if (
@@ -572,7 +585,7 @@ export function decodeRole(value: unknown, guildId: string): GuildRole | undefin
         !nonNegativeInt32(value.position) ||
         typeof value.permissions !== "string" ||
         !/^(0|[1-9][0-9]{0,19})$/.test(value.permissions) ||
-        !permission(BigInt(value.permissions)) ||
+        !unsignedPermission(BigInt(value.permissions)) ||
         typeof value.hoist !== "boolean" ||
         typeof value.mentionable !== "boolean" ||
         (value.hoist_position !== undefined && value.hoist_position !== null && !int32(value.hoist_position)) ||
@@ -639,11 +652,11 @@ function roleBody(input: RoleCreate | RoleEdit, create: boolean): string | Input
         )
     if (color !== undefined && (!int32(color) || color < 0 || color > 0xffffff))
         return inputValidationFailure("color", "range", "Role color must be an integer from 0 through 16,777,215")
-    if (permissions !== undefined && !permission(permissions))
+    if (permissions !== undefined && !writablePermission(permissions))
         return inputValidationFailure(
             "permissions",
             "range",
-            "Role permissions must be a bigint from 0 through 18,446,744,073,709,551,615",
+            "Role permissions must be a bigint from 0 through 9,223,372,036,854,775,807",
         )
     if (hoist !== undefined && typeof hoist !== "boolean")
         return inputValidationFailure("hoist", "type", "Role hoist must be a boolean")

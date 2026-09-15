@@ -119,7 +119,9 @@ export interface SupervisorOptions {
 export interface SupervisorChildOptions {
     /** Bot token for the client created by child.run. The parent assignment does not supply this credential */
     readonly token: string
-    /** Client settings copied into the child client. Runtime validation rejects token and sharding overrides */
+    /** Supported client settings are read by property name and copied before configure, including inherited and
+     * non-enumerable properties. Runtime validation rejects token and sharding overrides
+     */
     readonly clientOptions?: Omit<ClientOptions, "token" | "sharding">
 }
 

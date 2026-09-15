@@ -18,6 +18,7 @@ import { MessageError } from "#sdk/message-errors"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
 import { decodeAttachments, encodeAttachments, type EncodedBody } from "./attachments.js"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 export const record = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value)
@@ -27,7 +28,7 @@ export const identifier = (value: unknown): value is string =>
 const timestamp = (value: unknown): value is string =>
     typeof value === "string" &&
     /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)$/.test(value) &&
-    Number.isFinite(Date.parse(value))
+    validCalendarTimestamp(value)
 const int32 = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
 const count = (value: unknown): value is number => int32(value) && value >= 0
@@ -330,8 +331,12 @@ function decodeReferencedMessage(value: unknown, construct = true): Observed<Mes
     return construct ? { value: Object.freeze({ id: value.id, channelId: value.channel_id }) } : unobserved
 }
 
-export function reference(value: unknown): value is MessageReference {
-    return record(value) && identifier(value.id) && identifier(value.channelId)
+/** Read one message target without retaining a caller-controlled object across validation and dispatch */
+export function snapshotReference(value: unknown): MessageReference | undefined {
+    if (!record(value)) return undefined
+    const id = value.id
+    const channelId = value.channelId
+    return identifier(id) && identifier(channelId) ? Object.freeze({ id, channelId }) : undefined
 }
 
 export function encodeHistory(channelId: unknown, query: unknown) {
@@ -367,20 +372,32 @@ export function encodeHistory(channelId: unknown, query: unknown) {
 
 export function decodeDeletion(value: unknown): MessageDeletion | undefined {
     if (!record(value) || !identifier(value.id) || !identifier(value.channel_id)) return undefined
+    if (value.guild_id !== undefined && !identifier(value.guild_id)) return undefined
     if ("content" in value && value.content !== null && typeof value.content !== "string") return undefined
     if ("author_id" in value && !identifier(value.author_id)) return undefined
     return Object.freeze({
         id: value.id,
         channelId: value.channel_id,
+        ...(value.guild_id === undefined ? {} : { guildId: value.guild_id as string }),
         ...(value.content === null || typeof value.content === "string" ? { content: value.content } : {}),
         ...(identifier(value.author_id) ? { authorId: value.author_id } : {}),
     })
 }
 
 export function decodeBulkDeletion(value: unknown): MessageBulkDeletion | undefined {
-    if (!record(value) || !identifier(value.channel_id) || !Array.isArray(value.ids) || !value.ids.every(identifier))
+    if (
+        !record(value) ||
+        !identifier(value.channel_id) ||
+        !Array.isArray(value.ids) ||
+        !value.ids.every(identifier) ||
+        (value.guild_id !== undefined && !identifier(value.guild_id))
+    )
         return undefined
-    return Object.freeze({ channelId: value.channel_id, ids: Object.freeze([...value.ids]) })
+    return Object.freeze({
+        channelId: value.channel_id,
+        ids: Object.freeze([...value.ids]),
+        ...(value.guild_id === undefined ? {} : { guildId: value.guild_id as string }),
+    })
 }
 
 const messageInputKeys: readonly string[] = [
@@ -420,15 +437,20 @@ export function encodeMessage(
     if (attachments instanceof InputValidationFailure) return invalid(attachments)
     const body = encodeBody(input, attachments.uploadedFilenames)
     if (body instanceof InputValidationFailure) return invalid(body)
-    const stickerIds = input.stickerIds
-    if (stickerIds !== undefined && !Array.isArray(stickerIds))
-        return invalid(inputValidationFailure("stickerIds", "type", "Sticker IDs must be an array"))
-    if (Array.isArray(stickerIds) && stickerIds.length > 3)
-        return invalid(
-            inputValidationFailure("stickerIds", "length", "A message may contain at most three sticker IDs"),
-        )
-    if (Array.isArray(stickerIds) && !Array.from(stickerIds).every(identifier))
-        return invalid(inputValidationFailure("stickerIds[]", "format", "Sticker IDs must be decimal strings"))
+    const stickerInput = input.stickerIds
+    let stickerIds: readonly unknown[] | undefined
+    if (stickerInput !== undefined) {
+        if (!Array.isArray(stickerInput))
+            return invalid(inputValidationFailure("stickerIds", "type", "Sticker IDs must be an array"))
+        const count = stickerInput.length
+        if (count > 3)
+            return invalid(
+                inputValidationFailure("stickerIds", "length", "A message may contain at most three sticker IDs"),
+            )
+        stickerIds = snapshotArray(stickerInput, count)
+        if (!stickerIds.every(identifier))
+            return invalid(inputValidationFailure("stickerIds[]", "format", "Sticker IDs must be decimal strings"))
+    }
     if (input.flags !== undefined && !writableFlags(input.flags))
         return invalid(
             inputValidationFailure(
@@ -449,7 +471,7 @@ export function encodeMessage(
         !(typeof input.content === "string" && input.content.length > 0) &&
         !body.embeds?.length &&
         !attachments.files.length &&
-        !(Array.isArray(stickerIds) && stickerIds.length)
+        !stickerIds?.length
     )
         return invalid(
             inputValidationFailure(
@@ -460,8 +482,9 @@ export function encodeMessage(
         )
     const mentions = encodeAllowedMentions(input.allowedMentions)
     if (mentions instanceof InputValidationFailure) return invalid(mentions)
-    const ref = replyTarget ?? input.messageReference
-    if (ref !== undefined && !reference(ref))
+    const rawReference = replyTarget ?? input.messageReference
+    const ref = rawReference === undefined ? undefined : snapshotReference(rawReference)
+    if (rawReference !== undefined && ref === undefined)
         return invalid(
             inputValidationFailure(
                 "messageReference",
@@ -481,7 +504,7 @@ export function encodeMessage(
         files: attachments.files,
         json: JSON.stringify({
             ...body,
-            ...(stickerIds === undefined ? {} : { sticker_ids: [...stickerIds] }),
+            ...(stickerIds === undefined ? {} : { sticker_ids: stickerIds }),
             ...(attachments.metadata === undefined ? {} : { attachments: attachments.metadata }),
             nonce,
             allowed_mentions: mentions,
@@ -510,40 +533,50 @@ export function encodeForward(channelId: unknown, input: unknown, defaultNonce: 
         )
     const nonce = encodeNonce(input.nonce, defaultNonce)
     if (nonce instanceof InputValidationFailure) return invalid(nonce)
-    const source = input.source
-    if (!reference(source))
+    const source = snapshotReference(input.source)
+    if (source === undefined)
         return invalid(
             inputValidationFailure("source", "format", "Forward source requires decimal id and channelId strings"),
         )
-    const attachmentIds = input.attachmentIds
-    const embedIndices = input.embedIndices
-    if (attachmentIds !== undefined && !Array.isArray(attachmentIds))
-        return invalid(inputValidationFailure("attachmentIds", "type", "Forward attachment IDs must be an array"))
-    if (Array.isArray(attachmentIds) && attachmentIds.length > 10)
-        return invalid(
-            inputValidationFailure("attachmentIds", "length", "A forward may select at most ten attachments"),
+    const attachmentIdsInput = input.attachmentIds
+    const embedIndicesInput = input.embedIndices
+    let attachmentIds: readonly unknown[] | undefined
+    if (attachmentIdsInput !== undefined) {
+        if (!Array.isArray(attachmentIdsInput))
+            return invalid(inputValidationFailure("attachmentIds", "type", "Forward attachment IDs must be an array"))
+        const count = attachmentIdsInput.length
+        if (count > 10)
+            return invalid(
+                inputValidationFailure("attachmentIds", "length", "A forward may select at most ten attachments"),
+            )
+        attachmentIds = snapshotArray(attachmentIdsInput, count)
+        if (!attachmentIds.every(identifier))
+            return invalid(
+                inputValidationFailure("attachmentIds[]", "format", "Forward attachment IDs must be decimal strings"),
+            )
+    }
+    let embedIndices: readonly unknown[] | undefined
+    if (embedIndicesInput !== undefined) {
+        if (!Array.isArray(embedIndicesInput))
+            return invalid(inputValidationFailure("embedIndices", "type", "Forward embed indices must be an array"))
+        const count = embedIndicesInput.length
+        if (count > 10)
+            return invalid(inputValidationFailure("embedIndices", "length", "A forward may select at most ten embeds"))
+        embedIndices = snapshotArray(embedIndicesInput, count)
+        if (
+            !embedIndices.every(
+                (index) =>
+                    typeof index === "number" && Number.isSafeInteger(index) && index >= 0 && index <= 2_147_483_647,
+            )
         )
-    if (Array.isArray(attachmentIds) && !Array.from(attachmentIds).every(identifier))
-        return invalid(
-            inputValidationFailure("attachmentIds[]", "format", "Forward attachment IDs must be decimal strings"),
-        )
-    if (embedIndices !== undefined && !Array.isArray(embedIndices))
-        return invalid(inputValidationFailure("embedIndices", "type", "Forward embed indices must be an array"))
-    if (Array.isArray(embedIndices) && embedIndices.length > 10)
-        return invalid(inputValidationFailure("embedIndices", "length", "A forward may select at most ten embeds"))
-    if (
-        Array.isArray(embedIndices) &&
-        !Array.from(embedIndices).every(
-            (index) => typeof index === "number" && Number.isSafeInteger(index) && index >= 0 && index <= 2_147_483_647,
-        )
-    )
-        return invalid(
-            inputValidationFailure(
-                "embedIndices[]",
-                "range",
-                "Forward embed indices must be nonnegative 32-bit integers",
-            ),
-        )
+            return invalid(
+                inputValidationFailure(
+                    "embedIndices[]",
+                    "range",
+                    "Forward embed indices must be nonnegative 32-bit integers",
+                ),
+            )
+    }
     return {
         files: [],
         json: JSON.stringify({
@@ -552,8 +585,8 @@ export function encodeForward(channelId: unknown, input: unknown, defaultNonce: 
                 message_id: source.id,
                 channel_id: source.channelId,
                 type: 1,
-                ...(attachmentIds === undefined ? {} : { attachment_ids: [...attachmentIds] }),
-                ...(embedIndices === undefined ? {} : { embed_indices: [...embedIndices] }),
+                ...(attachmentIds === undefined ? {} : { attachment_ids: attachmentIds }),
+                ...(embedIndices === undefined ? {} : { embed_indices: embedIndices }),
             },
         }),
     }
@@ -582,32 +615,44 @@ function encodeAllowedMentions(value: unknown) {
             "allowedFields",
             "Allowed mentions may contain only users, roles, everyone, and repliedUser",
         )
-    for (const key of ["users", "roles"]) {
+    const selections: Record<"users" | "roles", readonly unknown[] | undefined> = { users: undefined, roles: undefined }
+    for (const key of ["users", "roles"] as const) {
         const list = mentions[key]
         if (list !== undefined && !Array.isArray(list))
             return inputValidationFailure(`allowedMentions.${key}`, "type", "Mention selections must be arrays")
-        if (Array.isArray(list) && list.length > 100)
+        if (list === undefined) continue
+        const count = list.length
+        if (count > 100)
             return inputValidationFailure(
                 `allowedMentions.${key}`,
                 "length",
                 "Mention selections may contain at most 100 IDs",
             )
-        if (Array.isArray(list) && !Array.from(list).every(identifier))
+        const selection = snapshotArray(list, count)
+        if (!selection.every(identifier))
             return inputValidationFailure(
                 `allowedMentions.${key}[]`,
                 "format",
                 "Mention selection IDs must be decimal strings",
             )
+        selections[key] = selection
     }
     for (const key of ["everyone", "repliedUser"])
         if (mentions[key] !== undefined && typeof mentions[key] !== "boolean")
             return inputValidationFailure(`allowedMentions.${key}`, "type", "Mention switches must be booleans")
     return {
         parse: mentions.everyone === true ? ["everyone"] : [],
-        users: mentions.users ?? [],
-        roles: mentions.roles ?? [],
+        users: selections.users ?? [],
+        roles: selections.roles ?? [],
         replied_user: mentions.repliedUser ?? false,
     }
+}
+
+/** Copy already bounded indexed entries once, avoiding caller-defined iteration during validation or encoding */
+function snapshotArray(value: readonly unknown[], count: number): readonly unknown[] {
+    const result: unknown[] = []
+    for (let index = 0; index < count; index += 1) result.push(value[index])
+    return Object.freeze(result)
 }
 
 export function encodeEdit(input: unknown): EncodedBody | InputValidationFailure {
@@ -654,10 +699,14 @@ export function encodeEdit(input: unknown): EncodedBody | InputValidationFailure
     }
 }
 
-export function replyInput(target: unknown, input: unknown): MessageInput | MessageError {
+export function replyInput(
+    target: unknown,
+    input: unknown,
+): { readonly target: MessageReference; readonly input: MessageInput } | MessageError {
     const invalid = (failure: InputValidationFailure) =>
         new MessageError("input", "notSent", null, null, null, failure.detail)
-    if (!reference(target))
+    const reference = snapshotReference(target)
+    if (reference === undefined)
         return invalid(
             inputValidationFailure("target", "format", "Reply targets require decimal id and channelId strings"),
         )
@@ -671,7 +720,7 @@ export function replyInput(target: unknown, input: unknown): MessageInput | Mess
             ),
         )
     // The send owner validates the original structural body in its normal order after accepting the lifetime
-    return input as MessageInput
+    return Object.freeze({ target: reference, input: input as MessageInput })
 }
 
 function encodeBody(input: Record<string, unknown>, uploadedFilenames?: readonly string[]) {

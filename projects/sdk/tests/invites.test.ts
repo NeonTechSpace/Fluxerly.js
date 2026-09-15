@@ -160,6 +160,10 @@ test.each(modes)("%s rejects mismatched invite responses and duplicate managemen
     let response: unknown = { ...wire(), code: "WrongCode" }
     stubFetchWithHostedDiscovery(async () => Response.json(response))
     await expect(settle(client.invites.fetch("FixtureCode"))).rejects.toMatchObject({ reason: "response" })
+    response = { ...wire(), expires_at: "2025-02-29T00:00:00Z" }
+    await expect(settle(client.invites.fetch("FixtureCode"))).rejects.toMatchObject({ reason: "response" })
+    response = { ...wire(), created_at: "2025-04-31T00:00:00Z" }
+    await expect(settle(client.invites.create("100"))).rejects.toMatchObject({ reason: "response", outcome: "unknown" })
     response = wire()
     await expect(settle(client.invites.create("999"))).rejects.toMatchObject({ reason: "response", outcome: "unknown" })
     response = [wire(), wire()]

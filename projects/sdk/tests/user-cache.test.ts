@@ -21,7 +21,7 @@ function user(id: string): User {
     })
 }
 
-function directMessage(id: string): DirectMessageChannel {
+function directMessage(id: string, extra: Partial<DirectMessageChannel> = {}): DirectMessageChannel {
     return Object.freeze({
         id,
         type: "dm",
@@ -31,6 +31,7 @@ function directMessage(id: string): DirectMessageChannel {
         ownerId: null,
         nicknames: Object.freeze({}),
         lastMessageId: null,
+        ...extra,
     })
 }
 
@@ -112,3 +113,29 @@ test.each(["users", "directMessages"] as const)(
         cache.close()
     },
 )
+
+test("direct-message mutations invalidate overlapping reads through clear and failure", () => {
+    const cache = new UserCache({ directMessages: settings }, () => 0)
+    const stale = directMessage("10")
+    const current = directMessage("10", { name: "current" })
+    const mutationGeneration = cache.begin("directMessages", true)
+
+    cache.clear()
+    const readGeneration = cache.begin("directMessages", false)
+    cache.complete("directMessages", readGeneration, [stale])
+    cache.complete("directMessages", mutationGeneration, [current], false, true)
+    expect(cache.get("directMessages", current.id)).toBeUndefined()
+
+    complete(cache, "directMessages", [current])
+    const successGeneration = cache.begin("directMessages", true)
+    cache.complete("directMessages", successGeneration, [current], false, true)
+    expect(cache.get("directMessages", current.id)).toBe(current)
+
+    const failedGeneration = cache.begin("directMessages", true)
+    cache.failed("directMessages", failedGeneration)
+    expect(cache.get("directMessages", current.id)).toBeUndefined()
+
+    complete(cache, "directMessages", [current])
+    expect(cache.get("directMessages", current.id)).toBe(current)
+    cache.close()
+})

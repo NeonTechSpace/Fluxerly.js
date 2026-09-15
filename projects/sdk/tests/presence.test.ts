@@ -450,6 +450,28 @@ test.each(publicModes)(
     },
 )
 
+test.each(publicModes)("%s accepts only real future calendar dates for custom-status expiration", async (mode) => {
+    const api = await publicDriver(mode)
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2029-01-01T00:00:00Z"))
+    const fetch = vi.fn()
+    vi.stubGlobal("fetch", fetch)
+    try {
+        for (const expiresAt of ["2030-02-29T00:00Z", "2030-02-30T00:00:00+02:00", "2031-04-31T00:00:00Z"]) {
+            expect(api.invalid({ status: "online", customStatus: { expiresAt } })).toMatchObject({
+                inputValidation: { path: "customStatus.expiresAt", constraint: "format" },
+            })
+        }
+        for (const expiresAt of ["2032-02-29T00:00Z", "2030-01-01T24:00Z", "2030-01-01T12:00:00.123456789+02:00"]) {
+            api.set({ status: "online", customStatus: { expiresAt } })
+        }
+        expect(fetch).not.toHaveBeenCalled()
+        expect(transport.sockets).toEqual([])
+    } finally {
+        now.mockRestore()
+        await api.shutdown()
+    }
+})
+
 test.each(publicModes)(
     "%s member selection refreshes unchanged input and reconciles a clear after RESUMED and guild availability",
     async (mode) => {

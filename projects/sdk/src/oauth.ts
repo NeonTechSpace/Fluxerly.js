@@ -47,7 +47,8 @@ export interface OAuthConfig {
 
 /** Build the consent URL for an authorization-code request with PKCE.
  * Retain state and the PKCE verifier in your application, then verify state when you receive the callback.
- * The SDK does not store these values, open a browser or receive the redirect
+ * The SDK does not store these values, open a browser or receive the redirect.
+ * Values are sampled once when authorizationUrl starts, then validated and encoded from that snapshot
  */
 export interface OAuthAuthorizationInput {
     /** Exact registered redirect, using HTTPS or loopback HTTP, without embedded credentials or a fragment */
@@ -71,7 +72,8 @@ export interface OAuthAuthorizationInput {
 }
 
 /** Values received or retained by your application for exchangeCode after a consent callback.
- * Verify the callback's state before exchanging its code, since the SDK does not perform that check
+ * Verify the callback's state before exchanging its code, since the SDK does not perform that check.
+ * Values are sampled once when exchangeCode starts, then validated and transmitted from that snapshot
  */
 export interface OAuthCodeExchangeInput {
     /** Nonempty callback code to exchange for tokens.
@@ -172,7 +174,9 @@ export interface OAuthActiveIntrospection {
  */
 export type OAuthIntrospection = OAuthInactiveIntrospection | OAuthActiveIntrospection
 
-/** Set the deadline for one OAuth call without scheduling retries or changing another call's lifetime */
+/** Set the deadline for one OAuth call without scheduling retries or changing another call's lifetime.
+ * Malformed options return a local input error before discovery
+ */
 export interface OAuthOperationOptions {
     /** Total milliseconds across discovery and the operation, integer 1–2,147,483,647, default 30,000.
      * Required cleanup can outlast this deadline

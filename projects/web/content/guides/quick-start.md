@@ -1,5 +1,6 @@
 ---
 title: Start your first bot
+navTitle: Quick start
 description: Type !ping and let your bot reply Pong!
 ---
 
@@ -28,13 +29,17 @@ Keep this file private while it contains your token
 ```js
 import { createClient } from "@neontechspace/fluxerly"
 
-const created = createClient({ token: "YOUR_BOT_TOKEN" })
+const created = createClient({
+    token: "YOUR_BOT_TOKEN",
+})
 if (created.isErr()) throw created.error
 const client = created.value
 
 client.on("messageCreate", async (message) => {
     if (message.content === "!ping") {
-        await client.messages.reply(message, { content: "Pong!" })
+        await client.messages.reply(message, {
+            content: "Pong!",
+        })
     }
 })
 
@@ -55,8 +60,16 @@ Press Ctrl+C in the terminal to stop it
 
 ## Keep going
 
-Change `!ping` or `Pong!` to give your bot a different command or reply.
-The [client's message methods](/docs/{{version}}/api/interfaces/js-ts.Client/#messages) cover replies, edits and more
+Change `!ping` or `Pong!` to give your bot a different command or reply. Then choose a task:
+
+- [Send messages, embeds and files](/docs/{{version}}/messages/): Check reply results, edit messages and attach a file
+- [Give your bot prefix commands](/docs/{{version}}/commands/): Register actions with typed arguments and generated help
+- [React to events and collect replies](/docs/{{version}}/events-and-collectors/): Distinguish joins from startup and build a bounded conversation
+- [Read history and use caches](/docs/{{version}}/history-and-cache/): Scan deliberately and separate local snapshots from remote reads
+- [Operate a long-running bot](/docs/{{version}}/reliability/): Handle failures, cancellation and shutdown
+- [Learn Effect with a bot](/docs/{{version}}/effect-first-bot/): Try the native API without changing SDK capabilities
+
+The [client's message methods](/docs/{{version}}/api/interfaces/js-ts.Client/#messages) link to the full API reference when you need exact inputs and return values
 
 <details>
 <summary>If your bot doesn't reply</summary>
@@ -73,7 +86,7 @@ Never share your bot token when asking for help
 <summary>What do isErr() and value mean?</summary>
 
 The SDK returns a result so you can handle a failed request without guessing whether it succeeded.
-`isErr()` tells you that the operation failed, and `error` describes that failure.
+The `isErr()` method tells you that the operation failed, and `error` describes that failure.
 Otherwise, `value` holds the successful result, such as your client
 
 The startup checks above stop the script if the client cannot be created or connected.
@@ -84,7 +97,7 @@ Call `client.shutdown()` when you add graceful shutdown to your application
 </details>
 
 <details>
-<summary>Which SDK version should I use?</summary>
+<summary>Which SDK version should be used?</summary>
 
 Choose Stable in the documentation version selector once a stable release is available.
 The install command then includes that exact version.
@@ -100,7 +113,7 @@ Choose TypeScript above to save this example as `bot.ts` and run it directly wit
 For TypeScript projects that compile or typecheck their code, use TypeScript 7
 
 The default API works with JavaScript and TypeScript.
-The [Effect-native API](/docs/{{version}}/api/modules/Effect/) is for applications already using Effect
+The optional [Effect learning path](/docs/{{version}}/effect-first-bot/) introduces the native API through progressively larger bot examples
 
 Use the Effect version selected by your installed SDK, not Effect's latest release.
 Open `node_modules/@neontechspace/fluxerly/package.json`.

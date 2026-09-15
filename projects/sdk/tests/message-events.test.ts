@@ -264,7 +264,7 @@ test("default callbacks and pull subscriptions route frozen updates and deletion
     for (const body of [
         { id: "10", channel_id: "20" },
         { id: "11", channel_id: "20", content: null },
-        { id: "12", channel_id: "20", content: "", author_id: "30" },
+        { id: "12", channel_id: "20", content: "", author_id: "30", guild_id: "99" },
     ])
         server.dispatch("MESSAGE_DELETE", body)
     server.dispatch("MESSAGE_DELETE_BULK", { channel_id: "20", ids: ["40", "41"], guild_id: "99" })
@@ -282,9 +282,9 @@ test("default callbacks and pull subscriptions route frozen updates and deletion
     expect(deletions).toEqual([
         { id: "10", channelId: "20" },
         { id: "11", channelId: "20", content: null },
-        { id: "12", channelId: "20", content: "", authorId: "30" },
+        { id: "12", channelId: "20", content: "", authorId: "30", guildId: "99" },
     ])
-    expect(batches).toEqual([{ channelId: "20", ids: ["40", "41"] }])
+    expect(batches).toEqual([{ channelId: "20", ids: ["40", "41"], guildId: "99" }])
     expect(
         Object.isFrozen(updates[0]!.author) && Object.isFrozen(deletions[0]) && Object.isFrozen(batches[0]!.ids),
     ).toBe(true)
@@ -375,19 +375,31 @@ test("native callbacks preserve caller context and streams route single and bulk
                     }),
                 )
                 const deleted = yield* Effect.forkScoped(
-                    Stream.runCollect(client.events("messageDelete").pipe(Stream.take(1))),
+                    Stream.runCollect(client.events("messageDelete").pipe(Stream.take(2))),
                 )
                 const bulk = yield* Effect.forkScoped(
-                    Stream.runCollect(client.events("messageDeleteBulk").pipe(Stream.take(1))),
+                    Stream.runCollect(client.events("messageDeleteBulk").pipe(Stream.take(2))),
                 )
                 yield* client.connect()
                 server.dispatch("MESSAGE_UPDATE", wire("native"))
-                server.dispatch("MESSAGE_DELETE", { id: "10", channel_id: "20", content: "native", author_id: "30" })
-                server.dispatch("MESSAGE_DELETE_BULK", { channel_id: "20", ids: ["11", "12"] })
+                server.dispatch("MESSAGE_DELETE", {
+                    id: "10",
+                    channel_id: "20",
+                    content: "native",
+                    author_id: "30",
+                    guild_id: "99",
+                })
+                server.dispatch("MESSAGE_DELETE", { id: "11", channel_id: "20" })
+                server.dispatch("MESSAGE_DELETE_BULK", { channel_id: "20", ids: ["12", "13"], guild_id: "99" })
+                server.dispatch("MESSAGE_DELETE_BULK", { channel_id: "20", ids: ["14", "15"] })
                 expect(yield* Fiber.join(deleted)).toEqual([
-                    { id: "10", channelId: "20", content: "native", authorId: "30" },
+                    { id: "10", channelId: "20", content: "native", authorId: "30", guildId: "99" },
+                    { id: "11", channelId: "20" },
                 ])
-                expect(yield* Fiber.join(bulk)).toEqual([{ channelId: "20", ids: ["11", "12"] }])
+                expect(yield* Fiber.join(bulk)).toEqual([
+                    { channelId: "20", ids: ["12", "13"], guildId: "99" },
+                    { channelId: "20", ids: ["14", "15"] },
+                ])
                 yield* Effect.promise(() => vi.waitFor(() => expect(received).toHaveLength(1)))
                 yield* update.unsubscribe()
                 yield* update.waitForClose()
@@ -776,6 +788,46 @@ test("new-event handlers remain sequential by default, report the matching name 
         ),
     )
 })
+
+test.each(["default", "native"] as const)(
+    "%s rejects malformed deletion guild context without delivery",
+    async (mode) => {
+        for (const [event, body] of [
+            ["MESSAGE_DELETE", { id: "10", channel_id: "20", guild_id: null }],
+            ["MESSAGE_DELETE_BULK", { channel_id: "20", ids: ["10"], guild_id: "invalid" }],
+        ] as const) {
+            const server = await fixture()
+            const received = vi.fn()
+            if (mode === "default") {
+                const client = defaultApi()
+                value(client.on("messageDelete", received))
+                value(client.on("messageDeleteBulk", received))
+                value(await client.connect())
+                server.dispatch(event, body)
+                const closed = await client.waitForClose()
+                expect(closed.isErr() && closed.error).toMatchObject({ _tag: "ConnectionError", reason: "protocol" })
+            } else {
+                await Effect.runPromise(
+                    Effect.scoped(
+                        Effect.gen(function* () {
+                            const client = yield* createNative({ token: "fixture-only-not-a-credential" })
+                            yield* client.on("messageDelete", () => Effect.sync(received))
+                            yield* client.on("messageDeleteBulk", () => Effect.sync(received))
+                            yield* client.connect()
+                            server.dispatch(event, body)
+                            expect(yield* Effect.result(client.waitForClose())).toMatchObject({
+                                _tag: "Failure",
+                                failure: { _tag: "ConnectionError", reason: "protocol" },
+                            })
+                        }),
+                    ),
+                )
+            }
+            expect(received).not.toHaveBeenCalled()
+            expect(server.requests).toBe(0)
+        }
+    },
+)
 
 test.each([
     ["MESSAGE_UPDATE", { id: "10", channel_id: "20", content: "partial" }],

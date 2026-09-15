@@ -6,6 +6,8 @@ import type { AllowedMentions, MessageInput, MessageReference } from "./messages
  * Assemble an embed by chaining methods, then pass `build()`'s plain object to a message operation.
  * Setters change this builder and return it so calls can be chained. Later setters replace earlier values, while field methods append.
  * Every build returns a fresh object, including copied author, footer, media and field objects.
+ * Supported structural fields are read by name, including inherited and non-enumerable getters.
+ * Non-record inputs and unknown own enumerable fields remain for message-operation validation.
  * Building sends nothing and performs no validation. Message operations check lengths, URLs and server limits
  */
 export class EmbedBuilder {
@@ -52,25 +54,25 @@ export class EmbedBuilder {
 
     /** Replace the author label and optional links, copy the supplied object, then return this builder */
     author(value: EmbedAuthorInput): this {
-        this.authorValue = { ...value }
+        this.authorValue = copyEmbedAuthor(value)
         return this
     }
 
     /** Replace the footer text and optional icon, copy the supplied object, then return this builder */
     footer(value: EmbedFooterInput): this {
-        this.footerValue = { ...value }
+        this.footerValue = copyEmbedFooter(value)
         return this
     }
 
     /** Replace the full-size image URL and optional alternative text, copy the object, then return this builder. No image is uploaded or fetched */
     image(value: EmbedMediaInput): this {
-        this.imageValue = { ...value }
+        this.imageValue = copyEmbedMedia(value)
         return this
     }
 
     /** Replace the small image URL and optional alternative text, copy the object, then return this builder. No image is uploaded or fetched */
     thumbnail(value: EmbedMediaInput): this {
-        this.thumbnailValue = { ...value }
+        this.thumbnailValue = copyEmbedMedia(value)
         return this
     }
 
@@ -84,7 +86,7 @@ export class EmbedBuilder {
 
     /** Add field objects after existing fields in argument order and return this builder. Copies each object, passing no arguments adds nothing */
     addFields(...values: readonly EmbedFieldInput[]): this {
-        this.fieldValues.push(...values.map((value) => ({ ...value })))
+        this.fieldValues.push(...values.map(copyEmbedField))
         return this
     }
 
@@ -99,11 +101,11 @@ export class EmbedBuilder {
             ...(this.urlValue === undefined ? {} : { url: this.urlValue }),
             ...(this.colorValue === undefined ? {} : { color: this.colorValue }),
             ...(this.timestampValue === undefined ? {} : { timestamp: this.timestampValue }),
-            ...(this.authorValue === undefined ? {} : { author: { ...this.authorValue } }),
-            ...(this.footerValue === undefined ? {} : { footer: { ...this.footerValue } }),
-            ...(this.imageValue === undefined ? {} : { image: { ...this.imageValue } }),
-            ...(this.thumbnailValue === undefined ? {} : { thumbnail: { ...this.thumbnailValue } }),
-            ...(this.fieldValues.length === 0 ? {} : { fields: this.fieldValues.map((value) => ({ ...value })) }),
+            ...(this.authorValue === undefined ? {} : { author: copyEmbedAuthor(this.authorValue) }),
+            ...(this.footerValue === undefined ? {} : { footer: copyEmbedFooter(this.footerValue) }),
+            ...(this.imageValue === undefined ? {} : { image: copyEmbedMedia(this.imageValue) }),
+            ...(this.thumbnailValue === undefined ? {} : { thumbnail: copyEmbedMedia(this.thumbnailValue) }),
+            ...(this.fieldValues.length === 0 ? {} : { fields: this.fieldValues.map(copyEmbedField) }),
         }
     }
 }
@@ -111,6 +113,8 @@ export class EmbedBuilder {
 /**
  * Assemble a message by chaining methods, then send the plain object returned by `build()`.
  * Methods change the same builder. Content and settings replace earlier values, while embeds, attachments and stickers append.
+ * Supported structural fields are read by name, including inherited and non-enumerable getters.
+ * Non-record inputs and unknown own enumerable fields remain for message-operation validation.
  * Building does not send or validate a message. In TypeScript, select content, an embed, an attachment or a sticker before calling build.
  * JavaScript can build an empty object, but message operations reject it. The HasBody type parameter tracks selection, not valid content
  */
@@ -157,13 +161,13 @@ export class MessageBuilder<HasBody extends boolean = false> {
      * The builder and its outputs retain those references. Sending does not clear the builder, and direct operations own copying or consuming their inputs
      */
     attachment(value: AttachmentInput): MessageBuilder<true> {
-        this.attachmentValues.push({ ...value })
+        this.attachmentValues.push(copyAttachment(value))
         return this as unknown as MessageBuilder<true>
     }
 
     /** Add one or more attachments in argument order and return this builder. Metadata is copied, but bytes, file and stream sources stay shared just as with `attachment` */
     addAttachments(...values: readonly [first: AttachmentInput, ...rest: AttachmentInput[]]): MessageBuilder<true> {
-        this.attachmentValues.push(...values.map((value) => ({ ...value })))
+        this.attachmentValues.push(...values.map(copyAttachment))
         return this as unknown as MessageBuilder<true>
     }
 
@@ -179,7 +183,7 @@ export class MessageBuilder<HasBody extends boolean = false> {
         return this as unknown as MessageBuilder<true>
     }
 
-    /** Replace who may be notified by mention text, copy the user/role arrays, then return this builder.
+    /** Replace who may be notified by mention text, copy user/role arrays, and preserve other values for message-operation validation.
      * If omitted, message operations keep notifications disabled. This method alone neither inserts mention text nor notifies anyone
      */
     allowedMentions(value: AllowedMentions): this {
@@ -189,7 +193,7 @@ export class MessageBuilder<HasBody extends boolean = false> {
 
     /** Choose the message to reply to when using `messages.send`, copy its reference, then return this builder. No message is fetched */
     reference(value: MessageReference): this {
-        this.messageReferenceValue = { ...value }
+        this.messageReferenceValue = copyMessageReference(value)
         return this
     }
 
@@ -208,16 +212,14 @@ export class MessageBuilder<HasBody extends boolean = false> {
         return {
             ...(this.contentValue === undefined ? {} : { content: this.contentValue }),
             ...(this.embedValues.length === 0 ? {} : { embeds: this.embedValues.map(copyEmbed) }),
-            ...(this.attachmentValues.length === 0
-                ? {}
-                : { attachments: this.attachmentValues.map((value) => ({ ...value })) }),
+            ...(this.attachmentValues.length === 0 ? {} : { attachments: this.attachmentValues.map(copyAttachment) }),
             ...(this.stickerValues.length === 0 ? {} : { stickerIds: [...this.stickerValues] }),
             ...(this.allowedMentionsValue === undefined
                 ? {}
                 : { allowedMentions: copyAllowedMentions(this.allowedMentionsValue) }),
             ...(this.messageReferenceValue === undefined
                 ? {}
-                : { messageReference: { ...this.messageReferenceValue } }),
+                : { messageReference: copyMessageReference(this.messageReferenceValue) }),
             ...(this.flagsValue === undefined ? {} : { flags: this.flagsValue }),
         } as MessageInput
     }) as IsExactly<HasBody, true> extends true ? () => MessageInput : never
@@ -225,7 +227,7 @@ export class MessageBuilder<HasBody extends boolean = false> {
 
 type IsExactly<Value, Expected> = [Value] extends [Expected] ? ([Expected] extends [Value] ? true : false) : false
 
-/** Start optional chainable builders instead of writing embed and message objects by hand.
+/** Start optional chainable builders for embed and message objects.
  * Both package entry points return builders immediately, not lazy Effects
  */
 export const builders: Readonly<{
@@ -239,20 +241,87 @@ export const builders: Readonly<{
 })
 
 function copyEmbed(value: EmbedInput): EmbedInput {
+    const copied = copyStructuralInput(value, [
+        "title",
+        "description",
+        "url",
+        "color",
+        "timestamp",
+        "author",
+        "footer",
+        "image",
+        "thumbnail",
+        "fields",
+    ])
+    if (!structuralRecord(copied)) return copied
     return {
-        ...value,
-        ...(value.author === undefined ? {} : { author: { ...value.author } }),
-        ...(value.footer === undefined ? {} : { footer: { ...value.footer } }),
-        ...(value.image === undefined ? {} : { image: { ...value.image } }),
-        ...(value.thumbnail === undefined ? {} : { thumbnail: { ...value.thumbnail } }),
-        ...(value.fields === undefined ? {} : { fields: value.fields.map((field) => ({ ...field })) }),
+        ...copied,
+        ...(copied.author === undefined ? {} : { author: copyEmbedAuthor(copied.author) }),
+        ...(copied.footer === undefined ? {} : { footer: copyEmbedFooter(copied.footer) }),
+        ...(copied.image === undefined ? {} : { image: copyEmbedMedia(copied.image) }),
+        ...(copied.thumbnail === undefined ? {} : { thumbnail: copyEmbedMedia(copied.thumbnail) }),
+        ...(Array.isArray(copied.fields) ? { fields: copied.fields.map(copyEmbedField) } : {}),
     }
 }
 
 function copyAllowedMentions(value: AllowedMentions): AllowedMentions {
+    const copied = copyStructuralInput(value, ["users", "roles", "everyone", "repliedUser"])
+    if (!structuralRecord(copied)) return copied
     return {
-        ...value,
-        ...(value.users === undefined ? {} : { users: [...value.users] }),
-        ...(value.roles === undefined ? {} : { roles: [...value.roles] }),
+        ...copied,
+        ...(Array.isArray(copied.users) ? { users: [...copied.users] } : {}),
+        ...(Array.isArray(copied.roles) ? { roles: [...copied.roles] } : {}),
     }
+}
+
+function copyEmbedAuthor(value: EmbedAuthorInput): EmbedAuthorInput {
+    return copyStructuralInput(value, ["name", "url", "iconUrl"])
+}
+
+function copyEmbedFooter(value: EmbedFooterInput): EmbedFooterInput {
+    return copyStructuralInput(value, ["text", "iconUrl"])
+}
+
+function copyEmbedMedia(value: EmbedMediaInput): EmbedMediaInput {
+    return copyStructuralInput(value, ["url", "description"])
+}
+
+function copyEmbedField(value: EmbedFieldInput): EmbedFieldInput {
+    return copyStructuralInput(value, ["name", "value", "inline"])
+}
+
+function copyAttachment(value: AttachmentInput): AttachmentInput {
+    return copyStructuralInput(value, [
+        "data",
+        "file",
+        "stream",
+        "size",
+        "filename",
+        "contentType",
+        "title",
+        "description",
+        "spoiler",
+    ])
+}
+
+function copyMessageReference(value: MessageReference): MessageReference {
+    return copyStructuralInput(value, ["id", "channelId"])
+}
+
+/** Snapshot a record's own enumerable keys and each defined supported property read from the original receiver.
+ * Non-record values stay intact for message-operation validation
+ */
+function copyStructuralInput<Value extends object>(value: Value, properties: readonly (keyof Value)[]): Value {
+    if (!structuralRecord(value)) return value
+    const copied = { ...value } as Record<PropertyKey, unknown>
+    for (const property of properties) {
+        if (Object.hasOwn(copied, property)) continue
+        const item = value[property]
+        if (item !== undefined) copied[property] = item
+    }
+    return copied as Value
+}
+
+function structuralRecord(value: unknown): value is object {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
 }

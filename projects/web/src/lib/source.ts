@@ -22,4 +22,18 @@ for (const entry of await getCollection("meta")) {
     })
 }
 
-export const source = loader({ baseUrl: "/docs", source: { files } })
+export const source = loader({
+    baseUrl: "/docs",
+    source: { files },
+    pageTree: {
+        transformers: [
+            {
+                file(node, path) {
+                    const file = path ? this.storage.read(path) : undefined
+                    const navTitle = file?.format === "page" ? file.data.navTitle : undefined
+                    return navTitle ? { ...node, name: navTitle } : node
+                },
+            },
+        ],
+    },
+})

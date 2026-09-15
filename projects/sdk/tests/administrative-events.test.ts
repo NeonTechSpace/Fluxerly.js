@@ -148,6 +148,7 @@ test("default administrative subscriptions project full provider results without
                 temporary: "false",
                 uses: "3",
                 delete_message_days: "2",
+                delete_message_seconds: "60",
             },
         }),
     )
@@ -186,6 +187,7 @@ test("default administrative subscriptions project full provider results without
             temporary: false,
             uses: 3,
             deleteMemberDays: "2",
+            deleteMessageSeconds: 60,
         },
         changes: [{ key: "name", oldValue: "before", newValue: "after" }],
     } satisfies GuildAuditLogEntryCreate)
@@ -224,7 +226,7 @@ test("native administrative callbacks retain caller context and streams preserve
                     audit({
                         target_id: null,
                         reason: undefined,
-                        options: { temporary: "1", count: "", max_uses: "invalid" },
+                        options: { temporary: "1", count: "", max_uses: "invalid", delete_message_seconds: "60" },
                         changes: undefined,
                     }),
                 )
@@ -233,7 +235,7 @@ test("native administrative callbacks retain caller context and streams preserve
                         guildId: "10",
                         userId: "30",
                         targetId: null,
-                        options: { temporary: true, count: 0 },
+                        options: { temporary: true, count: 0, deleteMessageSeconds: 60 },
                     }),
                 ])
                 yield* Effect.promise(() => vi.waitFor(() => expect(received).toEqual([{ code: "fixture-invite" }])))
@@ -263,6 +265,7 @@ test.each([
     ["GUILD_AUDIT_LOG_ENTRY_CREATE", audit({ user_id: undefined })],
     ["GUILD_AUDIT_LOG_ENTRY_CREATE", audit({ target_id: undefined })],
     ["GUILD_AUDIT_LOG_ENTRY_CREATE", audit({ options: { max_age: "Infinity" } })],
+    ["GUILD_AUDIT_LOG_ENTRY_CREATE", audit({ options: { delete_message_seconds: [] } })],
     ["GUILD_AUDIT_LOG_ENTRY_CREATE", audit({ options: { temporary: [] } })],
 ] as const)("malformed %s closes without projecting a partial administrative event", async (event, body) => {
     const server = await fixture()

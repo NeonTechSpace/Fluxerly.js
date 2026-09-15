@@ -1,4 +1,5 @@
 import {
+    type GuildCreate,
     createClient,
     oauth,
     OAuthScopes,
@@ -76,6 +77,19 @@ import {
     type OAuthConnection,
     type OAuthIntrospection,
 } from "@neontechspace/fluxerly"
+
+export function watchGuildJoins(client: Client) {
+    return client.on("guildCreate", (event) => {
+        const observation: GuildCreate = event
+        const guild: import("@neontechspace/fluxerly").Guild = observation
+        const joined: boolean = observation.isNewJoin
+        void joined
+        // @ts-expect-error Event metadata is readonly
+        observation.isNewJoin = false
+        // @ts-expect-error Plain Guild snapshots do not contain event metadata
+        void guild.isNewJoin
+    })
+}
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
 
 /** Packed schemas infer literal choices and reject unsafe converted-value access */
@@ -673,7 +687,7 @@ export async function searchIndexedMessages(
     if (page.isErr()) return undefined
     const observed: MessageSearchPage = page.value
     if (observed.indexing) return observed
-    const filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor"> = { content: "todo" }
+    const filters: Omit<MessageSearchQuery, "limit" | "page"> = { content: "todo" }
     const limits: MessageSearchIterationLimits = { maxItems: 100, pageSize: 25 }
     for await (const result of client.messages.iterateSearch(context, filters, limits)) {
         if (result.isErr()) break
@@ -682,6 +696,10 @@ export async function searchIndexedMessages(
     }
     // @ts-expect-error Search context requires a decimal guild or channel ID
     client.messages.search({})
+    // @ts-expect-error The provider does not honor search cursors
+    client.messages.search(context, { cursor: ["opaque"] })
+    // @ts-expect-error Iterator filters cannot set their own page
+    client.messages.iterateSearch(context, { page: 2 }, { maxItems: 1 })
     // @ts-expect-error Iterator filters cannot replay a provider cursor
     client.messages.iterateSearch(context, { cursor: ["opaque"] }, { maxItems: 1 })
     return observed
@@ -771,14 +789,22 @@ export function watchMessageChanges(client: Client) {
     const deleted = client.on("messageDelete", (message) => {
         const deletion: MessageDeletion = message
         const content: string | null | undefined = deletion.content
+        const guildId: string | undefined = deletion.guildId
         void content
+        void guildId
+        // @ts-expect-error Event guild context is readonly
+        deletion.guildId = "99"
         // @ts-expect-error A deletion need not have a full author object
         message.author.username
     })
     const batches = client.on("messageDeleteBulk", (batch) => {
         const deletion: MessageBulkDeletion = batch
         const ids: readonly string[] = deletion.ids
+        const guildId: string | undefined = deletion.guildId
         void ids
+        void guildId
+        // @ts-expect-error Event guild context is readonly
+        deletion.guildId = "99"
         // @ts-expect-error Batch IDs cannot be mutated
         batch.ids.push("10")
     })
@@ -788,7 +814,14 @@ export function watchMessageChanges(client: Client) {
     })
     const pull = client.events("messageDeleteBulk")
     if (pull.isOk()) pull.value.next().map((batch) => batch?.ids)
-    return [updates, deleted, batches]
+    const pins = client.on("channelPinsUpdate", (event) => {
+        const update: import("@neontechspace/fluxerly").ChannelPinsUpdate = event
+        const guildId: string | undefined = update.guildId
+        void guildId
+        // @ts-expect-error Event guild context is readonly
+        update.guildId = "99"
+    })
+    return [updates, deleted, batches, pins]
 }
 /** Typechecked targeted nickname and local hierarchy usage against the packed default entry point */
 export function manageMemberHierarchy(client: Client, target: MemberReference, snapshot: RoleHierarchyInput) {

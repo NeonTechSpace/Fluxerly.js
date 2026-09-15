@@ -99,6 +99,7 @@ export type Operation =
     | "cache.entries"
     | "directMessages.send"
     | import("./application.js").BotApplicationOperation
+    | "oauth.create"
     | import("./oauth.js").OAuthOperation
     | import("./counts.js").CountOperation
     | "members.iterateChunks"

@@ -290,6 +290,23 @@ test.each(["default", "native"] as const)(
         })
         if (defaultApi) value(await defaultApi.connect())
         else await Effect.runPromise(native!.connect())
+        const delivered: string[] = []
+        if (defaultApi)
+            value(
+                defaultApi.on("messageCreate", (message) => {
+                    delivered.push(message.content)
+                }),
+            )
+        else
+            await Effect.runPromise(
+                native!
+                    .on("messageCreate", (message) =>
+                        Effect.sync(() => {
+                            delivered.push(message.content)
+                        }),
+                    )
+                    .pipe(Scope.provide(scope)),
+            )
         for (const foreign of [false, true])
             for (const hostile of [false, true]) {
                 const seen: string[] = []
@@ -324,8 +341,13 @@ test.each(["default", "native"] as const)(
                 await turn()
                 expect(rejections).toEqual([])
                 const stopped = [...seen]
+                const afterFailureDeliveries = delivered.filter((content) => content === "after-failure").length
                 server.dispatch("after-failure", "201")
-                await turn()
+                await vi.waitFor(() =>
+                    expect(delivered.filter((content) => content === "after-failure")).toHaveLength(
+                        afterFailureDeliveries + 1,
+                    ),
+                )
                 expect(seen).toEqual(stopped)
             }
         expect((defaultApi ?? native)!.state).toBe("Connected")

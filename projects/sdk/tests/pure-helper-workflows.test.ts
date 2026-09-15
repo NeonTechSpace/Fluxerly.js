@@ -95,6 +95,26 @@ for (const [mode, api] of [
         expect(rgb).toEqual([255, 136, 0])
         expect(Object.isFrozen(rgb)).toBe(true)
         expect(await value(api.colors.parse(rgb))).toBe(0xff8800)
+        const alternating: [number, number, number] = [0, 0, 0]
+        let greenReads = 0
+        Object.defineProperty(alternating, 1, {
+            get: () => (greenReads++ === 0 ? 1 : 999),
+            enumerable: true,
+        })
+        expect(await value(api.colors.parse(alternating))).toBe(0x000100)
+        expect(greenReads).toBe(1)
+        const iteratorMasked = [0, 999, 0]
+        Object.defineProperty(iteratorMasked, Symbol.iterator, {
+            value: function* () {
+                yield 0
+                yield 0
+                yield 0
+            },
+        })
+        expect(await failure(api.colors.parse(iteratorMasked as never))).toMatchObject({
+            operation: "colors.parse",
+            reason: "color",
+        })
         for (const input of [
             "red",
             "#fff",

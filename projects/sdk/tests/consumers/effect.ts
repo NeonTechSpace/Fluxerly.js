@@ -1,5 +1,6 @@
 import { Context, Effect, Stream, type Scope } from "effect"
 import {
+    type GuildCreate,
     createClient,
     oauth,
     OAuthScopes,
@@ -73,6 +74,21 @@ import {
     type OAuthConnection,
     type OAuthIntrospection,
 } from "@neontechspace/fluxerly/effect"
+
+export function watchGuildJoins(client: Client) {
+    return client.on("guildCreate", (event) =>
+        Effect.sync(() => {
+            const observation: GuildCreate = event
+            const guild: import("@neontechspace/fluxerly/effect").Guild = observation
+            const joined: boolean = observation.isNewJoin
+            void joined
+            // @ts-expect-error Event metadata is readonly
+            observation.isNewJoin = false
+            // @ts-expect-error Plain Guild snapshots do not contain event metadata
+            void guild.isNewJoin
+        }),
+    )
+}
 const exampleEmbed = { title: "Build finished", fields: [{ name: "Status", value: "Passed", inline: true }] }
 
 /** Packed typed commands retain their handler service requirement */
@@ -622,17 +638,21 @@ export function readOlderMessages(client: Client): Effect.Effect<readonly Messag
     })
 }
 
-/** Packed-declaration usage for explicit indexed search; indexing stays caller-visible and streams own their bounded cursor progress */
+/** Packed-declaration usage for explicit indexed search; indexing stays caller-visible and streams own bounded numbered pages */
 export function searchIndexedMessages(
     client: Client,
     context: MessageSearchContext,
 ): Effect.Effect<MessageSearchPage, MessageOperationFailure> {
-    const filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor"> = { content: "todo" }
+    const filters: Omit<MessageSearchQuery, "limit" | "page"> = { content: "todo" }
     const limits: MessageSearchIterationLimits = { maxItems: 100, pageSize: 25 }
     const stream = client.messages.iterateSearch(context, filters, limits)
     void stream
     // @ts-expect-error Search context requires a decimal guild or channel ID
     client.messages.search({})
+    // @ts-expect-error The provider does not honor search cursors
+    client.messages.search(context, { cursor: ["opaque"] })
+    // @ts-expect-error Iterator filters cannot set their own page
+    client.messages.iterateSearch(context, { page: 2 }, { maxItems: 1 })
     // @ts-expect-error Native message search options do not accept AbortSignal
     client.messages.search(context, {}, { signal: new AbortController().signal })
     return client.messages.search(context, { content: "todo", has: ["link"] })
@@ -666,7 +686,11 @@ export function watchMessageChanges(client: Client) {
             Effect.sync(() => {
                 const deletion: MessageDeletion = message
                 const content: string | null | undefined = deletion.content
+                const guildId: string | undefined = deletion.guildId
                 void content
+                void guildId
+                // @ts-expect-error Event guild context is readonly
+                deletion.guildId = "99"
                 // @ts-expect-error Missing authors are not fabricated
                 message.author.username
             }),
@@ -674,9 +698,22 @@ export function watchMessageChanges(client: Client) {
         yield* client.on("messageDeleteBulk", (batch) =>
             Effect.sync(() => {
                 const deletion: MessageBulkDeletion = batch
+                const guildId: string | undefined = deletion.guildId
                 void deletion.ids
+                void guildId
+                // @ts-expect-error Event guild context is readonly
+                deletion.guildId = "99"
                 // @ts-expect-error Bulk IDs cannot be mutated
                 batch.ids.push("10")
+            }),
+        )
+        yield* client.on("channelPinsUpdate", (event) =>
+            Effect.sync(() => {
+                const update: import("@neontechspace/fluxerly/effect").ChannelPinsUpdate = event
+                const guildId: string | undefined = update.guildId
+                void guildId
+                // @ts-expect-error Event guild context is readonly
+                update.guildId = "99"
             }),
         )
     })

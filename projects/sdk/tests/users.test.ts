@@ -273,6 +273,41 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s snapshots bounded latest-message channel IDs from indexed values", async (mode) => {
+    const calls: unknown[] = []
+    rest(async (_url, init) => {
+        calls.push(JSON.parse(String(init.body)))
+        return Response.json({ "10": null })
+    })
+    const api = await setup(mode)
+    const channelIds = ["10"]
+    Object.defineProperty(channelIds, Symbol.iterator, {
+        value: () => {
+            throw Error("Latest-message reads must not consume caller iterators")
+        },
+    })
+
+    await api.fetchLatestMessages(channelIds)
+    expect(calls).toEqual([{ channels: ["10"] }])
+
+    let indexedReads = 0
+    const invalid = ["10"]
+    Object.defineProperty(invalid, "0", {
+        get: () => {
+            indexedReads++
+            return "invalid"
+        },
+    })
+    Object.defineProperty(invalid, Symbol.iterator, {
+        value: () => {
+            throw Error("Latest-message reads must reject indexed invalid values without iterating")
+        },
+    })
+    await expect(api.fetchLatestMessages(invalid)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    expect(indexedReads).toBe(1)
+    expect(calls).toHaveLength(1)
+})
+
 test.each(modes)("%s cancels an admitted latest-message batch and releases its private read slot", async (mode) => {
     let aborted = false
     rest(
@@ -536,6 +571,183 @@ test.each(modes)("%s prevents an overlapping stale user read from replacing a ga
     expect((await api.getUser())?.username).toBe("gateway observation")
 })
 
+test.each(modes)("%s prevents group-edit cache races from retaining stale reads", async (mode) => {
+    for (const clear of [false, true])
+        for (const completion of ["readFirst", "writeFirst"] as const) {
+            let patchStarted = false
+            let readStarted = false
+            let completedConflictingRead = false
+            let releasePatch: (() => void) | undefined
+            let releaseRead: (() => void) | undefined
+            rest(async (url, init) => {
+                const path = new URL(url).pathname
+                if (path !== "/v1/channels/10") throw Error(`Unexpected request ${init.method} ${path}`)
+                if (init.method === "PATCH") {
+                    patchStarted = true
+                    await new Promise<void>((resolve) => {
+                        releasePatch = resolve
+                    })
+                    return Response.json(group("10", { name: "after" }))
+                }
+                if (!patchStarted) return Response.json(group("10", { name: "before" }))
+                if (!completedConflictingRead) {
+                    completedConflictingRead = true
+                    readStarted = true
+                    await new Promise<void>((resolve) => {
+                        releaseRead = resolve
+                    })
+                    return Response.json(group("10", { name: "before" }))
+                }
+                return Response.json(group("10", { name: "after" }))
+            })
+            const api = await setup(mode, { directMessages: true })
+            const editing = api.editGroup("10", { name: "after" })
+            void editing.catch(() => {})
+            let reading: ReturnType<typeof api.fetchDirectMessage> | undefined
+            try {
+                await vi.waitFor(() => expect(patchStarted).toBe(true))
+                if (clear) api.clearCache()
+                reading = api.fetchDirectMessage("10")
+                void reading.catch(() => {})
+                await vi.waitFor(() => expect(readStarted).toBe(true))
+
+                if (completion === "readFirst") {
+                    releaseRead!()
+                    expect((await reading).name).toBe("before")
+                    releasePatch!()
+                    expect((await editing).name).toBe("after")
+                } else {
+                    releasePatch!()
+                    expect((await editing).name).toBe("after")
+                    releaseRead!()
+                    expect((await reading).name).toBe("before")
+                }
+                const cached = await api.getDirectMessage()
+                expect(cached === undefined || cached.name === "after").toBe(true)
+                expect((await api.fetchDirectMessage("10")).name).toBe("after")
+                expect((await api.getDirectMessage())?.name).toBe("after")
+            } finally {
+                releaseRead?.()
+                releasePatch?.()
+                await Promise.allSettled([editing, ...(reading ? [reading] : [])])
+            }
+        }
+})
+
+test.each(modes)("%s keeps successful close and recipient removal from retaining overlapping reads", async (mode) => {
+    for (const mutation of ["close", "removeRecipient"] as const) {
+        let deleteStarted = false
+        let readStarted = false
+        let requests = 0
+        let releaseDelete: (() => void) | undefined
+        let releaseRead: (() => void) | undefined
+        const snapshot = mutation === "close" ? directMessage() : group("10")
+        rest(async (url, init) => {
+            const path = new URL(url).pathname
+            if (++requests === 1) {
+                if (path !== "/v1/channels/10") throw Error(`Unexpected request ${init.method} ${path}`)
+                return Response.json(snapshot)
+            }
+            if (requests === 2) {
+                const expected = mutation === "close" ? "/v1/channels/10" : "/v1/channels/10/recipients/31"
+                if (path !== expected) throw Error(`Unexpected request ${init.method} ${path}`)
+                deleteStarted = true
+                await new Promise<void>((resolve) => {
+                    releaseDelete = resolve
+                })
+                return new Response(null, { status: 204 })
+            }
+            if (requests !== 3 || path !== "/v1/channels/10") throw Error(`Unexpected request ${init.method} ${path}`)
+            readStarted = true
+            await new Promise<void>((resolve) => {
+                releaseRead = resolve
+            })
+            return Response.json(snapshot)
+        })
+        const api = await setup(mode, { directMessages: true })
+        const closing = mutation === "close" ? api.closeDirectMessage() : api.removeRecipient("10", "31")
+        void closing.catch(() => {})
+        let reading: ReturnType<typeof api.fetchDirectMessage> | undefined
+        try {
+            await vi.waitFor(() => expect(deleteStarted).toBe(true))
+            reading = api.fetchDirectMessage()
+            void reading.catch(() => {})
+            await vi.waitFor(() => expect(readStarted).toBe(true))
+            releaseDelete!()
+            await expect(closing).resolves.toBeUndefined()
+            expect(await api.getDirectMessage()).toBeUndefined()
+            releaseRead!()
+            expect((await reading).id).toBe("10")
+            expect(await api.getDirectMessage()).toBeUndefined()
+        } finally {
+            releaseRead?.()
+            releaseDelete?.()
+            await Promise.allSettled([closing, ...(reading ? [reading] : [])])
+        }
+    }
+})
+
+test.each(modes)("%s invalidates direct-message cache races around nested send opening", async (mode) => {
+    let opening = "success" as "success" | "failure"
+    let openStarted = false
+    let readStarted = false
+    let completedConflictingRead = false
+    let releaseOpen: (() => void) | undefined
+    let releaseRead: (() => void) | undefined
+    rest(async (url, init) => {
+        const path = new URL(url).pathname
+        if (path === "/v1/users/@me/channels") {
+            if (opening === "failure") throw Error("fixture opening failure")
+            openStarted = true
+            await new Promise<void>((resolve) => {
+                releaseOpen = resolve
+            })
+            return Response.json(directMessage("10", { last_message_id: "71" }))
+        }
+        if (path === "/v1/channels/10") {
+            if (!completedConflictingRead) {
+                completedConflictingRead = true
+                readStarted = true
+                await new Promise<void>((resolve) => {
+                    releaseRead = resolve
+                })
+                return Response.json(directMessage("10", { last_message_id: "70" }))
+            }
+            return Response.json(directMessage("10", { last_message_id: "71" }))
+        }
+        if (path === "/v1/channels/10/messages") return Response.json(message("80", "10"))
+        throw Error(`Unexpected request ${init.method} ${path}`)
+    })
+    const api = await setup(mode, { directMessages: true })
+    const sending = api.send("30", { content: "fixture" })
+    void sending.catch(() => {})
+    let reading: ReturnType<typeof api.fetchDirectMessage> | undefined
+    try {
+        await vi.waitFor(() => expect(openStarted).toBe(true))
+        reading = api.fetchDirectMessage("10")
+        void reading.catch(() => {})
+        await vi.waitFor(() => expect(readStarted).toBe(true))
+        releaseRead!()
+        expect((await reading).lastMessageId).toBe("70")
+        releaseOpen!()
+        expect((await sending).channelId).toBe("10")
+        expect(await api.getDirectMessage("10")).toBeUndefined()
+        expect((await api.fetchDirectMessage("10")).lastMessageId).toBe("71")
+
+        opening = "failure"
+        await expect(api.send("30", { content: "fixture" })).rejects.toMatchObject({
+            _tag: "MessageError",
+            reason: "network",
+            delivery: "notSent",
+        })
+        expect(await api.getDirectMessage("10")).toBeUndefined()
+    } finally {
+        releaseRead?.()
+        releaseOpen?.()
+        await Promise.allSettled([sending, ...(reading ? [reading] : [])])
+    }
+})
+
 test.each(modes)("%s keeps the DM-opening explanation when send cannot reach message creation", async (mode) => {
     const calls: string[] = []
     rest(async (url) => {
@@ -733,6 +945,10 @@ async function setup(mode: (typeof modes)[number], cache: ClientOptions["cache"]
         close,
         connect: async () => (defaultApi ? unwrap(await defaultApi.connect()) : run(native!.connect())),
         diagnostics: () => (defaultApi ? defaultApi.diagnostics() : native!.diagnostics()),
+        clearCache: () => {
+            if (defaultApi) defaultApi.cache.clear()
+            else native!.cache.clear()
+        },
         cacheEntries: async (kind: "users" | "directMessages") =>
             defaultApi ? unwrap(defaultApi.cache.entries(kind)) : run(native!.cache.entries(kind)),
         getUser: async (id = "30") => (defaultApi ? unwrap(defaultApi.users.get(id)) : run(native!.users.get(id))),

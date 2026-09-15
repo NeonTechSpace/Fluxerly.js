@@ -8,6 +8,7 @@ import type {
 } from "#sdk/channels"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 /** Validated request description, with the shared REST owner retaining admission, cleanup and rate state */
 export interface ChannelRequest<A> {
@@ -32,7 +33,8 @@ export interface ChannelRequest<A> {
 
 type ChannelValidationResult<A> = ChannelRequest<A> | InputValidationFailure
 
-const maxPermission = 18_446_744_073_709_551_615n
+const maxUnsignedPermission = 18_446_744_073_709_551_615n
+const maxWritablePermission = 9_223_372_036_854_775_807n
 const maxRequestBytes = 4_194_304
 
 const int32 = (value: unknown): value is number =>
@@ -40,10 +42,12 @@ const int32 = (value: unknown): value is number =>
 const nonNegativeInt32 = (value: unknown): value is number => int32(value) && value >= 0
 const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
-const permission = (value: unknown): value is bigint =>
-    typeof value === "bigint" && value >= 0n && value <= maxPermission
+const unsignedPermission = (value: unknown): value is bigint =>
+    typeof value === "bigint" && value >= 0n && value <= maxUnsignedPermission
+const writablePermission = (value: unknown): value is bigint =>
+    typeof value === "bigint" && value >= 0n && value <= maxWritablePermission
 const timestamp = (value: unknown): value is string =>
-    typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && Number.isFinite(Date.parse(value))
+    typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && validCalendarTimestamp(value)
 
 export const channelEvents = {
     CHANNEL_CREATE: "guildChannelCreate",
@@ -65,7 +69,7 @@ function decodeOverwrite(value: unknown): PermissionOverwrite | undefined {
         return undefined
     const allow = BigInt(value.allow)
     const deny = BigInt(value.deny)
-    if (!permission(allow) || !permission(deny)) return undefined
+    if (!unsignedPermission(allow) || !unsignedPermission(deny)) return undefined
     return Object.freeze({ id: value.id, type: value.type === 0 ? "role" : "member", allow, deny })
 }
 
@@ -248,12 +252,12 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
         return inputValidationFailure("parentId", "format", "Channel parentId must be null or a decimal string")
     if (
         input.bitrate !== undefined &&
-        !nullableValue(input.bitrate, (candidate) => int32(candidate) && candidate >= 8_000 && candidate <= 320_000)
+        !nullableValue(input.bitrate, (candidate) => int32(candidate) && candidate >= 8_000 && candidate <= 384_000)
     )
         return inputValidationFailure(
             "bitrate",
             "range",
-            "Channel bitrate must be null or an integer from 8,000 through 320,000",
+            "Channel bitrate must be null or an integer from 8,000 through 384,000",
         )
     if (
         input.userLimit !== undefined &&
@@ -345,17 +349,17 @@ function encodeOverwrites(value: unknown): readonly Record<string, string | numb
                 "allowedValue",
                 "Permission overwrite type must be role or member",
             )
-        if (!permission(item.allow))
+        if (!writablePermission(item.allow))
             return inputValidationFailure(
                 "permissionOverwrites[].allow",
                 "range",
-                "Permission overwrite allow must be an unsigned 64-bit bigint",
+                "Permission overwrite allow must be a bigint from 0 through 9,223,372,036,854,775,807",
             )
-        if (!permission(item.deny))
+        if (!writablePermission(item.deny))
             return inputValidationFailure(
                 "permissionOverwrites[].deny",
                 "range",
-                "Permission overwrite deny must be an unsigned 64-bit bigint",
+                "Permission overwrite deny must be a bigint from 0 through 9,223,372,036,854,775,807",
             )
         ids.add(item.id)
         overwrites.push({
@@ -558,13 +562,13 @@ function permissionSetBody(input: PermissionOverwrite): string | InputValidation
         Object.keys(input).some((key) => key !== "id" && key !== "type" && key !== "allow" && key !== "deny") ||
         !identifier(input.id) ||
         (input.type !== "role" && input.type !== "member") ||
-        !permission(input.allow) ||
-        !permission(input.deny)
+        !writablePermission(input.allow) ||
+        !writablePermission(input.deny)
     )
         return inputValidationFailure(
             "permissionOverwrite",
             "format",
-            "Permission overwrite requires a decimal ID, role or member type, and unsigned 64-bit allow and deny values",
+            "Permission overwrite requires a decimal ID, role or member type, and allow and deny values from 0 through 9,223,372,036,854,775,807",
         )
     return JSON.stringify({
         type: input.type === "role" ? 0 : 1,

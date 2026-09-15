@@ -77,7 +77,14 @@ test.each(["default", "native"] as const)(
             const parsed = new URL(url)
             requests.push(parsed)
             expect(init.method).toBe("GET")
-            return Response.json(page())
+            return Response.json(
+                page([
+                    entry({
+                        action_type: AuditLogActions.MemberBanAdd,
+                        options: { delete_message_seconds: 60 },
+                    }),
+                ]),
+            )
         })
         try {
             const fetchPage = async (): Promise<AuditLogPage> =>
@@ -87,6 +94,7 @@ test.each(["default", "native"] as const)(
             const first = await fetchPage()
             const second = await fetchPage()
             expect(first).toEqual(second)
+            expect(first.entries[0]!.options).toEqual({ deleteMessageSeconds: 60 })
             expect(Object.isFrozen(first) && Object.isFrozen(first.entries[0]!)).toBe(true)
             expect(requests).toHaveLength(2)
             expect(requests.every((request) => request.pathname === "/v1/guilds/20/audit-logs")).toBe(true)
@@ -169,6 +177,7 @@ test("projects every published option and change-value shape from a GuildUpdate 
                     channel_id: "40",
                     count: 2,
                     delete_member_days: "7",
+                    delete_message_seconds: 86_400,
                     id: "41",
                     integration_type: 3,
                     message_id: "42",
@@ -200,6 +209,7 @@ test("projects every published option and change-value shape from a GuildUpdate 
             channelId: "40",
             count: 2,
             deleteMemberDays: "7",
+            deleteMessageSeconds: 86_400,
             id: "41",
             integrationType: 3,
             messageId: "42",
@@ -241,6 +251,7 @@ test("rejects unfiltered, malformed, ambiguous, and non-descending audit-log pag
     expect(before.decode(page([entry({ id: "200" })]))).toBeUndefined()
     expect(before.decode(page([entry({ id: "199" }), entry({ id: "199" })]))).toBeUndefined()
     expect(before.decode(page([entry({ action_type: AuditLogActions.GuildUpdate })]))).toBeUndefined()
+    expect(before.decode(page([entry({ options: { delete_message_seconds: "60" } })]))).toBeUndefined()
     expect(
         before.decode(page([entry({ changes: [{ key: "permissions", new_value: { untrusted: true } }] })])),
     ).toBeUndefined()

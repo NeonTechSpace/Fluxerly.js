@@ -585,6 +585,7 @@ import {
 export type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 import { auditLogPage } from "#sdk/internal/audit-logs"
 export type {
+    GuildCreate,
     GuildEmojisUpdate,
     GuildStickersUpdate,
     GuildLifecycleEvents,
@@ -819,7 +820,10 @@ export interface OAuthClient {
     /** Exchange a refresh token for a new access and refresh token pair.
      * Coordinate concurrent refreshes and replace the stored pair atomically after success. Never retry an unknown outcome, which may have rotated the token */
     refresh(refreshToken: string, options?: OAuthOperationOptions): Effect.Effect<OAuthTokens, OAuthOperationFailure>
-    /** Revoke one access or refresh token. A lost response can still mean the token was revoked */
+    /** Revoke one access or refresh token.
+     * The token and hint are captured once when the Effect runs, then validated and transmitted from that snapshot.
+     * A lost response can still mean the token was revoked
+     */
     revoke(
         input: {
             /** Access or refresh token to invalidate. Keep this secret out of logs */
@@ -887,7 +891,8 @@ export interface OAuthClient {
  */
 export const oauth: Readonly<{
     /** Create the OAuth client when this Effect executes, without making a request.
-     * ConfigurationError reports invalid client credentials or instance settings. Scope closure calls shutdown
+     * ConfigurationError reports invalid client credentials or instance settings. Unexpected failures remain defects in the Cause.
+     * Scope closure calls shutdown
      */
     create: (config: OAuthConfig) => Effect.Effect<OAuthClient, ConfigurationError, Scope.Scope>
     /** Generate a random S256 PKCE verifier and challenge immediately.
@@ -1778,7 +1783,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Fluxerly always sends the search scope named current. Completion is either an immutable indexing state or an immutable observed result page.
      * Reads recognized query fields, including inherited and nonenumerable properties, and copies their arrays when the Effect executes.
      * An indexing result never starts polling. You choose whether to run another explicit search.
-     * A cursor is a provider-issued continuation value. Pass it unchanged to a later search call.
+     * Use page numbers from 1 through 400 for later requests, keeping limit unchanged. Fluxer does not honor returned cursors.
      * Invalid input, malformed success and POST failure use MessageOperationError operation search. This POST has no transient-read retry.
      * Confirmed rate limits retain shared REST handling. Interruption retains the Cause and releases only this request
      * @example
@@ -1795,10 +1800,12 @@ export interface Messages<M extends MessageCore = Message> {
         query?: MessageSearchQuery,
         options?: MessageOperationOptions,
     ): Effect.Effect<MessageSearchPage<M>, MessageOperationFailure>
-    /** Read indexed messages from the guild or channel you specify, following provider cursors without polling, prefetching or automatic cache population.
+    /** Read indexed messages from the guild or channel you specify, following numbered pages without polling, prefetching or automatic cache population.
      * maxItems is required. `pageSize` is 1–25 and maxPages defaults to 100. Each execution owns input copies and one bounded page.
      * Recognized filter fields, including inherited and nonenumerable properties, are read and their arrays copied per stream consumption.
-     * An indexing page ends with PaginationError indexing. Repeated opaque cursors end with cursorStalled rather than snowflake comparison.
+     * Request capacity stays at the smaller of pageSize and maxItems throughout the scan; only maxItems hits are delivered.
+     * An indexing page ends with PaginationError indexing. An unexpected echoed page number or capacity ends with cursorStalled.
+     * Reaching maxPages or Fluxer's 400-page ceiling with more matches fails with pageLimit. Index changes can still skip or repeat observations.
      * Delivered snapshots remain caller-owned after a later failure. Interruption and stream-scope closure await owned request cleanup
      * @example
      * ```ts
@@ -1809,7 +1816,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     iterateSearch(
         context: MessageSearchContext,
-        filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+        filters: Omit<MessageSearchQuery, "limit" | "page">,
         limits: MessageSearchIterationLimits,
         options?: MessageOperationOptions,
     ): Stream.Stream<M, MessageOperationFailure | PaginationError>
@@ -2009,7 +2016,8 @@ export interface Messages<M extends MessageCore = Message> {
     ): Effect.Effect<ReactionUsersPage, MessageOperationFailure>
     /**
      * Add the bot's own reaction and complete after HTTP 204, without waiting for or synthesizing a gateway event.
-     * Accept literal Unicode or a custom { name, id }. Fluxer owns emoji availability and permission checks
+     * Accept Unicode, static or animated custom markup, a parsed custom emoji, or a received emoji snapshot.
+     * ReactionEmojiInput defines local validation. Custom emoji are encoded as name:id. Fluxer checks availability and permissions
      *
      * No gateway readiness is required. Use the shared 30,000 ms deadline by default. `timeoutMs` overrides it.
      * Share HTTP concurrency and queue limits and global rate limits, with a channel reaction bucket separate from message operations.
@@ -2090,7 +2098,7 @@ export interface Messages<M extends MessageCore = Message> {
      * export const askName = (client: Client, channelId: string, userId: string) => Effect.scoped(
      *     Effect.gen(function* () {
      *         const collector = yield* client.messages.collect(channelId, { filter: message => message.author.id === userId })
-     *         yield* client.messages.send(channelId, { content: "What should I call you?" })
+     *         yield* client.messages.send(channelId, { content: "What name should the bot use?" })
      *         return yield* collector.waitForClose()
      *     }),
      * )
@@ -2618,6 +2626,7 @@ export interface Emojis {
         options?: ModerationOptions,
     ): Effect.Effect<GuildEmoji, GuildOperationFailure>
     /** Submit 1–50 uploads in one batch, with separate successes and failures and no rollback.
+     * The input array is copied by index, then its entries are copied when the Effect is executed.
      * Duplicate names cannot map failures to input positions. No automatic chunking or replay.
      * Unknown outcomes require fresh remote snapshots and caller reconciliation
      */
@@ -2685,6 +2694,7 @@ export interface Stickers {
         options?: ModerationOptions,
     ): Effect.Effect<GuildSticker, GuildOperationFailure>
     /** Submit 1–50 uploads in one batch, with separate successes and failures and no rollback.
+     * The input array is copied by index, then its entries are copied when the Effect is executed.
      * Duplicate names cannot map failures to input positions. No automatic chunking or replay.
      * Unknown outcomes require fresh remote snapshots and caller reconciliation
      */
@@ -3023,6 +3033,7 @@ export interface Channels {
         options?: ChannelOperationOptions,
     ): Effect.Effect<readonly GuildChannel[], ChannelOperationFailure>
     /** Create one supported guild channel and return Fluxer's frozen snapshot. Fluxer chooses its initial position.
+     * Each overwrite allow and deny mask must be from 0n through 9_223_372_036_854_775_807n; invalid masks fail before dispatch.
      * Omitted permissionOverwrites inherits the selected parent category's overrides. [] creates no explicit overrides, not private visibility.
      * Explicit overwrite bits include ViewChannelMembers through Fluxer's required feature opt-in
      * @example
@@ -3046,6 +3057,7 @@ export interface Channels {
         options?: ChannelOperationOptions,
     ): Effect.Effect<GuildChannel, ChannelOperationFailure>
     /** Patch only supplied channel settings and return Fluxer's frozen snapshot. Empty/unknown-field patches are input errors.
+     * Each replacement allow and deny mask must be from 0n through 9_223_372_036_854_775_807n.
      * Channel type and parent are intentionally not editable here. Move a channel with reorder. Omitted permissionOverwrites preserves them, while [] clears them.
      * Explicit overwrite replacements opt into Fluxer's ViewChannelMembers permission handling, including clearing that bit
      */
@@ -3068,6 +3080,7 @@ export interface Channels {
         options?: ChannelOperationOptions,
     ): Effect.Effect<void, ChannelOperationFailure>
     /** Replace one explicit role or member permission overwrite with the supplied raw bigint allow and deny bits.
+     * Each mask must be from 0n through 9_223_372_036_854_775_807n; larger received masks cannot be written unchanged.
      * Completes after HTTP 204.
      * Sets and clears ViewChannelMembers through Fluxer's required feature opt-in, alongside the other raw bits.
      * Fluxer enforces ManageRoles. This does not calculate inherited/effective permissions or prefetch the target
@@ -3134,7 +3147,7 @@ export interface Members {
         options?: MemberChunkOptions,
     ): Stream.Stream<MemberChunk, MemberChunkFailure>
     /** Replace the member's entire explicit role set with 0–250 distinct positive decimal role IDs in one PATCH.
-     * Copies IDs when run using your Effect program's services, with no prefetch or merge. [] clears assigned roles. The implicit everyone role is rejected as input
+     * Copies IDs by index when run using your Effect program's services, with no prefetch or merge. [] clears assigned roles. The implicit everyone role is rejected as input
      *
      * Requires provider ManageRoles and hierarchy permission for changes. This may overwrite concurrent role changes.
      * Fluxer can silently omit nonexistent or foreign role IDs. Returns its frozen actual member, not a promise that every requested role was accepted
@@ -3453,6 +3466,7 @@ export interface Roles {
         options?: GuildOperationOptions,
     ): Effect.Effect<readonly GuildRole[], GuildOperationFailure>
     /** Create a role with name, color and permissions. Permissions default to 0n, not Fluxer's inherited everyone grants.
+     * Supplied permissions must be from 0n through 9_223_372_036_854_775_807n.
      * Explicit permissions include ViewChannelMembers through Fluxer's required feature opt-in.
      * Returns the server's actual grants, which can differ from the request. Hoist/mentionable changes require a separate edit
      * @example
@@ -3472,6 +3486,7 @@ export interface Roles {
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildRole, GuildOperationFailure>
     /** Patch only defined fields and return the server's snapshot. Empty/unknown-field patches are input errors.
+     * Replacement permissions must be from 0n through 9_223_372_036_854_775_807n; larger received masks cannot be written unchanged.
      * permissions replaces the raw grants, including setting or clearing ViewChannelMembers. It is not an additive grant.
      * The default/everyone role accepts only color and permissions. Other defined fields fail locally, including mixed patches */
     edit(
@@ -3851,7 +3866,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Afterward it is force-terminated, and shutdown still waits for the close event.
      * Pending handshakes terminate immediately. Forced termination may discard unsent data.
      * The SDK releases its credential reference but does not terminate your process or undo remote writes.
-     * No expected error is returned. Cleanup faults remain defects in Cause
+     * No expected error is returned. Cleanup faults remain defects in Cause.
+     * When shutdown interrupts an owned worker, that interruption and any cleanup defect remain separate Cause reasons
      */
     shutdown(): Effect.Effect<void>
     /**
@@ -4089,8 +4105,9 @@ export interface DirectMessages<M extends MessageCore = Message> {
     /** Read open one-to-one and group conversations remotely, excluding personal notes. This is not an atomic snapshot or a complete message history */
     fetchAll(options?: UserOperationOptions): Effect.Effect<readonly DirectMessageChannel[], UserOperationFailure>
     /** Fetch the latest message for 1–100 explicitly selected distinct DM/group-DM IDs through Fluxer's batch endpoint.
+     * IDs are copied by index when the Effect is executed.
      * POST is read-shaped but is not retried after a dispatched uncertain failure. It does not enumerate conversations or populate any cache.
-     * Returned null is ambiguous. omittedChannelIds preserves requested IDs Fluxer omitted, rather than treating omission as null, an empty channel or access denial
+     * Returned null is ambiguous. The omittedChannelIds field preserves requested IDs Fluxer omitted, with no inference about channel content or access
      */
     fetchLatestMessages(
         channelIds: readonly string[],
@@ -4455,7 +4472,7 @@ export function createClient<E = never, R = never, const F extends MessageFields
                 ) => owner.searchMessages(context, query, options),
                 iterateSearch: (
                     context: MessageSearchContext,
-                    filters: Omit<MessageSearchQuery, "limit" | "page" | "cursor">,
+                    filters: Omit<MessageSearchQuery, "limit" | "page">,
                     limits: MessageSearchIterationLimits,
                     options?: MessageOperationOptions,
                 ) => paginationStream(searchMessagePagination(owner, context, filters, limits, options)),

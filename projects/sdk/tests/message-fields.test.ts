@@ -257,10 +257,17 @@ test.each(
         has_more: false,
     }
     expectProjection((await settle(api.client.messages.fetchPins("20"))).items[0]?.message, fields)
-    response = { messages: [wire()], channels: [], total: 1, hits_per_page: 25, page: 1 }
+    response = {
+        messages: [wire()],
+        channels: [{ id: "20", guild_id: "40", type: 0 }],
+        total: 1,
+        hits_per_page: 25,
+        page: 1,
+    }
     const search = await settle(api.client.messages.search({ guildId: "40" }, { content: "rich" }))
     if (search.indexing) throw new Error("Expected indexed messages")
     expectProjection(search.messages[0], fields)
+    expect(search.channels).toEqual([{ id: "20", guildId: "40", type: 0 }])
     response = { "20": wire(), "21": null }
     const latest = await settle(api.client.directMessages.fetchLatestMessages(["20", "21", "22"]))
     expectProjection(latest.messages["20"], fields)
@@ -388,9 +395,16 @@ test.each(modes)(
 
 test.each(modes)("%s excluded malformed REST fields still reject the response", async (mode) => {
     const api = await setup(mode, [])
-    stubFetchWithHostedDiscovery(async () => Response.json({ ...wire(), attachments: [{ ...attachment, size: -1 }] }))
-    await expect(settle(api.client.messages.fetch(target))).rejects.toMatchObject({ reason: "response" })
-    expect(await settle(api.client.messages.get(target))).toBeUndefined()
+    for (const fields of [
+        { attachments: [{ ...attachment, size: -1 }] },
+        { timestamp: "2025-02-29T00:00:00Z" },
+        { edited_timestamp: "2025-04-31T00:00:00Z" },
+        { message_snapshots: [{ ...wire().message_snapshots[0], timestamp: "2025-02-29T00:00:00Z" }] },
+    ]) {
+        stubFetchWithHostedDiscovery(async () => Response.json({ ...wire(), ...fields }))
+        await expect(settle(api.client.messages.fetch(target))).rejects.toMatchObject({ reason: "response" })
+        expect(await settle(api.client.messages.get(target))).toBeUndefined()
+    }
 })
 
 test.each(modes)("%s retained cache and collector budgets account for the selected projection", async (mode) => {

@@ -1,5 +1,6 @@
 import type { Embed } from "#sdk/embeds"
 import { InputValidationFailure, inputValidationFailure, type InputValidationConstraint } from "#sdk/input-validation"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 const object = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value)
@@ -41,12 +42,10 @@ const attachmentUrl = (value: unknown, uploadedFilenames: readonly string[] | un
         ? value
         : undefined
 }
-const timestamp: Reader = (value) =>
-    typeof value === "string" &&
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
-    Number.isFinite(Date.parse(value))
-        ? value
-        : undefined
+const isoTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+const timestamp: Reader = (value) => {
+    return typeof value === "string" && isoTimestamp.test(value) && validCalendarTimestamp(value) ? value : undefined
+}
 
 // The tables own only response projection, which ignores unknown wire properties
 function project(value: unknown, shape: Shape, construct = true): Record<string, unknown> | true | undefined {
@@ -95,9 +94,12 @@ function projectInput(value: unknown, shape: Shape, path: string): Record<string
 }
 
 function list(value: unknown, read: Reader, max = Infinity, construct = true): readonly unknown[] | true | undefined {
-    if (!Array.isArray(value) || value.length > max) return undefined
+    if (!Array.isArray(value)) return undefined
+    const count = value.length
+    if (count > max) return undefined
     const result: unknown[] | undefined = construct ? [] : undefined
-    for (const item of value) {
+    for (let index = 0; index < count; index += 1) {
+        const item = value[index]
         const decoded = read(item, construct)
         if (decoded === undefined) return undefined
         result?.push(decoded)
@@ -112,10 +114,12 @@ function inputList(
     path: string,
 ): readonly unknown[] | InputValidationFailure {
     if (!Array.isArray(value)) return inputValidationFailure(path, "type", "Embed collection must be an array")
-    if (value.length > maximum)
+    const count = value.length
+    if (count > maximum)
         return inputValidationFailure(path, "length", `Embed collection may contain at most ${maximum} entries`)
     const result: unknown[] = []
-    for (const item of value) {
+    for (let index = 0; index < count; index += 1) {
+        const item = value[index]
         const decoded = read(item)
         if (decoded instanceof InputValidationFailure) return decoded
         if (decoded === undefined) return inputValidationFailure(`${path}[]`, "format", "Embed entry is invalid")

@@ -167,16 +167,45 @@ test.each(modes)("%s manages guild channels through exact routes with frozen, lo
             },
         ],
     })
+    const maximumPermission = (1n << 63n) - 1n
+    await api.create("20", {
+        type: ChannelType.Text,
+        name: "maximum",
+        permissionOverwrites: [{ id: "51", type: "member", allow: maximumPermission, deny: maximumPermission }],
+    })
+    expect(calls.at(-1)).toMatchObject({
+        path: "/v1/guilds/20/channels",
+        method: "POST",
+        body: {
+            type: 0,
+            name: "maximum",
+            permission_overwrites: [
+                { id: "51", type: 1, allow: maximumPermission.toString(), deny: maximumPermission.toString() },
+            ],
+        },
+    })
+    await api.edit("10", {
+        permissionOverwrites: [{ id: "51", type: "member", allow: maximumPermission, deny: maximumPermission }],
+    })
+    expect(calls.at(-1)).toMatchObject({
+        path: "/v1/channels/10",
+        method: "PATCH",
+        body: {
+            permission_overwrites: [
+                { id: "51", type: 1, allow: maximumPermission.toString(), deny: maximumPermission.toString() },
+            ],
+        },
+    })
     await api.setPermissionOverwrite("10", {
         id: "51",
         type: "member",
-        allow: 1n << 63n,
-        deny: 0n,
+        allow: maximumPermission,
+        deny: maximumPermission,
     })
     expect(calls.at(-1)).toMatchObject({
         path: "/v1/channels/10/permissions/51",
         method: "PUT",
-        body: { type: 1, allow: "9223372036854775808", deny: "0" },
+        body: { type: 1, allow: maximumPermission.toString(), deny: maximumPermission.toString() },
     })
     await api.removePermissionOverwrite("10", "51")
     expect(calls.at(-1)).toMatchObject({ path: "/v1/channels/10/permissions/51", method: "DELETE" })
@@ -302,6 +331,33 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s accepts provider bitrate bounds and returns the server-selected bitrate", async (mode) => {
+    const calls: { method: string; bitrate: number }[] = []
+    let serverMaximum = 384_000
+    rest(async (_url, init) => {
+        const body = JSON.parse(String(init.body)) as { bitrate: number }
+        calls.push({ method: init.method!, bitrate: body.bitrate })
+        return Response.json(voiceChannel("11", { bitrate: Math.min(body.bitrate, serverMaximum) }))
+    })
+    const api = await setup(mode)
+    for (const bitrate of [8_000, 384_000]) {
+        const created = await api.create("20", { type: ChannelType.Voice, name: "voice", bitrate })
+        expect(created.bitrate).toBe(bitrate)
+        expect((await api.edit("11", { bitrate })).bitrate).toBe(bitrate)
+    }
+    serverMaximum = 96_000
+    expect((await api.create("20", { type: ChannelType.Voice, name: "voice", bitrate: 384_000 })).bitrate).toBe(96_000)
+    expect((await api.edit("11", { bitrate: 384_000 })).bitrate).toBe(96_000)
+    expect(calls).toEqual([
+        { method: "POST", bitrate: 8_000 },
+        { method: "PATCH", bitrate: 8_000 },
+        { method: "POST", bitrate: 384_000 },
+        { method: "PATCH", bitrate: 384_000 },
+        { method: "POST", bitrate: 384_000 },
+        { method: "PATCH", bitrate: 384_000 },
+    ])
+})
+
 test.each(modes)("%s rejects invalid writes before dispatch and whole malformed channel responses", async (mode) => {
     let calls = 0
     let response: unknown = channel()
@@ -317,6 +373,7 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
         { type: ChannelType.Text, name: "valid", topic: "" },
         { type: ChannelType.Text, name: "valid", rateLimitPerUser: 21_601 },
         { type: ChannelType.Voice, name: "valid", bitrate: 7_999 },
+        { type: ChannelType.Voice, name: "valid", bitrate: 384_001 },
         { type: ChannelType.Voice, name: "valid", userLimit: 100 },
         { type: ChannelType.Voice, name: "valid", voiceConnectionLimit: 101 },
         {
@@ -327,6 +384,16 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
                 { id: "50", type: "member", allow: 0n, deny: 0n },
             ],
         },
+        {
+            type: ChannelType.Text,
+            name: "valid",
+            permissionOverwrites: [{ id: "50", type: "role", allow: 1n << 63n, deny: 0n }],
+        },
+        {
+            type: ChannelType.Text,
+            name: "valid",
+            permissionOverwrites: [{ id: "50", type: "role", allow: 0n, deny: 1n << 63n }],
+        },
     ])
         await expect(api.create("20", input)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
     for (const input of [
@@ -335,7 +402,11 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
         { parentId: "12" },
         { name: undefined },
         { rateLimitPerUser: -1 },
+        { bitrate: 7_999 },
+        { bitrate: 384_001 },
         { extra: true },
+        { permissionOverwrites: [{ id: "50", type: "role", allow: 1n << 63n, deny: 0n }] },
+        { permissionOverwrites: [{ id: "50", type: "role", allow: 0n, deny: 1n << 63n }] },
     ])
         await expect(api.edit("10", input)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
     for (const positions of [
@@ -349,6 +420,8 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
     for (const overwrite of [
         { id: "50", type: "user", allow: 0n, deny: 0n },
         { id: "50", type: "role", allow: -1n, deny: 0n },
+        { id: "50", type: "role", allow: 1n << 63n, deny: 0n },
+        { id: "50", type: "role", allow: 0n, deny: 1n << 63n },
         { id: "50", type: "role", allow: 1n << 64n, deny: 0n },
     ])
         await expect(api.setPermissionOverwrite("10", overwrite)).rejects.toMatchObject({
@@ -371,6 +444,7 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
         { ...channel(), id: "11" },
         { ...channel(), guild_id: undefined },
         { ...channel(), type: -1 },
+        { ...channel(), last_pin_timestamp: "2025-02-29T00:00:00Z" },
         { ...channel(), permission_overwrites: [{ id: "50", type: 0, allow: "01", deny: "0" }] },
         { ...channel(), permission_overwrites: [{ id: "50", type: 2, allow: "0", deny: "0" }] },
     ])

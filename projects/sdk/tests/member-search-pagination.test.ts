@@ -162,6 +162,45 @@ test.each(modes)("%s rejects invalid traversal before requests", async (mode) =>
     expect(fetch).not.toHaveBeenCalled()
 })
 
+test.each(modes)("%s snapshots bounded member-search filters from indexed values", async (mode) => {
+    const api = await setup(mode)
+    const sent: unknown[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        sent.push(JSON.parse(String(init.body)))
+        return page(["301"], 1)
+    })
+    const roleIds = ["401"]
+    Object.defineProperty(roleIds, Symbol.iterator, {
+        value: () => {
+            throw Error("Member search must not consume caller iterators")
+        },
+    })
+
+    await api.search({ roleIds })
+    expect(sent).toEqual([{ limit: 25, offset: 0, role_ids: ["401"] }])
+
+    let indexedReads = 0
+    const invalid = ["401"]
+    Object.defineProperty(invalid, "0", {
+        get: () => {
+            indexedReads++
+            return "invalid"
+        },
+    })
+    Object.defineProperty(invalid, Symbol.iterator, {
+        value: () => {
+            throw Error("Member search must reject indexed invalid values without iterating")
+        },
+    })
+    await expect(api.search({ roleIds: invalid })).rejects.toMatchObject({
+        reason: "input",
+        outcome: "notDispatched",
+        inputValidation: { path: "query.roleIds[]" },
+    })
+    expect(indexedReads).toBe(1)
+    expect(sent).toHaveLength(1)
+})
+
 test.each(modes)("%s search and traversal preserve structural filters at consumption", async (mode) => {
     const api = await setup(mode)
     const sent: Record<string, unknown>[] = []

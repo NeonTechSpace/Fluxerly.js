@@ -4,12 +4,12 @@ import { PaginationError, type PaginationOperation } from "#sdk/pagination"
 import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
 import type { OperationOptions } from "#sdk/client"
 import type { ClientOwner } from "./client.js"
-import { encodeHistory, record, reference } from "./message.js"
+import { encodeHistory, record, snapshotReference } from "./message.js"
 import { memberPage } from "./guilds.js"
 import { guildList } from "./guild-lifecycle.js"
 import { auditLogPage } from "./audit-logs.js"
 import { encodePinsQuery } from "./pins.js"
-import { encodeReactionEmoji, encodeReactionUsersQuery } from "./reactions.js"
+import { encodeReactionUsersQuery, resolveReactionEmoji } from "./reactions.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
 interface Page<A> {
@@ -52,7 +52,8 @@ export function iterationOptions(value: unknown) {
             typeof signal.removeEventListener !== "function")
     )
         return inputValidationFailure("options.signal", "type", "Iteration signal must be an AbortSignal")
-    return { request: { ...(value.timeoutMs === undefined ? {} : { timeoutMs: value.timeoutMs as number }) }, signal }
+    const timeoutMs = value.timeoutMs
+    return { request: { ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number }) }, signal }
 }
 
 /** One consumption owns its page and optional pin IDs, not credentials or retained result arrays */
@@ -325,24 +326,18 @@ export const reactionUserPagination = <M extends MessageCore = Message>(
     options?: MessageOperationOptions,
 ) =>
     prepare(owner, "iterateReactionUsers", query, options, "after", 25, 100, (settings) => {
-        if (
-            !reference(target) ||
-            encodeReactionEmoji(emoji as import("#sdk/reactions").ReactionEmojiInput) === undefined
-        )
+        const message = snapshotReference(target)
+        const selected = resolveReactionEmoji(emoji as import("#sdk/reactions").ReactionEmojiInput)
+        if (message === undefined || selected === undefined)
             return inputValidationFailure(
-                !reference(target) ? "target" : "emoji",
+                message === undefined ? "target" : "emoji",
                 "format",
-                !reference(target)
+                message === undefined
                     ? "Message target requires decimal channelId and message id strings"
                     : "Reaction emoji must be a Unicode emoji string or a valid custom emoji",
             )
         const validated = encodeReactionUsersQuery(cursorQuery("after", settings.cursor, settings.pageSize))
         if (validated instanceof InputValidationFailure) return validated
-        const message = { channelId: target.channelId, id: target.id }
-        const selected =
-            typeof emoji === "string"
-                ? emoji
-                : { name: (emoji as { name: string }).name, id: (emoji as { id: string }).id }
         return {
             load: (cursor, limit) =>
                 owner
@@ -412,7 +407,14 @@ export const auditLogPagination = <M extends MessageCore = Message>(
                     ).detail,
                 ),
             )
-        const { userId, actionType, ...bounds } = query
+        const userId = query.userId
+        const actionType = query.actionType
+        const bounds = {
+            maxItems: query.maxItems,
+            maxPages: query.maxPages,
+            pageSize: query.pageSize,
+            before: query.before,
+        }
         const filters = {
             ...(userId === undefined ? {} : { userId: userId as string }),
             ...(actionType === undefined ? {} : { actionType: actionType as number }),

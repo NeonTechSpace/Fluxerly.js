@@ -3,7 +3,37 @@ export function remarkProse() {
     return highlight
 }
 
-const keywords = /\b(?:HTTPS?|WSS?|REST|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|\d+(?:,\d{3})*(?:\.\d+)*(?:%)?)\b/g
+const technicalVocabulary = [
+    "OAuth2",
+    "OAuth",
+    "Node\\.js",
+    "JavaScript",
+    "TypeScript",
+    "WebSockets?",
+    "UTF-8",
+    "APIs?",
+    "SDKs?",
+    "JSON",
+    "HTML",
+    "XML",
+    "ESM",
+    "URLs?",
+    "URI",
+    "HTTPS?",
+    "WSS?",
+    "REST",
+    "CLI",
+    "pnpm",
+    "npm",
+]
+const tokenStart = "(?<![#$\\p{L}\\p{N}_])"
+const tokenEnd = "(?![#$\\p{L}\\p{N}_])"
+const numberStart = "(?<![#$\\p{L}\\p{N}_,.])"
+const numberEnd = "(?![#$\\p{L}\\p{N}_,]|\\.[#$\\p{L}\\p{N}_])"
+const keywords = new RegExp(
+    `${tokenStart}(?:${technicalVocabulary.join("|")}|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)${tokenEnd}|${numberStart}\\d+(?:,\\d{3})*(?:\\.\\d+)*(?:%)?${numberEnd}`,
+    "gu",
+)
 const excluded = new Set(["code", "inlineCode", "html", "blockquote", "link", "linkReference", "image", "imageReference"])
 
 function highlight(node) {

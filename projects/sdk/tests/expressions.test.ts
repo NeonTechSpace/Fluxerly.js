@@ -136,6 +136,75 @@ test.each(modes)("%s validates expressions before HTTP, without leaking rejected
     expect(fetch).not.toHaveBeenCalled()
 })
 
+test.each(modes)("%s snapshots bounded expression inputs and sticker tags from indexed values", async (mode) => {
+    const client = await setup(mode)
+    const bodies: unknown[] = []
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body))
+        bodies.push(body)
+        return new URL(url).pathname.endsWith("/bulk")
+            ? Response.json({ success: [wire()], failed: [] })
+            : Response.json(wire(new URL(url).pathname.includes("stickers")))
+    })
+    const inputs = [{ name: "Fixture", image }]
+    Object.defineProperty(inputs, Symbol.iterator, {
+        value: () => {
+            throw Error("Expression batches must not consume caller iterators")
+        },
+    })
+    const tags = ["fixture"]
+    Object.defineProperty(tags, Symbol.iterator, {
+        value: () => {
+            throw Error("Sticker writes must not consume caller iterators")
+        },
+    })
+
+    await settle(client.emojis.createMany("200", inputs))
+    await settle(client.stickers.create("200", { name: "Fixture", image, tags }))
+    expect(bodies).toEqual([
+        { emojis: [{ name: "Fixture", image }] },
+        { name: "Fixture", image, description: null, tags: ["fixture"] },
+    ])
+
+    let batchReads = 0
+    const invalidInputs = [{ name: "Fixture", image }]
+    Object.defineProperty(invalidInputs, "0", {
+        get: () => {
+            batchReads++
+            return { name: "invalid name", image }
+        },
+    })
+    Object.defineProperty(invalidInputs, Symbol.iterator, {
+        value: () => {
+            throw Error("Expression batches must reject indexed invalid values without iterating")
+        },
+    })
+    let tagReads = 0
+    const invalidTags = ["fixture"]
+    Object.defineProperty(invalidTags, "0", {
+        get: () => {
+            tagReads++
+            return ""
+        },
+    })
+    Object.defineProperty(invalidTags, Symbol.iterator, {
+        value: () => {
+            throw Error("Sticker writes must reject indexed invalid values without iterating")
+        },
+    })
+    await expect(settle(client.emojis.createMany("200", invalidInputs))).rejects.toMatchObject({
+        _tag: "GuildOperationError",
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    await expect(
+        settle(client.stickers.create("200", { name: "Fixture", image, tags: invalidTags })),
+    ).rejects.toMatchObject({ _tag: "GuildOperationError", reason: "input", outcome: "notDispatched" })
+    expect(batchReads).toBe(1)
+    expect(tagReads).toBe(1)
+    expect(bodies).toHaveLength(2)
+})
+
 test.each(modes)("%s accepts parameterized image data URIs without weakening base64 bounds", async (mode) => {
     const client = await setup(mode)
     const fetch = vi.fn(async (url: string, init: RequestInit) => {

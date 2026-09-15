@@ -52,7 +52,7 @@ Registry release commands enforce the [registry publication contract](/docs/RELE
 | [member-search.ts](/projects/sdk/src/internal/member-search.ts) | Indexed member-search validation and projection, separate from full member observations |
 | [member-search-workflow.ts](/projects/sdk/src/internal/member-search-workflow.ts) | Invite-sensitive permission preflight and bounded offset search traversal |
 | [message-search.ts](/projects/sdk/src/internal/message-search.ts) | Contextual indexed message-search validation and immutable page projection without cache admission |
-| [message-search-workflow.ts](/projects/sdk/src/internal/message-search-workflow.ts) | Bounded opaque-cursor message-search traversal, including explicit indexing and progress failures |
+| [message-search-workflow.ts](/projects/sdk/src/internal/message-search-workflow.ts) | Bounded numbered-page message-search traversal, including explicit indexing and progress failures |
 | [permissions.ts](/projects/sdk/src/internal/permissions.ts) | Local permission-bit calculation and explicit fresh-resource composition, not action authorization |
 | [role-hierarchy-workflow.ts](/projects/sdk/src/internal/role-hierarchy-workflow.ts) | Fresh guild, bot member, target member and role reads for a hierarchy check, not action authorization |
 | [message-cleanup.ts](/projects/sdk/src/internal/message-cleanup.ts) | Bounded cleanup previews and one-use exact deletion plans, with partial submission reports |

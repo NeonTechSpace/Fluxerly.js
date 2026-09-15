@@ -10,13 +10,14 @@ import type {
 import { identifier, record } from "./message.js"
 import { decodeMember, memberFetch, type GuildRequest } from "./guilds.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { validCalendarTimestamp } from "./timestamp.js"
 
 const integer = (value: unknown, min: number, max: number): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
 const text = (value: unknown, min: number, max: number): value is string =>
     typeof value === "string" && [...value].length >= min && [...value].length <= max
 const timestamp = (value: unknown): value is string =>
-    typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && Number.isFinite(Date.parse(value))
+    typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && validCalendarTimestamp(value)
 
 export function auditSettings(
     options?: ModerationOptions,
