@@ -1,6 +1,7 @@
 <h1 align="center">
   <a href="https://fluxerly.neontechspace.com">Fluxerly.js</a>
   <br>
+  <br>
   <img src="/docs/assets/mascot.png" width="220" alt="Fluxerly mascot">
 </h1>
 
