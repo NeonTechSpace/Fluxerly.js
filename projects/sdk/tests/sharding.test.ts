@@ -662,10 +662,22 @@ test.each(modes)("%s preserves the aggregate startup deadline when a ready shard
     )
     expect(driver.client.state).toBe("Connecting")
     await vi.waitFor(() => expect(fixture.resumes).toHaveLength(1), { interval: 5, timeout: 2_000 })
+    // Both shards have reached READY individually, so only the aggregate startup guard can expire
+    const sibling = fixture.identifies[1]!
+    fixture.ready(sibling)
+    await vi.waitFor(
+        () =>
+            expect(driver.client.shards.find((shard) => shard.shardId === shardTuple(sibling)[0])?.state).toBe(
+                "Connected",
+            ),
+        { interval: 5, timeout: 2_000 },
+    )
+    expect(driver.client.state).toBe("Connecting")
     await expect(startup).resolves.toMatchObject({
         kind: "failure",
         error: { _tag: "ConnectionTimeoutError", timeoutMs: 2_500 },
     })
+    expect(driver.client.state).toBe("Disconnected")
     await fixture.waitClosed()
 })
 
