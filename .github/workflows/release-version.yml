@@ -76,6 +76,11 @@ jobs:
           appendFileSync(process.env.GITHUB_ENV, `RELEASE_VERSION=${version}\n`)
           appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`)
           NODE
+      - name: Format the generated SDK changelog
+        id: format
+        if: steps.version.outputs.skipped != 'true'
+        working-directory: projects
+        run: pnpm --filter @neontechspace/fluxerly exec prettier --write CHANGELOG.md
       - name: Open the version PR for review
         id: pull_request
         if: steps.version.outputs.skipped != 'true'

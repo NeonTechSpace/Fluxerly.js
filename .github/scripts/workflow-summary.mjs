@@ -112,6 +112,7 @@ export const summaryProfiles = {
             ["support", "Registry publication contract gate before source effects"],
             ["build", "Prospective publishable SDK content built"],
             ["version", "Content guard and source version preparation"],
+            ["format", "Generated SDK changelog formatting"],
             ["pull_request", "Version pull request creation or reconciliation"],
         ],
         scope: "A version PR is reviewable source, not a package release. The registry support gate remains enforced",

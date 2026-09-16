@@ -269,6 +269,24 @@ test("Candidate, artifact and PR identities come from reported outputs, not uplo
     assert.match(renderSummary({ kind: "version", steps: version }), /PR operation: updated/)
 })
 
+test("Version PR formatting runs after generation and gates PR creation", () => {
+    const workflow = readFileSync(join(repository, ".github/workflows/release-version.yml"), "utf8")
+    const steps = workflow.split(/^      - /m).slice(1)
+    const generation = steps.findIndex((step) => /^        id: version$/m.test(step))
+    const formatting = steps.findIndex((step) => /^        id: format$/m.test(step))
+    const publication = steps.findIndex((step) => /^        id: pull_request$/m.test(step))
+    assert.ok(generation >= 0 && formatting > generation && publication > formatting)
+    assert.match(steps[formatting], /if: steps\.version\.outputs\.skipped != 'true'/)
+    assert.match(steps[formatting], /working-directory: projects/)
+    assert.match(steps[formatting], /run: pnpm --filter @neontechspace\/fluxerly exec prettier --write CHANGELOG\.md/)
+    assert.doesNotMatch(steps[formatting], /continue-on-error|always\(\)/)
+    assert.doesNotMatch(steps[publication], /always\(\)|!cancelled\(\)/)
+    const states = successfulSteps("version")
+    states.format.outcome = "failure"
+    states.pull_request.outcome = "skipped"
+    assert.match(renderSummary({ kind: "version", steps: states }), /Failed or cancelled/)
+})
+
 test("Untrusted display values cannot inject Markdown, HTML, extra lines or unrelated output data", () => {
     const steps = successfulSteps("version")
     steps.version.outputs = { version: "<script>bad</script>\n| injected | `code` [link](https://example.invalid)" }
