@@ -27,7 +27,7 @@
 Build with `async` / `await`, or use the Effect-native API for typed errors and scoped concurrency. Both entry points share the same SDK features. Effect is optional
 
 > [!NOTE]
-> Fluxerly is a prerelease SDK. Start with the [temporary Canary documentation](https://preview.fluxerly.neontechspace.com/docs/1000.0.0-canary.0/). Install the explicit `@canary` channel and review changes when upgrading
+> Fluxerly is a prerelease SDK. Start with the [temporary Canary documentation](https://preview.fluxerly.neontechspace.com/docs/1000.0.0-canary.1/). Install the explicit `@canary` channel and review changes when upgrading
 >
 > Pull requests and issues open with the first stable release, alongside contribution guides and templates
 
@@ -79,7 +79,7 @@ if (connected.isErr()) throw connected.error
 
 Run `node bot.js` or `node bot.ts`. Send **!ping** in a channel your bot can read and reply to. It should answer **Pong!**
 
-The [temporary Canary documentation](https://preview.fluxerly.neontechspace.com/docs/1000.0.0-canary.0/) starts with this bot. As you add commands, check reply Results too and give your application an explicit shutdown path
+The [temporary Canary documentation](https://preview.fluxerly.neontechspace.com/docs/1000.0.0-canary.1/) starts with this bot. As you add commands, check reply Results too and give your application an explicit shutdown path
 
 ## Choose your API
 
