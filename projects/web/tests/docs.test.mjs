@@ -111,12 +111,16 @@ test("Every built internal link and fragment resolves, public docs exclude inter
         const html = await readFile(path, "utf8")
         assert.ok(!/<link[^>]+rel="sitemap"|property="og:|name="twitter:/i.test(html), path)
         assert.match(html, /noindex/)
-        const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => decode(match[1]))
+        // Copy anchor strings so V8 cannot keep each full HTML body through a sliced string
+        const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) =>
+            Buffer.from(decode(match[1]), "utf8").toString("utf8"),
+        )
         assert.equal(new Set(ids).size, ids.length, `Duplicate HTML anchor in ${path}`)
-        pages.set(path, { html, ids: new Set(ids) })
+        pages.set(path, { ids: new Set(ids) })
     }
     const failures = new Set()
-    for (const [path, { html }] of pages) {
+    for (const path of pages.keys()) {
+        const html = await readFile(path, "utf8")
         const base = new URL(
             relative(dist, path)
                 .replaceAll("\\", "/")
