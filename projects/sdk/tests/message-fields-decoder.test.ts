@@ -68,7 +68,12 @@ const wire = () => ({
     mention_channels: [channel()],
     reactions: [{ emoji: { name: "wave", id: null, animated: null }, count: 1, me: null }],
     message_reference: { message_id: "11", channel_id: "12", guild_id: null, type: 1 },
-    referenced_message: { id: "11", channel_id: "12", content: "not projected" },
+    referenced_message: {
+        id: "11",
+        channel_id: "12",
+        content: "reply context",
+        author: { id: "13", username: "reply-author", bot: true },
+    },
     message_snapshots: [
         {
             content: null,

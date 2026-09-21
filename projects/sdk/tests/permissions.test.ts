@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Scope } from "effect"
+import { Cause, Clock, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
     createClient,
@@ -257,6 +257,9 @@ test.each(modes)("%s preserves resource failures and rejects cross-guild remote 
 
 test.each(modes)("%s gives later permission reads only the shared deadline remainder", async (mode) => {
     vi.useFakeTimers({ now: 0, toFake: ["Date", "performance", "setTimeout", "clearTimeout"] })
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() =>
+        BigInt(Math.floor(performance.now() * 1_000_000)),
+    )
     let enteredGuild!: () => void
     let enteredMember!: () => void
     let memberAborted = false

@@ -408,6 +408,9 @@ export async function useAttachments(client: Client, channelId: string) {
     const sent = await client.messages.send(channelId, { attachments: [file, ...sources] })
     if (sent.isErr()) return sent
     const attachment = sent.value.attachments[0]!
+    const refreshed = await client.attachments.refreshUrls(attachment.url === undefined ? [""] : [attachment.url])
+    if (refreshed.isErr()) return refreshed
+    const refreshedUrl: string = refreshed.value[0]!.refreshed
     const downloaded = await client.attachments.download(attachment, { maxBytes: 1_024, timeoutMs: 5_000 })
     if (downloaded.isErr()) return downloaded
     const bytes: Uint8Array = downloaded.value
@@ -428,11 +431,13 @@ export async function useAttachments(client: Client, channelId: string) {
     client.attachments.download(attachment, {})
     // @ts-expect-error Bounded streamed downloads require maxBytes
     client.attachments.stream(attachment, {})
+    // @ts-expect-error Attachment URL refresh accepts strings only
+    client.attachments.refreshUrls([1])
     // @ts-expect-error Attachment input lists remain readonly
     sources.push({ file: structuralAttachmentFile, filename: "later.bin" })
     // @ts-expect-error Received metadata is immutable
     attachment.filename = "renamed"
-    return { url: attachment.url, bytes }
+    return { url: attachment.url, refreshedUrl, bytes }
 }
 
 export async function useEmbeds(client: Client, channelId: string) {
@@ -893,11 +898,19 @@ export function approvedRequestInputs(client: Client, webhook: import("@neontech
         timeoutReason: "Timeout context",
         auditReason: "Moderator action",
     }
+    const guildAudit: import("@neontechspace/fluxerly").DefaultGuildAuditOperationOptions = {
+        auditReason: "Provision reviewed role",
+    }
+    const channelAudit: import("@neontechspace/fluxerly").DefaultChannelAuditOperationOptions = {
+        auditReason: "Provision reviewed channel",
+    }
     const mention: import("@neontechspace/fluxerly").CommandArgumentMention = "role"
     const shutdown: ReturnType<Client["shutdown"]> = webhook.shutdown()
     return [
         client.members.timeout({ guildId: "1", userId: "2" }, 60_000, options),
         client.members.clearTimeout({ guildId: "1", userId: "2" }, { timeoutReason: null }),
+        client.roles.create("1", { name: "Reviewed role", permissions: 0n }, guildAudit),
+        client.channels.create("1", { name: "reviewed-channel", type: ChannelType.Text }, channelAudit),
         client.directMessages.editGroup("3", { name: null }),
         shutdown.map(() => mention),
     ]

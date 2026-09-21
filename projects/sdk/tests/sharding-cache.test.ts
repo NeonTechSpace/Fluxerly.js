@@ -187,26 +187,26 @@ test("user snapshots are unknown while private conversations retain their null s
     const directMessageId = "direct-message"
     const user = { id: userId, username: "initial" } as never
     const directMessage = { id: directMessageId, type: "direct" } as never
-    const userInitial = cache.begin("users", false)
-    const directMessageInitial = cache.begin("directMessages", false)
-    cache.complete("users", userInitial, [user])
-    cache.complete("directMessages", directMessageInitial, [directMessage])
-    const staleUser = cache.begin("users", false)
-    const freshDirectMessage = cache.begin("directMessages", false)
+    const userInitial = cache.begin("users", { id: userId })
+    const directMessageInitial = cache.begin("directMessages", { id: directMessageId })
+    cache.complete(userInitial, [user])
+    cache.complete(directMessageInitial, [directMessage])
+    const staleUser = cache.begin("users", { id: userId })
+    const freshDirectMessage = cache.begin("directMessages", { id: directMessageId })
 
     cache.gap(affected)
     expect(cache.get("users", userId)).toBeUndefined()
     expect(cache.get("directMessages", directMessageId)).toBe(directMessage)
-    cache.complete("users", staleUser, [{ id: "user", username: "stale" } as never])
+    cache.complete(staleUser, [{ id: "user", username: "stale" } as never])
     const updatedDirectMessage = { id: directMessageId, type: "direct", name: "updated" } as never
-    cache.complete("directMessages", freshDirectMessage, [updatedDirectMessage])
+    cache.complete(freshDirectMessage, [updatedDirectMessage])
 
     expect(cache.get("users", userId)).toBeUndefined()
     expect(cache.get("directMessages", directMessageId)).toBe(updatedDirectMessage)
 
-    const stalePrivate = cache.begin("directMessages", false)
+    const stalePrivate = cache.begin("directMessages", { id: "later" })
     cache.gap((guildId) => guildId === undefined || guildId === null)
-    cache.complete("directMessages", stalePrivate, [{ id: "later", type: "direct" } as never])
+    cache.complete(stalePrivate, [{ id: "later", type: "direct" } as never])
 
     expect(cache.get("directMessages", directMessageId)).toBeUndefined()
     expect(cache.get("directMessages", "later")).toBeUndefined()

@@ -15,7 +15,7 @@ const positive = (value: unknown): value is number =>
 
 /** Search may enqueue indexing, so the shared REST owner's POST retry policy remains unchanged */
 export function searchMembers(
-    owner: Pick<ClientOwner, "guild">,
+    owner: Pick<ClientOwner, "guild" | "logical">,
     guildId: string,
     query?: MemberSearchQuery,
     options?: GuildOperationOptions,
@@ -55,18 +55,32 @@ export function searchMembers(
             )
         const body = JSON.parse(request.json!) as { join_source_type?: unknown[]; source_invite_code?: unknown[] }
         const sensitive = (body.join_source_type?.length ?? 0) > 0 || (body.source_invite_code?.length ?? 0) > 0
-        const deadline = performance.now() + timeout
+        const now = () => owner.logical.now()
+        const deadline = now() + timeout
         const remaining = () =>
             Effect.suspend(() => {
-                const left = Math.ceil(deadline - performance.now())
+                const left = Math.ceil(deadline - now())
                 return left > 0
                     ? Effect.succeed({ timeoutMs: left })
                     : Effect.fail(new GuildOperationError("members.search", "timeout", "notDispatched"))
             })
         if (sensitive) {
-            const member = yield* owner.guild("members.fetchSelf", () => memberSelf(guildId), yield* remaining())
-            const guild = yield* owner.guild("guilds.fetch", () => guildFetch(guildId), yield* remaining())
-            const roles = yield* owner.guild("roles.fetchAll", () => roleList(guildId), yield* remaining())
+            const [member, guild, roles] = yield* Effect.all(
+                [
+                    remaining().pipe(
+                        Effect.flatMap((options) =>
+                            owner.guild("members.fetchSelf", () => memberSelf(guildId), options),
+                        ),
+                    ),
+                    remaining().pipe(
+                        Effect.flatMap((options) => owner.guild("guilds.fetch", () => guildFetch(guildId), options)),
+                    ),
+                    remaining().pipe(
+                        Effect.flatMap((options) => owner.guild("roles.fetchAll", () => roleList(guildId), options)),
+                    ),
+                ],
+                { concurrency: 3 },
+            )
             const bits = yield* calculatePermissions({ guild, member, roles })
             if ((bits & Permissions.ManageGuild) !== Permissions.ManageGuild)
                 return yield* Effect.fail(new GuildOperationError("members.search", "rejected", "notDispatched"))
@@ -76,7 +90,7 @@ export function searchMembers(
 }
 
 export function searchMemberPagination(
-    owner: Pick<ClientOwner, "guild" | "subscribe" | "state">,
+    owner: Pick<ClientOwner, "guild" | "logical" | "subscribe" | "state">,
     guildId: string,
     filters: Omit<MemberSearchQuery, "limit">,
     limits: MemberSearchIterationLimits,

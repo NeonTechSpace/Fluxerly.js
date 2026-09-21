@@ -5,13 +5,14 @@ import type {
     MessageReference,
     MessageDeletion,
     MessageBulkDeletion,
-    MessageMention,
+    MessageUser,
     MessageChannelMention,
     MessageReactionSummary,
     MessageContextReference,
     MessageSnapshot,
     MessageSticker,
     MessageField,
+    ReferencedMessage,
 } from "#sdk/messages"
 import type { MessageObservation } from "./message-fields.js"
 import { MessageError } from "#sdk/message-errors"
@@ -47,6 +48,16 @@ export function decodeMessage(
 ): MessageObservation | undefined
 /** Selection changes construction only. Every recognized wire field keeps the full decoder's validation rules */
 export function decodeMessage(value: unknown, fields?: ReadonlySet<MessageField>): MessageObservation | undefined {
+    const decoded = decodeMessageValue(value, fields, true, true)
+    return decoded === true ? undefined : decoded
+}
+
+function decodeMessageValue(
+    value: unknown,
+    fields: ReadonlySet<MessageField> | undefined,
+    allowReferencedMessage: boolean,
+    construct: boolean,
+): MessageObservation | true | undefined {
     if (!record(value) || !identifier(value.id) || !identifier(value.channel_id) || typeof value.content !== "string")
         return undefined
     if (
@@ -63,29 +74,31 @@ export function decodeMessage(value: unknown, fields?: ReadonlySet<MessageField>
     )
         return undefined
     if (value.webhook_id != null && !identifier(value.webhook_id)) return undefined
-    const author = value.author
-    if (
-        !record(author) ||
-        !identifier(author.id) ||
-        typeof author.username !== "string" ||
-        (author.bot !== undefined && typeof author.bot !== "boolean")
-    )
-        return undefined
-    const selected = (field: MessageField) => fields === undefined || fields.has(field)
+    const author = decodeMessageUser(value.author, construct)
+    if (!author) return undefined
+    const selected = (field: MessageField) => construct && (fields === undefined || fields.has(field))
     const embeds = decodeEmbeds(value.embeds, selected("embeds"))
     const attachments = decodeAttachments(value.attachments, selected("attachments"))
     const stickers = decodeStickers(value.stickers, selected("stickers"))
     if (embeds === undefined || attachments === undefined || stickers === undefined) return undefined
     const mentions = decodeMentions(value.mentions, selected("mentions"))
+    const referencedUsers = decodeReferencedUsers(value.users, selected("referencedUsers"))
     const mentionRoles = decodeIdentifiers(value.mention_roles, selected("mentionRoleIds"))
+    const nsfwEmojiIds = decodeIdentifiers(value.nsfw_emojis, selected("nsfwEmojiIds"))
     const mentionChannels = decodeMentionChannels(value.mention_channels, selected("mentionChannels"))
     const reactions = decodeReactionSummaries(value.reactions, selected("reactions"))
     const messageReference = decodeMessageReference(value.message_reference, selected("messageReference"))
     const messageSnapshots = decodeMessageSnapshots(value.message_snapshots, selected("messageSnapshots"))
-    const referencedMessage = decodeReferencedMessage(value.referenced_message, selected("referencedMessage"))
+    const referencedMessage = allowReferencedMessage
+        ? decodeReferencedMessage(value.referenced_message, selected("referencedMessage"))
+        : "referenced_message" in value
+          ? undefined
+          : unobserved
     if (
         mentions === undefined ||
+        referencedUsers === undefined ||
         mentionRoles === undefined ||
+        nsfwEmojiIds === undefined ||
         mentionChannels === undefined ||
         reactions === undefined ||
         messageReference === undefined ||
@@ -93,6 +106,7 @@ export function decodeMessage(value: unknown, fields?: ReadonlySet<MessageField>
         referencedMessage === undefined
     )
         return undefined
+    if (!construct) return true
     return Object.freeze({
         id: value.id,
         channelId: value.channel_id,
@@ -112,13 +126,15 @@ export function decodeMessage(value: unknown, fields?: ReadonlySet<MessageField>
         ...(attachments === true ? {} : { attachments }),
         ...(stickers === true ? {} : { stickers }),
         ...(mentions.value === undefined ? {} : { mentions: mentions.value }),
+        ...(referencedUsers.value === undefined ? {} : { referencedUsers: referencedUsers.value }),
         ...(mentionRoles.value === undefined ? {} : { mentionRoleIds: mentionRoles.value }),
+        ...(nsfwEmojiIds.value === undefined ? {} : { nsfwEmojiIds: nsfwEmojiIds.value }),
         ...(mentionChannels.value === undefined ? {} : { mentionChannels: mentionChannels.value }),
         ...(reactions.value === undefined ? {} : { reactions: reactions.value }),
         ...(messageReference.value === undefined ? {} : { messageReference: messageReference.value }),
         ...(messageSnapshots.value === undefined ? {} : { messageSnapshots: messageSnapshots.value }),
         ...(referencedMessage.value === undefined ? {} : { referencedMessage: referencedMessage.value }),
-        author: Object.freeze({ id: author.id, username: author.username, isBot: author.bot === true }),
+        author: author as MessageUser,
     })
 }
 
@@ -143,22 +159,58 @@ function decodeStickers(value: unknown, construct = true): readonly MessageStick
     return stickers ? Object.freeze(stickers) : true
 }
 
-function decodeMentions(value: unknown, construct = true): Observed<readonly MessageMention[]> | undefined {
+function decodeMessageUser(value: unknown, construct = true): MessageUser | true | undefined {
+    if (
+        !record(value) ||
+        !identifier(value.id) ||
+        typeof value.username !== "string" ||
+        (value.discriminator !== undefined && typeof value.discriminator !== "string") ||
+        (value.global_name !== undefined && value.global_name !== null && typeof value.global_name !== "string") ||
+        (value.avatar !== undefined && value.avatar !== null && typeof value.avatar !== "string") ||
+        (value.avatar_color !== undefined && value.avatar_color !== null && !int32(value.avatar_color)) ||
+        (value.bot !== undefined && typeof value.bot !== "boolean") ||
+        (value.system !== undefined && typeof value.system !== "boolean") ||
+        (value.flags !== undefined && !int32(value.flags)) ||
+        (value.mention_flags !== undefined &&
+            value.mention_flags !== 0 &&
+            value.mention_flags !== 1 &&
+            value.mention_flags !== 2)
+    )
+        return undefined
+    if (!construct) return true
+    return Object.freeze({
+        id: value.id,
+        username: value.username,
+        isBot: value.bot === true,
+        ...(value.discriminator === undefined ? {} : { discriminator: value.discriminator }),
+        ...(value.global_name === undefined ? {} : { displayName: value.global_name }),
+        ...(value.avatar === undefined ? {} : { avatar: value.avatar }),
+        ...(value.avatar_color === undefined ? {} : { avatarColor: value.avatar_color }),
+        ...(value.system === undefined ? {} : { isSystem: value.system }),
+        ...(value.flags === undefined ? {} : { flags: value.flags }),
+        ...(value.mention_flags === undefined ? {} : { mentionFlags: value.mention_flags as 0 | 1 | 2 }),
+    })
+}
+
+function decodeMessageUsers(value: unknown, construct = true): Observed<readonly MessageUser[]> | undefined {
     if (value === undefined) return unobserved
     if (!Array.isArray(value)) return undefined
-    const mentions: MessageMention[] | undefined = construct ? [] : undefined
-    for (const mention of value) {
-        if (
-            !record(mention) ||
-            !identifier(mention.id) ||
-            typeof mention.username !== "string" ||
-            (mention.bot !== undefined && typeof mention.bot !== "boolean")
-        )
-            return undefined
-        if (mentions)
-            mentions.push(Object.freeze({ id: mention.id, username: mention.username, isBot: mention.bot === true }))
+    const users: MessageUser[] | undefined = construct ? [] : undefined
+    for (const input of value) {
+        const user = decodeMessageUser(input, construct)
+        if (!user) return undefined
+        if (users && user !== true) users.push(user)
     }
-    return mentions ? { value: Object.freeze(mentions) } : unobserved
+    return users ? { value: Object.freeze(users) } : unobserved
+}
+
+function decodeMentions(value: unknown, construct = true): Observed<readonly MessageUser[]> | undefined {
+    return decodeMessageUsers(value, construct)
+}
+
+function decodeReferencedUsers(value: unknown, construct = true): Observed<readonly MessageUser[] | null> | undefined {
+    if (value === null) return construct ? { value: null } : unobserved
+    return decodeMessageUsers(value, construct)
 }
 
 function decodeIdentifiers(value: unknown, construct = true): Observed<readonly string[]> | undefined {
@@ -324,11 +376,12 @@ function decodeSnapshotMentionChannels(
     return construct ? (decoded.value ?? undefined) : true
 }
 
-function decodeReferencedMessage(value: unknown, construct = true): Observed<MessageReference | null> | undefined {
+function decodeReferencedMessage(value: unknown, construct = true): Observed<ReferencedMessage | null> | undefined {
     if (value === undefined) return unobserved
     if (value === null) return construct ? { value: null } : unobserved
-    if (!record(value) || !identifier(value.id) || !identifier(value.channel_id)) return undefined
-    return construct ? { value: Object.freeze({ id: value.id, channelId: value.channel_id }) } : unobserved
+    const message = decodeMessageValue(value, undefined, false, construct)
+    if (!message) return undefined
+    return construct && message !== true ? { value: message as ReferencedMessage } : unobserved
 }
 
 /** Read one message target without retaining a caller-controlled object across validation and dispatch */

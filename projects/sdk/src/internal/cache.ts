@@ -4,6 +4,7 @@ import type { Message, MessageCore, MessageReference } from "#sdk/messages"
 import type { CachePolicyErrorReport } from "#sdk/cache"
 import { validAge, type CacheConfiguration } from "./configuration.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
+import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
 type Entry<M extends MessageCore> = { message: M; bytes: number; storedAt: number; age: number | null }
 export type CacheRequest = {
@@ -20,7 +21,7 @@ export class MessageCache<M extends MessageCore = Message> {
     #requests = new Set<CacheRequest>()
     #bytes = 0
     #generation = 0
-    #timer: ReturnType<typeof setTimeout> | undefined
+    #timer: ReturnType<typeof setTimeout> | LogicalTimer | undefined
     #closed = false
     readonly #limits: { readonly maxEntries: number; readonly maxBytes: number } | undefined
 
@@ -28,6 +29,7 @@ export class MessageCache<M extends MessageCore = Message> {
         private settings: CacheConfiguration<M> | undefined,
         private report: (report: CachePolicyErrorReport) => void,
         private readonly now: () => number,
+        private readonly logical?: LogicalScheduler,
     ) {
         this.#limits = settings && Object.freeze({ maxEntries: settings.maxEntries, maxBytes: settings.maxBytes })
     }
@@ -218,7 +220,9 @@ export class MessageCache<M extends MessageCore = Message> {
     }
 
     #schedule() {
-        if (this.#timer !== undefined) clearTimeout(this.#timer)
+        if (this.#timer !== undefined)
+            if (this.logical) this.logical.clear(this.#timer as LogicalTimer)
+            else clearTimeout(this.#timer as ReturnType<typeof setTimeout>)
         this.#timer = undefined
         if (this.#closed) return
         const now = this.now()
@@ -226,15 +230,18 @@ export class MessageCache<M extends MessageCore = Message> {
         for (const entry of this.#entries.values())
             if (entry.age !== null) remaining = Math.min(remaining, entry.age - (now - entry.storedAt))
         if (remaining !== Infinity) {
-            this.#timer = setTimeout(
-                () => {
-                    this.#timer = undefined
-                    this.#purge()
-                    this.#schedule()
-                },
-                Math.min(2_147_483_647, Math.max(1, Math.ceil(remaining))),
-            )
-            this.#timer.unref()
+            const callback = () => {
+                this.#timer = undefined
+                this.#purge()
+                this.#schedule()
+            }
+            const delay = Math.min(2_147_483_647, Math.max(1, Math.ceil(remaining)))
+            if (this.logical) this.#timer = this.logical.set(callback, delay, "message cache")
+            else {
+                const timer = setTimeout(callback, delay)
+                timer.unref()
+                this.#timer = timer
+            }
         }
     }
 

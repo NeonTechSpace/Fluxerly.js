@@ -54,27 +54,76 @@ Keep your package manager's lockfile for reproducible installs. The SDK does not
 
 ## From !ping to Pong!
 
-Add `"type": "module"` to your bot project's `package.json`. Save this as `bot.js`, or `bot.ts` for TypeScript, and replace `YOUR_BOT_TOKEN`. Keep the token-containing file private
+Add `"type": "module"` to your bot project's `package.json`. Save this as `bot.js`, or `bot.ts` for TypeScript, and set `FLUXER_BOT_TOKEN` in the process environment. Keep that environment and any process-manager configuration containing the token private
 
 ```js
-import { createClient } from "@neontechspace/fluxerly"
+import { createClient } from "@neontechspace/fluxerly";
+
+const token = process.env.FLUXER_BOT_TOKEN;
+if (!token) throw new Error("FLUXER_BOT_TOKEN is required");
 
 const created = createClient({
-    token: "YOUR_BOT_TOKEN",
-})
-if (created.isErr()) throw created.error
-const client = created.value
+    token,
+});
+if (created.isErr()) throw created.error;
+const client = created.value;
 
-client.on("messageCreate", async (message) => {
-    if (message.content === "!ping") {
-        await client.messages.reply(message, {
-            content: "Pong!",
-        })
-    }
-})
+const stop = new AbortController();
+const requestStop = () => stop.abort();
+process.once("SIGINT", requestStop);
+process.once("SIGTERM", requestStop);
 
-const connected = await client.connect()
-if (connected.isErr()) throw connected.error
+try {
+    const registered = client.on("messageCreate", async (message, signal) => {
+        if (message.author.isBot || message.content !== "!ping") return;
+
+        const replied = await client.messages.reply(
+            message,
+            { content: "Pong!" },
+            { signal },
+        );
+        if (replied.isErr())
+            console.warn("Reply failed", { kind: replied.error._tag });
+    });
+    if (registered.isErr()) throw registered.error;
+
+    const connection = client.run({ signal: stop.signal });
+    const worker = registered.value.waitForClose({ signal: stop.signal });
+    let firstSource = "pending";
+    let firstWorkerSucceeded = false;
+    await new Promise((resolve, reject) => {
+        connection.then((result) => {
+            if (firstSource !== "pending") return;
+            firstSource = "connection";
+            resolve(undefined);
+        }, reject);
+        worker.then((result) => {
+            if (firstSource !== "pending") return;
+            firstSource = "worker";
+            firstWorkerSucceeded = result.isOk();
+            resolve(undefined);
+        }, reject);
+    });
+    const unexpectedWorkerStop =
+        firstSource === "worker" &&
+        firstWorkerSucceeded &&
+        !stop.signal.aborted &&
+        client.state !== "Closing" &&
+        client.state !== "Closed";
+    stop.abort();
+    const [finished, closed] = await Promise.all([connection, worker]);
+    if (finished.isErr() && finished.error._tag !== "CancelledError")
+        throw finished.error;
+    if (closed.isErr() && closed.error._tag !== "CancelledError")
+        throw closed.error;
+    if (unexpectedWorkerStop)
+        throw new Error("Critical messageCreate worker stopped");
+} finally {
+    stop.abort();
+    process.off("SIGINT", requestStop);
+    process.off("SIGTERM", requestStop);
+    await client.shutdown();
+}
 ```
 
 Run `node bot.js` or `node bot.ts`. Send **!ping** in a channel your bot can read and reply to. It should answer **Pong!**

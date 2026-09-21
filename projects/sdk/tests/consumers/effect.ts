@@ -783,6 +783,8 @@ export function useAttachments(client: Client, channelId: string) {
         ] as const satisfies readonly AttachmentInput[]
         const sent = yield* client.messages.send(channelId, { attachments: [file, ...sources] })
         const attachment = sent.attachments[0]!
+        const refreshed = yield* client.attachments.refreshUrls(attachment.url === undefined ? [""] : [attachment.url])
+        const refreshedUrl: string = refreshed[0]!.refreshed
         const bytes: Uint8Array = yield* client.attachments.download(attachment, {
             maxBytes: 1_024,
             timeoutMs: 5_000,
@@ -806,11 +808,13 @@ export function useAttachments(client: Client, channelId: string) {
         client.attachments.download(attachment, {})
         // @ts-expect-error Bounded streamed downloads require maxBytes
         client.attachments.stream(attachment, {})
+        // @ts-expect-error Attachment URL refresh accepts strings only
+        client.attachments.refreshUrls([1])
         // @ts-expect-error Attachment input lists remain readonly
         sources.push({ file: structuralAttachmentFile, filename: "later.bin" })
         // @ts-expect-error Received arrays are immutable
         sent.attachments.push(attachment)
-        return { url: attachment.url, bytes }
+        return { url: attachment.url, refreshedUrl, bytes }
     })
 }
 /** Typechecked targeted nickname and local hierarchy usage against the packed Effect entry point */
@@ -883,10 +887,18 @@ export function approvedRequestInputs(client: Client) {
         timeoutReason: "Timeout context",
         auditReason: "Moderator action",
     }
+    const guildAudit: import("@neontechspace/fluxerly/effect").GuildAuditOperationOptions = {
+        auditReason: "Provision reviewed role",
+    }
+    const channelAudit: import("@neontechspace/fluxerly/effect").ChannelAuditOperationOptions = {
+        auditReason: "Provision reviewed channel",
+    }
     const mention: import("@neontechspace/fluxerly/effect").CommandArgumentMention = "role"
     return Effect.gen(function* () {
         yield* client.members.timeout({ guildId: "1", userId: "2" }, 60_000, options)
         yield* client.members.clearTimeout({ guildId: "1", userId: "2" }, { timeoutReason: null })
+        yield* client.roles.create("1", { name: "Reviewed role", permissions: 0n }, guildAudit)
+        yield* client.channels.create("1", { name: "reviewed-channel", type: ChannelType.Text }, channelAudit)
         yield* client.directMessages.editGroup("3", { name: null })
         return mention
     })

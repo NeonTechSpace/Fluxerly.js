@@ -55,8 +55,8 @@ function options(value: unknown): GuildOperationOptions | InputValidationFailure
     return value
 }
 
-function remaining(deadline: number): GuildOperationOptions | undefined {
-    const timeoutMs = Math.floor(deadline - performance.now())
+function remaining(deadline: number, now: () => number): GuildOperationOptions | undefined {
+    const timeoutMs = Math.floor(deadline - now())
     return timeoutMs > 0 ? { timeoutMs } : undefined
 }
 
@@ -75,7 +75,7 @@ function remoteFailure(error: GuildOperationFailure): GuildOperationFailure {
 
 /** Fetches the four independent hierarchy inputs in parallel under one deadline, then evaluates the pure local rule */
 export function fetchHierarchyCheck(
-    owner: Pick<ClientOwner, "guild">,
+    owner: Pick<ClientOwner, "guild" | "logical">,
     input: MemberReference,
     suppliedOptions?: GuildOperationOptions,
 ): Effect.Effect<boolean, GuildOperationFailure> {
@@ -84,28 +84,28 @@ export function fetchHierarchyCheck(
         const validOptions = options(suppliedOptions)
         if (member instanceof InputValidationFailure) return Effect.fail(inputFailure(member))
         if (validOptions instanceof InputValidationFailure) return Effect.fail(inputFailure(validOptions))
-        const deadline = performance.now() + (validOptions.timeoutMs ?? 30_000)
-        const guildOptions = remaining(deadline)
-        const selfOptions = remaining(deadline)
-        const targetOptions = remaining(deadline)
-        const roleOptions = remaining(deadline)
-        if (!guildOptions || !selfOptions || !targetOptions || !roleOptions) return Effect.fail(timeoutFailure())
-        return Effect.all(
-            [
-                owner.guild("guilds.fetch", () => guildFetch(member.guildId), guildOptions),
-                owner.guild("members.fetchSelf", () => memberSelf(member.guildId), selfOptions),
-                owner.guild("members.fetch", () => memberFetch(member), targetOptions),
-                owner.guild("roles.fetchAll", () => roleList(member.guildId), roleOptions),
-            ],
-            { concurrency: "unbounded" },
-        ).pipe(
-            mapFailureCause(remoteFailure),
-            Effect.flatMap(([guild, actor, targetMember, roles]) => {
-                const manageable = evaluateMemberHierarchy({ guild, actor, target: targetMember, roles })
-                return manageable === undefined
-                    ? Effect.fail(new GuildOperationError("members.fetchHierarchyCheck", "response", "unknown"))
-                    : Effect.succeed(manageable)
-            }),
-        )
+        return Effect.gen(function* () {
+            const now = () => owner.logical.now()
+            const deadline = now() + (validOptions.timeoutMs ?? 30_000)
+            const guildOptions = remaining(deadline, now)
+            const selfOptions = remaining(deadline, now)
+            const targetOptions = remaining(deadline, now)
+            const roleOptions = remaining(deadline, now)
+            if (!guildOptions || !selfOptions || !targetOptions || !roleOptions)
+                return yield* Effect.fail(timeoutFailure())
+            const [guild, actor, targetMember, roles] = yield* Effect.all(
+                [
+                    owner.guild("guilds.fetch", () => guildFetch(member.guildId), guildOptions),
+                    owner.guild("members.fetchSelf", () => memberSelf(member.guildId), selfOptions),
+                    owner.guild("members.fetch", () => memberFetch(member), targetOptions),
+                    owner.guild("roles.fetchAll", () => roleList(member.guildId), roleOptions),
+                ],
+                { concurrency: "unbounded" },
+            ).pipe(mapFailureCause(remoteFailure))
+            const manageable = evaluateMemberHierarchy({ guild, actor, target: targetMember, roles })
+            return manageable === undefined
+                ? yield* Effect.fail(new GuildOperationError("members.fetchHierarchyCheck", "response", "unknown"))
+                : manageable
+        })
     })
 }

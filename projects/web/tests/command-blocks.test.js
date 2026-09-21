@@ -3,9 +3,18 @@ import test from "node:test"
 import { createMarkdownProcessor } from "@astrojs/markdown-remark"
 import { commandVariant, escapeHtml, remarkCommandBlocks, renderCommandBlock, validateCommand } from "../scripts/command-blocks.js"
 import { commandPreferencesKey, parseCommandPreferences } from "../src/components/command-preferences.ts"
+import { authoredGuides } from "../scripts/generate.js"
 
 const install = { kind: "install", package: "@neontechspace/fluxerly", version: "1000.0.0-rc.2" }
 const managers = ["npm", "pnpm"]
+
+test("Authored guide command blocks render with supported metadata", async () => {
+    const processor = await createMarkdownProcessor({ remarkPlugins: [remarkCommandBlocks] })
+    for (const guide of await authoredGuides()) {
+        const content = guide.content.replaceAll("{{effect-version}}", "4.0.0-rc.117")
+        await assert.doesNotReject(() => processor.render(content), guide.slug)
+    }
+})
 
 test("SDK install variants retain the exact selected release", () => {
     assert.deepEqual(managers.map((manager) => commandVariant(install, manager).command), [

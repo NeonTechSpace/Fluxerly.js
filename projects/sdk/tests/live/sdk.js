@@ -407,10 +407,13 @@ async function verifyBucketLearning(client, guildId, userId, run, fail) {
         if (requests > 3) return response
         const headers = new Headers(response.headers)
         // Override only scheduling metadata on real read responses. This opaque,
-        // unrecognized template is intentionally treated as account-wide
+        // unrecognized template is intentionally treated as account-wide. The
+        // three responses coherently consume a three-request leaky bucket whose
+        // first refill remains beyond the following 100 ms admission deadline
         headers.set("x-ratelimit-bucket", "fixture-shared-read-bucket")
-        headers.set("x-ratelimit-remaining", requests === 3 ? "0" : "10")
-        headers.set("x-ratelimit-reset-after", "1")
+        headers.set("x-ratelimit-limit", "3")
+        headers.set("x-ratelimit-remaining", String(3 - requests))
+        headers.set("x-ratelimit-reset-after", ["0.333", "0.667", "1"][requests - 1])
         return new Response(response.body, { status: response.status, headers })
     }
     try {

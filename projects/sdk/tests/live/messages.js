@@ -52,6 +52,16 @@ const forceRecovery = recover || cache || collectors || attachments || reactions
 const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const journalPath = new URL("../../.env.test.messages.local", import.meta.url)
 const report = (check, passed) => console.log(JSON.stringify({ mode, check, passed }))
+const auditActions = Object.freeze({
+    channelCreate: 10,
+    channelUpdate: 11,
+    channelDelete: 12,
+    channelOverwriteCreate: 13,
+    channelOverwriteDelete: 15,
+    roleCreate: 30,
+    roleUpdate: 31,
+    roleDelete: 32,
+})
 let stage = "configuration"
 let lock
 let token
@@ -196,6 +206,53 @@ async function api(method, path, body) {
         return { status: response.status, data }
     }
     throw new Error("Sandbox request budget exhausted")
+}
+
+function prepareAuditMarker() {
+    journal.auditMarker ??= `fluxerly-sdk-audit-${randomUUID().replaceAll("-", "")}`
+    assert.match(journal.auditMarker, /^fluxerly-sdk-audit-[a-f0-9]{32}$/)
+    writeFileSync(journalPath, JSON.stringify(journal))
+}
+
+function auditOptions(operation) {
+    const auditReason = `${journal.auditMarker}:${operation}`
+    assert.match(auditReason, /^[\x20-\x7e]{1,512}$/)
+    return { auditReason }
+}
+
+async function waitForAuditEntry(botId, actionType, targetId, auditReason, channelId, required = true) {
+    const query = new URLSearchParams({ user_id: botId, action_type: String(actionType), limit: "100" })
+    const targetIds = Array.isArray(targetId) ? targetId : [targetId]
+    let diagnostics
+    for (let attempt = 0; attempt < 8; attempt++) {
+        const response = await api("GET", `/guilds/${guildId}/audit-logs?${query}`)
+        assert.ok(Array.isArray(response.data?.audit_log_entries))
+        const entry = response.data.audit_log_entries.find(
+            (item) =>
+                item.user_id === botId &&
+                item.action_type === actionType &&
+                targetIds.includes(item.target_id) &&
+                item.reason === auditReason &&
+                (channelId === undefined || item.options?.channel_id === channelId),
+        )
+        if (entry) return entry
+        diagnostics = {
+            returnedCount: response.data.audit_log_entries.length,
+            actorMatchCount: response.data.audit_log_entries.filter((item) => item.user_id === botId).length,
+            actionMatchCount: response.data.audit_log_entries.filter((item) => item.action_type === actionType).length,
+            targetMatchCount: response.data.audit_log_entries.filter((item) => targetIds.includes(item.target_id))
+                .length,
+            reasonMatchCount: response.data.audit_log_entries.filter((item) => item.reason === auditReason).length,
+            channelMatchCount:
+                channelId === undefined
+                    ? response.data.audit_log_entries.length
+                    : response.data.audit_log_entries.filter((item) => item.options?.channel_id === channelId).length,
+        }
+        await sleep(500)
+    }
+    console.log(JSON.stringify({ mode, check: `${stage}_audit_match_diagnostic`, passed: false, ...diagnostics }))
+    if (!required) return undefined
+    assert.fail(`Audit entry deadline for action ${actionType}`)
 }
 
 async function waitForCondition(matches, deadlineMessage) {
@@ -366,6 +423,7 @@ async function verifyOptionalTools(ops, channelId, botId) {
 }
 
 async function verifyGuildMembers(ops, channelId, botId, interrupt) {
+    prepareAuditMarker()
     stage = "guild_member_readback"
     const target = { guildId, userId: botId }
     const rawGuild = (await api("GET", `/guilds/${guildId}`)).data
@@ -386,12 +444,14 @@ async function verifyGuildMembers(ops, channelId, botId, interrupt) {
     assert.ok(Object.isFrozen(fetched) && Object.isFrozen(fetched.roleIds))
     report(stage, true)
     stage = "test_role_creation"
+    const firstRoleCreate = auditOptions("role-create-first")
     const roleId = await createGuildTestRole(
         api,
         journal,
         () => writeFileSync(journalPath, JSON.stringify(journal)),
-        ops.createRole,
+        (input) => ops.createRole(input, firstRoleCreate),
     )
+    await waitForAuditEntry(botId, auditActions.roleCreate, roleId, firstRoleCreate.auditReason)
     const seen = []
     const stop = await ops.on("guildMemberUpdate", (member) => {
         if (member.guildId === guildId && member.userId === botId) {
@@ -413,7 +473,7 @@ async function verifyGuildMembers(ops, channelId, botId, interrupt) {
     try {
         stage = "reaction_role_workflow"
         const message = await ops.send()
-        const collector = await ops.collect(message, target, roleId)
+        const collector = await ops.collect(message, target, roleId, auditOptions("member-role-add-reaction"))
         try {
             await ops.react(message)
             assert.equal((await collector.wait()).reason, "limit")
@@ -424,29 +484,29 @@ async function verifyGuildMembers(ops, channelId, botId, interrupt) {
             await collector.stop()
             await collector.close?.()
         }
-        await ops.remove(target, roleId)
+        await ops.remove(target, roleId, auditOptions("member-role-remove-reaction"))
         await waitRole(false)
         report(stage, true)
-        await verifyGuildCache(ops, target, roleId)
+        await verifyGuildCache(ops, target, roleId, botId)
         await interrupt()
         assert.equal(await ops.getGuild(), undefined)
         assert.equal(await ops.getMember(target), undefined)
         assert.equal(await ops.getRole(roleId), undefined)
         report("guild_cache_gap_clear", true)
         stage = "member_role_after_resume"
-        await ops.add(target, roleId)
+        await ops.add(target, roleId, auditOptions("member-role-add-after-resume"))
         await waitRole(true)
-        await ops.remove(target, roleId)
+        await ops.remove(target, roleId, auditOptions("member-role-remove-after-resume"))
         await waitRole(false)
         assert.deepEqual(fetched.roleIds, before.roles)
         report(stage, true)
-        await verifyGuildRoles(ops, roleId)
+        await verifyGuildRoles(ops, roleId, botId)
     } finally {
         await stop()
     }
 }
 
-async function verifyGuildCache(ops, target, roleId) {
+async function verifyGuildCache(ops, target, roleId, botId) {
     stage = "guild_cache_local_lookup"
     const guild = await ops.guild()
     const member = await ops.member(target)
@@ -499,9 +559,11 @@ async function verifyGuildCache(ops, target, roleId) {
         return response
     }
     try {
-        await assert.rejects(ops.editRole(roleId, { color: 0x456789 }), (error) => error.outcome === "unknown")
+        const options = auditOptions("role-edit-lost-response")
+        await assert.rejects(ops.editRole(roleId, { color: 0x456789 }, options), (error) => error.outcome === "unknown")
         assert.equal(dispatched, 1)
         assert.equal(await ops.getRole(roleId), undefined)
+        await waitForAuditEntry(botId, auditActions.roleUpdate, roleId, options.auditReason)
     } finally {
         globalThis.fetch = originalFetch
     }
@@ -512,8 +574,9 @@ async function verifyGuildCache(ops, target, roleId) {
     report(stage, true)
 }
 
-async function verifyGuildRoles(ops, roleId) {
+async function verifyGuildRoles(ops, roleId, botId) {
     stage = "role_management_after_resume"
+    let roleAuditReadbackComplete = true
     const seen = []
     const stops = []
     for (const event of ["guildRoleCreate", "guildRoleUpdate", "guildRoleUpdateBulk", "guildRoleDelete"]) {
@@ -525,9 +588,9 @@ async function verifyGuildRoles(ops, roleId) {
             }),
         )
     }
-    const waitEvent = async (event, predicate) => {
+    const waitEvent = async (event, predicate, from = 0) => {
         const deadline = performance.now() + 10_000
-        while (!seen.some((item) => item.event === event && predicate(item.value))) {
+        while (!seen.slice(from).some((item) => item.event === event && predicate(item.value))) {
             assert.ok(performance.now() < deadline, "Role event deadline")
             await sleep(20)
         }
@@ -535,14 +598,16 @@ async function verifyGuildRoles(ops, roleId) {
     try {
         journal.secondRole = { guildId }
         stage = "role_create"
+        const secondRoleCreate = auditOptions("role-create-second")
         const secondId = await createGuildTestRole(
             api,
             journal.secondRole,
             () => writeFileSync(journalPath, JSON.stringify(journal)),
-            ops.createRole,
+            (input) => ops.createRole(input, secondRoleCreate),
         )
         stage = "role_create_event"
         await waitEvent("guildRoleCreate", (role) => role.id === secondId && role.permissions === 0n)
+        await waitForAuditEntry(botId, auditActions.roleCreate, secondId, secondRoleCreate.auditReason)
         stage = "role_list_readback"
         const listed = await ops.roles()
         const raw = (await api("GET", `/guilds/${guildId}/roles`)).data
@@ -560,7 +625,8 @@ async function verifyGuildRoles(ops, roleId) {
         assert.ok(first && second)
         const beforeOrder = listed.indexOf(first) - listed.indexOf(second)
         stage = "role_edit_readback"
-        const edited = await ops.editRole(roleId, { color: 0x123456, permissions: 0n })
+        const roleEdit = auditOptions("role-edit")
+        const edited = await ops.editRole(roleId, { color: 0x123456, permissions: 0n }, roleEdit)
         assert.equal(edited.color, 0x123456)
         assert.equal(edited.permissions, 0n)
         stage = "role_edit_event"
@@ -569,17 +635,34 @@ async function verifyGuildRoles(ops, roleId) {
             (await api("GET", `/guilds/${guildId}/roles`)).data.find((role) => role.id === roleId).color,
             0x123456,
         )
+        await waitForAuditEntry(botId, auditActions.roleUpdate, roleId, roleEdit.auditReason)
         stage = "role_reorder"
-        await ops.reorderRoles([
-            { id: roleId, position: first.position === second.position ? (beforeOrder < 0 ? 0 : 1) : second.position },
-            { id: secondId, position: first.position === second.position ? (beforeOrder < 0 ? 1 : 0) : first.position },
-        ])
+        const roleReorder = auditOptions("role-reorder")
+        const reorderEventStart = seen.length
+        await ops.reorderRoles(
+            [
+                {
+                    id: roleId,
+                    position: first.position === second.position ? (beforeOrder < 0 ? 0 : 1) : second.position,
+                },
+                {
+                    id: secondId,
+                    position: first.position === second.position ? (beforeOrder < 0 ? 1 : 0) : first.position,
+                },
+            ],
+            roleReorder,
+        )
         stage = "role_reorder_readback"
         const reordered = await ops.roles()
         const firstAfter = reordered.find((role) => role.id === roleId)
         const secondAfter = reordered.find((role) => role.id === secondId)
         assert.ok(firstAfter && secondAfter)
         assert.ok((reordered.indexOf(firstAfter) - reordered.indexOf(secondAfter)) * beforeOrder < 0)
+        const changedRoleIds = [
+            ...(firstAfter.position === first.position ? [] : [roleId]),
+            ...(secondAfter.position === second.position ? [] : [secondId]),
+        ]
+        assert.ok(changedRoleIds.length > 0)
         const untouched = (roles) =>
             roles.filter((role) => role.id !== roleId && role.id !== secondId).map((role) => role.id)
         assert.deepEqual(untouched(reordered), untouched(listed))
@@ -589,20 +672,39 @@ async function verifyGuildRoles(ops, roleId) {
             readback.map((role) => [role.id, role.position]),
         )
         stage = "role_reorder_event"
-        await waitEvent("guildRoleUpdateBulk", (value) =>
-            value.roles.some(
-                (role) =>
-                    (role.id === roleId && role.position === firstAfter.position && role.position !== first.position) ||
-                    (role.id === secondId &&
-                        role.position === secondAfter.position &&
-                        role.position !== second.position),
-            ),
+        await waitEvent(
+            "guildRoleUpdateBulk",
+            (value) =>
+                value.roles.some(
+                    (role) =>
+                        (role.id === roleId && role.position === firstAfter.position) ||
+                        (role.id === secondId && role.position === secondAfter.position),
+                ),
+            reorderEventStart,
         )
+        stage = "role_reorder_audit_readback"
+        const reorderAudit = await waitForAuditEntry(
+            botId,
+            auditActions.roleUpdate,
+            changedRoleIds,
+            roleReorder.auditReason,
+            undefined,
+            false,
+        )
+        report("role_reorder_audit_reason_readback", reorderAudit !== undefined)
+        if (reorderAudit === undefined) {
+            roleAuditReadbackComplete = false
+            process.exitCode = 1
+        }
         stage = "role_hoist_positions"
-        await ops.setHoistPositions([
-            { id: roleId, hoistPosition: 1 },
-            { id: secondId, hoistPosition: 0 },
-        ])
+        const roleHoist = auditOptions("role-hoist")
+        await ops.setHoistPositions(
+            [
+                { id: roleId, hoistPosition: 1 },
+                { id: secondId, hoistPosition: 0 },
+            ],
+            roleHoist,
+        )
         const hoisted = (await api("GET", `/guilds/${guildId}/roles`)).data
         assert.equal(hoisted.find((role) => role.id === roleId).hoist_position, 1)
         assert.equal(hoisted.find((role) => role.id === secondId).hoist_position, 0)
@@ -621,6 +723,7 @@ async function verifyGuildRoles(ops, roleId) {
         await waitEvent("guildRoleUpdateBulk", (value) =>
             value.roles.some((role) => role.id === roleId && role.hoistPosition === 1),
         )
+        await waitForAuditEntry(botId, auditActions.roleUpdate, roleId, roleHoist.auditReason)
         report(stage, true)
         stage = "role_hoist_uncertain_write"
         const beforeLoss = globalThis.fetch
@@ -642,12 +745,14 @@ async function verifyGuildRoles(ops, roleId) {
             return response
         }
         try {
+            const options = auditOptions("role-hoist-lost-response")
             await assert.rejects(
-                ops.setHoistPositions([{ id: roleId, hoistPosition: 2 }]),
+                ops.setHoistPositions([{ id: roleId, hoistPosition: 2 }], options),
                 (error) => error.outcome === "unknown",
             )
             assert.equal(hoistDispatches, 1)
             assert.equal(await ops.getRole(roleId), undefined)
+            await waitForAuditEntry(botId, auditActions.roleUpdate, roleId, options.auditReason)
         } finally {
             globalThis.fetch = beforeLoss
         }
@@ -657,11 +762,13 @@ async function verifyGuildRoles(ops, roleId) {
         )
         assert.equal((await ops.roles()).find((role) => role.id === roleId).hoistPosition, 2)
         report(stage, true)
-        for (const id of [roleId, secondId]) {
+        for (const [index, id] of [roleId, secondId].entries()) {
             stage = "role_delete"
-            await ops.deleteRole(id)
+            const options = auditOptions(`role-delete-${index + 1}`)
+            await ops.deleteRole(id, options)
             stage = "role_delete_event"
             await waitEvent("guildRoleDelete", (role) => role.id === id)
+            await waitForAuditEntry(botId, auditActions.roleDelete, id, options.auditReason)
         }
         stage = "role_delete_readback"
         const after = (await api("GET", `/guilds/${guildId}/roles`)).data
@@ -669,6 +776,7 @@ async function verifyGuildRoles(ops, roleId) {
         assert.deepEqual(untouched(after), untouched(listed))
         const member = (await api("GET", `/guilds/${guildId}/members/@me`)).data
         assert.ok(!member.roles.includes(roleId) && !member.roles.includes(secondId))
+        report("role_audit_reason_readback", roleAuditReadbackComplete)
         stage = "role_management_after_resume"
         report(stage, true)
     } finally {
@@ -1342,13 +1450,49 @@ async function verifyCacheProjectionConflict(send, fetch, get, channelId) {
             new URL(args[0]).pathname === `/v1/channels/${channelId}/messages/${sent.id}`
         ) {
             held = true
-            const json = response.json.bind(response)
-            response.json = async () => {
-                const body = await json()
-                ready = true
-                await waiting
-                return body
+            const source = response.body?.getReader()
+            assert.ok(source, "Held response body")
+            let firstPull = true
+            let sourceReleased = false
+            const releaseSource = () => {
+                if (sourceReleased) return
+                sourceReleased = true
+                source.releaseLock()
             }
+            const body = new ReadableStream(
+                {
+                    async pull(controller) {
+                        try {
+                            if (firstPull) {
+                                firstPull = false
+                                ready = true
+                                await waiting
+                            }
+                            const next = await source.read()
+                            if (next.done) {
+                                releaseSource()
+                                controller.close()
+                            } else controller.enqueue(next.value)
+                        } catch (error) {
+                            releaseSource()
+                            controller.error(error)
+                        }
+                    },
+                    async cancel(reason) {
+                        try {
+                            await source.cancel(reason)
+                        } finally {
+                            releaseSource()
+                        }
+                    },
+                },
+                { highWaterMark: 0 },
+            )
+            return new Response(body, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+            })
         }
         return response
     }
@@ -1415,6 +1559,7 @@ async function verifyCacheGatewayRebuild(get, channelId) {
 }
 
 async function verifyChannels(ops, mainChannelId, botId, interrupt) {
+    prepareAuditMarker()
     const rawChannel = async (id) => {
         const response = await api("GET", `/channels/${id}`)
         assert.equal(response.status, 200)
@@ -1462,14 +1607,18 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
             const snapshot = await ops.get(id)
             return predicate(snapshot) ? snapshot : undefined
         }, "Guild channel cache deadline")
-    const createFixture = (key, input) =>
-        createGuildChannelFixture(
+    const createFixture = async (key, input) => {
+        const options = auditOptions(`channel-create-${key}`)
+        const created = await createGuildChannelFixture(
             journal,
             () => writeFileSync(journalPath, JSON.stringify(journal)),
             key,
             input,
-            (input) => ops.create(guildId, input),
+            (input) => ops.create(guildId, input, options),
         )
+        await waitForAuditEntry(botId, auditActions.channelCreate, created.id, options.auditReason)
+        return created
+    }
 
     stage = "channel_remote_reads"
     const initial = await ops.fetch(mainChannelId)
@@ -1548,11 +1697,35 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
 
         stage = "channel_permission_overwrites"
         let updates = seen.guildChannelUpdate.length
-        await ops.setPermissionOverwrite(categoryA.id, { id: guildId, type: "role", allow: 0n, deny: 0n })
+        const roleOverwrite = auditOptions("channel-overwrite-role-create")
+        await ops.setPermissionOverwrite(
+            categoryA.id,
+            { id: guildId, type: "role", allow: 0n, deny: 0n },
+            roleOverwrite,
+        )
         await waitForEvent("guildChannelUpdate", updates, (value) => value.id === categoryA.id)
+        await waitForAuditEntry(
+            botId,
+            auditActions.channelOverwriteCreate,
+            guildId,
+            roleOverwrite.auditReason,
+            categoryA.id,
+        )
         updates = seen.guildChannelUpdate.length
-        await ops.setPermissionOverwrite(categoryA.id, { id: botId, type: "member", allow: 0n, deny: 0n })
+        const memberOverwrite = auditOptions("channel-overwrite-member-create")
+        await ops.setPermissionOverwrite(
+            categoryA.id,
+            { id: botId, type: "member", allow: 0n, deny: 0n },
+            memberOverwrite,
+        )
         await waitForEvent("guildChannelUpdate", updates, (value) => value.id === categoryA.id)
+        await waitForAuditEntry(
+            botId,
+            auditActions.channelOverwriteCreate,
+            botId,
+            memberOverwrite.auditReason,
+            categoryA.id,
+        )
         let categoryARaw = await rawChannel(categoryA.id)
         assert.deepEqual(
             normalizeOverwrites(rawOverwrites(categoryARaw)),
@@ -1562,16 +1735,36 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
             ]),
         )
         updates = seen.guildChannelUpdate.length
-        await ops.removePermissionOverwrite(categoryA.id, botId)
+        const overwriteDelete = auditOptions("channel-overwrite-member-delete")
+        await ops.removePermissionOverwrite(categoryA.id, botId, overwriteDelete)
         await waitForEvent("guildChannelUpdate", updates, (value) => value.id === categoryA.id)
+        await waitForAuditEntry(
+            botId,
+            auditActions.channelOverwriteDelete,
+            botId,
+            overwriteDelete.auditReason,
+            categoryA.id,
+        )
         categoryARaw = await rawChannel(categoryA.id)
         assert.deepEqual(
             normalizeOverwrites(rawOverwrites(categoryARaw)),
             normalizeOverwrites([{ id: guildId, type: "role", allow: "0", deny: "0" }]),
         )
         updates = seen.guildChannelUpdate.length
-        await ops.setPermissionOverwrite(categoryB.id, { id: botId, type: "member", allow: 0n, deny: 0n })
+        const secondCategoryOverwrite = auditOptions("channel-overwrite-second-category")
+        await ops.setPermissionOverwrite(
+            categoryB.id,
+            { id: botId, type: "member", allow: 0n, deny: 0n },
+            secondCategoryOverwrite,
+        )
         await waitForEvent("guildChannelUpdate", updates, (value) => value.id === categoryB.id)
+        await waitForAuditEntry(
+            botId,
+            auditActions.channelOverwriteCreate,
+            botId,
+            secondCategoryOverwrite.auditReason,
+            categoryB.id,
+        )
         const categoryBRaw = await rawChannel(categoryB.id)
         assert.deepEqual(
             normalizeOverwrites(rawOverwrites(categoryBRaw)),
@@ -1604,7 +1797,8 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         stage = "channel_edit_readback"
         const editedCategoryName = `${journal.channelFixtures.categoryA.marker}-edited`
         updates = seen.guildChannelUpdate.length
-        const editedCategory = await ops.edit(categoryA.id, { name: editedCategoryName })
+        const categoryEdit = auditOptions("channel-edit-category")
+        const editedCategory = await ops.edit(categoryA.id, { name: editedCategoryName }, categoryEdit)
         assertSnapshot(editedCategory, categoryA.id, 4)
         assert.equal(editedCategory.name, editedCategoryName)
         await waitForEvent(
@@ -1614,11 +1808,16 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         )
         categoryARaw = await rawChannel(categoryA.id)
         assert.equal(categoryARaw.name, editedCategoryName)
+        await waitForAuditEntry(botId, auditActions.channelUpdate, categoryA.id, categoryEdit.auditReason)
         report(stage, true)
 
         stage = "channel_reorder_keep_permissions"
         let bulk = seen.guildChannelUpdateBulk.length
-        await ops.reorder(guildId, [{ id: explicit.id, parentId: categoryB.id, syncPermissionsOnMove: false }])
+        await ops.reorder(
+            guildId,
+            [{ id: explicit.id, parentId: categoryB.id, syncPermissionsOnMove: false }],
+            auditOptions("channel-reorder-keep-permissions"),
+        )
         await waitForEvent("guildChannelUpdateBulk", bulk, (value) =>
             value.channels.some((channel) => channel.id === explicit.id && channel.parentId === categoryB.id),
         )
@@ -1629,7 +1828,11 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
 
         stage = "channel_reorder_copy_permissions"
         bulk = seen.guildChannelUpdateBulk.length
-        await ops.reorder(guildId, [{ id: explicit.id, parentId: categoryA.id, syncPermissionsOnMove: true }])
+        await ops.reorder(
+            guildId,
+            [{ id: explicit.id, parentId: categoryA.id, syncPermissionsOnMove: true }],
+            auditOptions("channel-reorder-copy-permissions-first"),
+        )
         await waitForEvent("guildChannelUpdateBulk", bulk, (value) =>
             value.channels.some((channel) => channel.id === explicit.id && channel.parentId === categoryA.id),
         )
@@ -1637,7 +1840,11 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         assert.equal(movedRaw.parent_id, categoryA.id)
         assert.deepEqual(normalizeOverwrites(rawOverwrites(movedRaw)), normalizeOverwrites(rawOverwrites(categoryARaw)))
         bulk = seen.guildChannelUpdateBulk.length
-        await ops.reorder(guildId, [{ id: explicit.id, parentId: categoryB.id, syncPermissionsOnMove: true }])
+        await ops.reorder(
+            guildId,
+            [{ id: explicit.id, parentId: categoryB.id, syncPermissionsOnMove: true }],
+            auditOptions("channel-reorder-copy-permissions-second"),
+        )
         await waitForEvent("guildChannelUpdateBulk", bulk, (value) =>
             value.channels.some((channel) => channel.id === explicit.id && channel.parentId === categoryB.id),
         )
@@ -1670,7 +1877,8 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
             return response
         }
         try {
-            await assert.rejects(ops.edit(explicit.id, { name: uncertainName }), (error) => {
+            const options = auditOptions("channel-edit-lost-response")
+            await assert.rejects(ops.edit(explicit.id, { name: uncertainName }, options), (error) => {
                 assert.equal(error?._tag, "ChannelOperationError")
                 assert.equal(error.operation, "channels.edit")
                 assert.equal(error.outcome, "unknown")
@@ -1678,6 +1886,7 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
             })
             assert.equal(dispatched, 1)
             assert.equal(await ops.get(explicit.id), undefined)
+            await waitForAuditEntry(botId, auditActions.channelUpdate, explicit.id, options.auditReason)
         } finally {
             globalThis.fetch = originalFetch
         }
@@ -1699,7 +1908,8 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         assert.equal(resumedCategory.name, editedCategoryName)
         updates = seen.guildChannelUpdate.length
         const resumedName = `${journal.channelFixtures.categoryA.marker}-resumed`
-        const afterResume = await ops.edit(categoryA.id, { name: resumedName })
+        const resumeEdit = auditOptions("channel-edit-after-resume")
+        const afterResume = await ops.edit(categoryA.id, { name: resumedName }, resumeEdit)
         assert.equal(afterResume.name, resumedName)
         await waitForEvent(
             "guildChannelUpdate",
@@ -1707,12 +1917,14 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
             (value) => value.id === categoryA.id && value.name === resumedName,
         )
         assert.equal((await rawChannel(categoryA.id)).name, resumedName)
+        await waitForAuditEntry(botId, auditActions.channelUpdate, categoryA.id, resumeEdit.auditReason)
         report(stage, true)
 
         stage = "channel_delete_readback"
         const beforeDelete = await ops.fetch(explicit.id)
         const deletes = seen.guildChannelDelete.length
-        await ops.delete(explicit.id)
+        const channelDelete = auditOptions("channel-delete")
+        await ops.delete(explicit.id, channelDelete)
         const deleted = await waitForEvent("guildChannelDelete", deletes, (value) => value.id === explicit.id)
         assertSnapshot(deleted, explicit.id, 0)
         assert.equal(deleted.name, beforeDelete.name)
@@ -1723,6 +1935,8 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         )
         assert.equal((await api("GET", `/channels/${explicit.id}`)).status, 404)
         assert.equal(await ops.get(explicit.id), undefined)
+        await waitForAuditEntry(botId, auditActions.channelDelete, explicit.id, channelDelete.auditReason)
+        report("channel_audit_reason_readback", true)
         report(stage, true)
     } finally {
         for (const stop of stops) await stop()
@@ -2136,6 +2350,19 @@ async function verifyManaged(snapshot, content, seed) {
 }
 
 function verifyReceivedMetadata(snapshot, wire) {
+    const projectUser = (user) => ({
+        id: user.id,
+        username: user.username,
+        isBot: user.bot === true,
+        ...(Object.hasOwn(user, "discriminator") ? { discriminator: user.discriminator } : {}),
+        ...(Object.hasOwn(user, "global_name") ? { displayName: user.global_name } : {}),
+        ...(Object.hasOwn(user, "avatar") ? { avatar: user.avatar } : {}),
+        ...(Object.hasOwn(user, "avatar_color") ? { avatarColor: user.avatar_color } : {}),
+        ...(Object.hasOwn(user, "system") ? { isSystem: user.system } : {}),
+        ...(Object.hasOwn(user, "flags") ? { flags: user.flags } : {}),
+        ...(Object.hasOwn(user, "mention_flags") ? { mentionFlags: user.mention_flags } : {}),
+    })
+    const projectUsers = (users) => (users === null ? null : users.map(projectUser))
     const requireObserved = (wireKey, snapshotKey, project = (value) => value) => {
         assert.ok(Object.hasOwn(wire, wireKey), `Readback omitted required ${wireKey}`)
         assert.ok(snapshotKey in snapshot, `SDK snapshot omitted required ${snapshotKey}`)
@@ -2169,12 +2396,13 @@ function verifyReceivedMetadata(snapshot, wire) {
     requireObserved("type", "type")
     requireObserved("flags", "flags")
     requireObserved("mention_everyone", "mentionedEveryone")
-    requireObserved("mentions", "mentions", (mentions) =>
-        mentions.map((mention) => ({ id: mention.id, username: mention.username, isBot: mention.bot === true })),
-    )
+    requireObserved("author", "author", projectUser)
+    requireObserved("mentions", "mentions", projectUsers)
     requireObserved("mention_roles", "mentionRoleIds")
     compareIfObserved("edited_timestamp", "editedAt")
     compareIfObserved("guild_id", "guildId")
+    compareIfObserved("users", "referencedUsers", projectUsers)
+    compareIfObserved("nsfw_emojis", "nsfwEmojiIds")
     compareIfObserved("mention_channels", "mentionChannels", (channels) =>
         channels === null
             ? null
@@ -2184,13 +2412,46 @@ function verifyReceivedMetadata(snapshot, wire) {
         reactions === null ? null : reactions.map(projectReaction),
     )
     compareIfObserved("message_reference", "messageReference", projectReference)
-    compareIfObserved("referenced_message", "referencedMessage", (reference) =>
-        reference === null ? null : { id: reference.id, channelId: reference.channel_id },
-    )
+    if (Object.hasOwn(wire, "referenced_message") && "referencedMessage" in snapshot) {
+        const received = wire.referenced_message
+        const resolved = snapshot.referencedMessage
+        if (received === null) assert.equal(resolved, null)
+        else {
+            assert.ok(resolved)
+            assert.deepEqual(
+                {
+                    id: resolved.id,
+                    channelId: resolved.channelId,
+                    content: resolved.content,
+                    author: resolved.author,
+                },
+                {
+                    id: received.id,
+                    channelId: received.channel_id,
+                    content: received.content,
+                    author: projectUser(received.author),
+                },
+            )
+            assert.equal("referencedMessage" in resolved, false)
+            for (const [wireKey, snapshotKey, project] of [
+                ["mentions", "mentions", projectUsers],
+                ["users", "referencedUsers", projectUsers],
+                ["nsfw_emojis", "nsfwEmojiIds", (value) => value],
+            ]) {
+                assert.equal(snapshotKey in resolved, Object.hasOwn(received, wireKey))
+                if (Object.hasOwn(received, wireKey))
+                    assert.deepEqual(resolved[snapshotKey], project(received[wireKey]))
+            }
+        }
+    }
     assert.ok(Object.isFrozen(snapshot))
     for (const nested of [
+        snapshot.author,
         snapshot.mentions,
         snapshot.mentions?.[0],
+        snapshot.referencedUsers,
+        snapshot.referencedUsers?.[0],
+        snapshot.nsfwEmojiIds,
         snapshot.mentionRoleIds,
         snapshot.mentionChannels,
         snapshot.mentionChannels?.[0],
@@ -2199,6 +2460,15 @@ function verifyReceivedMetadata(snapshot, wire) {
         snapshot.reactions?.[0]?.emoji,
         snapshot.messageReference,
         snapshot.referencedMessage,
+        snapshot.referencedMessage?.author,
+        snapshot.referencedMessage?.mentions,
+        snapshot.referencedMessage?.mentions?.[0],
+        snapshot.referencedMessage?.referencedUsers,
+        snapshot.referencedMessage?.referencedUsers?.[0],
+        snapshot.referencedMessage?.nsfwEmojiIds,
+        snapshot.referencedMessage?.embeds,
+        snapshot.referencedMessage?.attachments,
+        snapshot.referencedMessage?.stickers,
     ])
         if (nested !== undefined && nested !== null) assert.ok(Object.isFrozen(nested))
 }
@@ -3421,27 +3691,28 @@ try {
                         getMember: (target) => run(client.members.get(target)),
                         getRole: (id) => run(client.roles.get({ guildId, id })),
                         roles: () => run(client.roles.fetchAll(guildId)),
-                        createRole: (input) => run(client.roles.create(guildId, input)),
-                        editRole: (id, input) => run(client.roles.edit({ guildId, id }, input)),
-                        deleteRole: (id) => run(client.roles.delete({ guildId, id })),
-                        reorderRoles: (positions) => run(client.roles.reorder(guildId, positions)),
-                        setHoistPositions: (positions) => run(client.roles.setHoistPositions(guildId, positions)),
+                        createRole: (input, options) => run(client.roles.create(guildId, input, options)),
+                        editRole: (id, input, options) => run(client.roles.edit({ guildId, id }, input, options)),
+                        deleteRole: (id, options) => run(client.roles.delete({ guildId, id }, options)),
+                        reorderRoles: (positions, options) => run(client.roles.reorder(guildId, positions, options)),
+                        setHoistPositions: (positions, options) =>
+                            run(client.roles.setHoistPositions(guildId, positions, options)),
                         member: (target) => run(client.members.fetch(target)),
                         self: () => run(client.members.fetchSelf(guildId)),
                         page: () => run(client.members.fetchPage(guildId, { limit: 2 })),
-                        add: (target, roleId) => run(client.members.addRole(target, roleId)),
-                        remove: (target, roleId) => run(client.members.removeRole(target, roleId)),
+                        add: (target, roleId, options) => run(client.members.addRole(target, roleId, options)),
+                        remove: (target, roleId, options) => run(client.members.removeRole(target, roleId, options)),
                         send: () =>
                             run(client.messages.send(channel.id, { content: "SDK reaction role verification" })),
                         react: (target) => run(client.messages.addReaction(target, "✅")),
-                        collect: async (message, target, roleId) => {
+                        collect: async (message, target, roleId, options) => {
                             const collector = await run(
                                 client.messages.collectReactions(message, {
                                     emoji: "✅",
                                     timeoutMs: 10_000,
                                     filter: (reaction) => reaction.userId === user.id,
                                     onReaction: async (_reaction, signal) => {
-                                        await run(client.members.addRole(target, roleId, { signal }))
+                                        await run(client.members.addRole(target, roleId, { ...options, signal }))
                                         await run(
                                             client.messages.edit(message, { content: "SDK role assigned" }, { signal }),
                                         )
@@ -3474,14 +3745,14 @@ try {
                         get: (id) => run(client.channels.get(id)),
                         fetch: (id) => run(client.channels.fetch(id)),
                         fetchAll: (id) => run(client.channels.fetchAll(id)),
-                        create: (id, input) => run(client.channels.create(id, input)),
-                        edit: (id, input) => run(client.channels.edit(id, input)),
-                        delete: (id) => run(client.channels.delete(id)),
-                        reorder: (id, positions) => run(client.channels.reorder(id, positions)),
-                        setPermissionOverwrite: (id, overwrite) =>
-                            run(client.channels.setPermissionOverwrite(id, overwrite)),
-                        removePermissionOverwrite: (id, targetId) =>
-                            run(client.channels.removePermissionOverwrite(id, targetId)),
+                        create: (id, input, options) => run(client.channels.create(id, input, options)),
+                        edit: (id, input, options) => run(client.channels.edit(id, input, options)),
+                        delete: (id, options) => run(client.channels.delete(id, options)),
+                        reorder: (id, positions, options) => run(client.channels.reorder(id, positions, options)),
+                        setPermissionOverwrite: (id, overwrite, options) =>
+                            run(client.channels.setPermissionOverwrite(id, overwrite, options)),
+                        removePermissionOverwrite: (id, targetId, options) =>
+                            run(client.channels.removePermissionOverwrite(id, targetId, options)),
                         on: async (event, handler) => {
                             const subscription = await run(client.on(event, handler))
                             return async () => {
@@ -3638,6 +3909,11 @@ try {
                     collect: async (options) => {
                         const collector = await unwrap(client.messages.collect(channel.id, options))
                         return () => unwrap(collector.waitForClose())
+                    },
+                    refreshUrls: async (urls, options) => {
+                        const result = await client.attachments.refreshUrls(urls, options)
+                        if (result.isErr()) throw result.error
+                        return result.value
                     },
                     download: (attachment, options) => unwrap(client.attachments.download(attachment, options)),
                     downloadFailure: async (attachment, options) => {
@@ -4225,17 +4501,21 @@ try {
                                     getMember: (target) => run(client.members.get(target)),
                                     getRole: (id) => run(client.roles.get({ guildId, id })),
                                     roles: () => run(client.roles.fetchAll(guildId)),
-                                    createRole: (input) => run(client.roles.create(guildId, input)),
-                                    editRole: (id, input) => run(client.roles.edit({ guildId, id }, input)),
-                                    deleteRole: (id) => run(client.roles.delete({ guildId, id })),
-                                    reorderRoles: (positions) => run(client.roles.reorder(guildId, positions)),
-                                    setHoistPositions: (positions) =>
-                                        run(client.roles.setHoistPositions(guildId, positions)),
+                                    createRole: (input, options) => run(client.roles.create(guildId, input, options)),
+                                    editRole: (id, input, options) =>
+                                        run(client.roles.edit({ guildId, id }, input, options)),
+                                    deleteRole: (id, options) => run(client.roles.delete({ guildId, id }, options)),
+                                    reorderRoles: (positions, options) =>
+                                        run(client.roles.reorder(guildId, positions, options)),
+                                    setHoistPositions: (positions, options) =>
+                                        run(client.roles.setHoistPositions(guildId, positions, options)),
                                     member: (target) => run(client.members.fetch(target)),
                                     self: () => run(client.members.fetchSelf(guildId)),
                                     page: () => run(client.members.fetchPage(guildId, { limit: 2 })),
-                                    add: (target, roleId) => run(client.members.addRole(target, roleId)),
-                                    remove: (target, roleId) => run(client.members.removeRole(target, roleId)),
+                                    add: (target, roleId, options) =>
+                                        run(client.members.addRole(target, roleId, options)),
+                                    remove: (target, roleId, options) =>
+                                        run(client.members.removeRole(target, roleId, options)),
                                     send: () =>
                                         run(
                                             client.messages.send(channel.id, {
@@ -4243,7 +4523,7 @@ try {
                                             }),
                                         ),
                                     react: (target) => run(client.messages.addReaction(target, "✅")),
-                                    collect: async (message, target, roleId) => {
+                                    collect: async (message, target, roleId, options) => {
                                         const collector = await run(
                                             client.messages
                                                 .collectReactions(message, {
@@ -4252,7 +4532,7 @@ try {
                                                     filter: (reaction) => reaction.userId === user.id,
                                                     onReaction: () =>
                                                         Effect.gen(function* () {
-                                                            yield* client.members.addRole(target, roleId)
+                                                            yield* client.members.addRole(target, roleId, options)
                                                             yield* client.messages.edit(message, {
                                                                 content: "SDK role assigned",
                                                             })
@@ -4296,14 +4576,15 @@ try {
                                     get: (id) => run(client.channels.get(id)),
                                     fetch: (id) => run(client.channels.fetch(id)),
                                     fetchAll: (id) => run(client.channels.fetchAll(id)),
-                                    create: (id, input) => run(client.channels.create(id, input)),
-                                    edit: (id, input) => run(client.channels.edit(id, input)),
-                                    delete: (id) => run(client.channels.delete(id)),
-                                    reorder: (id, positions) => run(client.channels.reorder(id, positions)),
-                                    setPermissionOverwrite: (id, overwrite) =>
-                                        run(client.channels.setPermissionOverwrite(id, overwrite)),
-                                    removePermissionOverwrite: (id, targetId) =>
-                                        run(client.channels.removePermissionOverwrite(id, targetId)),
+                                    create: (id, input, options) => run(client.channels.create(id, input, options)),
+                                    edit: (id, input, options) => run(client.channels.edit(id, input, options)),
+                                    delete: (id, options) => run(client.channels.delete(id, options)),
+                                    reorder: (id, positions, options) =>
+                                        run(client.channels.reorder(id, positions, options)),
+                                    setPermissionOverwrite: (id, overwrite, options) =>
+                                        run(client.channels.setPermissionOverwrite(id, overwrite, options)),
+                                    removePermissionOverwrite: (id, targetId, options) =>
+                                        run(client.channels.removePermissionOverwrite(id, targetId, options)),
                                     on: async (event, handler) => {
                                         const subscription = await run(
                                             client
@@ -4480,6 +4761,13 @@ try {
                                     client.messages.collect(channel.id, options).pipe(Scope.provide(scope)),
                                 )
                                 return () => Effect.runPromise(collector.waitForClose())
+                            },
+                            refreshUrls: async (urls, options) => {
+                                const result = await Effect.runPromise(
+                                    Effect.result(client.attachments.refreshUrls(urls, options)),
+                                )
+                                if (result._tag === "Failure") throw result.failure
+                                return result.success
                             },
                             download: (attachment, options) => run(client.attachments.download(attachment, options)),
                             downloadFailure: (attachment, options) =>

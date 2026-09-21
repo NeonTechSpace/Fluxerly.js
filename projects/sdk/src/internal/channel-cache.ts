@@ -3,6 +3,7 @@ import type { ResourceCacheSettings } from "#sdk/cache"
 import type { CacheDiagnostic } from "#sdk/client"
 import type { GuildChannel } from "#sdk/channels"
 import type { EventMap, EventName } from "#sdk/events"
+import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 import { identifier, record } from "./message.js"
 
 export type ChannelCacheRequest = {
@@ -48,11 +49,12 @@ export class ChannelCache {
     #bytes = 0
     #generation = 0
     #closed = false
-    #timer: ReturnType<typeof setTimeout> | undefined
+    #timer: ReturnType<typeof setTimeout> | LogicalTimer | undefined
 
     constructor(
         private readonly settings: Required<ResourceCacheSettings>,
         private readonly now: () => number,
+        private readonly logical?: LogicalScheduler,
     ) {}
 
     get(channelId: string): GuildChannel | undefined {
@@ -254,20 +256,25 @@ export class ChannelCache {
     }
 
     #schedule() {
-        if (this.#timer !== undefined) clearTimeout(this.#timer)
+        if (this.#timer !== undefined)
+            if (this.logical) this.logical.clear(this.#timer as LogicalTimer)
+            else clearTimeout(this.#timer as ReturnType<typeof setTimeout>)
         this.#timer = undefined
         if (this.#closed) return
         let next = Infinity
         for (const entry of this.#entries.values()) if (entry.expires !== null) next = Math.min(next, entry.expires)
         if (next !== Infinity) {
-            this.#timer = setTimeout(
-                () => {
-                    this.#purge()
-                    this.#schedule()
-                },
-                Math.min(2_147_483_647, Math.max(1, Math.ceil(next - this.now()))),
-            )
-            this.#timer.unref()
+            const callback = () => {
+                this.#purge()
+                this.#schedule()
+            }
+            const delay = Math.min(2_147_483_647, Math.max(1, Math.ceil(next - this.now())))
+            if (this.logical) this.#timer = this.logical.set(callback, delay, "channel cache")
+            else {
+                const timer = setTimeout(callback, delay)
+                timer.unref()
+                this.#timer = timer
+            }
         }
     }
 }

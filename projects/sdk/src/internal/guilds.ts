@@ -34,6 +34,8 @@ export interface GuildRequest<A> {
     readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"
     readonly status: 200 | 202 | 204
     readonly json?: string
+    /** Allows the shared REST owner to validate and send an operation audit reason */
+    readonly audited?: true
     readonly moderation?: true
     readonly auditReason?: string
     /** Permits timeoutReason only on timeout and clear-timeout operation options */
@@ -51,7 +53,11 @@ export interface GuildRequest<A> {
 type GuildValidationResult<A> = GuildRequest<A> | InputValidationFailure
 
 const nullableText = (value: unknown) => value === undefined || value === null || typeof value === "string"
-const positiveIdentifier = (value: unknown): value is string => identifier(value) && value !== "0"
+const maximumSnowflake = "9223372036854775807"
+const positiveIdentifier = (value: unknown): value is string =>
+    identifier(value) &&
+    value !== "0" &&
+    (value.length < maximumSnowflake.length || (value.length === maximumSnowflake.length && value <= maximumSnowflake))
 const int32 = (value: unknown): value is number =>
     typeof value === "number" && Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
 const nonNegativeInt32 = (value: unknown): value is number => int32(value) && value >= 0
@@ -449,6 +455,7 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
     return {
         guildId,
         bucket: "guild:member:self:update",
+        audited: true,
         cache: { selection: { kind: "members", guildId }, mutation: true },
         path: `/guilds/${guildId}/members/@me`,
         method: "PATCH",
@@ -478,6 +485,7 @@ export function memberNicknameEdit(
     return {
         guildId,
         bucket: "guild:member:nickname:update",
+        audited: true,
         cache: { selection: { kind: "members", guildId, id: userId }, mutation: true },
         path: `/guilds/${guildId}/members/${userId}`,
         method: "PATCH",
@@ -497,16 +505,24 @@ export function memberRolesSet(
 ): GuildValidationResult<GuildMember> {
     if (!record(target)) return inputValidationFailure("target", "type", "Member targets must be objects")
     if (!positiveIdentifier(target.guildId))
-        return inputValidationFailure("target.guildId", "format", "Guild IDs must be positive decimal strings")
+        return inputValidationFailure(
+            "target.guildId",
+            "format",
+            "Guild IDs must be positive signed-63-bit decimal strings",
+        )
     if (!positiveIdentifier(target.userId))
-        return inputValidationFailure("target.userId", "format", "User IDs must be positive decimal strings")
+        return inputValidationFailure(
+            "target.userId",
+            "format",
+            "User IDs must be positive signed-63-bit decimal strings",
+        )
     if (!Array.isArray(roleIds)) return inputValidationFailure("roleIds", "type", "Role IDs must be an array")
     const count = roleIds.length
     if (count > 250) return inputValidationFailure("roleIds", "length", "A member role set may contain at most 250 IDs")
     const roles = new Array<string>(count)
     for (let index = 0; index < count; index++) roles[index] = roleIds[index]
     if (!roles.every(positiveIdentifier))
-        return inputValidationFailure("roleIds[]", "format", "Role IDs must be positive decimal strings")
+        return inputValidationFailure("roleIds[]", "format", "Role IDs must be positive signed-63-bit decimal strings")
     if (new Set(roles).size !== roles.length)
         return inputValidationFailure("roleIds", "unique", "Role IDs must be unique")
     if (roles.some((roleId) => roleId === target.guildId))
@@ -515,6 +531,7 @@ export function memberRolesSet(
     return {
         guildId,
         bucket: "guild:member:roles:set",
+        audited: true,
         cache: { selection: { kind: "members", guildId, id: userId }, mutation: true },
         path: `/guilds/${guildId}/members/${userId}`,
         method: "PATCH",
@@ -576,6 +593,7 @@ export function memberRole(target: MemberReference, roleId: string, add: boolean
     return {
         guildId,
         bucket: add ? "guild:member:role:add" : "guild:member:role:remove",
+        audited: true,
         path: `/guilds/${guildId}/members/${userId}/roles/${roleId}`,
         cache: { selection: { kind: "members", guildId, id: userId }, mutation: true },
         method: add ? "PUT" : "DELETE",
@@ -699,6 +717,7 @@ export function roleCreate(guildId: string, input: RoleCreate): GuildValidationR
     return {
         guildId,
         bucket: "guild:role:create",
+        audited: true,
         cache: { selection: { kind: "roles", guildId }, mutation: true },
         path: `/guilds/${guildId}/roles`,
         method: "POST",
@@ -735,6 +754,7 @@ export function roleEdit(target: RoleReference, input: RoleEdit): GuildValidatio
     return {
         guildId,
         bucket: "guild:role:update",
+        audited: true,
         cache: {
             selection: { kind: "roles", guildId, ...(input.hoistPosition === undefined ? { id } : {}) },
             mutation: true,
@@ -761,6 +781,7 @@ export function roleDelete(target: RoleReference): GuildValidationResult<void> {
     return {
         guildId: target.guildId,
         bucket: "guild:role:delete",
+        audited: true,
         cache: { selection: { kind: "roles", guildId: target.guildId }, mutation: true, members: true },
         path: `/guilds/${target.guildId}/roles/${target.id}`,
         method: "DELETE",
@@ -811,6 +832,7 @@ export function roleReorder(guildId: string, positions: readonly RolePosition[])
     return {
         guildId,
         bucket: "guild:role:positions",
+        audited: true,
         cache: { selection: { kind: "roles", guildId }, mutation: true },
         path: `/guilds/${guildId}/roles`,
         method: "PATCH",
@@ -867,6 +889,7 @@ export function roleSetHoistPositions(
     return {
         guildId,
         bucket: "guild:role:hoist-positions",
+        audited: true,
         cache: { selection: { kind: "roles", guildId }, mutation: true },
         path: `/guilds/${guildId}/roles/hoist-positions`,
         method: "PATCH",
@@ -881,6 +904,7 @@ export function roleResetHoistPositions(guildId: string): GuildValidationResult<
     return {
         guildId,
         bucket: "guild:role:hoist-positions",
+        audited: true,
         cache: { selection: { kind: "roles", guildId }, mutation: true },
         path: `/guilds/${guildId}/roles/hoist-positions`,
         method: "DELETE",

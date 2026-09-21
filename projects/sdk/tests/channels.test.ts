@@ -2,7 +2,14 @@ import { once } from "node:events"
 import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { WebSocketServer } from "ws"
-import { ChannelType, createClient, type ClientOptions, type EventName } from "../src/index.js"
+import {
+    ChannelType,
+    createClient,
+    type ClientOptions,
+    type DefaultChannelAuditOperationOptions,
+    type DefaultChannelOperationOptions,
+    type EventName,
+} from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
@@ -27,6 +34,54 @@ afterEach(() => {
 })
 
 const modes = ["default", "native"] as const
+
+test.each(modes)("%s sends audit reasons only on supported channel mutations", async (mode) => {
+    const calls: Array<{ method: string; path: string; reason: string | null }> = []
+    rest(async (url, init) => {
+        const path = new URL(url).pathname
+        const body = init.body === undefined ? undefined : JSON.parse(String(init.body))
+        calls.push({ method: init.method!, path, reason: new Headers(init.headers).get("X-Audit-Log-Reason") })
+        if (init.method === "GET")
+            return Response.json(path.endsWith("/channels") ? [channel()] : channel(path.split("/").at(-1)!))
+        if (init.method === "DELETE" || Array.isArray(body) || path.includes("/permissions/"))
+            return new Response(null, { status: 204 })
+        return Response.json(channel(init.method === "POST" ? "13" : "10", body))
+    })
+    const api = await setup(mode)
+    const options = { auditReason: "  channel audit  " }
+    const overwrite = { id: "50", type: "role" as const, allow: 1n, deny: 0n }
+
+    await api.create("20", { type: ChannelType.Text, name: "created" }, options)
+    await api.edit("10", { name: "edited" }, options)
+    await api.delete("10", options)
+    await api.reorder("20", [{ id: "10", position: 1 }], options)
+    await api.setPermissionOverwrite("10", overwrite, options)
+    await api.removePermissionOverwrite("10", "50", options)
+
+    expect(calls).toEqual([
+        { method: "POST", path: "/v1/guilds/20/channels", reason: "channel audit" },
+        { method: "PATCH", path: "/v1/channels/10", reason: "channel audit" },
+        { method: "DELETE", path: "/v1/channels/10", reason: "channel audit" },
+        { method: "PATCH", path: "/v1/guilds/20/channels", reason: "channel audit" },
+        { method: "PUT", path: "/v1/channels/10/permissions/50", reason: "channel audit" },
+        { method: "DELETE", path: "/v1/channels/10/permissions/50", reason: "channel audit" },
+    ])
+
+    const readOptions = { auditReason: "not applicable" } as DefaultChannelOperationOptions
+    const beforeReads = calls.length
+    await expect(api.fetch("10", readOptions as unknown as { timeoutMs?: number })).rejects.toMatchObject({
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(calls).toHaveLength(beforeReads)
+
+    const privateReason = "not-for-diagnostics"
+    const failure = await api.delete("10", { auditReason: `${privateReason}\n` }).catch((error) => error)
+    expect(failure).toMatchObject({ reason: "input", outcome: "notDispatched" })
+    expect(JSON.stringify(failure)).not.toContain(privateReason)
+    expect(calls).toHaveLength(beforeReads)
+})
+
 const channel = (id = "10", extra: Record<string, unknown> = {}) => ({
     id,
     guild_id: "20",
@@ -808,26 +863,37 @@ async function setup(mode: (typeof modes)[number], cache: ClientOptions["cache"]
             defaultApi ? unwrap(await defaultApi.messages.fetch(target)) : run(native!.messages.fetch(target)),
         getMessage: async (target = { id: "10", channelId: "20" }) =>
             defaultApi ? unwrap(defaultApi.messages.get(target)) : run(native!.messages.get(target)),
-        create: async (guildId: string, input: any) =>
+        create: async (guildId: string, input: any, options?: DefaultChannelAuditOperationOptions) =>
             defaultApi
-                ? unwrap(await defaultApi.channels.create(guildId, input))
-                : run(native!.channels.create(guildId, input)),
-        edit: async (id: string, input: any) =>
-            defaultApi ? unwrap(await defaultApi.channels.edit(id, input)) : run(native!.channels.edit(id, input)),
-        delete: async (id: string) =>
-            defaultApi ? unwrap(await defaultApi.channels.delete(id)) : run(native!.channels.delete(id)),
-        reorder: async (guildId: string, positions: any) =>
+                ? unwrap(await defaultApi.channels.create(guildId, input, options))
+                : run(native!.channels.create(guildId, input, options), options?.signal as AbortSignal),
+        edit: async (id: string, input: any, options?: DefaultChannelAuditOperationOptions) =>
             defaultApi
-                ? unwrap(await defaultApi.channels.reorder(guildId, positions))
-                : run(native!.channels.reorder(guildId, positions)),
-        setPermissionOverwrite: async (id: string, overwrite: any) =>
+                ? unwrap(await defaultApi.channels.edit(id, input, options))
+                : run(native!.channels.edit(id, input, options), options?.signal as AbortSignal),
+        delete: async (id: string, options?: DefaultChannelAuditOperationOptions) =>
             defaultApi
-                ? unwrap(await defaultApi.channels.setPermissionOverwrite(id, overwrite))
-                : run(native!.channels.setPermissionOverwrite(id, overwrite)),
-        removePermissionOverwrite: async (id: string, targetId: string) =>
+                ? unwrap(await defaultApi.channels.delete(id, options))
+                : run(native!.channels.delete(id, options), options?.signal as AbortSignal),
+        reorder: async (guildId: string, positions: any, options?: DefaultChannelAuditOperationOptions) =>
             defaultApi
-                ? unwrap(await defaultApi.channels.removePermissionOverwrite(id, targetId))
-                : run(native!.channels.removePermissionOverwrite(id, targetId)),
+                ? unwrap(await defaultApi.channels.reorder(guildId, positions, options))
+                : run(native!.channels.reorder(guildId, positions, options), options?.signal as AbortSignal),
+        setPermissionOverwrite: async (id: string, overwrite: any, options?: DefaultChannelAuditOperationOptions) =>
+            defaultApi
+                ? unwrap(await defaultApi.channels.setPermissionOverwrite(id, overwrite, options))
+                : run(native!.channels.setPermissionOverwrite(id, overwrite, options), options?.signal as AbortSignal),
+        removePermissionOverwrite: async (
+            id: string,
+            targetId: string,
+            options?: DefaultChannelAuditOperationOptions,
+        ) =>
+            defaultApi
+                ? unwrap(await defaultApi.channels.removePermissionOverwrite(id, targetId, options))
+                : run(
+                      native!.channels.removePermissionOverwrite(id, targetId, options),
+                      options?.signal as AbortSignal,
+                  ),
         on: async (event: EventName, handler: (value: any) => void | Promise<void>) =>
             defaultApi
                 ? unwrap(defaultApi.on(event, handler))

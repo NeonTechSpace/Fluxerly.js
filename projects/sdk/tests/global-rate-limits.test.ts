@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Scope } from "effect"
+import { Cause, Clock, Effect, Exit, Scope } from "effect"
 import type { ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../src/index.js"
@@ -8,6 +8,7 @@ import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 const modes = ["default", "native"] as const
 afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
     vi.useRealTimers()
 })
 
@@ -22,6 +23,9 @@ async function settle<A>(operation: ResultAsync<A, unknown> | Effect.Effect<A, u
 
 async function setup(mode: (typeof modes)[number]) {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] })
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() =>
+        BigInt(Math.round(performance.now() * 1_000_000)),
+    )
     const scope = Scope.makeUnsafe()
     const options = { token: "fixture-only-not-a-credential" }
     const client =

@@ -1,4 +1,4 @@
-import { Deferred, Effect, Scope } from "effect"
+import { Clock, Deferred, Effect, Scope } from "effect"
 import type {
     OAuthAuthorizationInput,
     OAuthCodeExchangeInput,
@@ -38,8 +38,21 @@ function text(value: unknown): value is string {
     return typeof value === "string" && value.length > 0
 }
 
+// Fluxer OAuth form/query strings use createStringType(1), capped at 256 UTF-16 units.
+// Reject normalization changes rather than changing opaque state, credentials or redirects.
+function canonicalText(value: unknown): value is string {
+    return (
+        text(value) &&
+        value.length <= 256 &&
+        value.isWellFormed() &&
+        value === value.replace(/[\u000c\u202e]/g, "").trim()
+    )
+}
+
+const oauthScopeInputCapacity = 256
+
 function redirectUri(value: unknown): value is string {
-    if (!text(value)) return false
+    if (!canonicalText(value)) return false
     try {
         const url = new URL(value)
         const loopback =
@@ -323,73 +336,82 @@ export class OAuthOwner {
             progress: { knownResponseFailure: OAuthOperationError | undefined },
         ) => Effect.Effect<A, OAuthOperationError>,
     ): Effect.Effect<A, OAuthOperationError | ClientClosedError> {
-        return Effect.suspend<A, OAuthOperationError | ClientClosedError, never>(() => {
-            if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-                return Effect.fail(
-                    inputError(
-                        operation,
-                        "options",
-                        "format",
-                        "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
-                    ),
+        return Clock.clockWith((clock) =>
+            Effect.suspend<A, OAuthOperationError | ClientClosedError, never>(() => {
+                if (
+                    options !== undefined &&
+                    (typeof options !== "object" || options === null || Array.isArray(options))
                 )
-            const timeoutMs = options?.timeoutMs
-            const limit = timeout(timeoutMs)
-            if (
-                options !== undefined &&
-                (Object.keys(options).some((key) => key !== "timeoutMs") ||
-                    (timeoutMs !== undefined && limit === undefined))
-            )
-                return Effect.fail(
-                    inputError(
-                        operation,
-                        "options",
-                        "format",
-                        "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
-                    ),
+                    return Effect.fail(
+                        inputError(
+                            operation,
+                            "options",
+                            "format",
+                            "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
+                        ),
+                    )
+                const timeoutMs = options?.timeoutMs
+                const limit = timeout(timeoutMs)
+                if (
+                    options !== undefined &&
+                    (Object.keys(options).some((key) => key !== "timeoutMs") ||
+                        (timeoutMs !== undefined && limit === undefined))
                 )
-            if (this.#closed || !this.#secret) return Effect.fail(new ClientClosedError())
-            if (this.#active >= maximumConcurrentRequests)
-                return Effect.fail(new OAuthError(operation, "busy", "notDispatched"))
-            this.#active += 1
-            const completed = Deferred.makeUnsafe<void>()
-            this.#operations.add(completed)
-            const deadline = limit ?? defaultTimeoutMs
-            const started = Date.now()
-            const progress: { knownResponseFailure: OAuthOperationError | undefined } = {
-                knownResponseFailure: undefined,
-            }
-            return this.instance.resolve().pipe(
-                withDeadline(deadline, () => new OAuthError(operation, "timeout", "notDispatched")),
-                mapFailureCause((error) =>
-                    error instanceof OAuthError || error instanceof ClientClosedError
-                        ? error
-                        : this.#closed
-                          ? new ClientClosedError()
-                          : error instanceof RateLimitError
-                            ? new OAuthError(operation, "rateLimit", "notDispatched", 429, error.retryAfterMs)
-                            : new OAuthError(operation, "network", "notDispatched"),
-                ),
-                Effect.flatMap((endpoints): Effect.Effect<A, OAuthOperationError | ClientClosedError> =>
-                    this.#closed || !this.#secret
-                        ? Effect.fail(new ClientClosedError())
-                        : task(endpoints.apiPublic, endpoints.webapp, this.#secret, progress).pipe(
-                              withDeadline(
-                                  Math.max(1, deadline - (Date.now() - started)),
-                                  () =>
-                                      progress.knownResponseFailure ?? new OAuthError(operation, "timeout", "unknown"),
+                    return Effect.fail(
+                        inputError(
+                            operation,
+                            "options",
+                            "format",
+                            "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
+                        ),
+                    )
+                if (this.#closed || !this.#secret) return Effect.fail(new ClientClosedError())
+                if (this.#active >= maximumConcurrentRequests)
+                    return Effect.fail(new OAuthError(operation, "busy", "notDispatched"))
+                this.#active += 1
+                const completed = Deferred.makeUnsafe<void>()
+                this.#operations.add(completed)
+                const deadline = limit ?? defaultTimeoutMs
+                const started = clock.monotonicTimeNanosUnsafe()
+                const progress: { knownResponseFailure: OAuthOperationError | undefined } = {
+                    knownResponseFailure: undefined,
+                }
+                return this.instance.resolve().pipe(
+                    withDeadline(deadline, () => new OAuthError(operation, "timeout", "notDispatched")),
+                    mapFailureCause((error) =>
+                        error instanceof OAuthError || error instanceof ClientClosedError
+                            ? error
+                            : this.#closed
+                              ? new ClientClosedError()
+                              : error instanceof RateLimitError
+                                ? new OAuthError(operation, "rateLimit", "notDispatched", 429, error.retryAfterMs)
+                                : new OAuthError(operation, "network", "notDispatched"),
+                    ),
+                    Effect.flatMap((endpoints): Effect.Effect<A, OAuthOperationError | ClientClosedError> =>
+                        this.#closed || !this.#secret
+                            ? Effect.fail(new ClientClosedError())
+                            : task(endpoints.apiPublic, endpoints.webapp, this.#secret, progress).pipe(
+                                  withDeadline(
+                                      Math.max(
+                                          1,
+                                          deadline - Number(clock.monotonicTimeNanosUnsafe() - started) / 1_000_000,
+                                      ),
+                                      () =>
+                                          progress.knownResponseFailure ??
+                                          new OAuthError(operation, "timeout", "unknown"),
+                                  ),
                               ),
-                          ),
-                ),
-                Effect.ensuring(
-                    Effect.sync(() => {
-                        this.#active -= 1
-                        this.#operations.delete(completed)
-                        Deferred.doneUnsafe(completed, Effect.void)
-                    }),
-                ),
-            ) as Effect.Effect<A, OAuthOperationError | ClientClosedError>
-        })
+                    ),
+                    Effect.ensuring(
+                        Effect.sync(() => {
+                            this.#active -= 1
+                            this.#operations.delete(completed)
+                            Deferred.doneUnsafe(completed, Effect.void)
+                        }),
+                    ),
+                ) as Effect.Effect<A, OAuthOperationError | ClientClosedError>
+            }),
+        )
     }
 
     authorizationUrl(
@@ -417,9 +439,14 @@ export class OAuthOwner {
                     ),
                 )
             const state = input.state
-            if (!text(state))
+            if (!canonicalText(state))
                 return Effect.fail(
-                    inputError("oauth.authorizationUrl", "state", "required", "OAuth state must be a non-empty string"),
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "state",
+                        "format",
+                        "OAuth state must contain 1 through 256 canonical UTF-16 units",
+                    ),
                 )
             const codeChallenge = input.codeChallenge
             if (typeof codeChallenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(codeChallenge))
@@ -437,11 +464,16 @@ export class OAuthOwner {
                     inputError("oauth.authorizationUrl", "scopes", "length", "OAuth scopes must be a non-empty array"),
                 )
             const scopeLength = scopeInput.length
-            if (scopeLength === 0)
+            if (scopeLength === 0 || scopeLength > oauthScopeInputCapacity)
                 return Effect.fail(
-                    inputError("oauth.authorizationUrl", "scopes", "length", "OAuth scopes must be a non-empty array"),
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "scopes",
+                        "length",
+                        "OAuth scopes must contain 1 through 256 entries",
+                    ),
                 )
-            const scopes = Array.from({ length: scopeLength }, (_, index) => scopeInput[index])
+            const scopes = [...new Set(Array.from({ length: scopeLength }, (_, index) => scopeInput[index]))]
             if (scopes.some((scope) => !["identify", "email", "guilds", "connections", "bot"].includes(scope)))
                 return Effect.fail(
                     inputError(
@@ -692,13 +724,13 @@ export class OAuthOwner {
                     inputError("oauth.exchangeCode", "input", "type", "OAuth code exchange input must be an object"),
                 )
             const code = input.code
-            if (!text(code))
+            if (!canonicalText(code))
                 return Effect.fail(
                     inputError(
                         "oauth.exchangeCode",
                         "code",
-                        "required",
-                        "Authorization code must be a non-empty string",
+                        "format",
+                        "Authorization code must contain 1 through 256 canonical UTF-16 units",
                     ),
                 )
             const redirectUriValue = input.redirectUri
@@ -751,9 +783,14 @@ export class OAuthOwner {
         refreshToken: string,
         options?: OAuthOperationOptions,
     ): Effect.Effect<OAuthTokens, OAuthOperationError | ClientClosedError> {
-        if (!text(refreshToken))
+        if (!canonicalText(refreshToken))
             return Effect.fail(
-                inputError("oauth.refresh", "refreshToken", "required", "Refresh token must be a non-empty string"),
+                inputError(
+                    "oauth.refresh",
+                    "refreshToken",
+                    "format",
+                    "Refresh token must contain 1 through 256 canonical UTF-16 units",
+                ),
             )
         return this.#run("oauth.refresh", options, (api, _webapp, secret, progress) =>
             this.#request(
@@ -785,9 +822,14 @@ export class OAuthOwner {
             if (!record(value))
                 return Effect.fail(inputError("oauth.revoke", "input", "type", "OAuth revoke input must be an object"))
             const token = value.token
-            if (!text(token))
+            if (!canonicalText(token))
                 return Effect.fail(
-                    inputError("oauth.revoke", "token", "required", "Revoked token must be a non-empty string"),
+                    inputError(
+                        "oauth.revoke",
+                        "token",
+                        "format",
+                        "Revoked token must contain 1 through 256 canonical UTF-16 units",
+                    ),
                 )
             const tokenTypeHint = value.tokenTypeHint
             if (tokenTypeHint !== undefined && tokenTypeHint !== "access_token" && tokenTypeHint !== "refresh_token")
@@ -906,9 +948,14 @@ export class OAuthOwner {
         token: string,
         options?: OAuthOperationOptions,
     ): Effect.Effect<OAuthIntrospection, OAuthOperationError | ClientClosedError> {
-        if (!text(token))
+        if (!canonicalText(token))
             return Effect.fail(
-                inputError("oauth.introspect", "token", "required", "Inspected token must be a non-empty string"),
+                inputError(
+                    "oauth.introspect",
+                    "token",
+                    "format",
+                    "Inspected token must contain 1 through 256 canonical UTF-16 units",
+                ),
             )
         return this.#run("oauth.introspect", options, (api, _webapp, secret, progress) =>
             this.#request(

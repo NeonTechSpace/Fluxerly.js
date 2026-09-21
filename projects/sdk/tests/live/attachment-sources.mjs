@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
+import { verifyAttachmentRefresh } from "./attachment-refresh.js"
 
 const chunkBytes = 65_536
 const fileBytes = 3 * chunkBytes
@@ -476,6 +477,14 @@ export async function verifyAttachmentSources({ ops, channelId, rawFetch, getFet
             fileDigest,
             "attachment_sources_open_as_blob",
         )
+        await verifyAttachmentRefresh({
+            ops,
+            attachment: fileAttachment,
+            size: fileBytes,
+            digest: fileDigest,
+            setStage,
+            report,
+        })
 
         setStage("attachment_sources_download_too_small")
         const tooSmall = await ops.downloadFailure(fileAttachment, { maxBytes: fileBytes - 1, timeoutMs: 60_000 })

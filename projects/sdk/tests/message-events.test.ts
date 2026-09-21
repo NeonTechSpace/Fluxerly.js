@@ -51,7 +51,12 @@ const metadataWire = (content = "metadata") => ({
     mention_channels: [{ id: "60", name: "visible-channel", type: 0 }],
     reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
     message_reference: { message_id: "70", channel_id: "71", guild_id: null, type: 1 },
-    referenced_message: { id: "70", channel_id: "71", content: "not retained" },
+    referenced_message: {
+        id: "70",
+        channel_id: "71",
+        content: "reply context",
+        author: { id: "32", username: "reply-author", bot: true },
+    },
     message_snapshots: [
         {
             content: "Forwarded source",
@@ -197,7 +202,15 @@ function expectMetadata(message: Message) {
         mentionChannels: [{ id: "60", name: "visible-channel", type: 0 }],
         reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
         messageReference: { id: "70", channelId: "71", guildId: null, type: 1 },
-        referencedMessage: { id: "70", channelId: "71" },
+        referencedMessage: {
+            id: "70",
+            channelId: "71",
+            content: "reply context",
+            author: { id: "32", username: "reply-author", isBot: true },
+            embeds: [],
+            attachments: [],
+            stickers: [],
+        },
         messageSnapshots: [
             {
                 content: "Forwarded source",
@@ -208,7 +221,7 @@ function expectMetadata(message: Message) {
             },
         ],
     })
-    expect("content" in message.referencedMessage!).toBe(false)
+    expect("referencedMessage" in message.referencedMessage!).toBe(false)
     for (const nested of [
         message,
         message.author,
@@ -222,6 +235,10 @@ function expectMetadata(message: Message) {
         message.reactions?.[0]?.emoji,
         message.messageReference,
         message.referencedMessage,
+        message.referencedMessage?.author,
+        message.referencedMessage?.embeds,
+        message.referencedMessage?.attachments,
+        message.referencedMessage?.stickers,
         message.messageSnapshots,
         message.messageSnapshots?.[0],
         message.messageSnapshots?.[0]?.attachments,

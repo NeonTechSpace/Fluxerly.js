@@ -146,12 +146,12 @@
         "ws": "8.21.3"
     },
     "peerDependencies": {
-        "effect": "4.0.0-rc.115"
+        "effect": "4.0.0-rc.117"
     },
     "devDependencies": {
         "@types/node": "24.13.3",
         "@types/ws": "8.18.1",
-        "effect": "4.0.0-rc.115",
+        "effect": "4.0.0-rc.117",
         "npm": "11.19.0",
         "prettier": "3.9.6",
         "typescript": "7.0.2",

@@ -1,8 +1,9 @@
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import { expect, test } from "vitest"
 import { CountOwner } from "../src/internal/counts.js"
 import { GatewayRequestBudget } from "../src/internal/gateway-requests.js"
 import { MemberChunkOwner } from "../src/internal/member-chunks.js"
+import { LogicalScheduler } from "../src/internal/logical-scheduler.js"
 
 interface GuildFrame {
     readonly shardId: number
@@ -95,7 +96,7 @@ test("an unrelated shard detach leaves the shared member stream and healthy requ
         readonly payload: Readonly<Record<string, unknown>>
         readonly nonce: string
     }[] = []
-    const members = new MemberChunkOwner(budget, () => 0)
+    const members = new MemberChunkOwner(budget, new LogicalScheduler(Effect.runSync(Clock.Clock)), () => 0)
     members.attach((payload, nonce) => memberFrames.push({ shardId: 0, payload, nonce }), 0)
     members.attach((payload, nonce) => memberFrames.push({ shardId: 1, payload, nonce }), 1)
 

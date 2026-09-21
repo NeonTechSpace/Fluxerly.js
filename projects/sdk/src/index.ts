@@ -493,7 +493,7 @@ export type {
     EmbedField,
 } from "./embeds.js"
 export type { MessageBody } from "./messages.js"
-export { AttachmentDownloadError } from "./attachments.js"
+export { AttachmentDownloadError, AttachmentRefreshError } from "./attachments.js"
 import { AttachmentDownloadError } from "./attachments.js"
 export type {
     Attachment,
@@ -503,6 +503,9 @@ export type {
     AttachmentFileInput,
     AttachmentFileSource,
     AttachmentInput,
+    AttachmentRefreshFailure,
+    AttachmentRefreshOperation,
+    AttachmentRefreshOptions,
     AttachmentReference,
     AttachmentStreamInput,
     AttachmentStreamReadResult,
@@ -510,13 +513,18 @@ export type {
     AttachmentStreamReaderOptions,
     AttachmentStreamSource,
     DefaultAttachmentDownloadOptions,
+    DefaultAttachmentRefreshOptions,
     DefaultAttachmentStreamOptions,
+    RefreshedAttachmentUrl,
 } from "./attachments.js"
 import type {
     Attachment,
     AttachmentDownloadFailure,
+    AttachmentRefreshFailure,
+    DefaultAttachmentRefreshOptions,
     DefaultAttachmentDownloadOptions,
     DefaultAttachmentStreamOptions,
+    RefreshedAttachmentUrl,
 } from "./attachments.js"
 import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "./reactions.js"
 export type {
@@ -793,7 +801,21 @@ export const commands = defaultCommands
  * ```
  */
 export const supervisor: import("./default-supervisor.js").DefaultSupervisorTools = makeDefaultSupervisor(createClient)
-export type { LoggingOptions, DefaultLoggingOptions, DefaultLogger } from "./logging.js"
+export { fromStructuredLogger } from "./logging.js"
+export type {
+    LoggingOptions,
+    DefaultLoggingOptions,
+    DefaultLogger,
+    SdkLifecycleEvent,
+    SdkLifecycleLogRecord,
+    SdkLogLevel,
+    SdkLogRecord,
+    SdkMeasurementLogRecord,
+    SdkMeasurementOperation,
+    SdkMeasurementStage,
+    SdkOperationalLogRecord,
+    StructuredLogger,
+} from "./logging.js"
 export type { CachePolicyErrorReport, MessageCacheSettings, MessageCacheOptions } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"
 import type {
@@ -816,6 +838,7 @@ import type {
     ChannelOperationError,
     ChannelOperationFailure,
     DefaultChannelOperationOptions,
+    DefaultChannelAuditOperationOptions,
 } from "./channels.js"
 export { ChannelOperationError, ChannelType } from "./channels.js"
 export type {
@@ -834,6 +857,8 @@ export type {
     ChannelOperationFailure,
     ChannelOperationOptions,
     DefaultChannelOperationOptions,
+    ChannelAuditOperationOptions,
+    DefaultChannelAuditOperationOptions,
 } from "./channels.js"
 import {
     channelFetch,
@@ -860,6 +885,7 @@ import {
     type MemberQuery,
     type GuildOperationFailure,
     type DefaultGuildOperationOptions,
+    type DefaultGuildAuditOperationOptions,
 } from "./guilds.js"
 export { GuildOperationError, Permissions } from "./guilds.js"
 export type {
@@ -880,6 +906,8 @@ export type {
     GuildOperationFailure,
     GuildOperationOptions,
     DefaultGuildOperationOptions,
+    GuildAuditOperationOptions,
+    DefaultGuildAuditOperationOptions,
 } from "./guilds.js"
 import {
     guildFetch,
@@ -1027,6 +1055,8 @@ export type {
     MessageFlag,
     MessageSticker,
     MessageMention,
+    MessageUser,
+    ReferencedMessage,
     MessageChannelMention,
     MessageReactionEmoji,
     MessageReactionSummary,
@@ -1121,11 +1151,32 @@ export interface EventHandlerOptions extends HandlerOptions {
 }
 
 /**
- * Download files described by received Attachment data, either all at once or as chunks.
- * Downloads use this client's selected instance, with no gateway connection or cache required.
- * The SDK never sends bot credentials to the download URL or substitutes attachment.proxyUrl
+ * Refresh signed attachment URL strings explicitly, or download received Attachment data all at once or as chunks.
+ * Refresh uses the selected instance's authenticated API. Downloads use its media path, with no gateway connection or cache required.
+ * The SDK never sends bot credentials to a download URL or substitutes attachment.proxyUrl
  */
 export interface Attachments {
+    /**
+     * Ask Fluxer's bot-authenticated API to reissue signatures for 1 through 50 URL strings.
+     * Each string may contain at most 2,048 UTF-16 code units. Strings, duplicate entries and query parameters are sent unchanged
+     *
+     * The frozen result has one original/refreshed pair per input in the same order.
+     * A string outside this instance's attachment URL space is returned unchanged by Fluxer.
+     * Refreshing does not check attachment existence, guild or channel membership, permission to download, or media availability
+     *
+     * This method never downloads media and never sends the bot credential to a requested or refreshed URL.
+     * The credentialed POST follows no redirect. Use download explicitly afterward for a returned URL that belongs to this instance
+     *
+     * timeoutMs defaults to 30,000 across endpoint discovery, shared REST admission, rate-limit waits and the bounded response.
+     * A confirmed 429 can retry after its required wait. An uncertain POST or malformed success is not retried automatically.
+     * Aborting options.signal cancels only this refresh and waits for request cleanup.
+     * HTTP 404 cannot distinguish an older unsupported deployment from an unavailable route or denied access.
+     * No refresh happens automatically when reading messages or downloading attachments
+     */
+    refreshUrls(
+        urls: readonly string[],
+        options?: DefaultAttachmentRefreshOptions,
+    ): ResultAsync<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure | CancelledError | ConfigurationError>
     /**
      * Download attachment.url into one Uint8Array
      *
@@ -3063,6 +3114,8 @@ export interface Guilds {
  * Any dispatched channel change clears the enabled channel cache.
  * Local input failure before dispatch preserves it.
  * No write is followed by an automatic confirmation fetch.
+ * The create, edit, delete, reorder and permission-overwrite mutations accept a raw audit reason through
+ * DefaultChannelAuditOperationOptions. Read operations reject auditReason instead of sending a meaningless header.
  * Expected failures return ChannelOperationError or ClientClosedError.
  * Abort returns CancelledError after cleanup.
  * Unexpected failures reject with SdkDefect
@@ -3151,7 +3204,7 @@ export interface Channels {
     create(
         guildId: string,
         input: ChannelCreate,
-        options?: DefaultChannelOperationOptions,
+        options?: DefaultChannelAuditOperationOptions,
     ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change only the supplied channel settings and return the frozen server snapshot.
@@ -3166,7 +3219,7 @@ export interface Channels {
     edit(
         channelId: string,
         input: ChannelEdit,
-        options?: DefaultChannelOperationOptions,
+        options?: DefaultChannelAuditOperationOptions,
     ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete a guild channel and return Ok(undefined) after HTTP 204.
@@ -3176,7 +3229,7 @@ export interface Channels {
      */
     delete(
         channelId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: DefaultChannelAuditOperationOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Submit guild-channel moves and return Ok(undefined) after HTTP 204.
@@ -3185,12 +3238,13 @@ export interface Channels {
      * A bulk channel event can arrive before that copy finishes.
      * Failures can leave partial movement because this is not a transaction.
      * Use fetchAll afterward when final order matters.
+     * Fluxer currently accepts auditReason on this route without retaining it in an audit entry.
      * No reordered list is invented locally
      */
     reorder(
         guildId: string,
         positions: readonly ChannelPosition[],
-        options?: DefaultChannelOperationOptions,
+        options?: DefaultChannelAuditOperationOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Replace one explicit role or member permission overwrite.
@@ -3203,7 +3257,7 @@ export interface Channels {
     setPermissionOverwrite(
         channelId: string,
         input: PermissionOverwrite,
-        options?: DefaultChannelOperationOptions,
+        options?: DefaultChannelAuditOperationOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove one explicit permission overwrite by decimal role or member target ID.
@@ -3215,7 +3269,7 @@ export interface Channels {
     removePermissionOverwrite(
         channelId: string,
         targetId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: DefaultChannelAuditOperationOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
 }
 
@@ -3229,6 +3283,8 @@ export interface Channels {
  *
  * Writes retry only confirmed HTTP 429 rejection.
  * Cancellation cannot undo a dispatched change
+ * The setRoles, editSelf, setNickname, addRole and removeRole methods accept DefaultGuildAuditOperationOptions.
+ * Member reads and searches reject auditReason. Moderation methods keep their more specific audited option types
  */
 export interface Members {
     /**
@@ -3290,7 +3346,7 @@ export interface Members {
     ): AsyncIterable<Result<MemberChunk, MemberChunkFailure | CancelledError | ConfigurationError>>
     /**
      * Replace one member's entire assigned role list in a single PATCH request.
-     * Use 0–250 distinct positive decimal role IDs.
+     * Use 0–250 distinct positive decimal role IDs no greater than 9,223,372,036,854,775,807.
      * [] clears assigned roles.
      * Do not include the implicit everyone role
      *
@@ -3319,7 +3375,7 @@ export interface Members {
     setRoles(
         member: MemberReference,
         roleIds: readonly string[],
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Search Fluxer's member index for a guild, without using or populating the member cache.
@@ -3331,6 +3387,7 @@ export interface Members {
      * Counts do not guarantee completeness
      *
      * Join-source and invite filters first fetch the bot's guild permissions and require ManageGuild.
+     * The three independent precheck reads run concurrently under the same total deadline. A failure cancels sibling reads.
      * Known permission denial returns members.search/rejected with outcome notDispatched and no HTTP status.
      * The precheck prevents knowingly sending ignored filters, but permissions can still change before search.
      * Other queries have no hidden reads.
@@ -3395,7 +3452,7 @@ export interface Members {
     editSelf(
         guildId: string,
         input: MemberProfileEdit,
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set one member's nickname, or pass null to clear it.
@@ -3423,7 +3480,7 @@ export interface Members {
     setNickname(
         member: MemberReference,
         nickname: string | null,
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Move a member who is already in voice to a positive decimal voice-channel ID.
@@ -3669,6 +3726,7 @@ export interface Members {
      * The example collects one future reaction addition before assigning the role.
      * Supply a connected client, an existing message in this guild and a role the bot can assign.
      * A timeout can collect nothing.
+     * Fluxer currently accepts auditReason on member-role add/remove routes without retaining it in an audit entry.
      * This is not a persistent reaction-role system and does not revoke roles on removal
      *
      * @example
@@ -3694,7 +3752,7 @@ export interface Members {
     addRole(
         member: MemberReference,
         roleId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove one role from a member while leaving other roles unchanged.
@@ -3705,7 +3763,7 @@ export interface Members {
     removeRole(
         member: MemberReference,
         roleId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }
 
@@ -3759,6 +3817,7 @@ export interface PermissionHelpers {
  * Inputs are copied when called.
  * Results are snapshots, not gateway acknowledgement.
  * Role permissions use bigint, which you must convert explicitly before JSON serialization
+ * Every remote role mutation accepts DefaultGuildAuditOperationOptions. The fetchAll method rejects auditReason
  */
 export interface Roles {
     /**
@@ -3801,7 +3860,7 @@ export interface Roles {
     create(
         guildId: string,
         input: RoleCreate,
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change only the role fields you supply and return the server's snapshot.
@@ -3815,7 +3874,7 @@ export interface Roles {
     edit(
         role: RoleReference,
         input: RoleEdit,
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete a role and remove its member assignments in Fluxer.
@@ -3825,7 +3884,7 @@ export interface Roles {
      */
     delete(
         role: RoleReference,
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change role hierarchy positions using distinct role IDs and nonnegative safe-integer positions.
@@ -3838,7 +3897,7 @@ export interface Roles {
     reorder(
         guildId: string,
         positions: readonly RolePosition[],
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set roles' display positions without changing their permission hierarchy or enabling hoist.
@@ -3861,7 +3920,7 @@ export interface Roles {
     setHoistPositions(
         guildId: string,
         positions: readonly RoleHoistPosition[],
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Clear display-position assignments across the guild, including roles above the bot.
@@ -3874,7 +3933,7 @@ export interface Roles {
      */
     resetHoistPositions(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }
 
@@ -4208,7 +4267,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      */
     readonly members: Members
     /**
-     * Download received attachments from this instance's discovered media path, with explicit byte limits
+     * Refresh signed attachment URLs explicitly or download from this instance's discovered media path with byte limits
      */
     readonly attachments: Attachments
     /**
@@ -4324,6 +4383,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * No request, telemetry or persistent record is created.
      * The report excludes tokens, routes, resource IDs and payloads.
      * Counts cover only this client's assigned shards and local work.
+     * Event counts include open sources, message/reaction collectors and executing subscription handlers, not an enforced client-wide admission quota.
      * Accounted cache and queue bytes are not heap memory, process memory or remote storage.
      * After closure, configured limits remain visible and retained counts show cleanup progress.
      * These values do not prove remote completeness or gateway readiness.
@@ -4491,6 +4551,7 @@ type OperationFailure =
     | PresenceError
     | PaginationError
     | AttachmentDownloadFailure
+    | AttachmentRefreshFailure
     | OAuthOperationFailure
 
 const executeOperation = <A, E extends OperationFailure>(
@@ -4860,7 +4921,8 @@ export interface Users {
     get(id: string): Result<User | undefined, UserOperationFailure>
     /**
      * Fetch a public account snapshot by decimal user ID.
-     * An unknown user returns notFound rather than an empty result
+     * An unknown user returns notFound rather than an empty result.
+     * An enabled user cache admits this ID independently of unrelated targeted user reads
      */
     fetch(
         id: string,
@@ -4893,7 +4955,8 @@ export interface Users {
     ): ResultAsync<UserProfile, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the authenticated bot's public account data remotely.
-     * Private account fields are excluded
+     * Private account fields are excluded.
+     * Because its ID is not known before the response, enabled user-cache conflict handling is collection-wide
      */
     fetchSelf(
         options?: DefaultUserOperationOptions,
@@ -4918,6 +4981,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * Sized file and finite stream bytes are read later, using messages.send's source limits and cleanup rules.
      * MessageError with delivery notSent does not mean opening the conversation was undone.
      * An uncertain send is never replayed automatically.
+     * Opening by user ID uses collection-wide direct-message cache conflict handling because the channel ID is not known yet.
      * Reply references are not accepted here.
      * Use messages.reply with an existing channel and message reference
      *
@@ -4946,7 +5010,8 @@ export interface DirectMessages<M extends MessageCore = Message> {
     /**
      * Open or reopen a one-to-one conversation with the selected user.
      * The result is a private channel, not proof a message can be delivered.
-     * Privacy checks can still prevent sending after opening succeeds
+     * Privacy checks can still prevent sending after opening succeeds.
+     * Because the channel ID is not known before the response, enabled direct-message cache conflict handling is collection-wide
      */
     open(
         userId: string,
@@ -4954,7 +5019,8 @@ export interface DirectMessages<M extends MessageCore = Message> {
     ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch a private channel by decimal ID.
-     * A guild-channel response is rejected as invalid
+     * A guild-channel response is rejected as invalid.
+     * An enabled cache admits this ID independently of unrelated targeted private-channel reads
      */
     fetch(
         id: string,
@@ -4963,7 +5029,8 @@ export interface DirectMessages<M extends MessageCore = Message> {
     /**
      * Fetch this bot's currently open one-to-one and group conversations.
      * Personal notes are excluded.
-     * The list is neither an atomic snapshot nor complete message history
+     * The list is neither an atomic snapshot nor complete message history.
+     * Enabled cache replacement is skipped when a later targeted request or channel observation conflicts
      */
     fetchAll(
         options?: DefaultUserOperationOptions,
@@ -4986,7 +5053,8 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * A null name clears it.
      * Omitted fields remain unchanged.
      * Fluxer enforces member and owner permissions.
-     * A failed response does not guarantee rollback
+     * A failed response does not guarantee rollback.
+     * Enabled cache invalidation remains scoped to this conversation unless a collection-wide fence occurs
      */
     editGroup(
         id: string,
@@ -4996,7 +5064,8 @@ export interface DirectMessages<M extends MessageCore = Message> {
     /**
      * Close a one-to-one conversation for this bot, or leave a group conversation.
      * Another recipient's conversation is not erased.
-     * If the group owner leaves, ownership may transfer
+     * If the group owner leaves, ownership may transfer.
+     * Enabled cache invalidation remains scoped to this conversation unless a collection-wide fence occurs
      */
     close(
         id: string,
@@ -5005,7 +5074,8 @@ export interface DirectMessages<M extends MessageCore = Message> {
     /**
      * Remove a group recipient as owner, or remove the bot itself.
      * This does not request deletion of that user's messages.
-     * If the last recipient leaves, Fluxer deletes the group
+     * If the last recipient leaves, Fluxer deletes the group.
+     * Enabled cache invalidation remains scoped to this conversation unless a collection-wide fence occurs
      */
     removeRecipient(
         id: string,
@@ -5754,19 +5824,19 @@ export function createClient<const F extends MessageFields | undefined = undefin
                         "channels.fetchAll",
                         options,
                     ),
-                create: (id: string, input: ChannelCreate, options?: DefaultChannelOperationOptions) =>
+                create: (id: string, input: ChannelCreate, options?: DefaultChannelAuditOperationOptions) =>
                     execute(
                         owner.channel("channels.create", () => channelCreate(id, input), options),
                         "channels.create",
                         options,
                     ),
-                edit: (id: string, input: ChannelEdit, options?: DefaultChannelOperationOptions) =>
+                edit: (id: string, input: ChannelEdit, options?: DefaultChannelAuditOperationOptions) =>
                     execute(
                         owner.channel("channels.edit", () => channelEdit(id, input), options),
                         "channels.edit",
                         options,
                     ),
-                delete: (id: string, options?: DefaultChannelOperationOptions) =>
+                delete: (id: string, options?: DefaultChannelAuditOperationOptions) =>
                     execute(
                         owner.channel("channels.delete", () => channelDelete(id), options),
                         "channels.delete",
@@ -5775,7 +5845,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                 reorder: (
                     id: string,
                     positions: readonly ChannelPosition[],
-                    options?: DefaultChannelOperationOptions,
+                    options?: DefaultChannelAuditOperationOptions,
                 ) =>
                     execute(
                         owner.channel("channels.reorder", () => channelReorder(id, positions), options),
@@ -5785,14 +5855,18 @@ export function createClient<const F extends MessageFields | undefined = undefin
                 setPermissionOverwrite: (
                     id: string,
                     input: PermissionOverwrite,
-                    options?: DefaultChannelOperationOptions,
+                    options?: DefaultChannelAuditOperationOptions,
                 ) =>
                     execute(
                         owner.channel("channels.setPermissionOverwrite", () => permissionSet(id, input), options),
                         "channels.setPermissionOverwrite",
                         options,
                     ),
-                removePermissionOverwrite: (id: string, targetId: string, options?: DefaultChannelOperationOptions) =>
+                removePermissionOverwrite: (
+                    id: string,
+                    targetId: string,
+                    options?: DefaultChannelAuditOperationOptions,
+                ) =>
                     execute(
                         owner.channel(
                             "channels.removePermissionOverwrite",
@@ -5808,7 +5882,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                 setRoles: (
                     target: MemberReference,
                     roleIds: readonly string[],
-                    options?: DefaultGuildOperationOptions,
+                    options?: DefaultGuildAuditOperationOptions,
                 ) =>
                     execute(
                         owner.guild("members.setRoles", () => memberRolesSet(target, roleIds), options),
@@ -5828,7 +5902,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                         "members.iterateSearch",
                         options,
                     ),
-                editSelf: (guildId: string, input: MemberProfileEdit, options?: DefaultGuildOperationOptions) =>
+                editSelf: (guildId: string, input: MemberProfileEdit, options?: DefaultGuildAuditOperationOptions) =>
                     execute(
                         owner.guild("members.editSelf", () => memberEditSelf(guildId, input), options),
                         "members.editSelf",
@@ -5837,7 +5911,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                 setNickname: (
                     target: MemberReference,
                     nickname: string | null,
-                    options?: DefaultGuildOperationOptions,
+                    options?: DefaultGuildAuditOperationOptions,
                 ) =>
                     execute(
                         owner.guild("members.setNickname", () => memberNicknameEdit(target, nickname), options),
@@ -5913,13 +5987,13 @@ export function createClient<const F extends MessageFields | undefined = undefin
                         "members.fetchPage",
                         options,
                     ),
-                addRole: (target: MemberReference, id: string, options?: DefaultGuildOperationOptions) =>
+                addRole: (target: MemberReference, id: string, options?: DefaultGuildAuditOperationOptions) =>
                     execute(
                         owner.guild("members.addRole", () => memberRole(target, id, true), options),
                         "members.addRole",
                         options,
                     ),
-                removeRole: (target: MemberReference, id: string, options?: DefaultGuildOperationOptions) =>
+                removeRole: (target: MemberReference, id: string, options?: DefaultGuildAuditOperationOptions) =>
                     execute(
                         owner.guild("members.removeRole", () => memberRole(target, id, false), options),
                         "members.removeRole",
@@ -5935,14 +6009,14 @@ export function createClient<const F extends MessageFields | undefined = undefin
                 setHoistPositions: (
                     id: string,
                     positions: readonly RoleHoistPosition[],
-                    options?: DefaultGuildOperationOptions,
+                    options?: DefaultGuildAuditOperationOptions,
                 ) =>
                     execute(
                         owner.guild("roles.setHoistPositions", () => roleSetHoistPositions(id, positions), options),
                         "roles.setHoistPositions",
                         options,
                     ),
-                resetHoistPositions: (id: string, options?: DefaultGuildOperationOptions) =>
+                resetHoistPositions: (id: string, options?: DefaultGuildAuditOperationOptions) =>
                     execute(
                         owner.guild("roles.resetHoistPositions", () => roleResetHoistPositions(id), options),
                         "roles.resetHoistPositions",
@@ -5955,25 +6029,29 @@ export function createClient<const F extends MessageFields | undefined = undefin
                         "roles.fetchAll",
                         options,
                     ),
-                create: (id: string, input: RoleCreate, options?: DefaultGuildOperationOptions) =>
+                create: (id: string, input: RoleCreate, options?: DefaultGuildAuditOperationOptions) =>
                     execute(
                         owner.guild("roles.create", () => roleCreate(id, input), options),
                         "roles.create",
                         options,
                     ),
-                edit: (target: RoleReference, input: RoleEdit, options?: DefaultGuildOperationOptions) =>
+                edit: (target: RoleReference, input: RoleEdit, options?: DefaultGuildAuditOperationOptions) =>
                     execute(
                         owner.guild("roles.edit", () => roleEdit(target, input), options),
                         "roles.edit",
                         options,
                     ),
-                delete: (target: RoleReference, options?: DefaultGuildOperationOptions) =>
+                delete: (target: RoleReference, options?: DefaultGuildAuditOperationOptions) =>
                     execute(
                         owner.guild("roles.delete", () => roleDelete(target), options),
                         "roles.delete",
                         options,
                     ),
-                reorder: (id: string, positions: readonly RolePosition[], options?: DefaultGuildOperationOptions) =>
+                reorder: (
+                    id: string,
+                    positions: readonly RolePosition[],
+                    options?: DefaultGuildAuditOperationOptions,
+                ) =>
                     execute(
                         owner.guild("roles.reorder", () => roleReorder(id, positions), options),
                         "roles.reorder",
@@ -5981,6 +6059,8 @@ export function createClient<const F extends MessageFields | undefined = undefin
                     ),
             }),
             attachments: Object.freeze({
+                refreshUrls: (urls: readonly string[], options?: DefaultAttachmentRefreshOptions) =>
+                    execute(owner.refreshAttachmentUrls(urls, options), "attachments.refreshUrls", options),
                 download: (attachment: Attachment, options: DefaultAttachmentDownloadOptions) =>
                     execute(owner.downloadAttachment(attachment, options), "attachments.download", options),
                 stream: (attachment: Attachment, options: DefaultAttachmentStreamOptions) =>
@@ -6356,6 +6436,8 @@ export interface OAuthClient {
     ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Exchange a refresh token for a new token pair.
+     * Form tokens must contain 1–256 well-formed UTF-16 units without surrounding whitespace, U+000C or U+202E.
+     * Invalid values fail locally rather than being normalized. This also applies to revoke and introspect tokens.
      * Fluxer rotates refresh tokens, so your application must coordinate refreshes and atomically replace the stored pair after success.
      * An uncertain result must not be retried
      */

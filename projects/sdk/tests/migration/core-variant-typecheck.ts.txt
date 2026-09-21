@@ -1,0 +1,44 @@
+import { Client, Events, type Message } from "@fluxerjs/core"
+
+export async function installCoreVariant(client: Client, greeting: (userId: string) => Promise<string>) {
+    const handler = async (message: Message) => {
+        if (message.content !== "!hello") return
+        await message.reply({ content: await greeting(message.author.id), allowedMentions: { parse: [] } })
+    }
+    client.on(Events.MessageCreate, handler)
+    return () => client.off(Events.MessageCreate, handler)
+}
+
+export async function readCoreHistory(client: Client, channelId: string, maxItems: number) {
+    const channel = await client.channels.fetch(channelId)
+    if (!channel.isTextBased()) throw new Error("Expected a text channel")
+    const messages: Message[] = []
+    let before: string | undefined
+    while (messages.length < maxItems) {
+        const page = await channel.messages.fetch({
+            limit: Math.min(100, maxItems - messages.length),
+            ...(before ? { before } : {}),
+        })
+        if (page.size === 0) break
+        messages.push(...page.values())
+        before = messages.at(-1)?.id
+    }
+    return messages
+}
+
+export async function kickCoreMember(client: Client, guildId: string, userId: string, reason: string) {
+    const guild = await client.guilds.fetch(guildId)
+    await guild.kick(userId, reason)
+}
+
+export function coreHealth(client: Client) {
+    return {
+        gateway: client.isReady() ? "ready" : "notStarted",
+        gatewayPingMs: client.isReady() ? client.ws.ping : null,
+        cache: client.cache.stats(),
+    }
+}
+
+export async function closeCore(client: Client) {
+    await client.destroy()
+}

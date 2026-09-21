@@ -21,6 +21,7 @@ import type { MessageReaction, MessageReactionBatch } from "#sdk/reactions"
 import { withDeadline } from "./effect-failures.js"
 import { record } from "./message.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
+import type { ClientLogging } from "./logging.js"
 
 type Resume<A> = (value: Effect.Effect<A | null, EventOverflowError>) => void
 type Limits = Required<HandlerOptions>
@@ -288,6 +289,8 @@ class EventWait<K extends EventName, M extends MessageCore = Message> implements
 }
 
 export class EventBus<M extends MessageCore = Message> {
+    constructor(private readonly logging?: () => ClientLogging) {}
+
     #reactionCollectors = new Map<
         string,
         Set<(reaction: MessageReaction | MessageReactionBatch, bytes: number, shardId: number) => void>
@@ -376,6 +379,17 @@ export class EventBus<M extends MessageCore = Message> {
     #handlerFibers = new Set<number>()
     ownsHandler(fiberId: number) {
         return this.#handlerFibers.has(fiberId)
+    }
+    diagnostics() {
+        return {
+            subscriptions: Object.values(this.#sources).reduce((total, sources) => total + sources.size, 0),
+            messageCollectors: [...this.#collectors.values()].reduce((total, listeners) => total + listeners.size, 0),
+            reactionCollectors: [...this.#reactionCollectors.values()].reduce(
+                (total, listeners) => total + listeners.size,
+                0,
+            ),
+            activeHandlers: this.#handlerFibers.size,
+        }
     }
     open<K extends EventName>(
         event: K,
@@ -484,8 +498,27 @@ export class EventBus<M extends MessageCore = Message> {
                     Effect.withFiber((fiber) =>
                         Effect.gen(function* () {
                             bus.#handlerFibers.add(fiber.id)
+                            const logging = bus.logging?.()
+                            const clock = logging?.measurements ? yield* Clock.Clock : undefined
+                            const startedAt = clock ? Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 : 0
                             yield* Effect.scoped(Effect.suspend(() => handler(message))).pipe(
-                                Effect.onExit((exit) => Effect.sync(() => source.recordCleanup(exit))),
+                                Effect.onExit((exit) =>
+                                    Effect.sync(() => {
+                                        source.recordCleanup(exit)
+                                        if (!logging?.measurements || !clock) return
+                                        logging.emitMeasurement(fiber, {
+                                            operation: "event.handler",
+                                            stage: "handler",
+                                            durationMs:
+                                                Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 - startedAt,
+                                            outcome: Exit.isSuccess(exit)
+                                                ? "success"
+                                                : Cause.hasInterrupts(exit.cause)
+                                                  ? "cancelled"
+                                                  : "failure",
+                                        })
+                                    }),
+                                ),
                                 Effect.catchCause((cause) => {
                                     if (Cause.hasInterrupts(cause))
                                         return Effect.failCause(

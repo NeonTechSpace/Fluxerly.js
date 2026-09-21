@@ -20,6 +20,8 @@ export interface ChannelRequest<A> {
     readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"
     readonly status: 200 | 204
     readonly json?: string
+    /** Allows the shared REST owner to validate and send an operation audit reason */
+    readonly audited?: true
     /** Private client capabilities required for one explicit provider-gated replacement */
     readonly features?: readonly string[]
     readonly decode: (value: unknown) => A | undefined
@@ -444,6 +446,7 @@ export function channelCreate(guildId: string, input: ChannelCreate): ChannelVal
     return {
         majorId: guildId,
         bucket: "guild:channel:create",
+        audited: true,
         path: `/guilds/${guildId}/channels`,
         method: "POST",
         status: 200,
@@ -465,6 +468,7 @@ export function channelEdit(channelId: string, input: ChannelEdit): ChannelValid
     return {
         majorId: channelId,
         bucket: "channel:update",
+        audited: true,
         path: `/channels/${channelId}`,
         method: "PATCH",
         status: 200,
@@ -484,6 +488,7 @@ export function channelDelete(channelId: string): ChannelValidationResult<void> 
     return {
         majorId: channelId,
         bucket: "channel:delete",
+        audited: true,
         path: `/channels/${channelId}`,
         method: "DELETE",
         status: 204,
@@ -551,6 +556,7 @@ export function channelReorder(guildId: string, positions: readonly ChannelPosit
     return {
         majorId: guildId,
         bucket: "guild:channel:positions",
+        audited: true,
         path: `/guilds/${guildId}/channels`,
         method: "PATCH",
         status: 204,
@@ -589,6 +595,7 @@ export function permissionSet(channelId: string, input: PermissionOverwrite): Ch
     return {
         majorId: channelId,
         bucket: "channel:update",
+        audited: true,
         path: `/channels/${channelId}/permissions/${input.id}`,
         method: "PUT",
         status: 204,
@@ -607,6 +614,7 @@ export function permissionRemove(channelId: string, targetId: string): ChannelVa
     return {
         majorId: channelId,
         bucket: "channel:update",
+        audited: true,
         path: `/channels/${channelId}/permissions/${targetId}`,
         method: "DELETE",
         status: 204,

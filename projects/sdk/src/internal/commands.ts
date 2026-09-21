@@ -227,8 +227,8 @@ export type LocalMemoryResult<A> =
 export interface LocalMemoryCooldownStore {
     readonly maxEntries: number
     readonly size: number
-    claim(input: unknown): LocalMemoryResult<CommandCooldownClaim>
-    sweep(): number
+    claim(input: unknown, now?: number): LocalMemoryResult<CommandCooldownClaim>
+    sweep(now?: number): number
     clear(): void
 }
 
@@ -576,10 +576,9 @@ class LocalMemoryCooldownStoreOwner implements LocalMemoryCooldownStore {
         return this.entries.size
     }
 
-    claim(input: unknown): LocalMemoryResult<CommandCooldownClaim> {
+    claim(input: unknown, now = Date.now()): LocalMemoryResult<CommandCooldownClaim> {
         const request = validateMemoryRequest(input)
         if (request._tag === "Failure") return request
-        const now = Date.now()
         this.sweepAt(now)
         const active = this.entries.get(request.value.key)
         if (active !== undefined && active > now)
@@ -595,8 +594,8 @@ class LocalMemoryCooldownStoreOwner implements LocalMemoryCooldownStore {
         return success(Object.freeze({ _tag: "CooldownAcquired", retryAtMs }))
     }
 
-    sweep(): number {
-        return this.sweepAt(Date.now())
+    sweep(now = Date.now()): number {
+        return this.sweepAt(now)
     }
 
     clear(): void {

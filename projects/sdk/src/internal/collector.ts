@@ -1,4 +1,4 @@
-import { Cause, Clock, Deferred, Effect, Exit, type Fiber } from "effect"
+import { Cause, Deferred, Effect, Exit, type Fiber } from "effect"
 import type { ConnectionState, OperationOptions } from "#sdk/client"
 import {
     CollectorError,
@@ -12,6 +12,7 @@ import type { Message, MessageCore } from "#sdk/messages"
 import type { ClientOwner } from "./client.js"
 import { identifier, record } from "./message.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
+import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
 type Settings<M extends MessageCore> = Required<Omit<CollectorOptions<M>, "filter" | "guildId" | "idleMs">> &
     Pick<CollectorOptions<M>, "filter" | "guildId"> & { readonly idleMs: number | undefined } & OperationOptions
@@ -100,7 +101,7 @@ export class MessageCollector<M extends MessageCore = Message> {
     #messages: M[] = []
     #ids = new Set<string>()
     #bytes = 0
-    #timer: ReturnType<typeof setTimeout> | undefined
+    #timer: LogicalTimer | undefined
     #drain: ReturnType<typeof setImmediate> | undefined
     #release: (() => void) | undefined
     #settings: Settings<M> | undefined
@@ -176,7 +177,7 @@ export class MessageCollector<M extends MessageCore = Message> {
 
     constructor(
         settings: Settings<M>,
-        private readonly clock: Clock.Clock,
+        private readonly logical: LogicalScheduler,
     ) {
         this.#settings = settings
         const now = this.#now()
@@ -185,7 +186,7 @@ export class MessageCollector<M extends MessageCore = Message> {
     }
 
     #now() {
-        return Number(this.clock.monotonicTimeNanosUnsafe()) / 1_000_000
+        return this.logical.now()
     }
 
     start(owner: ClientOwner<M>, channelId: string) {
@@ -221,7 +222,7 @@ export class MessageCollector<M extends MessageCore = Message> {
     }
 
     #scheduleDeadline() {
-        this.#timer = setTimeout(
+        this.#timer = this.logical.set(
             () => {
                 this.#timer = undefined
                 this.#guard(() => {
@@ -229,6 +230,7 @@ export class MessageCollector<M extends MessageCore = Message> {
                 })
             },
             Math.max(1, Math.ceil(Math.min(this.#deadline, this.#idleDeadline) - this.#now())),
+            "message collector",
         )
     }
 
@@ -326,7 +328,7 @@ export class MessageCollector<M extends MessageCore = Message> {
     #finish(outcome: Exit.Exit<CollectorResult<M>, CollectorFailure>) {
         if (!this.#active) return
         this.#active = false
-        if (this.#timer !== undefined) clearTimeout(this.#timer)
+        this.logical.clear(this.#timer)
         if (this.#drain !== undefined) clearImmediate(this.#drain)
         this.#timer = undefined
         this.#drain = undefined
@@ -375,8 +377,7 @@ export function collect<E = never, R = never, M extends MessageCore = Message>(
             owner.gatewayState(config.guildId) !== "Connected"
         )
             return yield* Effect.fail(new CollectorError("notConnected"))
-        const clock = yield* Clock.Clock
-        const collector = new MessageCollector<M>(config, clock)
+        const collector = new MessageCollector<M>(config, owner.logical)
         if (handler) yield* collector.run(owner, handler)
         collector.start(owner, channelId)
         return collector

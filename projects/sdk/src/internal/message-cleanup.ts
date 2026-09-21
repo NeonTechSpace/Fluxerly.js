@@ -194,8 +194,12 @@ function selection<M extends MessageCore>(value: unknown): ValidSelection<M> | I
     }
 }
 
-function remaining(deadline: number, signal: AbortSignal | undefined): MessageOperationOptions | undefined {
-    const timeoutMs = Math.floor(deadline - performance.now())
+function remaining(
+    deadline: number,
+    signal: AbortSignal | undefined,
+    now: () => number,
+): MessageOperationOptions | undefined {
+    const timeoutMs = Math.floor(deadline - now())
     return timeoutMs > 0 ? { timeoutMs, ...(signal === undefined ? {} : { signal }) } : undefined
 }
 
@@ -272,14 +276,15 @@ export function previewCleanup<M extends MessageCore = Message>(
             return invalid(inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings"))
         if (selected instanceof InputValidationFailure) return invalid(selected)
         if (requestOptions instanceof InputValidationFailure) return invalid(requestOptions)
-        const deadline = performance.now() + (requestOptions.timeoutMs ?? 30_000)
         return Effect.gen(function* () {
+            const now = () => owner.logical.now()
+            const deadline = now() + (requestOptions.timeoutMs ?? 30_000)
             const messages: M[] = []
             let scannedCount = 0
             let before: string | undefined
             let stopReason: MessageCleanupStopReason = "historyExhausted"
             while (scannedCount < selected.maxScanned && messages.length < selected.maxSelected) {
-                const options = remaining(deadline, requestOptions.signal)
+                const options = remaining(deadline, requestOptions.signal, now)
                 if (!options)
                     return yield* Effect.fail(
                         error("preview", "timeout", "notDispatched", scannedCount, selectedIds(messages), []),
@@ -309,7 +314,7 @@ export function previewCleanup<M extends MessageCore = Message>(
                             error("preview", "filter", "notDispatched", scannedCount, selectedIds(messages), []),
                         ),
                     )
-                    if (!remaining(deadline, requestOptions.signal))
+                    if (!remaining(deadline, requestOptions.signal, now))
                         return yield* Effect.fail(
                             error("preview", "timeout", "notDispatched", scannedCount, selectedIds(messages), []),
                         )
@@ -373,12 +378,13 @@ export function cleanup<M extends MessageCore = Message>(
         consumedPlans.add(plan)
         const notify = progressCallback(suppliedOptions)
         const ids = selectedIds(plan.selectedMessages)
-        const deadline = performance.now() + (requestOptions.timeoutMs ?? 30_000)
         return Effect.gen(function* () {
+            const now = () => owner.logical.now()
+            const deadline = now() + (requestOptions.timeoutMs ?? 30_000)
             const submitted: MessageCleanupBatch[] = []
             for (let offset = 0; offset < ids.length; offset += 100) {
                 const current = batch(offset / 100, ids.slice(offset, offset + 100))
-                if (!remaining(deadline, requestOptions.signal))
+                if (!remaining(deadline, requestOptions.signal, now))
                     return yield* Effect.fail(
                         error("cleanup", "timeout", "notDispatched", plan.scannedCount, ids, submitted),
                     )
@@ -387,7 +393,7 @@ export function cleanup<M extends MessageCore = Message>(
                         error("cleanup", "closed", "notDispatched", plan.scannedCount, ids, submitted),
                     )
                 yield* Effect.sync(() => notify?.(Object.freeze({ state: "submitting", batch: current })))
-                const options = remaining(deadline, requestOptions.signal)
+                const options = remaining(deadline, requestOptions.signal, now)
                 if (!options)
                     return yield* Effect.fail(
                         error("cleanup", "timeout", "notDispatched", plan.scannedCount, ids, submitted),

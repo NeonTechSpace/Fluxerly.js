@@ -68,6 +68,8 @@ Registry release commands enforce the [registry publication contract](/docs/RELE
 | [channels.ts](/projects/sdk/src/internal/channels.ts) | Guild channel request validation and REST/event projection, with scheduling owned by shared REST |
 | [embeds.ts](/projects/sdk/src/internal/embeds.ts) | Rich-embed input validation and frozen received embed projection |
 | [attachments.ts](/projects/sdk/src/internal/attachments.ts) | File validation and metadata projection |
+| [attachment-refresh.ts](/projects/sdk/src/internal/attachment-refresh.ts) | Explicit signed-URL refresh request and ordered response validation, with scheduling and credentials owned by shared REST |
+| [audit.ts](/projects/sdk/src/internal/audit.ts) | Shared audit-reason validation for provider-supported mutations, without adding headers to reads |
 | [uploads.ts](/projects/sdk/src/internal/uploads.ts) | Presigned plan validation, with REST owning scheduling, direct uploads, downloads and message completion |
 | [response-json.ts](/projects/sdk/src/internal/response-json.ts) | Bounded REST success-JSON parsing and awaited reader cleanup, with REST selecting the general or upload-response budget |
 | [cache.ts](/projects/sdk/src/internal/cache.ts) | Cache retention and conflicting observations |
@@ -77,7 +79,8 @@ Registry release commands enforce the [registry publication contract](/docs/RELE
 | [cache-reports.ts](/projects/sdk/src/internal/cache-reports.ts) | Cache reporting lifetime |
 | [collector.ts](/projects/sdk/src/internal/collector.ts) | Collector budgets, deadlines and cleanup |
 | [reaction-collector.ts](/projects/sdk/src/internal/reaction-collector.ts) | Message-targeted reaction collection, batch intake, budgets and cleanup |
-| [logging.ts](/projects/sdk/src/internal/logging.ts) | Per-client logging configuration, Effect adapter and safe lifecycle diagnostics |
+| [logging.ts](/projects/sdk/src/internal/logging.ts) | Per-client logging configuration, Effect and structured adapters, safe lifecycle diagnostics and opt-in stage measurements |
+| [logical-scheduler.ts](/projects/sdk/src/internal/logical-scheduler.ts) | Scope-owned logical timers shared by SDK owners, separate from host-safety watchdogs and protocol wall time |
 
 Keep public API signatures and caller documentation in source, and user guides/reference in the website.
 Use [SDK tests](/projects/sdk/tests/) for behavior checks and [packed consumers](/projects/sdk/tests/consumers/) for package-boundary checks.
@@ -144,7 +147,7 @@ Run these commands from [projects/](/projects/) using the development Node versi
 | `pnpm --filter @neontechspace/fluxerly format` | Format SDK source, tests and configuration with Prettier |
 | `pnpm --filter @neontechspace/fluxerly format:check` | Check SDK formatting without writing files |
 | `pnpm check` | Check SDK formatting, build, public-client surface, types, runtime and packed consumers, then release tooling tests and website build, types and tests |
-| `pnpm --filter @neontechspace/fluxerly test:public-contract` | Check paired public client namespace names, runtime keys and JSDoc presence |
+| `pnpm --filter @neontechspace/fluxerly test:public-contract` | Check paired client namespace names, runtime keys, structural parameter/result parity and JSDoc presence |
 | `pnpm --filter @neontechspace/fluxerly test:npm` | Check npm installation of the packed SDK and required Effect peer |
 | `pnpm docs:dev` | Build the SDK, generate its public reference and start local Astro development |
 | `pnpm --filter fluxerly-docs test:browser` | Check the rendered development documentation in Chromium |
@@ -168,8 +171,9 @@ It does not depend on npm being bundled with the Node installation or install np
 The Effect unstable HTTP/socket transport characterization remains opt-in because it demonstrates an adapter cleanup limitation, not a production transport choice.
 The default SDK checks retain selected `ws` transport coverage and built SDK natural-exit checks
 
-The public-client contract covers only its inventoried default/native client interfaces and direct runtime namespace keys.
-It does not compare member types or behavior, assess comment accuracy, or cover every type-only export
+The public-client contract covers its inventoried default/native client namespace interfaces, direct runtime keys and structural parameter/result parity, with explicit exceptions for API-specific lifetime and effect contracts.
+Mutation fixtures verify that dropped options and projected fields fail the comparison.
+It does not establish behavioral parity, assess comment accuracy, or cover every standalone client or type-only export
 
 The upstream guild-feature check pins one current Fluxer commit per run and fails on changed values or unrecognized source structure.
 It is a manual source-drift signal, not hosted behavior proof; the live feature-toggle check owns semantic round trips and restoration
@@ -280,11 +284,11 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:events` | Gateway delivery after raw API mutations | Temporary channel/messages and test-message edits/deletions |
 | `test:live:reactions` | Unicode/custom reactions, collectors, reactor readback, clear events and recovery | Temporary channel/messages, reactions and guild emoji, plus test-socket termination |
 | `test:live:pins` | Pin/unpin, explicit pages, pin status/events and recovery | Temporary channel/messages and pins, server-created pin notices, plus test-socket termination |
-| `test:live:guilds` | Guild/member reads, reaction-driven role assignment, role management/events, optional caches and recovery | Temporary channel/messages, two zero-permission test roles with assignment only to the designated bot, plus test-socket termination and test-owned response loss |
+| `test:live:guilds` | Guild/member reads, audit-header reaction roles, role management/events with target-and-reason audit readback, optional caches and recovery | Temporary channel/messages, two zero-permission test roles with assignment only to the designated bot, plus test-socket termination and test-owned response loss |
 | `test:live:guild-events` | Bot-session guild create delivery after READY | Read-only gateway connection to the existing sandbox guild; fails when it is unavailable or the bounded event wait expires |
 | `test:live:voice` | Initial voice snapshots and member mute/deaf flags through both built APIs | Read-only sandbox gateway/member observations; no participant moderation, joining or media |
 | `test:live:voice-controls:default`, `test:live:voice-controls:effect` | Manual selected-participant move/disconnect and mute/deafen controls, with snapshots, events and REST readback | Temporary voice channel and participant state changes, followed by participant rejoin, baseline restoration and verified channel removal |
-| `test:live:channels` | Guild channel management, permission overwrites, inheritance, events/cache and recovery | Temporary channels/categories, overwrites targeting only the bot and test guild's everyone role, test-socket termination and test-owned response loss |
+| `test:live:channels` | Guild channel management, audit-header dispatch, target-and-reason audit readback for creates, edits, deletes and overwrites, inheritance, events/cache and recovery | Temporary channels/categories, overwrites targeting only the bot and test guild's everyone role, test-socket termination and test-owned response loss |
 | `test:live:history` | Explicit history pages checked against API readback | Temporary channel and messages |
 | `test:live:cleanup` | REST guild summaries, bot-self hierarchy and bounded message cleanup through both APIs | Temporary channel and test-bot messages, with one lost batch response. Uses the existing channel recovery journal and verifies test-owned cleanup |
 | `test:live:own-history` | Channel-wide own-history deletion, lost-response and cancellation reconciliation through both APIs | Two journaled temporary channels and bot messages, with verified channel removal. Guild-wide deletion requires a separate authorized invocation |
@@ -294,7 +298,7 @@ It creates temporary expressions and a channel, deletes test-owned resources wit
 | `test:live:collectors` | Collector completion, gap failure and use after recovery | Temporary channel/messages and test-socket termination |
 | `test:live:embeds` | Embed send/reply/edit, readback, events, cache and collectors | Temporary channel/messages and test-message edits |
 | `test:live:attachments` | Uploads, binary readback, file edits, events/cache/collectors and recovery | Temporary channel/messages, 50 MiB file upload/download, file replacements and test-socket termination |
-| `test:live:attachment-sources` | `openAsBlob` file and finite multipart-stream uploads, SDK/raw binary readback, bounded download failure/cancellation and injected inline fallback through both APIs | Temporary channel/messages, one test-owned temporary file and delayed-EOF wrapper; the injected 403 targets only the current channel's unique attachment plan and does not change provider configuration |
+| `test:live:attachment-sources` | `openAsBlob` file and finite multipart-stream uploads, SDK/raw binary readback, explicit signed-URL refresh with bounded digest readback, bounded download failure/cancellation and injected inline fallback through both APIs | Temporary channel/messages, one test-owned temporary file and delayed-EOF wrapper; the injected 403 targets only the current channel's unique attachment plan and does not change provider configuration |
 
 OAuth checks require `FLUXER_TEST_CLIENT_SECRET` and `FLUXER_TEST_OAUTH_REDIRECT_URI=http://localhost:3000/auth/fluxer/callback` in the ignored SDK env file.
 Register that exact redirect on the sandbox bot's application and leave localhost port 3000 free

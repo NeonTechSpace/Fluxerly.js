@@ -41,6 +41,7 @@ function fixture() {
         "guild-fixture.mjs",
         "moderation-fixture.mjs",
         "attachment-sources.mjs",
+        "attachment-refresh.js",
     ])
         copyFileSync(new URL(`./live/${helper}`, import.meta.url), join(root, `tests/live/${helper}`))
     symlinkSync(

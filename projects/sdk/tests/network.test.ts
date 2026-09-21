@@ -813,28 +813,30 @@ test("cancellation plus a cleanup defect rejects rather than returning Cancelled
     expect(transport.sockets[0]!.readyState).toBe(WebSocket.CLOSED)
 })
 
-test("native heartbeat measurement uses the caller's clock across the background connection", async () => {
+test("native heartbeat measurement uses the client creation Clock across the background connection", async () => {
     const server = await fixture({ noAck: true })
     const scope = Scope.makeUnsafe()
     onTestFinished(async () => {
         await Effect.runPromise(Scope.close(scope, Exit.void))
     })
-    const client = await Effect.runPromise(createNative({ token: "fixture" }).pipe(Scope.provide(scope)))
     const clock = Effect.runSync(Clock.Clock)
     let time = 1_000_000_000n
-    await Effect.runPromise(
-        client.connect().pipe(
-            Effect.provideService(Clock.Clock, {
-                currentTimeMillis: clock.currentTimeMillis,
-                currentTimeNanos: clock.currentTimeNanos,
-                currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
-                currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
-                monotonicTimeNanos: Effect.sync(() => time),
-                monotonicTimeNanosUnsafe: () => time,
-                sleep: (duration) => clock.sleep(duration),
-            }),
+    const measurementClock = {
+        currentTimeMillis: clock.currentTimeMillis,
+        currentTimeNanos: clock.currentTimeNanos,
+        currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+        currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+        monotonicTimeNanos: Effect.sync(() => time),
+        monotonicTimeNanosUnsafe: () => time,
+        sleep: (duration: Parameters<typeof clock.sleep>[0]) => clock.sleep(duration),
+    }
+    const client = await Effect.runPromise(
+        createNative({ token: "fixture" }).pipe(
+            Scope.provide(scope),
+            Effect.provideService(Clock.Clock, measurementClock),
         ),
     )
+    await Effect.runPromise(client.connect())
     server.sockets[0]!.send(JSON.stringify({ op: 1, d: null }))
     await vi.waitFor(() => expect(server.commands.some((command) => command.op === 1)).toBe(true))
     time += 25_000_000n

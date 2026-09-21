@@ -51,7 +51,12 @@ const metadataWire = (id: string, channel = "20", content = id) => ({
     mention_channels: null,
     reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
     message_reference: { message_id: "70", channel_id: "71", guild_id: null, type: 1 },
-    referenced_message: { id: "70", channel_id: "71", content: "not retained" },
+    referenced_message: {
+        id: "70",
+        channel_id: "71",
+        content: "reply context",
+        author: { id: "32", username: "reply-author" },
+    },
 })
 const projection = (id: string, content = id) => ({
     id,
@@ -74,7 +79,15 @@ const metadataProjection = (id: string, content = id) => ({
     mentionChannels: null,
     reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
     messageReference: { id: "70", channelId: "71", guildId: null, type: 1 },
-    referencedMessage: { id: "70", channelId: "71" },
+    referencedMessage: {
+        id: "70",
+        channelId: "71",
+        content: "reply context",
+        embeds: [],
+        attachments: [],
+        stickers: [],
+        author: { id: "32", username: "reply-author", isBot: false },
+    },
 })
 const value = <A, E>(result: { isErr(): boolean; value?: A; error?: E }): A => {
     if (result.isErr()) throw result.error
@@ -311,7 +324,8 @@ test.each(modes)(
                 Object.isFrozen(message.reactions) &&
                 Object.isFrozen(message.reactions?.[0]?.emoji) &&
                 Object.isFrozen(message.messageReference) &&
-                Object.isFrozen(message.referencedMessage),
+                Object.isFrozen(message.referencedMessage) &&
+                Object.isFrozen(message.referencedMessage?.author),
         ).toBe(true)
     },
 )

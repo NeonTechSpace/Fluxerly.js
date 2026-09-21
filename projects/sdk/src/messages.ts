@@ -59,7 +59,12 @@ export interface Message extends MessageReference {
     /** Attached sticker metadata in received order, or an empty array. Sticker images are not downloaded */
     readonly stickers: readonly MessageSticker[]
     /** Mentioned accounts in received order. An empty array means no mentions were reported, absence means unknown */
-    readonly mentions?: readonly MessageMention[]
+    readonly mentions?: readonly MessageUser[]
+    /** Accounts referenced by non-notifying text, embeds or forward snapshots.
+     * These are separate from active mentions and never change notification behavior. Null, absence and an empty array
+     * preserve the distinct values supplied by Fluxer
+     */
+    readonly referencedUsers?: readonly MessageUser[] | null
     /** Mentioned role IDs in received order. An empty array means none were reported, absence means unknown */
     readonly mentionRoleIds?: readonly string[]
     /** Channel mentions supplied with the message. Null and absence preserve distinct response values */
@@ -70,17 +75,17 @@ export interface Message extends MessageReference {
     readonly messageReference?: MessageContextReference | null
     /** Copies captured when Fluxer created a forward. They contain no source ID and do not follow later source edits */
     readonly messageSnapshots?: readonly MessageSnapshot[] | null
-    /** Only the resolved reply's message and channel IDs. Null means the target was missing, absence means no resolution was supplied */
-    readonly referencedMessage?: MessageReference | null
-    /** Account identity supplied as the author, without profile lookup or account methods */
-    readonly author: {
-        /** Author ID as a decimal string. Use webhookId, rather than this ID, to identify a webhook sender */
-        readonly id: string
-        /** Author's username at observation time */
-        readonly username: string
-        /** True when Fluxer marked the author as a bot, otherwise false */
-        readonly isBot: boolean
-    }
+    /** Custom emoji IDs that Fluxer classified as explicit. An empty array is known empty and absence is unknown */
+    readonly nsfwEmojiIds?: readonly string[]
+    /** Resolved reply snapshot. Null means the target was missing and absence means no resolution was supplied.
+     * Fluxer omits a second referencedMessage from this snapshot, so reply nesting is bounded to one level.
+     * Reading this field performs no request
+     */
+    readonly referencedMessage?: ReferencedMessage | null
+    /** Partial account identity supplied as the author, without profile lookup or account methods.
+     * Webhook and deleted-user authors remain partial MessageUser values and must not be treated as complete User objects
+     */
+    readonly author: MessageUser
 }
 
 /** Message fields available even when messageFields is an empty array.
@@ -116,17 +121,44 @@ export type SelectedMessage<F extends MessageFields | undefined = undefined> = F
           : Pick<Message, keyof MessageCore | F[number]>
       : never
 
-/** Account identity supplied in a message's mentions array.
- * This is not a full account profile, server member or live cached object
+/** Partial account identity embedded in a message response.
+ * This deeply frozen observation can describe an author, active mention or non-notifying referenced account.
+ * It is not a complete User, server member or live cached object. Optional fields remain absent when Fluxer omitted
+ * them, including for webhook and deleted-user placeholders. The mentionFlags value is descriptive only and never
+ * enables a notification or overrides AllowedMentions
  */
-export interface MessageMention {
-    /** Mentioned account ID as a decimal string */
+export interface MessageUser {
+    /** Account or webhook identity as a decimal string */
     readonly id: string
-    /** Mentioned account's username at observation time */
+    /** Username or webhook name at observation time */
     readonly username: string
-    /** True when Fluxer marked the mentioned account as a bot, otherwise false */
+    /** True when Fluxer marked the identity as a bot, otherwise false */
     readonly isBot: boolean
+    /** Provider discriminator when supplied */
+    readonly discriminator?: string
+    /** Account-wide display name, null when explicitly unset */
+    readonly displayName?: string | null
+    /** Avatar asset hash, null when explicitly absent */
+    readonly avatar?: string | null
+    /** Dominant avatar color, null when explicitly absent */
+    readonly avatarColor?: number | null
+    /** Whether Fluxer marked this as an official system account */
+    readonly isSystem?: boolean
+    /** Public account flags when supplied. Unrecognized 32-bit values are retained */
+    readonly flags?: number
+    /** Account-wide reply mention preference: 0 for none, 1 to prefer a mention, or 2 to prefer no mention.
+     * This is displayable context only. Sending and replying continue to use explicit AllowedMentions
+     */
+    readonly mentionFlags?: 0 | 1 | 2
 }
+
+/** @deprecated Use MessageUser. Message mentions and non-notifying references share the same partial-user shape */
+export type MessageMention = MessageUser
+
+/** One resolved reply supplied inline with a message.
+ * This is a frozen Message snapshot without another resolved reply, keeping nesting finite and avoiding hidden fetches
+ */
+export type ReferencedMessage = Omit<Message, "referencedMessage">
 
 /** Channel identity supplied in message or forward-snapshot mention data.
  * It contains only an ID, name and type, not cached channel settings or a decision that the bot may access it

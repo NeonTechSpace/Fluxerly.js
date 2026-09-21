@@ -489,6 +489,31 @@ test.each(modes)("%s keeps user and direct-message caches opt-in, bounded and ex
     expect(await expiring.getUser()).toBeUndefined()
 })
 
+test.each(modes)("%s caches overlapping unrelated user and direct-message fetches", async (mode) => {
+    const releases = new Map<string, () => void>()
+    rest(async (url) => {
+        const path = new URL(url).pathname
+        await new Promise<void>((resolve) => releases.set(path, resolve))
+        const id = path.split("/").at(-1)!
+        return Response.json(path.startsWith("/v1/users/") ? user(id) : directMessage(id))
+    })
+    const api = await setup(mode, { users: true, directMessages: true })
+    const pending = [
+        api.fetchUser("30"),
+        api.fetchUser("31"),
+        api.fetchDirectMessage("10"),
+        api.fetchDirectMessage("11"),
+    ]
+    await vi.waitFor(() => expect(releases.size).toBe(4))
+    for (const path of ["/v1/channels/11", "/v1/users/31", "/v1/channels/10", "/v1/users/30"]) releases.get(path)!()
+    await Promise.all(pending)
+
+    expect((await api.getUser("30"))?.id).toBe("30")
+    expect((await api.getUser("31"))?.id).toBe("31")
+    expect((await api.getDirectMessage("10"))?.id).toBe("10")
+    expect((await api.getDirectMessage("11"))?.id).toBe("11")
+})
+
 test.each(modes)(
     "%s promotes user and direct-message cache lookups without promoting diagnostics or enumeration",
     async (mode) => {

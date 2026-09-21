@@ -35,7 +35,7 @@ test("npm staging preserves compiler artifacts and documentation at a candidate 
         assert.equal(manifest.engines.node, ">=24.11.0")
         assert.ok(!manifest.private && !manifest.scripts && !manifest.devDependencies)
         assert.equal(manifest.dependencies.effect, undefined)
-        assert.equal(manifest.peerDependencies.effect, "4.0.0-rc.115")
+        assert.equal(manifest.peerDependencies.effect, "4.0.0-rc.117")
         assert.equal(manifest.peerDependenciesMeta, undefined)
         assert.throws(() => prepareNpmPackage(npm, version), { code: "EEXIST" })
         assert.equal(readFileSync(join(sdk, "package.json"), "utf8"), original)

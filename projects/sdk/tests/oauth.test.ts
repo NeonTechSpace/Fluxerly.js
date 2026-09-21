@@ -14,6 +14,148 @@ import { oauth as native } from "../src/effect.js"
 
 let close: (() => Promise<void>) | undefined
 
+test.each(["default", "native"] as const)(
+    "%s rejects noncanonical OAuth form/query values before discovery",
+    async (mode) => {
+        const fetch = vi.fn()
+        vi.stubGlobal("fetch", fetch)
+        const scope = Scope.makeUnsafe()
+        const defaultClient = defaultApi.create({ clientId: "1", clientSecret: "secret" })._unsafeUnwrap()
+        const client =
+            mode === "default"
+                ? defaultClient
+                : await Effect.runPromise(
+                      native.create({ clientId: "1", clientSecret: "secret" }).pipe(Scope.provide(scope)),
+                  )
+        const run = async (operation: unknown) =>
+            mode === "default"
+                ? ((await operation) as { error: unknown }).error
+                : await Effect.runPromise(Effect.flip(operation as Effect.Effect<unknown, unknown>))
+        const auth = {
+            redirectUri: "https://example.com/callback",
+            scopes: ["identify"] as const,
+            state: "state",
+            codeChallenge: "a".repeat(43),
+        }
+        try {
+            for (const value of [
+                "",
+                " ",
+                "x".repeat(257),
+                "😀".repeat(129),
+                " state",
+                "state ",
+                "sta\u000cte",
+                "sta\u202ete",
+                "\ud800",
+            ]) {
+                for (const operation of [
+                    client.authorizationUrl({ ...auth, state: value }),
+                    client.exchangeCode({ code: value, redirectUri: auth.redirectUri, codeVerifier: "a".repeat(43) }),
+                    client.refresh(value),
+                    client.revoke({ token: value }),
+                    client.introspect(value),
+                ])
+                    expect(await run(operation)).toMatchObject({ reason: "input", outcome: "notDispatched" })
+            }
+            for (const redirectUri of [
+                "https://example.com/" + "x".repeat(257 - "https://example.com/".length),
+                " https://example.com/callback",
+                "https://example.com/\u202ecallback",
+            ]) {
+                expect(await run(client.authorizationUrl({ ...auth, redirectUri }))).toMatchObject({
+                    reason: "input",
+                    outcome: "notDispatched",
+                })
+                expect(
+                    await run(client.exchangeCode({ code: "code", redirectUri, codeVerifier: "a".repeat(43) })),
+                ).toMatchObject({ reason: "input", outcome: "notDispatched" })
+            }
+            expect(fetch).not.toHaveBeenCalled()
+        } finally {
+            await defaultClient.shutdown()
+            await Effect.runPromise(Scope.close(scope, Exit.void))
+            vi.unstubAllGlobals()
+        }
+    },
+)
+
+test.each(["default", "native"] as const)("%s bounds OAuth scope entries before discovery", async (mode) => {
+    const fetch = vi.fn()
+    vi.stubGlobal("fetch", fetch)
+    const scope = Scope.makeUnsafe()
+    const defaultClient = defaultApi.create({ clientId: "1", clientSecret: "secret" })._unsafeUnwrap()
+    const client =
+        mode === "default"
+            ? defaultClient
+            : await Effect.runPromise(
+                  native.create({ clientId: "1", clientSecret: "secret" }).pipe(Scope.provide(scope)),
+              )
+    const run = async (operation: unknown) =>
+        mode === "default"
+            ? ((await operation) as { error: unknown }).error
+            : await Effect.runPromise(Effect.flip(operation as Effect.Effect<unknown, unknown>))
+    const auth = {
+        redirectUri: "https://example.com/callback",
+        state: "state",
+        codeChallenge: "a".repeat(43),
+    }
+    const sparse: "identify"[] = []
+    sparse.length = 0xffffffff
+    try {
+        for (const scopes of [Array<"identify">(257).fill("identify"), sparse])
+            expect(await run(client.authorizationUrl({ ...auth, scopes }))).toMatchObject({
+                reason: "input",
+                outcome: "notDispatched",
+            })
+        expect(fetch).not.toHaveBeenCalled()
+    } finally {
+        await defaultClient.shutdown()
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+        vi.unstubAllGlobals()
+    }
+})
+
+test("OAuth authorization preserves boundary state and deduplicates scopes through both APIs", async () => {
+    const { base, requests } = await fixture()
+    const config = { clientId: "1", clientSecret: "secret", instance: { url: base, allowInsecure: true } }
+    const client = defaultApi.create(config)._unsafeUnwrap()
+    const scope = Scope.makeUnsafe()
+    const nativeClient = await Effect.runPromise(native.create(config).pipe(Scope.provide(scope)))
+    const redirectUri = "https://example.com/" + "x".repeat(256 - "https://example.com/".length)
+    const scopes: OAuthAuthorizationInput["scopes"] = Array.from({ length: 256 }, (_, index) =>
+        index === 1 ? "guilds" : "identify",
+    )
+    try {
+        for (const state of ["x".repeat(256), "😀".repeat(128), "internal space"]) {
+            const input = {
+                redirectUri,
+                state,
+                scopes,
+                codeChallenge: "a".repeat(43),
+            }
+            const result = await client.authorizationUrl(input)
+            if (result.isErr()) throw result.error
+            const urls = [result.value, await Effect.runPromise(nativeClient.authorizationUrl(input))]
+            for (const url of urls) {
+                const params = new URL(url).searchParams
+                expect(params.get("state")).toBe(state)
+                expect(params.get("redirect_uri")).toBe(redirectUri)
+                expect(params.get("scope")).toBe("identify guilds")
+            }
+        }
+        const input = { code: "x".repeat(256), redirectUri, codeVerifier: "a".repeat(43) }
+        expect((await client.exchangeCode(input)).isOk()).toBe(true)
+        await Effect.runPromise(nativeClient.exchangeCode(input))
+        const exchanges = requests.filter((request) => request.path === "/oauth2/token")
+        expect(exchanges).toHaveLength(2)
+        for (const exchange of exchanges) expect(new URLSearchParams(exchange.body).get("code")).toBe(input.code)
+    } finally {
+        await client.shutdown()
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+    }
+})
+
 async function fixture(
     mode:
         | "normal"

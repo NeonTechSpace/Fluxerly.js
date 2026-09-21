@@ -53,6 +53,7 @@ import { mapFailureCause, withDeadline } from "./effect-failures.js"
 import { CountOwner } from "./counts.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import { MemberChunkOwner } from "./member-chunks.js"
+import { LogicalScheduler, type LogicalTimer, makeLogicalScheduler } from "./logical-scheduler.js"
 import { AttemptFailure, runSelectedGateway, type Session } from "./gateway.js"
 import { EventBus, isMessageEvent } from "./events.js"
 import type { MessageCollector } from "./collector.js"
@@ -86,7 +87,14 @@ import type {
     MessageReference,
     SendOptions,
 } from "#sdk/messages"
-import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "#sdk/attachments"
+import type {
+    Attachment,
+    AttachmentDownloadFailure,
+    AttachmentDownloadOptions,
+    AttachmentRefreshFailure,
+    AttachmentRefreshOptions,
+    RefreshedAttachmentUrl,
+} from "#sdk/attachments"
 import type { AttachmentDownloadSource } from "./rest.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 
@@ -183,7 +191,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return () => this.#reactionCollectors.delete(collector)
     }
     readonly logging: ClientLogging
-    readonly events = new EventBus<M>()
+    readonly events = new EventBus<M>(() => this.logging)
     readonly decodeMessage: Configuration<M>["decodeMessage"]
     readonly rest: RestOwner<M>
     /** One owner-scoped immutable discovery result, independent of credentials and REST admission state */
@@ -213,7 +221,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         configuration: Configuration<M>,
         readonly scope: Scope.Scope,
         private readonly reports: CacheReports | undefined,
-        now: () => number,
+        readonly logical: LogicalScheduler,
         private readonly identifyGate: IdentifyGate | undefined,
     ) {
         this.decodeMessage = configuration.decodeMessage
@@ -228,18 +236,32 @@ export class ClientOwner<M extends MessageCore = Message> {
                 session: { id: undefined, sequence: null },
             })
         const route = (guildId: string) => this.shardIdForGuild(guildId)
-        this.presence = new PresenceOwner(undefined, route)
+        this.presence = new PresenceOwner(
+            {
+                now: () => logical.now(),
+                set: (callback, delay) => logical.set(callback, delay, "presence"),
+                clear: (timer) => logical.clear(timer as LogicalTimer),
+            },
+            route,
+        )
         this.counts = new CountOwner(this.#gatewayRequests, route)
-        this.memberChunks = new MemberChunkOwner(this.#gatewayRequests, route)
+        this.memberChunks = new MemberChunkOwner(this.#gatewayRequests, logical, route)
         this.logging = configuration.logging
         this.cache = configuration.cache
-            ? new MessageCache(configuration.cache, (report) => reports!.offer(report), now)
+            ? new MessageCache(
+                  configuration.cache,
+                  (report) => reports!.offer(report),
+                  () => logical.now(),
+                  logical,
+              )
             : undefined
         this.resources = Object.keys(configuration.resourceCache).length
-            ? new GuildCache(configuration.resourceCache, now)
+            ? new GuildCache(configuration.resourceCache, () => logical.now(), logical)
             : undefined
-        this.channelCache = configuration.channelCache ? new ChannelCache(configuration.channelCache, now) : undefined
-        this.userCache = new UserCache(configuration.userCache, now)
+        this.channelCache = configuration.channelCache
+            ? new ChannelCache(configuration.channelCache, () => logical.now(), logical)
+            : undefined
+        this.userCache = new UserCache(configuration.userCache, () => logical.now(), logical)
         this.instance = new InstanceResolver(configuration.instance, scope)
         this.rest = new RestOwner(
             this.cache,
@@ -249,6 +271,8 @@ export class ClientOwner<M extends MessageCore = Message> {
             this.userCache,
             () => this.instance.resolve(),
             configuration.decodeMessage,
+            logical,
+            configuration.logging,
         )
     }
     get state(): ConnectionState {
@@ -309,6 +333,7 @@ export class ClientOwner<M extends MessageCore = Message> {
             }),
             uploads: Object.freeze({ reservedBytes: rest.reservedUploadBytes, byteCapacity: rest.uploadByteCapacity }),
             gatewayRequests: Object.freeze(this.#gatewayRequests.diagnostics()),
+            events: Object.freeze(this.events.diagnostics()),
             caches,
         })
     }
@@ -534,7 +559,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                             ).detail,
                         ),
                     )
-                const deadline = performance.now() + timeout
+                const deadline = owner.logical.now() + timeout
                 if (request.verifyType) {
                     const channel = yield* owner.rest.user(
                         token,
@@ -559,33 +584,33 @@ export class ClientOwner<M extends MessageCore = Message> {
                             ),
                         )
                 }
-                const remaining = Math.floor(deadline - performance.now())
+                const remaining = Math.floor(deadline - owner.logical.now())
                 if (remaining <= 0)
                     return yield* Effect.fail(new UserOperationError(operation, "timeout", "notDispatched"))
                 if (request.noCache)
                     return yield* owner.rest.user(token, operation, () => request, { timeoutMs: remaining })
-                const generation = owner.userCache.begin(request.resource, request.method !== "GET")
+                const guard = owner.userCache.begin(request.resource, {
+                    ...(request.id === undefined ? {} : { id: request.id }),
+                    mutation: request.method !== "GET",
+                    ...(request.replace === undefined ? {} : { replace: request.replace }),
+                })
                 return yield* owner.rest
                     .user(token, operation, () => request, { timeoutMs: remaining })
                     .pipe(
                         Effect.tap((value) =>
                             Effect.sync(() =>
                                 owner.userCache.complete(
-                                    request.resource,
-                                    generation,
+                                    guard,
                                     (value === undefined ? [] : Array.isArray(value) ? value : [value]) as readonly (
                                         User | DirectMessageChannel
                                     )[],
-                                    request.replace,
-                                    request.method !== "GET",
                                 ),
                             ),
                         ),
                         Effect.onExit((exit) =>
                             Effect.sync(() => {
                                 if (exit._tag === "Failure") {
-                                    if (request.method !== "GET") owner.userCache.invalidate(request.resource)
-                                    else owner.userCache.failed(request.resource, generation)
+                                    owner.userCache.failed(guard)
                                 }
                                 if (request.method === "DELETE" && request.id) owner.cache?.deleteChannel(request.id)
                             }),
@@ -754,6 +779,16 @@ export class ClientOwner<M extends MessageCore = Message> {
                 ? (this.reports?.start() ?? Effect.void).pipe(
                       Effect.andThen(this.rest.send(this.#configuration.token, channelId, input, options)),
                   )
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+    refreshAttachmentUrls(
+        urls: readonly string[],
+        options?: AttachmentRefreshOptions,
+    ): Effect.Effect<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure> {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.refreshAttachmentUrls(this.#configuration.token, urls, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -1179,6 +1214,8 @@ export class ClientOwner<M extends MessageCore = Message> {
                     ...diagnostic,
                     ...(configuration.sharding.identifyShards ? { shardId: shard.shardId } : {}),
                 })
+            const measure = (measurement: Parameters<ClientLogging["emitMeasurement"]>[1]) =>
+                owner.logging.emitMeasurement(fiber, measurement)
             emit({ event: "connecting", phase: "startup" })
             const clock = yield* Clock.Clock
             const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000
@@ -1193,6 +1230,8 @@ export class ClientOwner<M extends MessageCore = Message> {
                 attempts += 1
                 const phase = established ? "recovery" : "startup"
                 const mode = shard.session.id !== undefined && shard.session.sequence !== null ? "resume" : "identify"
+                const attemptStartedAt = owner.logging.measurements ? now() : 0
+                let attemptConnected = false
                 shard.recovery = { phase, attempt: attempts, retryDelayMs: null }
                 emit({ event: "attempt", phase, attempt: attempts, mode })
                 const budget = established ? 30_000 : Math.max(0, deadline - now())
@@ -1224,8 +1263,18 @@ export class ClientOwner<M extends MessageCore = Message> {
                         shard.session,
                         Math.max(0, attemptDeadline - now()),
                         (readyMode) => {
+                            const connectedAtMs = now()
+                            attemptConnected = true
+                            if (owner.logging.measurements)
+                                measure({
+                                    operation: "gateway.connection",
+                                    stage: "network",
+                                    durationMs: connectedAtMs - attemptStartedAt,
+                                    outcome: "success",
+                                    retryCount: attempts - 1,
+                                })
                             established = true
-                            connectedAt = now()
+                            connectedAt = connectedAtMs
                             disconnectedAt = undefined
                             shard.recovery = null
                             owner.#setShardState(shard, "Connected")
@@ -1243,23 +1292,30 @@ export class ClientOwner<M extends MessageCore = Message> {
                             owner.resources?.event(event, message)
                             owner.channelCache?.event(event, message)
                             if (event === "userUpdate" && "discriminator" in message) {
-                                const generation = owner.userCache.begin("users", false)
-                                owner.userCache.complete("users", generation, [message])
+                                const guard = owner.userCache.begin("users", { id: message.id })
+                                owner.userCache.complete(guard, [message])
                                 owner.userCache.invalidate("directMessages")
                             }
                             if (
                                 (event === "directMessageCreate" || event === "directMessageUpdate") &&
                                 "recipients" in message
                             ) {
-                                const generation = owner.userCache.begin("directMessages", false)
-                                owner.userCache.complete("directMessages", generation, [message])
+                                const guard = owner.userCache.begin("directMessages", { id: message.id })
+                                owner.userCache.complete(guard, [message])
                             }
                             if (
                                 event === "directMessageRecipientAdd" ||
                                 event === "directMessageRecipientRemove" ||
                                 event === "directMessageDelete"
-                            )
-                                owner.userCache.invalidate("directMessages")
+                            ) {
+                                const id =
+                                    "channelId" in message
+                                        ? message.channelId
+                                        : "id" in message
+                                          ? message.id
+                                          : undefined
+                                owner.userCache.invalidate("directMessages", typeof id === "string" ? id : undefined)
+                            }
                             if (event === "directMessageDelete" && "id" in message)
                                 owner.cache?.deleteChannel(message.id)
                             if (event === "guildChannelDelete" && "id" in message)
@@ -1345,6 +1401,14 @@ export class ClientOwner<M extends MessageCore = Message> {
                         }),
                     ),
                 )
+                if (!attemptConnected && owner.logging.measurements)
+                    measure({
+                        operation: "gateway.connection",
+                        stage: "network",
+                        durationMs: now() - attemptStartedAt,
+                        outcome: Exit.isFailure(result) && Cause.hasInterrupts(result.cause) ? "cancelled" : "failure",
+                        retryCount: attempts - 1,
+                    })
                 if (Exit.isSuccess(result))
                     return yield* Effect.die(new Error("Gateway lifetime ended without an outcome"))
                 const reason = result.cause.reasons.find((reason) => reason._tag === "Fail")
@@ -1428,6 +1492,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                 })
                 owner.#worker = yield* Effect.forkIn(
                     owner.#supervise(configuration, startup).pipe(
+                        Effect.provideService(Clock.Clock, owner.logical.clock),
                         Effect.onExit((exit) =>
                             Effect.gen(function* () {
                                 trackReady()
@@ -1587,14 +1652,8 @@ export function makeClient<F extends MessageFields | undefined = undefined>(
                                 })
                     : undefined
                 const reports = configuration.cache ? yield* makeCacheReports(reporter, scope) : undefined
-                const clock = yield* Clock.Clock
-                return new ClientOwner(
-                    configuration,
-                    scope,
-                    reports,
-                    () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000,
-                    identifyGate,
-                )
+                const logical = yield* makeLogicalScheduler(scope)
+                return new ClientOwner(configuration, scope, reports, logical, identifyGate)
             }),
         )
     })

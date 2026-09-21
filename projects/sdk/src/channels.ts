@@ -239,6 +239,19 @@ export interface ChannelOperationOptions {
 /** Default API calls start immediately, with abort cancelling only this call and awaiting owned cleanup */
 export interface DefaultChannelOperationOptions extends ChannelOperationOptions, OperationOptions {}
 
+/** Settings for a channel mutation whose provider handler consumes an audit-log reason */
+export interface ChannelAuditOperationOptions extends ChannelOperationOptions {
+    /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
+     * Sent as a raw header because Fluxer does not decode URL escapes. Non-ASCII and control characters fail before dispatch.
+     * Omission sends no header. Never included in SDK errors or diagnostics.
+     * Header delivery does not guarantee provider retention. Fluxer's channel-reorder path currently does not persist it in an audit entry
+     */
+    readonly auditReason?: string
+}
+
+/** Default API audited channel mutations start immediately. Abort cannot roll back a dispatched mutation */
+export interface DefaultChannelAuditOperationOptions extends ChannelAuditOperationOptions, OperationOptions {}
+
 /** The channel action named in an expected failure or SdkDefect */
 export type ChannelOperation =
     | "channels.get"

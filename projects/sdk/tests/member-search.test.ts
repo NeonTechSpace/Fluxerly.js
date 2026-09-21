@@ -203,6 +203,68 @@ test.each(modes)("%s preflights ManageGuild before sending sensitive filters", a
     )
 })
 
+test.each(modes)("%s starts independent sensitive-search preflight reads together before dispatch", async (mode) => {
+    const client = await setup(mode)
+    const ready = Promise.withResolvers<void>()
+    const started: string[] = []
+    let searchCalls = 0
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
+        const path = new URL(url).pathname
+        if (path.endsWith("/members-search")) {
+            searchCalls++
+            expect(started).toHaveLength(3)
+            return Response.json(page())
+        }
+        started.push(path)
+        if (started.length === 3) ready.resolve()
+        const abort = () => ready.reject(new Error("Fixture preflight aborted"))
+        init.signal?.addEventListener("abort", abort, { once: true })
+        try {
+            await ready.promise
+        } finally {
+            init.signal?.removeEventListener("abort", abort)
+        }
+        return Response.json(path.endsWith("/@me") ? selfMember : path.endsWith("/roles") ? roles("32") : guild)
+    })
+    await settle(client.members.search("20", { sourceInviteCodes: ["fixture"] }, { timeoutMs: 1_000 }))
+    expect(started).toHaveLength(3)
+    expect(searchCalls).toBe(1)
+})
+
+test.each(modes)(
+    "%s cancels sibling preflight reads after failure without dispatching sensitive search",
+    async (mode) => {
+        const client = await setup(mode)
+        const ready = Promise.withResolvers<void>()
+        let started = 0
+        let aborted = 0
+        let searchCalls = 0
+        stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
+            const path = new URL(url).pathname
+            if (path.endsWith("/members-search")) {
+                searchCalls++
+                return Response.json(page())
+            }
+            if (++started === 3) ready.resolve()
+            await ready.promise
+            if (path.endsWith("/@me")) return new Response(null, { status: 403 })
+            return new Promise<Response>((_resolve, reject) => {
+                const abort = () => {
+                    aborted++
+                    reject(new Error("Fixture sibling cancelled"))
+                }
+                if (init.signal?.aborted) abort()
+                else init.signal?.addEventListener("abort", abort, { once: true })
+            })
+        })
+        await expect(settle(client.members.search("20", { sourceInviteCodes: ["fixture"] }))).rejects.toMatchObject({
+            reason: "rejected",
+        })
+        expect(aborted).toBe(2)
+        expect(searchCalls).toBe(0)
+    },
+)
+
 test.each(modes)(
     "%s rejects permission denial and invalid options before an unexpected search request",
     async (mode) => {

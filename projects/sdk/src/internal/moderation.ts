@@ -12,6 +12,7 @@ import { decodeMember, memberFetch, type GuildRequest } from "./guilds.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { validCalendarTimestamp } from "./timestamp.js"
 import { normalizedText as text } from "./field-text.js"
+import { auditSettings as validateAuditSettings } from "./audit.js"
 
 const integer = (value: unknown, min: number, max: number): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
@@ -21,24 +22,8 @@ const timestamp = (value: unknown): value is string =>
 export function auditSettings(
     options?: ModerationOptions,
 ): { readonly moderation: true; readonly auditReason?: string } | InputValidationFailure {
-    if (options !== undefined && !record(options))
-        return inputValidationFailure("options", "type", "Moderation options must be an object")
-    const reason = options?.auditReason
-    if (reason === undefined) return { moderation: true as const }
-    if (typeof reason !== "string" || !/^[\x20-\x7E]+$/.test(reason))
-        return inputValidationFailure(
-            "options.auditReason",
-            "format",
-            "Audit reason must contain printable ASCII characters",
-        )
-    const trimmed = reason.trim()
-    if (!trimmed || trimmed.length > 512)
-        return inputValidationFailure(
-            "options.auditReason",
-            "length",
-            "Audit reason must contain 1 through 512 characters",
-        )
-    return { moderation: true as const, auditReason: trimmed }
+    const settings = validateAuditSettings(options)
+    return settings instanceof InputValidationFailure ? settings : { moderation: true as const, ...settings }
 }
 
 function timeoutSettings(

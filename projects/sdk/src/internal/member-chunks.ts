@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { Cause, Clock, Effect, Exit, Stream } from "effect"
+import { Cause, Effect, Exit, Stream } from "effect"
 import type { OperationOptions } from "#sdk/client"
 import { ClientClosedError } from "#sdk/errors"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
@@ -8,6 +8,7 @@ import { GatewayRequestBudget } from "./gateway-requests.js"
 import { decodeMember } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { decodePresenceUpdate } from "./presence.js"
+import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
 const maximumUint64 = "18446744073709551615"
 const positiveId = (value: unknown): value is string =>
@@ -133,7 +134,7 @@ export class MemberChunkSource {
     #received = false
     #exit: Exit.Exit<void, MemberChunkFailure> | undefined
     #wake: (() => void) | undefined
-    #timer: ReturnType<typeof setTimeout> | undefined
+    #timer: LogicalTimer | undefined
     #onRelease: (() => void) | undefined
     #release: (() => void) | undefined
     readonly #deadline: number
@@ -141,7 +142,7 @@ export class MemberChunkSource {
     constructor(
         readonly nonce: string,
         settings: Settings,
-        private readonly clock: Clock.Clock,
+        private readonly logical: LogicalScheduler,
         release: () => void,
     ) {
         this.#settings = settings
@@ -150,11 +151,11 @@ export class MemberChunkSource {
     }
 
     #now() {
-        return Number(this.clock.monotonicTimeNanosUnsafe()) / 1_000_000
+        return this.logical.now()
     }
 
     start() {
-        this.#timer = setTimeout(
+        this.#timer = this.logical.set(
             () => {
                 this.#timer = undefined
                 try {
@@ -164,6 +165,7 @@ export class MemberChunkSource {
                 }
             },
             Math.max(1, Math.ceil(this.#deadline - this.#now())),
+            "member chunk stream",
         )
     }
 
@@ -182,7 +184,7 @@ export class MemberChunkSource {
     #end(exit: Exit.Exit<void, MemberChunkFailure>): Cause.Cause<never> {
         if (this.#exit) return Cause.empty
         this.#exit = exit
-        clearTimeout(this.#timer)
+        this.logical.clear(this.#timer)
         this.#timer = undefined
         this.#queue.length = 0
         this.#bytes = 0
@@ -319,7 +321,7 @@ export class MemberChunkSource {
         this.#nextIndex++
         this.#received = this.#nextIndex === this.#count
         if (this.#received) {
-            clearTimeout(this.#timer)
+            this.logical.clear(this.#timer)
             this.#timer = undefined
         }
         const chunk: MemberChunk = Object.freeze({
@@ -364,6 +366,7 @@ export class MemberChunkOwner {
 
     constructor(
         private readonly budget: GatewayRequestBudget,
+        private readonly logical: LogicalScheduler,
         private readonly routeGuild: (guildId: string) => number | undefined = () => 0,
     ) {}
     attach(sender: Sender, shardId = 0) {
@@ -408,13 +411,12 @@ export class MemberChunkOwner {
             const shardId = this.routeGuild(config.guildId)
             const sender = shardId === undefined ? undefined : this.#senders.get(shardId)
             if (!sender) return yield* Effect.fail(new MemberChunkError("notConnected"))
-            const clock = yield* Clock.Clock
             if (this.#active) return yield* Effect.fail(new MemberChunkError("busy"))
             const release = this.budget.acquire()
             if (!release) return yield* Effect.fail(new MemberChunkError("busy"))
             let source: MemberChunkSource | undefined
             try {
-                source = new MemberChunkSource(randomUUID().replaceAll("-", ""), config, clock, () => {
+                source = new MemberChunkSource(randomUUID().replaceAll("-", ""), config, this.logical, () => {
                     if (this.#active === source) {
                         this.#active = undefined
                         this.#activeShard = undefined

@@ -72,15 +72,18 @@ export function installPing(client: Client) {
 
 ## Run the complete bot
 
-Save this as `bot.ts`, replace the private token and run `node bot.ts`. The subscription is registered before `client.run()` starts the gateway
+Save this as `bot.ts`, set `FLUXER_BOT_TOKEN` in the process environment and run `node bot.ts`. The subscription is registered before `client.run()` starts the gateway
 
 ```ts
 import { Cause, Effect, Exit } from "effect"
 import { createClient } from "@neontechspace/fluxerly/effect"
 
+const token = process.env.FLUXER_BOT_TOKEN
+if (!token) throw new Error("FLUXER_BOT_TOKEN is required")
+
 const program = Effect.scoped(
     Effect.gen(function* () {
-        const client = yield* createClient({ token: "YOUR_BOT_TOKEN" })
+        const client = yield* createClient({ token })
         const subscription = yield* client.on("messageCreate", message => {
             if (message.author.isBot || message.content !== "!ping") return Effect.void
             return client.messages.reply(message, { content: "Pong!" })
@@ -106,7 +109,7 @@ try {
 }
 ```
 
-Send `!ping` and expect `Pong!`. Press Ctrl+C to request interruption and wait for SDK-owned cleanup. The token-containing file must stay out of source control
+Send `!ping` and expect `Pong!`. Press Ctrl+C to request interruption and wait for SDK-owned cleanup. Keep the environment and any process-manager configuration containing the token private
 
 `Effect.all` observes both the client lifetime and the subscription. If either fails, it interrupts the sibling work. This prevents a stopped subscription from leaving an apparently connected but silent bot. Individual handler failures are isolated by the subscription and are not automatically retried
 

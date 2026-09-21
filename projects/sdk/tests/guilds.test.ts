@@ -14,6 +14,7 @@ import {
     type MemberQuery,
     type MemberReference,
     type DefaultGuildOperationOptions,
+    type DefaultGuildAuditOperationOptions,
     type DefaultModerationOptions,
     type BanInput,
     type ClientOptions,
@@ -42,6 +43,65 @@ afterEach(() => {
     transport.sockets = []
 })
 const modes = ["default", "native"] as const
+
+test.each(modes)("%s sends audit reasons only on supported role and member mutations", async (mode) => {
+    const calls: Array<{ method: string; path: string; reason: string | null }> = []
+    rest(async (url, init) => {
+        const path = new URL(url).pathname
+        const body = init.body === undefined ? undefined : JSON.parse(String(init.body))
+        calls.push({ method: init.method!, path, reason: new Headers(init.headers).get("X-Audit-Log-Reason") })
+        if (init.method === "GET")
+            return path.endsWith("/roles") ? Response.json([wireRole()]) : Response.json(member())
+        if (path.includes("/members/") && init.method === "PATCH") return Response.json(member())
+        if (path.endsWith("/roles") && init.method === "POST") return Response.json(wireRole("51", body))
+        if (path.endsWith("/roles/50") && init.method === "PATCH") return Response.json(wireRole("50", body))
+        return new Response(null, { status: 204 })
+    })
+    const api = await setup(mode)
+    const options = { auditReason: "  routine audit  " }
+
+    await api.roles.create({ name: "created" }, options)
+    await api.roles.edit({ name: "edited" }, "50", options)
+    await api.roles.reorder([{ id: "50", position: 1 }], options)
+    await api.roles.setHoist([{ id: "50", hoistPosition: 1 }], options)
+    await api.roles.resetHoist(options)
+    await api.roles.delete("50", options)
+    await api.setRoles(["50"], options)
+    await api.editSelf(options)
+    await api.setNickname(options)
+    await api.role(true, "50", options)
+    await api.role(false, "50", options)
+
+    expect(calls).toEqual([
+        { method: "POST", path: "/v1/guilds/20/roles", reason: "routine audit" },
+        { method: "PATCH", path: "/v1/guilds/20/roles/50", reason: "routine audit" },
+        { method: "PATCH", path: "/v1/guilds/20/roles", reason: "routine audit" },
+        { method: "PATCH", path: "/v1/guilds/20/roles/hoist-positions", reason: "routine audit" },
+        { method: "DELETE", path: "/v1/guilds/20/roles/hoist-positions", reason: "routine audit" },
+        { method: "DELETE", path: "/v1/guilds/20/roles/50", reason: "routine audit" },
+        { method: "PATCH", path: "/v1/guilds/20/members/30", reason: "routine audit" },
+        { method: "PATCH", path: "/v1/guilds/20/members/@me", reason: "routine audit" },
+        { method: "PATCH", path: "/v1/guilds/20/members/30", reason: "routine audit" },
+        { method: "PUT", path: "/v1/guilds/20/members/30/roles/50", reason: "routine audit" },
+        { method: "DELETE", path: "/v1/guilds/20/members/30/roles/50", reason: "routine audit" },
+    ])
+
+    const readOptions = { auditReason: "not applicable" } as DefaultGuildOperationOptions
+    const beforeReads = calls.length
+    const rejectedRead = api.defaultApi
+        ? (async () => unwrap(await api.defaultApi!.roles.fetchAll("20", readOptions)))()
+        : run(api.native!.roles.fetchAll("20", readOptions))
+    await expect(rejectedRead).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    expect(calls).toHaveLength(beforeReads)
+
+    const privateReason = "not-for-diagnostics"
+    const failure = await api.roles
+        .create({ name: "blocked" }, { auditReason: `${privateReason}\n` })
+        .catch((error) => error)
+    expect(failure).toMatchObject({ reason: "input", outcome: "notDispatched" })
+    expect(JSON.stringify(failure)).not.toContain(privateReason)
+    expect(calls).toHaveLength(beforeReads)
+})
 
 test.each(modes)("%s moderates with explicit defaults, reasons and timeout observations", async (mode) => {
     const calls: { path: string; method: string; body: unknown; reason: string | null }[] = []
@@ -1473,32 +1533,32 @@ async function setup(
         fetchRoles: async (id: string) =>
             defaultApi ? unwrap(await defaultApi.roles.fetchAll(id)) : run(native!.roles.fetchAll(id)),
         roles: {
-            setHoist: async (positions: readonly RoleHoistPosition[], options?: DefaultGuildOperationOptions) =>
+            setHoist: async (positions: readonly RoleHoistPosition[], options?: DefaultGuildAuditOperationOptions) =>
                 defaultApi
                     ? unwrap(await defaultApi.roles.setHoistPositions("20", positions, options))
                     : run(native!.roles.setHoistPositions("20", positions, options), options?.signal as AbortSignal),
-            resetHoist: async () =>
+            resetHoist: async (options?: DefaultGuildAuditOperationOptions) =>
                 defaultApi
-                    ? unwrap(await defaultApi.roles.resetHoistPositions("20"))
-                    : run(native!.roles.resetHoistPositions("20")),
+                    ? unwrap(await defaultApi.roles.resetHoistPositions("20", options))
+                    : run(native!.roles.resetHoistPositions("20", options), options?.signal as AbortSignal),
             list: async () =>
                 defaultApi ? unwrap(await defaultApi.roles.fetchAll("20")) : run(native!.roles.fetchAll("20")),
-            create: async (input: RoleCreate) =>
+            create: async (input: RoleCreate, options?: DefaultGuildAuditOperationOptions) =>
                 defaultApi
-                    ? unwrap(await defaultApi.roles.create("20", input))
-                    : run(native!.roles.create("20", input)),
-            edit: async (input: RoleEdit, id = "50") =>
+                    ? unwrap(await defaultApi.roles.create("20", input, options))
+                    : run(native!.roles.create("20", input, options), options?.signal as AbortSignal),
+            edit: async (input: RoleEdit, id = "50", options?: DefaultGuildAuditOperationOptions) =>
                 defaultApi
-                    ? unwrap(await defaultApi.roles.edit({ guildId: "20", id }, input))
-                    : run(native!.roles.edit({ guildId: "20", id }, input)),
-            delete: async (id = "50") =>
+                    ? unwrap(await defaultApi.roles.edit({ guildId: "20", id }, input, options))
+                    : run(native!.roles.edit({ guildId: "20", id }, input, options), options?.signal as AbortSignal),
+            delete: async (id = "50", options?: DefaultGuildAuditOperationOptions) =>
                 defaultApi
-                    ? unwrap(await defaultApi.roles.delete({ guildId: "20", id }))
-                    : run(native!.roles.delete({ guildId: "20", id })),
-            reorder: async (positions: readonly RolePosition[]) =>
+                    ? unwrap(await defaultApi.roles.delete({ guildId: "20", id }, options))
+                    : run(native!.roles.delete({ guildId: "20", id }, options), options?.signal as AbortSignal),
+            reorder: async (positions: readonly RolePosition[], options?: DefaultGuildAuditOperationOptions) =>
                 defaultApi
-                    ? unwrap(await defaultApi.roles.reorder("20", positions))
-                    : run(native!.roles.reorder("20", positions)),
+                    ? unwrap(await defaultApi.roles.reorder("20", positions, options))
+                    : run(native!.roles.reorder("20", positions, options), options?.signal as AbortSignal),
         },
         close,
         connect: async () => (defaultApi ? unwrap(await defaultApi.connect()) : run(native!.connect())),
@@ -1517,7 +1577,19 @@ async function setup(
             defaultApi
                 ? unwrap(await defaultApi.members.fetchPage("20", query))
                 : run(native!.members.fetchPage("20", query)),
-        role: async (add: boolean, id = "50", options?: DefaultGuildOperationOptions) =>
+        setRoles: async (ids: readonly string[], options?: DefaultGuildAuditOperationOptions) =>
+            defaultApi
+                ? unwrap(await defaultApi.members.setRoles(target, ids, options))
+                : run(native!.members.setRoles(target, ids, options), options?.signal as AbortSignal),
+        editSelf: async (options?: DefaultGuildAuditOperationOptions) =>
+            defaultApi
+                ? unwrap(await defaultApi.members.editSelf("20", { nickname: "self" }, options))
+                : run(native!.members.editSelf("20", { nickname: "self" }, options), options?.signal as AbortSignal),
+        setNickname: async (options?: DefaultGuildAuditOperationOptions) =>
+            defaultApi
+                ? unwrap(await defaultApi.members.setNickname(target, "member", options))
+                : run(native!.members.setNickname(target, "member", options), options?.signal as AbortSignal),
+        role: async (add: boolean, id = "50", options?: DefaultGuildAuditOperationOptions) =>
             defaultApi
                 ? unwrap(await defaultApi.members[add ? "addRole" : "removeRole"](target, id, options))
                 : run(

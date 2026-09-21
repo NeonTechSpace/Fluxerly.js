@@ -1,0 +1,13 @@
+{
+    "membersSetRoles": {
+        "target": { "guildId": "20", "userId": "31" },
+        "acceptedRoleIds": ["9223372036854775807"],
+        "rejectedRoleIds": ["9223372036854775808", "18446744073709551615", "100000000000000000000"],
+        "schemaAcceptedHandlerRejectedRoleIds": ["20"],
+        "request": {
+            "method": "PATCH",
+            "path": "/guilds/20/members/31",
+            "authorizationPrefix": "Bot "
+        }
+    }
+}

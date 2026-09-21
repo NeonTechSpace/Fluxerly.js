@@ -23,28 +23,77 @@ This lets Node use `import` in your bot
 
 ## 2. Create your bot
 
-Save this as <code data-example-filename>bot.js</code>, replacing `YOUR_BOT_TOKEN` with your bot's token.
-Keep this file private while it contains your token
+Save this as <code data-example-filename>bot.js</code>.
+Set `FLUXER_BOT_TOKEN` in the process environment instead of putting the token in the file
 
 ```js
-import { createClient } from "@neontechspace/fluxerly"
+import { createClient } from "@neontechspace/fluxerly";
+
+const token = process.env.FLUXER_BOT_TOKEN;
+if (!token) throw new Error("FLUXER_BOT_TOKEN is required");
 
 const created = createClient({
-    token: "YOUR_BOT_TOKEN",
-})
-if (created.isErr()) throw created.error
-const client = created.value
+    token,
+});
+if (created.isErr()) throw created.error;
+const client = created.value;
 
-client.on("messageCreate", async (message) => {
-    if (message.content === "!ping") {
-        await client.messages.reply(message, {
-            content: "Pong!",
-        })
-    }
-})
+const stop = new AbortController();
+const requestStop = () => stop.abort();
+process.once("SIGINT", requestStop);
+process.once("SIGTERM", requestStop);
 
-const connected = await client.connect()
-if (connected.isErr()) throw connected.error
+try {
+    const registered = client.on("messageCreate", async (message, signal) => {
+        if (message.author.isBot || message.content !== "!ping") return;
+
+        const replied = await client.messages.reply(
+            message,
+            { content: "Pong!" },
+            { signal },
+        );
+        if (replied.isErr())
+            console.warn("Reply failed", { kind: replied.error._tag });
+    });
+    if (registered.isErr()) throw registered.error;
+
+    const connection = client.run({ signal: stop.signal });
+    const worker = registered.value.waitForClose({ signal: stop.signal });
+    let firstSource = "pending";
+    let firstWorkerSucceeded = false;
+    await new Promise((resolve, reject) => {
+        connection.then((result) => {
+            if (firstSource !== "pending") return;
+            firstSource = "connection";
+            resolve(undefined);
+        }, reject);
+        worker.then((result) => {
+            if (firstSource !== "pending") return;
+            firstSource = "worker";
+            firstWorkerSucceeded = result.isOk();
+            resolve(undefined);
+        }, reject);
+    });
+    const unexpectedWorkerStop =
+        firstSource === "worker" &&
+        firstWorkerSucceeded &&
+        !stop.signal.aborted &&
+        client.state !== "Closing" &&
+        client.state !== "Closed";
+    stop.abort();
+    const [finished, closed] = await Promise.all([connection, worker]);
+    if (finished.isErr() && finished.error._tag !== "CancelledError")
+        throw finished.error;
+    if (closed.isErr() && closed.error._tag !== "CancelledError")
+        throw closed.error;
+    if (unexpectedWorkerStop)
+        throw new Error("Critical messageCreate worker stopped");
+} finally {
+    stop.abort();
+    process.off("SIGINT", requestStop);
+    process.off("SIGTERM", requestStop);
+    await client.shutdown();
+}
 ```
 
 ## 3. Start it
@@ -56,7 +105,7 @@ if (connected.isErr()) throw connected.error
 Type **!ping** in a channel your bot can read and reply to.
 It should answer **Pong!**
 
-Press Ctrl+C in the terminal to stop it
+Press Ctrl+C in the terminal to request shutdown and wait for SDK-owned cleanup
 
 ## Keep going
 
@@ -74,7 +123,7 @@ The [client's message methods](/docs/{{version}}/api/interfaces/js-ts.Client/#me
 <details>
 <summary>If your bot doesn't reply</summary>
 
-Check that you replaced `YOUR_BOT_TOKEN` and that the bot can view the channel and send messages.
+Check that `FLUXER_BOT_TOKEN` is set and that the bot can view the channel and send messages.
 Keep the terminal running while you try `!ping`.
 To inspect a failed reply, save the result from `client.messages.reply` and check its `isErr()` method
 
@@ -89,10 +138,9 @@ The SDK returns a result so you can handle a failed request without guessing whe
 The `isErr()` method tells you that the operation failed, and `error` describes that failure.
 Otherwise, `value` holds the successful result, such as your client
 
-The startup checks above stop the script if the client cannot be created or connected.
-As your bot grows, check message results too so it can respond to failed requests
-
-Call `client.shutdown()` when you add graceful shutdown to your application
+The startup and registration checks stop the script on a visible failure.
+The reply handler reports the typed failure kind without exposing message contents or credentials.
+The process-signal boundary asks the handler to stop, closes the connection and awaits cleanup
 
 </details>
 

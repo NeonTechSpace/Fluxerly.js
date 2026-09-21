@@ -16,6 +16,7 @@ let verified = false,
 const report = (check) => console.log(JSON.stringify({ mode, check, passed: true }))
 const save = () => writeFileSync(journalPath, JSON.stringify(journal))
 const observations = { emojis: { sequence: 0, value: undefined }, stickers: { sequence: 0, value: undefined } }
+const incompleteChecks = []
 async function expressionEvent(kind, predicate, after = -1) {
     const deadline = Date.now() + 10_000
     while (Date.now() < deadline) {
@@ -283,15 +284,40 @@ try {
         stage = `${kind}_clone`
         entry.clone = true
         save()
-        const cloned = await value(client[kind].clone(guildId, created.id))
-        entry.ids.push(cloned.id)
-        save()
-        assert.notEqual(cloned.id, created.id)
-        assert.equal(
-            (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === cloned.id)?.user?.id,
-            botId,
-        )
-        report(stage)
+        try {
+            const cloned = await value(client[kind].clone(guildId, created.id))
+            entry.ids.push(cloned.id)
+            save()
+            assert.notEqual(cloned.id, created.id)
+            assert.equal(
+                (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === cloned.id)?.user?.id,
+                botId,
+            )
+            report(stage)
+        } catch (error) {
+            if (
+                error?._tag !== "GuildOperationError" ||
+                error.operation !== `${kind}.clone` ||
+                error.reason !== "rejected" ||
+                error.outcome !== "rejected" ||
+                error.status !== 403
+            )
+                throw error
+            const skippedAssertions = ["clone_returns_distinct_expression", "clone_persists_with_test_bot_owner"]
+            incompleteChecks.push({ check: stage, skippedAssertions })
+            console.error(
+                JSON.stringify({
+                    mode,
+                    check: stage,
+                    passed: false,
+                    incomplete: true,
+                    reason: "cloning_unavailable",
+                    status: 403,
+                    skippedAssertions,
+                }),
+            )
+            process.exitCode = 1
+        }
         stage = `${kind}_partial_batch`
         const good = { name: `${journal.marker}_ok`, ids: [] },
             bad = { name: `${journal.marker}_bad`, ids: [] }
@@ -353,6 +379,16 @@ try {
     assert.equal(webhookRead.webhook_id, hook.webhook.id)
     assert.equal(webhookRead.stickers[0]?.id, sticker.id)
     report(stage)
+    if (incompleteChecks.length)
+        console.error(
+            JSON.stringify({
+                mode,
+                check: "expressions_live_suite",
+                passed: false,
+                incomplete: true,
+                incompleteChecks,
+            }),
+        )
 } catch (error) {
     console.error(
         JSON.stringify({

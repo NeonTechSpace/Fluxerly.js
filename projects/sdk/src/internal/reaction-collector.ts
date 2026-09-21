@@ -1,4 +1,4 @@
-import { Cause, Clock, Deferred, Effect, Exit, type Fiber } from "effect"
+import { Cause, Deferred, Effect, Exit, type Fiber } from "effect"
 import type { ConnectionState, OperationOptions } from "#sdk/client"
 import {
     CollectorError,
@@ -14,6 +14,7 @@ import type { ClientOwner } from "./client.js"
 import { record, snapshotReference } from "./message.js"
 import { resolveReactionEmoji } from "./reactions.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
+import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
 type Settings = Required<Omit<ReactionCollectorOptions, "filter" | "emoji" | "guildId" | "idleMs">> &
     Pick<ReactionCollectorOptions, "filter" | "guildId"> & {
@@ -108,7 +109,7 @@ export class ReactionCollector {
     #pendingBytes = 0
     #messages: MessageReaction[] = []
     #bytes = 0
-    #timer: ReturnType<typeof setTimeout> | undefined
+    #timer: LogicalTimer | undefined
     #drain: ReturnType<typeof setImmediate> | undefined
     #release: (() => void) | undefined
     #settings: Settings | undefined
@@ -189,7 +190,7 @@ export class ReactionCollector {
 
     constructor(
         settings: Settings,
-        private readonly clock: Clock.Clock,
+        private readonly logical: LogicalScheduler,
     ) {
         this.#settings = settings
         const now = this.#now()
@@ -198,7 +199,7 @@ export class ReactionCollector {
     }
 
     #now() {
-        return Number(this.clock.monotonicTimeNanosUnsafe()) / 1_000_000
+        return this.logical.now()
     }
 
     start<M extends MessageCore>(owner: ClientOwner<M>, target: MessageReference) {
@@ -234,7 +235,7 @@ export class ReactionCollector {
     }
 
     #scheduleDeadline() {
-        this.#timer = setTimeout(
+        this.#timer = this.logical.set(
             () => {
                 this.#timer = undefined
                 this.#guard(() => {
@@ -242,6 +243,7 @@ export class ReactionCollector {
                 })
             },
             Math.max(1, Math.ceil(Math.min(this.#deadline, this.#idleDeadline) - this.#now())),
+            "reaction collector",
         )
     }
 
@@ -367,7 +369,7 @@ export class ReactionCollector {
     #finish(outcome: Exit.Exit<ReactionCollectorResult, CollectorFailure>) {
         if (!this.#active) return
         this.#active = false
-        if (this.#timer !== undefined) clearTimeout(this.#timer)
+        this.logical.clear(this.#timer)
         if (this.#drain !== undefined) clearImmediate(this.#drain)
         this.#timer = undefined
         this.#drain = undefined
@@ -422,8 +424,7 @@ export function collectReactions<E = never, R = never, M extends MessageCore = M
             owner.gatewayState(config.guildId) !== "Connected"
         )
             return yield* Effect.fail(new CollectorError("notConnected"))
-        const clock = yield* Clock.Clock
-        const collector = new ReactionCollector(config, clock)
+        const collector = new ReactionCollector(config, owner.logical)
         if (handler) yield* collector.run(owner, handler)
         collector.start(owner, message)
         return collector

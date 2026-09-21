@@ -470,14 +470,21 @@ export interface GuildOperationOptions {
 /** Default API calls start immediately. Abort cancels only this call and awaits owned cleanup */
 export interface DefaultGuildOperationOptions extends GuildOperationOptions, OperationOptions {}
 
-/** Moderation-only request settings, with the same deadline and cleanup ownership as guild operations */
-export interface ModerationOptions extends GuildOperationOptions {
+/** Settings for a guild mutation whose provider handler consumes an audit-log reason */
+export interface GuildAuditOperationOptions extends GuildOperationOptions {
     /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
      * Sent as a raw header because Fluxer does not decode URL escapes. Non-ASCII and control characters fail before dispatch.
-     * Omission sends no header. Never included in SDK errors or diagnostics
+     * Omission sends no header. Never included in SDK errors or diagnostics.
+     * Header delivery does not guarantee provider retention. Fluxer's member-role add/remove path currently does not persist it in an audit entry
      */
     readonly auditReason?: string
 }
+
+/** Default API audited guild mutations start immediately. Abort cannot roll back a dispatched mutation */
+export interface DefaultGuildAuditOperationOptions extends GuildAuditOperationOptions, OperationOptions {}
+
+/** Moderation-only request settings, with the same deadline, audit and cleanup ownership as guild mutations */
+export interface ModerationOptions extends GuildAuditOperationOptions {}
 
 /** Default API moderation starts immediately. Aborting waits for owned cleanup but cannot roll back a dispatched action */
 export interface DefaultModerationOptions extends ModerationOptions, OperationOptions {}

@@ -115,6 +115,13 @@ test.each(modes)("%s exposes deeply frozen payload-free diagnostics and bounded 
         expect(Object.isFrozen(diagnostics.rest)).toBe(true)
         expect(Object.isFrozen(diagnostics.uploads)).toBe(true)
         expect(Object.isFrozen(diagnostics.gatewayRequests)).toBe(true)
+        expect(diagnostics.events).toEqual({
+            subscriptions: 0,
+            messageCollectors: 0,
+            reactionCollectors: 0,
+            activeHandlers: 0,
+        })
+        expect(Object.isFrozen(diagnostics.events)).toBe(true)
         expect(Object.isFrozen(diagnostics.caches)).toBe(true)
         expect(Object.isFrozen(diagnostics.caches.messages)).toBe(true)
         const encoded = JSON.stringify(diagnostics)
@@ -327,8 +334,8 @@ test("cache-owner clear generations reject every pre-clear read without changing
     channels.end(channelGuard, false)
 
     const users = new UserCache({ users: settings }, () => now)
-    const userGeneration = users.begin("users", false)
+    const userGuard = users.begin("users", { id: "30" })
     users.clear()
-    users.complete("users", userGeneration, [{ id: "30", username: "fixture" }] as never)
+    users.complete(userGuard, [{ id: "30", username: "fixture" }] as never)
     expect(users.entries("users", 1)).toEqual([])
 })

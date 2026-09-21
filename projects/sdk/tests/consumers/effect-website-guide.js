@@ -71,6 +71,7 @@ function deliver(id, content, bot = false) {
 }
 
 const originalFetch = globalThis.fetch
+const originalToken = process.env.FLUXER_BOT_TOKEN
 const originalConsoleError = console.error
 const initialSigintListeners = process.listeners("SIGINT")
 const initialSigtermListeners = process.listeners("SIGTERM")
@@ -92,6 +93,7 @@ globalThis.fetch = withHostedDiscovery(async (url, options) => {
         message_reference: body.message_reference,
     })
 })
+process.env.FLUXER_BOT_TOKEN = "fixture-only"
 console.error = (...values) => stopLogs.push(values)
 
 function assertSignalHandlersRestored() {
@@ -146,6 +148,8 @@ try {
     assert.deepEqual(stopLogs, [["Bot stopped because an operation or cleanup failed"]])
 } finally {
     process.exitCode = initialExitCode
+    if (originalToken === undefined) delete process.env.FLUXER_BOT_TOKEN
+    else process.env.FLUXER_BOT_TOKEN = originalToken
     globalThis.fetch = originalFetch
     console.error = originalConsoleError
     hooks.deregister()

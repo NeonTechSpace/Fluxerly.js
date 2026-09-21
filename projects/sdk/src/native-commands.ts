@@ -32,7 +32,7 @@ import {
 import { convertCommandArguments } from "#sdk/internal/command-arguments"
 import type { RegistrationError } from "#sdk/message-errors"
 import type { Message, MessageCore } from "#sdk/messages"
-import { Effect, type Scope } from "effect"
+import { Clock, Effect, type Scope } from "effect"
 import type { Client, EventHandlerOptions, Subscription } from "./effect.js"
 
 /**
@@ -179,7 +179,7 @@ export interface NativePrefixCommand<
 }
 
 /**
- * Bounded in-memory cooldown reservations for one process, using `Date.now()` expiry times.
+ * Bounded in-memory cooldown reservations for one process, using the caller's Effect Clock wall time.
  * Claim, sweep and clear return lazy Effects, so storage changes occur only when those Effects run.
  * No background timer, persistence or cross-process coordination is provided
  */
@@ -190,11 +190,11 @@ export interface MemoryCooldownStore {
     readonly size: number
     /**
      * When run, sweep expired keys and atomically reserve the key or report an active cooldown or full store.
-     * Acquired expiry is `Date.now() + durationMs`, and active entries are never evicted to make room.
+     * Acquired expiry is the caller Clock's current wall time plus `durationMs`, and active entries are never evicted to make room.
      * Malformed keys or durations fail with ConfigurationError. Unexpected input getter defects remain in the Effect cause
      */
     claim(input: CommandCooldownRequest): Effect.Effect<CommandCooldownClaim, ConfigurationError>
-    /** Return an Effect that removes keys expired according to `Date.now()` and produces the number removed, preserving active claims */
+    /** Return an Effect that removes keys expired according to the caller's Effect Clock and produces the number removed, preserving active claims */
     sweep(): Effect.Effect<number>
     /** Return an Effect that forgets this store's reservations, allowing new claims. Does not cancel handlers or clear other stores */
     clear(): Effect.Effect<void>
@@ -531,11 +531,13 @@ function nativeMemoryCooldownStore(owner: LocalMemoryCooldownStore): MemoryCoold
             return owner.size
         },
         claim: (input: CommandCooldownRequest) =>
-            Effect.suspend(() => {
-                const result = owner.claim(input)
-                return result._tag === "Success" ? Effect.succeed(result.value) : Effect.fail(result.error)
-            }),
-        sweep: () => Effect.sync(() => owner.sweep()),
+            Clock.clockWith((clock) =>
+                Effect.suspend(() => {
+                    const result = owner.claim(input, clock.currentTimeMillisUnsafe())
+                    return result._tag === "Success" ? Effect.succeed(result.value) : Effect.fail(result.error)
+                }),
+            ),
+        sweep: () => Clock.clockWith((clock) => Effect.sync(() => owner.sweep(clock.currentTimeMillisUnsafe()))),
         clear: () => Effect.sync(() => owner.clear()),
     })
 }

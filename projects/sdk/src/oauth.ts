@@ -51,11 +51,19 @@ export interface OAuthConfig {
  * Values are sampled once when authorizationUrl starts, then validated and encoded from that snapshot
  */
 export interface OAuthAuthorizationInput {
-    /** Exact registered redirect, using HTTPS or loopback HTTP, without embedded credentials or a fragment */
+    /** Exact registered redirect, using HTTPS or loopback HTTP, without embedded credentials or a fragment.
+     * Must contain 1–256 well-formed UTF-16 units, with no surrounding whitespace, U+000C or U+202E.
+     * Noncanonical values are rejected rather than normalized
+     */
     readonly redirectUri: string
-    /** At least one delegated or bot-installation scope from OAuthScopes */
+    /** Provide 1–256 delegated or bot-installation scopes from OAuthScopes.
+     * Supplied entries, including duplicates, count toward this SDK defensive limit.
+     * Duplicates are removed in first-occurrence order before serialization
+     */
     readonly scopes: readonly OAuthScope[]
-    /** Nonempty unpredictable caller-generated value, which the application must verify on the callback */
+    /** Unpredictable caller-generated value of 1–256 well-formed UTF-16 units, verified by the application on callback.
+     * Surrounding whitespace, U+000C and U+202E are rejected, not removed, so accepted state is preserved exactly
+     */
     readonly state: string
     /** Public hash challenge produced by createPkce, using S256 and exactly 43 base64url characters.
      * Retain the paired secret verifier for exchangeCode when the callback arrives
@@ -76,11 +84,12 @@ export interface OAuthAuthorizationInput {
  * Values are sampled once when exchangeCode starts, then validated and transmitted from that snapshot
  */
 export interface OAuthCodeExchangeInput {
-    /** Nonempty callback code to exchange for tokens.
+    /** Callback code of 1–256 well-formed UTF-16 units to exchange for tokens.
+     * Surrounding whitespace, U+000C and U+202E are rejected rather than changing the opaque credential.
      * A dispatched attempt may consume this one-use code even if its response is lost
      */
     readonly code: string
-    /** The exact redirect URI used in the authorization request */
+    /** The exact redirect URI used in the authorization request, with the same 1–256-unit and canonical-text requirements */
     readonly redirectUri: string
     /** Original secret PKCE verifier, such as the verifier returned by createPkce.
      * Must contain 43–128 ASCII letters, digits or the characters - . _ ~

@@ -44,21 +44,63 @@ const optionalKeys: MessageField[] = [
     "attachments",
     "stickers",
     "mentions",
+    "referencedUsers",
     "mentionRoleIds",
+    "nsfwEmojiIds",
     "mentionChannels",
     "reactions",
     "messageReference",
     "messageSnapshots",
     "referencedMessage",
 ]
-const selected: MessageField[] = ["messageSnapshots", "messageReference", "editedAt", "mentions", "id", "author"]
+const selected: MessageField[] = [
+    "messageSnapshots",
+    "messageReference",
+    "editedAt",
+    "mentions",
+    "referencedUsers",
+    "nsfwEmojiIds",
+    "referencedMessage",
+    "id",
+    "author",
+]
 const attachment = { id: "34", filename: "captured.txt", size: 1, flags: 0 }
+const author = {
+    id: "30",
+    username: "fixture",
+    discriminator: "0001",
+    global_name: "Fixture",
+    avatar: null,
+    avatar_color: 0x123456,
+    bot: true,
+    system: false,
+    flags: 4,
+    mention_flags: 2,
+}
+const referenced = {
+    id: "70",
+    channel_id: "71",
+    guild_id: "40",
+    content: "reply context",
+    author: { ...author, id: "33", username: "reply-author", bot: false, mention_flags: 1 },
+    timestamp: "2026-09-09T12:00:00.000Z",
+    edited_timestamp: null,
+    type: 0,
+    flags: 0,
+    pinned: false,
+    mention_everyone: false,
+    embeds: [],
+    attachments: [],
+    stickers: [],
+    mentions: [],
+    mention_roles: [],
+}
 const wire = (id = "10") => ({
     id,
     channel_id: "20",
     guild_id: "40",
     content: "rich fixture",
-    author: { id: "30", username: "fixture", bot: true },
+    author,
     nonce: null,
     webhook_id: "50",
     pinned: false,
@@ -70,12 +112,14 @@ const wire = (id = "10") => ({
     embeds: [{ type: "rich", title: "Title", fields: [{ name: "Name", value: "Value", inline: true }] }],
     attachments: [attachment],
     stickers: [{ id: "35", name: "Sticker", animated: false }],
-    mentions: [{ id: "31", username: "mentioned", bot: false }],
+    mentions: [{ ...author, id: "31", username: "mentioned", bot: false, mention_flags: 0 }],
+    users: [{ ...author, id: "36", username: "referenced", bot: false, mention_flags: 1 }],
     mention_roles: ["32"],
+    nsfw_emojis: ["37"],
     mention_channels: null,
     reactions: [{ emoji: { name: "👍", id: null }, count: 2, me: false }],
     message_reference: { message_id: "70", channel_id: "71", type: 1 },
-    referenced_message: { id: "70", channel_id: "71", content: "not retained" },
+    referenced_message: referenced,
     message_snapshots: [
         {
             content: "captured",
@@ -126,10 +170,42 @@ function expectProjection(message: MessageCore | undefined | null, fields: reado
     if (!message) throw new Error("Expected message observation")
     const keys = fields === undefined ? [...coreKeys, ...optionalKeys] : [...new Set([...coreKeys, ...fields])]
     expect(Object.keys(message).sort()).toEqual(keys.sort())
-    expect(message.author).toEqual({ id: "30", username: "fixture", isBot: true })
+    expect(message.author).toEqual({
+        id: "30",
+        username: "fixture",
+        isBot: true,
+        discriminator: "0001",
+        displayName: "Fixture",
+        avatar: null,
+        avatarColor: 0x123456,
+        isSystem: false,
+        flags: 4,
+        mentionFlags: 2,
+    })
     expect(message.guildId).toBe("40")
     expect(Object.isFrozen(message)).toBe(true)
     expect(Object.isFrozen(message.author)).toBe(true)
+    const projected = message as MessageCore & Partial<import("../src/index.js").Message>
+    if ("referencedUsers" in projected) {
+        expect(projected.referencedUsers?.[0]).toMatchObject({ id: "36", mentionFlags: 1 })
+        expect(Object.isFrozen(projected.referencedUsers)).toBe(true)
+        expect(Object.isFrozen(projected.referencedUsers?.[0])).toBe(true)
+    }
+    if ("nsfwEmojiIds" in projected) {
+        expect(projected.nsfwEmojiIds).toEqual(["37"])
+        expect(Object.isFrozen(projected.nsfwEmojiIds)).toBe(true)
+    }
+    if ("referencedMessage" in projected && projected.referencedMessage) {
+        expect(projected.referencedMessage).toMatchObject({
+            id: "70",
+            channelId: "71",
+            content: "reply context",
+            author: { id: "33", username: "reply-author", mentionFlags: 1 },
+        })
+        expect("referencedMessage" in projected.referencedMessage).toBe(false)
+        expect(Object.isFrozen(projected.referencedMessage)).toBe(true)
+        expect(Object.isFrozen(projected.referencedMessage.author)).toBe(true)
+    }
     if ("messageSnapshots" in message) {
         const snapshots = message.messageSnapshots as import("../src/index.js").Message["messageSnapshots"]
         expect(snapshots?.[0]?.attachments).toEqual([attachment])
@@ -400,11 +476,67 @@ test.each(modes)("%s excluded malformed REST fields still reject the response", 
         { timestamp: "2025-02-29T00:00:00Z" },
         { edited_timestamp: "2025-04-31T00:00:00Z" },
         { message_snapshots: [{ ...wire().message_snapshots[0], timestamp: "2025-02-29T00:00:00Z" }] },
+        { nsfw_emojis: null },
+        { nsfw_emojis: ["not-an-id"] },
+        { users: [{ ...author, mention_flags: 3 }] },
+        { referenced_message: { ...referenced, referenced_message: null } },
     ]) {
         stubFetchWithHostedDiscovery(async () => Response.json({ ...wire(), ...fields }))
         await expect(settle(api.client.messages.fetch(target))).rejects.toMatchObject({ reason: "response" })
         expect(await settle(api.client.messages.get(target))).toBeUndefined()
     }
+})
+
+test.each(modes)(
+    "%s preserves absent, null, empty and populated received context without extra reads",
+    async (mode) => {
+        const api = await setup(mode, ["nsfwEmojiIds", "referencedUsers", "referencedMessage"])
+        const { nsfw_emojis: _nsfw, users: _users, referenced_message: _reply, ...withoutContext } = wire()
+        const responses = [
+            withoutContext,
+            { ...withoutContext, users: null, referenced_message: null },
+            { ...withoutContext, nsfw_emojis: [], users: [] },
+            wire(),
+        ]
+        let calls = 0
+        stubFetchWithHostedDiscovery(async () => Response.json(responses[calls++]!))
+
+        const absent = await settle(api.client.messages.fetch(target))
+        expect("nsfwEmojiIds" in absent).toBe(false)
+        expect("referencedUsers" in absent).toBe(false)
+        expect("referencedMessage" in absent).toBe(false)
+
+        const nullable = await settle(api.client.messages.fetch(target))
+        expect(nullable.referencedUsers).toBeNull()
+        expect(nullable.referencedMessage).toBeNull()
+        expect("nsfwEmojiIds" in nullable).toBe(false)
+
+        const empty = await settle(api.client.messages.fetch(target))
+        expect(empty.nsfwEmojiIds).toEqual([])
+        expect(empty.referencedUsers).toEqual([])
+        expect("referencedMessage" in empty).toBe(false)
+
+        const populated = await settle(api.client.messages.fetch(target))
+        expect(populated.nsfwEmojiIds).toEqual(["37"])
+        expect(populated.referencedUsers?.[0]?.id).toBe("36")
+        expect(populated.referencedMessage?.author.id).toBe("33")
+        expect(calls).toBe(4)
+    },
+)
+
+test.each(modes)("%s received mention preferences never opt a reply into notifying", async (mode) => {
+    const api = await setup(mode, ["referencedUsers", "referencedMessage"])
+    const bodies: unknown[] = []
+    stubFetchWithHostedDiscovery(async (_url, init) => {
+        if (init?.body && typeof init.body === "string") bodies.push(JSON.parse(init.body))
+        return Response.json(wire())
+    })
+    const received = await settle(api.client.messages.fetch(target))
+    expect(received.author.mentionFlags).toBe(2)
+    expect(received.referencedUsers?.[0]?.mentionFlags).toBe(1)
+    await settle(api.client.messages.reply(received, { content: "reply" }))
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toMatchObject({ allowed_mentions: { parse: [], users: [], roles: [], replied_user: false } })
 })
 
 test.each(modes)("%s retained cache and collector budgets account for the selected projection", async (mode) => {
@@ -413,7 +545,18 @@ test.each(modes)("%s retained cache and collector budgets account for the select
         ...target,
         content: "rich fixture",
         guildId: "40",
-        author: { id: "30", username: "fixture", isBot: true },
+        author: {
+            id: "30",
+            username: "fixture",
+            isBot: true,
+            discriminator: "0001",
+            displayName: "Fixture",
+            avatar: null,
+            avatarColor: 0x123456,
+            isSystem: false,
+            flags: 4,
+            mentionFlags: 2,
+        },
     }
     const maxBytes = Buffer.byteLength(JSON.stringify(core))
     const api = await setup(mode, [], undefined, maxBytes)
@@ -423,6 +566,10 @@ test.each(modes)("%s retained cache and collector budgets account for the select
     const fetched = await settle(api.client.messages.fetch(target))
     expect(fetched).toEqual(core)
     expect(await settle(api.client.messages.get(target))).toBe(fetched)
+    const richApi = await setup(mode, ["nsfwEmojiIds", "referencedUsers", "referencedMessage"], undefined, maxBytes)
+    const rich = await settle(richApi.client.messages.fetch(target))
+    expect(Buffer.byteLength(JSON.stringify(rich))).toBeGreaterThan(maxBytes)
+    expect(await settle(richApi.client.messages.get(target))).toBeUndefined()
     await settle(api.client.connect())
     const collector = api.defaultApi
         ? api.defaultApi.messages.collect("20", { maxBytes })._unsafeUnwrap()

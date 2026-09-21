@@ -40,7 +40,7 @@ function value<K extends Kind>(kind: K, id: string): UserResources[K] {
 }
 
 function complete<K extends Kind>(cache: UserCache, kind: K, values: readonly UserResources[K][], replace = false) {
-    cache.complete(kind, cache.begin(kind, false), values, replace)
+    cache.complete(cache.begin(kind, { replace }), values)
 }
 
 test.each(["users", "directMessages"] as const)(
@@ -93,49 +93,160 @@ test.each(["users", "directMessages"] as const)(
     },
 )
 
+test.each(["users", "directMessages"] as const)("%s unrelated reads both populate the cache", (kind) => {
+    const cache = new UserCache({ [kind]: settings }, () => 0)
+    const first = value(kind, "10")
+    const second = value(kind, "11")
+    const firstGuard = cache.begin(kind, { id: first.id })
+    const secondGuard = cache.begin(kind, { id: second.id })
+
+    cache.complete(secondGuard, [second])
+    cache.complete(firstGuard, [first])
+    expect(cache.get(kind, first.id)).toBe(first)
+    expect(cache.get(kind, second.id)).toBe(second)
+    cache.close()
+})
+
 test.each(["users", "directMessages"] as const)(
-    "%s stale completion and invalidation cannot restore a newer snapshot",
+    "%s same-ID completion and invalidation cannot restore a newer snapshot",
     (kind) => {
         const cache = new UserCache({ [kind]: settings }, () => 0)
         const stale = value(kind, "10")
-        const current = value(kind, "11")
-        const staleGeneration = cache.begin(kind, false)
-        const currentGeneration = cache.begin(kind, false)
+        const current = value(kind, "10")
+        const staleGuard = cache.begin(kind, { id: stale.id })
+        const currentGuard = cache.begin(kind, { id: current.id })
 
-        cache.complete(kind, currentGeneration, [current])
-        cache.complete(kind, staleGeneration, [stale])
+        cache.complete(currentGuard, [current])
+        cache.complete(staleGuard, [stale])
         expect(cache.get(kind, current.id)).toBe(current)
-        expect(cache.get(kind, stale.id)).toBeUndefined()
 
         cache.invalidate(kind)
-        cache.complete(kind, currentGeneration, [current])
+        cache.complete(currentGuard, [current])
         expect(cache.get(kind, current.id)).toBeUndefined()
         cache.close()
     },
 )
 
-test("direct-message mutations invalidate overlapping reads through clear and failure", () => {
+test("direct-message mutations invalidate only overlapping reads through completion and failure", () => {
     const cache = new UserCache({ directMessages: settings }, () => 0)
     const stale = directMessage("10")
     const current = directMessage("10", { name: "current" })
-    const mutationGeneration = cache.begin("directMessages", true)
+    const unrelated = directMessage("11")
+    const mutationGuard = cache.begin("directMessages", { id: current.id, mutation: true })
+    const unrelatedGuard = cache.begin("directMessages", { id: unrelated.id })
 
+    const readGuard = cache.begin("directMessages", { id: stale.id })
+    cache.complete(readGuard, [stale])
+    cache.complete(unrelatedGuard, [unrelated])
+    cache.complete(mutationGuard, [current])
+    expect(cache.get("directMessages", current.id)).toBeUndefined()
+    expect(cache.get("directMessages", unrelated.id)).toBe(unrelated)
+
+    complete(cache, "directMessages", [current])
+    const successGuard = cache.begin("directMessages", { id: current.id, mutation: true })
+    cache.complete(successGuard, [current])
+    expect(cache.get("directMessages", current.id)).toBe(current)
+
+    const failedGuard = cache.begin("directMessages", { id: current.id, mutation: true })
+    cache.failed(failedGuard)
+    expect(cache.get("directMessages", current.id)).toBeUndefined()
+
+    complete(cache, "directMessages", [current])
+    expect(cache.get("directMessages", current.id)).toBe(current)
+    cache.close()
+})
+
+test.each(["users", "directMessages"] as const)(
+    "%s collection replacement orders targeted reads and observations without merging partial lists",
+    (kind) => {
+        const cache = new UserCache({ [kind]: settings }, () => 0)
+        const listed = value(kind, "10")
+        const targeted = value(kind, "11")
+
+        const oldList = cache.begin(kind, { replace: true })
+        const targetGuard = cache.begin(kind, { id: targeted.id })
+        cache.complete(targetGuard, [targeted])
+        cache.complete(oldList, [listed])
+        expect(cache.get(kind, listed.id)).toBeUndefined()
+        expect(cache.get(kind, targeted.id)).toBe(targeted)
+
+        const oldTarget = cache.begin(kind, { id: targeted.id })
+        const currentList = cache.begin(kind, { replace: true })
+        cache.complete(currentList, [listed])
+        cache.complete(oldTarget, [targeted])
+        expect(cache.get(kind, listed.id)).toBe(listed)
+        expect(cache.get(kind, targeted.id)).toBeUndefined()
+        cache.close()
+    },
+)
+
+test.each(["clear", "gap", "close"] as const)("%s fences stale targeted and collection completions", (operation) => {
+    const cache = new UserCache({ users: settings }, () => 0)
+    const targeted = user("10")
+    const listed = user("11")
+    const targetGuard = cache.begin("users", { id: targeted.id })
+    const listGuard = cache.begin("users", { replace: true })
+
+    cache[operation]()
+    cache.complete(targetGuard, [targeted])
+    cache.complete(listGuard, [listed])
+    expect(cache.diagnostics("users")).toMatchObject({ retainedEntries: 0, accountedBytes: 0 })
+    cache.close()
+})
+
+test("per-ID guard tracking falls back to a conservative collection fence at its bound", () => {
+    const cache = new UserCache({ users: { ...settings, maxEntries: 300 } }, () => 0)
+    const guards = Array.from({ length: 256 }, (_, index) => cache.begin("users", { id: String(index) }))
+    const overflow = user("overflow")
+    const overflowGuard = cache.begin("users", { id: overflow.id })
+
+    cache.complete(guards[0]!, [user("0")])
+    cache.complete(overflowGuard, [overflow])
+    expect(cache.get("users", "0")).toBeUndefined()
+    expect(cache.get("users", overflow.id)).toBe(overflow)
+    cache.close()
+})
+
+test("incremental byte accounting stays exact across replacement, eviction, expiry, clear, and close", () => {
+    let now = 0
+    const cache = new UserCache({ users: { maxEntries: 2, maxBytes: 100_000, maxAgeMs: 10 } }, () => now)
+    const first = user("10")
+    const second = user("11")
+    const replacement = Object.freeze({ ...first, username: "a longer replacement" })
+    const bytes = (item: User) => Buffer.byteLength(JSON.stringify(item))
+
+    cache.complete(cache.begin("users", { id: first.id }), [first])
+    cache.complete(cache.begin("users", { id: second.id }), [second])
+    expect(cache.diagnostics("users").accountedBytes).toBe(bytes(first) + bytes(second))
+
+    cache.complete(cache.begin("users", { id: replacement.id }), [replacement])
+    expect(cache.diagnostics("users").accountedBytes).toBe(bytes(second) + bytes(replacement))
+
+    const third = user("12")
+    cache.complete(cache.begin("users", { id: third.id }), [third])
+    expect(cache.get("users", second.id)).toBeUndefined()
+    expect(cache.diagnostics("users").accountedBytes).toBe(bytes(replacement) + bytes(third))
+
+    now = 10
+    expect(cache.diagnostics("users")).toMatchObject({ retainedEntries: 0, accountedBytes: 0 })
+    cache.complete(cache.begin("users", { id: first.id }), [first])
     cache.clear()
-    const readGeneration = cache.begin("directMessages", false)
-    cache.complete("directMessages", readGeneration, [stale])
-    cache.complete("directMessages", mutationGeneration, [current], false, true)
-    expect(cache.get("directMessages", current.id)).toBeUndefined()
+    expect(cache.diagnostics("users")).toMatchObject({ retainedEntries: 0, accountedBytes: 0 })
+    cache.complete(cache.begin("users", { id: first.id }), [first])
+    cache.close()
+    expect(cache.diagnostics("users")).toMatchObject({ retainedEntries: 0, accountedBytes: 0 })
+})
 
-    complete(cache, "directMessages", [current])
-    const successGeneration = cache.begin("directMessages", true)
-    cache.complete("directMessages", successGeneration, [current], false, true)
-    expect(cache.get("directMessages", current.id)).toBe(current)
+test("an over-budget replacement removes the prior value without changing accounted bytes", () => {
+    const first = user("10")
+    const exactBytes = Buffer.byteLength(JSON.stringify(first))
+    const cache = new UserCache({ users: { maxEntries: 2, maxBytes: exactBytes, maxAgeMs: null } }, () => 0)
+    cache.complete(cache.begin("users", { id: first.id }), [first])
+    expect(cache.diagnostics("users").accountedBytes).toBe(exactBytes)
 
-    const failedGeneration = cache.begin("directMessages", true)
-    cache.failed("directMessages", failedGeneration)
-    expect(cache.get("directMessages", current.id)).toBeUndefined()
-
-    complete(cache, "directMessages", [current])
-    expect(cache.get("directMessages", current.id)).toBe(current)
+    const oversized = Object.freeze({ ...first, username: `${first.username}-oversized` })
+    cache.complete(cache.begin("users", { id: oversized.id }), [oversized])
+    expect(cache.get("users", first.id)).toBeUndefined()
+    expect(cache.diagnostics("users")).toMatchObject({ retainedEntries: 0, accountedBytes: 0 })
     cache.close()
 })

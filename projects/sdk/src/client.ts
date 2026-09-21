@@ -64,15 +64,22 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
     /**
      * Configure this client's log output without changing another client.
      * Creation copies and checks these settings without invoking a logger.
-     * Connection diagnostics are off by default, while handler, cache-policy and observer error reports remain enabled.
+     * Connection diagnostics and low-cardinality operation measurements are off by default, while handler, cache-policy and observer error reports remain enabled.
      * SDK messages omit credentials, private payloads and raw upstream errors.
-     * Logging does not consume or replace returned operation failures, and adds no background work or stored history
+     * Logging does not consume or replace returned operation failures, and adds no telemetry service, background work or stored history
      *
      * @example
      * ```ts
-     * import { createClient } from "@neontechspace/fluxerly"
+     * import { createClient, fromStructuredLogger } from "@neontechspace/fluxerly"
      * export function loggingExample(token: string) {
-     *     return createClient({ token, logging: { development: true } })
+     *     return createClient({
+     *         token,
+     *         logging: {
+     *             development: true,
+     *             measurements: true,
+     *             logger: fromStructuredLogger(record => console.log(JSON.stringify(record))),
+     *         },
+     *     })
      * }
      * ```
      */
@@ -91,14 +98,14 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
     readonly cache?: {
         /** Cache public account profiles from explicit reads and complete user events, not partial message authors.
          * Local lookups improve eviction priority without renewing age.
-         * When reads overlap, an older read cannot overwrite a newer admitted observation.
-         * Lost gateway connections and shutdown release the SDK's retained snapshots
+         * Targeted reads conflict only with later observations of the same account, so unrelated IDs can both populate.
+         * Reads without a target ID, lost gateway connections, clear and shutdown retain collection-wide fences
          */
         readonly users?: boolean | ResourceCacheSettings
         /** Cache private conversations from explicit reads and complete channel events, without automatically listing them.
          * Local lookups improve eviction priority without renewing age.
-         * Mutations and recipient changes discard earlier snapshots. An uncontended response with a complete conversation
-         * can then become the new snapshot. Connection gaps and shutdown release retained snapshots
+         * Targeted reads, mutations and channel events conflict only for the same conversation.
+         * Full-list reads, opening by user ID, account updates, connection gaps, clear and shutdown retain collection-wide fences
          */
         readonly directMessages?: boolean | ResourceCacheSettings
         /** Cache guild details from explicit reads and guild create or update events, without preloading members or roles.
@@ -278,6 +285,19 @@ export interface ClientDiagnostics {
         readonly activeRequests: number
         /** Maximum logical requests allowed concurrently by this client */
         readonly activeCapacity: number
+    }
+    /** Current event-work registrations owned by this client, not process memory or an enforced aggregate quota.
+     * Counts exclude other clients and application tasks outside SDK event handlers
+     */
+    readonly events: {
+        /** Open event sources, including subscriptions, event streams and single-event waits */
+        readonly subscriptions: number
+        /** Registered message collectors, including collectors waiting for matching messages */
+        readonly messageCollectors: number
+        /** Registered reaction collectors, including collectors waiting for matching reactions */
+        readonly reactionCollectors: number
+        /** Subscription callbacks currently executing, excluding idle subscriptions and collector filters */
+        readonly activeHandlers: number
     }
     /** Accounting for each local cache category.
      * Closure releases retained snapshots but leaves configured capacity values available for inspection

@@ -40,7 +40,12 @@ const metadataMessage = (extra = {}) =>
         mention_channels: [{ id: "300", name: "deployments", type: 0 }],
         reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
         message_reference: { message_id: "401", channel_id: "300", guild_id: "200", type: 0 },
-        referenced_message: { id: "401", channel_id: "300", content: "not retained" },
+        referenced_message: {
+            id: "401",
+            channel_id: "300",
+            content: "reply context",
+            author: { id: "101", username: "mentioned", bot: true },
+        },
         ...extra,
     })
 afterEach(() => {
@@ -356,9 +361,14 @@ test.each(modes)("%s preserves supplied metadata from webhook message responses 
         mentionChannels: [{ id: "300", name: "deployments", type: 0 }],
         reactions: [{ emoji: { id: null, name: "👍", animated: null }, count: 2, me: null }],
         messageReference: { id: "401", channelId: "300", guildId: "200", type: 0 },
-        referencedMessage: { id: "401", channelId: "300" },
+        referencedMessage: {
+            id: "401",
+            channelId: "300",
+            content: "reply context",
+            author: { id: "101", username: "mentioned", isBot: true },
+        },
     })
-    expect("content" in received.referencedMessage!).toBe(false)
+    expect("referencedMessage" in received.referencedMessage!).toBe(false)
     expect(
         Object.isFrozen(received) &&
             Object.isFrozen(received.mentions) &&
@@ -370,7 +380,8 @@ test.each(modes)("%s preserves supplied metadata from webhook message responses 
             Object.isFrozen(received.reactions?.[0]) &&
             Object.isFrozen(received.reactions?.[0]?.emoji) &&
             Object.isFrozen(received.messageReference) &&
-            Object.isFrozen(received.referencedMessage),
+            Object.isFrozen(received.referencedMessage) &&
+            Object.isFrozen(received.referencedMessage?.author),
     ).toBe(true)
     expect(fetch).toHaveBeenCalledTimes(1)
 })

@@ -740,9 +740,11 @@ test("default reaction collection abort and reentrant stop release intake and pr
     expect(filter).toHaveBeenCalledTimes(1)
 })
 
-test("native reaction registration is lazy, retains caller clock and releases its own scope", async () => {
+test("native reaction registration is lazy, retains its owner clock and releases its own scope", async () => {
     await gateway()
     mockRest(async () => new Response(null, { status: 204 }))
+    let now = 0
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
     const api = await setup("native")
     await api.connect()
     const filter = vi.fn(() => true)
@@ -750,18 +752,14 @@ test("native reaction registration is lazy, retains caller clock and releases it
     deliverReaction(addition()).deliver()
     await turn()
     expect(filter).not.toHaveBeenCalled()
-    let now = 0
-    const clock = { ...Effect.runSync(Clock.Clock), monotonicTimeNanosUnsafe: () => BigInt(now) * 1_000_000n }
-    const collector = await Effect.runPromise(
-        effect.pipe(Scope.provide(api.collectorScope), Effect.provideService(Clock.Clock, clock)),
-    )
+    const collector = await Effect.runPromise(effect.pipe(Scope.provide(api.collectorScope)))
     deliverReaction(addition()).deliver()
     await turn()
     await Effect.runPromise(Scope.close(api.collectorScope, Exit.void))
     expect(await Effect.runPromise(collector.waitForClose())).toEqual({ reason: "stopped", reactions: [observed()] })
     expect(api.state()).toBe("Connected")
     const scope = Scope.makeUnsafe()
-    const timed = await Effect.runPromise(effect.pipe(Scope.provide(scope), Effect.provideService(Clock.Clock, clock)))
+    const timed = await Effect.runPromise(effect.pipe(Scope.provide(scope)))
     now = 30_000
     deliverReaction(addition()).deliver()
     expect(await Effect.runPromise(timed.waitForClose())).toEqual({ reason: "timeout", reactions: [] })

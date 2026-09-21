@@ -90,7 +90,12 @@ const metadataWire = (id: string, channelId: string, content = `Message ${id}`) 
     mention_roles: ["50"],
     reactions: [{ emoji: { id: null, name: "👍" }, count: 2, me: false }],
     message_reference: { message_id: "70", channel_id: "71", type: 1 },
-    referenced_message: { id: "70", channel_id: "71", content: "not retained" },
+    referenced_message: {
+        id: "70",
+        channel_id: "71",
+        content: "reply context",
+        author: { id: "32", username: "reply-author" },
+    },
 })
 
 const projection = (id: string, channelId: string, content = `Message ${id}`) => ({

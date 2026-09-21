@@ -25,7 +25,7 @@ export interface UserRequest<A> {
     readonly id?: string
     readonly replace?: boolean
     readonly verifyType?: "private" | "group"
-    /** Skips all user-cache generations and writes while retaining the shared REST scheduler and retries */
+    /** Skips all user-cache conflict guards and writes while retaining the shared REST scheduler and retries */
     readonly noCache?: boolean
 }
 

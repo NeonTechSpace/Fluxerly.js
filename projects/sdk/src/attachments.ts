@@ -1,7 +1,8 @@
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
-import { operationErrorMessage } from "./api-errors.js"
+import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
+import type { MessageOperationOptions } from "./messages.js"
 
 /** What an attachment reader returns from read: A byte chunk while reading, or done true at the end.
  * This shape accepts Node's native ReadableStream without requiring browser type declarations.
@@ -214,8 +215,8 @@ export interface AttachmentReference {
     readonly spoiler?: never
 }
 
-/** Metadata for a file attached to a received message. Use client.attachments to download or stream its bytes.
- * This object is frozen. Its URLs may expire, the SDK does not refresh them or download automatically
+/** Metadata for a file attached to a received message. Use client.attachments to refresh its URL explicitly, then download or stream its bytes.
+ * This object is frozen. Its URLs may expire, and the SDK never refreshes or downloads them automatically
  */
 export interface Attachment {
     /** Decimal attachment ID */
@@ -255,6 +256,74 @@ export interface Attachment {
     /** Optional server expiry observation, not a live availability check */
     readonly expired?: boolean
 }
+
+/** One result from an explicit attachment URL refresh.
+ * Fluxer returns these frozen entries in the same order as the requested URLs
+ */
+export interface RefreshedAttachmentUrl {
+    /** Requested string exactly as supplied to attachments.refreshUrls */
+    readonly original: string
+    /** Newly signed URL, or the original string when it is not an attachment URL of the selected instance */
+    readonly refreshed: string
+}
+
+/** Per-call deadline for an attachment URL refresh, separate from attachment download limits */
+export interface AttachmentRefreshOptions extends MessageOperationOptions {}
+
+/** Add cancellation to an attachment URL refresh in the default API */
+export interface DefaultAttachmentRefreshOptions extends AttachmentRefreshOptions, OperationOptions {}
+
+/** Attachment URL refresh operation identified by safe failure metadata */
+export type AttachmentRefreshOperation = "attachments.refreshUrls"
+
+/** The SDK could not refresh one ordered batch of attachment URL strings.
+ * Failures contain no requested URL, refreshed URL, response body or credential.
+ * HTTP 404 does not distinguish an older unsupported deployment from an unavailable route or denied access
+ */
+export class AttachmentRefreshError extends Error {
+    /** Stable expected-failure discriminator */
+    readonly _tag = "AttachmentRefreshError"
+    /** Safe local validation facts when the SDK can identify a failed input rule, otherwise null */
+    readonly inputValidation: InputValidationDetail | null
+
+    constructor(
+        /** Requested operation */
+        readonly operation: AttachmentRefreshOperation,
+        /** Input validation, local capacity, HTTP 404 or another rejection, transport, response decoding, deadline or rate limit */
+        readonly reason: "input" | "busy" | "notFound" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
+        /** notDispatched means no API request started, rejected means an observed rejection, and unknown means no valid result was received.
+         * Refreshing does not create or change an attachment, but an unknown outcome cannot recover a lost response
+         */
+        readonly outcome: "notDispatched" | "rejected" | "unknown",
+        /** HTTP status when received, otherwise null */
+        readonly status: number | null = null,
+        /** Provider retry delay in milliseconds when usable, otherwise null */
+        readonly retryAfterMs: number | null = null,
+        /** Reviewed provider rejection detail, or null when no safe classification is available */
+        readonly apiError: ApiErrorDetail | null = null,
+        inputValidation: InputValidationDetail | null = null,
+    ) {
+        super(
+            operationErrorMessage(
+                "Attachment URL",
+                operation,
+                reason,
+                outcome,
+                status,
+                apiError,
+                inputValidation?.explanation ?? null,
+                retryAfterMs,
+            ),
+        )
+        this.name = this._tag
+        this.inputValidation = freezeInputValidationDetail(inputValidation)
+    }
+}
+
+/** Expected attachment URL refresh failures shared by both entry points.
+ * Native interruption remains in the Effect cause, while default API calls additionally return CancelledError
+ */
+export type AttachmentRefreshFailure = AttachmentRefreshError | ClientClosedError
 
 /** Set the maximum bytes to accept and how long to wait for an attachment download.
  * maxBytes is required, a positive safe integer no greater than 52,428,800.

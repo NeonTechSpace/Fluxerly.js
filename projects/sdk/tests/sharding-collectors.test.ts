@@ -1,10 +1,11 @@
-import { Deferred, Effect } from "effect"
+import { Clock, Deferred, Effect } from "effect"
 import { expect, test } from "vitest"
 import type { ConnectionState } from "../src/client.js"
 import { CollectorError } from "../src/collectors.js"
 import { collect } from "../src/internal/collector.js"
 import type { ClientOwner } from "../src/internal/client.js"
 import { EventBus } from "../src/internal/events.js"
+import { LogicalScheduler } from "../src/internal/logical-scheduler.js"
 import { collectReactions } from "../src/internal/reaction-collector.js"
 import type { Message } from "../src/messages.js"
 import type { MessageReaction } from "../src/reactions.js"
@@ -18,11 +19,13 @@ function fixture() {
     const aggregateListeners = new Set<(state: ConnectionState) => void>()
     const gatewayListeners = new Map<string, Set<(state: ConnectionState) => void>>()
     const events = new EventBus()
+    const logical = new LogicalScheduler(Effect.runSync(Clock.Clock))
     const owner = {
         get state() {
             return aggregate
         },
         events,
+        logical,
         shardIdForGuild(guildId: string) {
             return guildId === "40" ? 1 : guildId === "41" ? 2 : undefined
         },

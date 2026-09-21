@@ -12,6 +12,7 @@ export class ConfigurationError extends Error {
             | "instance"
             | "logging"
             | "development"
+            | "measurements"
             | "minimumLevel"
             | "logger"
             | "token"
@@ -93,6 +94,7 @@ export class ConfigurationError extends Error {
 export type Operation =
     | "attachments.download"
     | "attachments.stream"
+    | import("./attachments.js").AttachmentRefreshOperation
     | "instance.resolve"
     | "presence.set"
     | "presence.setMembers"
@@ -360,6 +362,7 @@ export type DefectReason =
               | import("./pagination.js").PaginationError
               | import("./collectors.js").CollectorError
               | import("./attachments.js").AttachmentDownloadFailure
+              | import("./attachments.js").AttachmentRefreshFailure
               | import("./supervisor.js").SupervisorError
               | import("./supervisor.js").SupervisorChildError
               | CancelledError

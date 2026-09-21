@@ -21,6 +21,7 @@ import { RestOwner } from "./rest.js"
 import { InstanceResolver, type InstanceConfiguration, instanceConfiguration } from "./instance.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { normalizedText } from "./field-text.js"
+import { type LogicalScheduler, makeLogicalScheduler } from "./logical-scheduler.js"
 
 export type WebhookRequest<A> = {
     majorId: string
@@ -401,15 +402,18 @@ class WebhookOwner {
     readonly rest: RestOwner
     /** Token-only clients still own an independent immutable instance result and discovery worker */
     readonly instance: InstanceResolver
-    readonly #scope = Scope.makeUnsafe()
+    readonly #scope: Scope.Scope
     constructor(
         readonly id: string,
         token: string,
         maxBytes: number,
         instance: InstanceConfiguration,
+        scope: Scope.Scope,
+        logical: LogicalScheduler,
     ) {
         this.#token = Redacted.make(token)
-        this.instance = new InstanceResolver(instance, this.#scope)
+        this.#scope = scope
+        this.instance = new InstanceResolver(instance, scope)
         this.rest = new RestOwner<Message>(
             undefined,
             maxBytes,
@@ -418,6 +422,7 @@ class WebhookOwner {
             undefined,
             () => this.instance.resolve(),
             decodeMessage,
+            logical,
         )
     }
     run<A>(
@@ -474,6 +479,9 @@ export function makeWebhookClient(options: WebhookClientOptions): Effect.Effect<
             return Effect.fail(new ConfigurationError("uploads", "Invalid webhook upload budget"))
         const instance = instanceConfiguration(options.instance)
         if (instance instanceof ConfigurationError) return Effect.fail(instance)
-        return Effect.succeed(new WebhookOwner(options.id, token, maxBytes, instance))
+        const scope = Scope.makeUnsafe()
+        return makeLogicalScheduler(scope).pipe(
+            Effect.map((logical) => new WebhookOwner(options.id, token, maxBytes, instance, scope, logical)),
+        )
     })
 }

@@ -250,8 +250,8 @@ function validateOptions(value: unknown): GuildOperationOptions | InputValidatio
     return value
 }
 
-function remainingOptions(deadline: number): GuildOperationOptions | undefined {
-    const remaining = Math.floor(deadline - performance.now())
+function remainingOptions(deadline: number, now: () => number): GuildOperationOptions | undefined {
+    const remaining = Math.floor(deadline - now())
     return remaining > 0 ? { timeoutMs: remaining } : undefined
 }
 
@@ -273,7 +273,7 @@ function remoteCalculationFailure(error: GuildOperationError): GuildOperationErr
  * resulting observations are not transactional and do not establish access, hierarchy, timeouts, or action success
  */
 export function fetchPermissions(
-    owner: Pick<ClientOwner, "guild" | "channel">,
+    owner: Pick<ClientOwner, "guild" | "channel" | "logical">,
     target: PermissionTarget,
     options?: GuildOperationOptions,
 ): Effect.Effect<bigint, GuildOperationFailure | ChannelOperationFailure> {
@@ -284,10 +284,11 @@ export function fetchPermissions(
         const validatedOptions = validateOptions(options)
         if (validatedOptions instanceof InputValidationFailure)
             return Effect.fail(inputFailure("permissions.fetch", validatedOptions))
-        const deadline = performance.now() + (validatedOptions.timeoutMs ?? 30_000)
-        const requestOptions = () => remainingOptions(deadline)
         const timedOut = () => Effect.fail(timeoutFailure())
         return Effect.gen(function* () {
+            const now = () => owner.logical.now()
+            const deadline = now() + (validatedOptions.timeoutMs ?? 30_000)
+            const requestOptions = () => remainingOptions(deadline, now)
             const guildOptions = requestOptions()
             if (!guildOptions) return yield* timedOut()
             const guild = yield* owner.guild("guilds.fetch", () => guildFetch(targetSnapshot.guildId), guildOptions)

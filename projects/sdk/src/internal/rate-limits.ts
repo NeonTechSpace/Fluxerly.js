@@ -3,7 +3,17 @@ import { rateLimitParameters } from "./rate-limit-templates.js"
 
 const capacity = 2048
 const aliasIdleMs = 300_000
-type Bucket = { remaining: number; until: number }
+type Bucket = {
+    remaining: number
+    until: number
+    limit?: number
+    next?: number
+    sequence: number
+    probeRoute?: string
+    probeSequence?: number
+    probeRemaining?: number
+    probeIncomplete?: true
+}
 type Alias = { key: string; sequence: number; expires: number; carryUntil: number }
 export type RateRoute = { readonly key: string; readonly parameters: Readonly<Record<string, string>> }
 export type RateAttempt = { readonly route: RateRoute; readonly sequence: number }
@@ -57,18 +67,27 @@ export class RateLimits {
     #overflowUntil = 0
 
     begin(route: RateRoute): RateAttempt {
-        return { route, sequence: ++this.#sequence }
+        const sequence = ++this.#sequence
+        const alias = this.#aliases.get(route.key)
+        const bucket = this.#buckets.get(alias?.key ?? provisional(route.key))
+        if (bucket?.probeRoute === route.key && bucket.probeSequence === undefined) bucket.probeSequence = sequence
+        return { route, sequence }
     }
 
     #alias(route: string, now: number) {
         const alias = this.#aliases.get(route)
         if (!alias) return undefined
-        if (alias.expires <= now && this.#wait(alias.key, now) <= now && alias.carryUntil <= now) {
+        if (alias.expires <= now && !this.#protected(alias.key, now) && alias.carryUntil <= now) {
             this.#aliases.delete(route)
             return undefined
         }
         alias.expires = now + aliasIdleMs
         return alias
+    }
+
+    #protected(key: string, now: number) {
+        const bucket = this.#buckets.get(key)
+        return bucket !== undefined && bucket.until > now && bucket.remaining <= 0
     }
 
     #wait(key: string, now: number) {
@@ -77,7 +96,9 @@ export class RateLimits {
             this.#buckets.delete(key)
             return 0
         }
-        return bucket && bucket.remaining <= 0 ? bucket.until : 0
+        if (!bucket || bucket.remaining > 0) return 0
+        if (bucket.probeRoute !== undefined) return bucket.until
+        return bucket.next !== undefined && bucket.next < bucket.until ? bucket.next : bucket.until
     }
 
     wait(route: string, now: number): number {
@@ -93,10 +114,28 @@ export class RateLimits {
     reserve(route: string, now: number) {
         const alias = this.#alias(route, now)
         const bucket = this.#buckets.get(alias?.key ?? provisional(route))
-        if (bucket && bucket.until > now) bucket.remaining--
+        if (!bucket || bucket.until <= now) return
+        if (bucket.remaining > 0) {
+            bucket.remaining--
+            return
+        }
+        if (bucket.next !== undefined && bucket.next <= now && bucket.probeRoute === undefined) {
+            // Once integer remaining reaches zero, only one request may test the
+            // next refill. Its response must refresh the schedule before another
+            // request can use the same bucket
+            bucket.probeRoute = route
+        }
     }
 
-    #store(key: string, remaining: number, until: number, now: number) {
+    #store(
+        key: string,
+        remaining: number,
+        until: number,
+        now: number,
+        sequence: number,
+        limit?: number,
+        next?: number,
+    ) {
         const previous = this.#buckets.get(key)
         if (!previous || previous.until <= now) {
             for (const [candidate, bucket] of this.#buckets) if (bucket.until <= now) this.#buckets.delete(candidate)
@@ -114,9 +153,41 @@ export class RateLimits {
                 return
             }
         }
+        const active = previous && previous.until > now ? previous : undefined
+        const newest = !active || sequence >= active.sequence
+        const changedLimit = active?.limit !== undefined && limit !== undefined && active.limit !== limit
+        const refreshedProbe = active?.probeSequence !== undefined && sequence === active.probeSequence
+        const observedProbeRemaining =
+            active?.probeRoute === undefined ? undefined : Math.min(active.probeRemaining ?? remaining, remaining)
+        const conservativeProbe = active?.probeIncomplete === true || (active?.probeRoute !== undefined && changedLimit)
+        const refreshesSchedule = newest || refreshedProbe
+        const retainedLimit = newest
+            ? changedLimit
+                ? Math.min(active!.limit!, limit!)
+                : (limit ?? active?.limit)
+            : active?.limit
         this.#buckets.set(key, {
-            remaining: Math.min(previous && previous.until > now ? previous.remaining : remaining, remaining),
-            until: Math.max(previous && previous.until > now ? previous.until : 0, until),
+            remaining: refreshedProbe
+                ? conservativeProbe
+                    ? 0
+                    : (observedProbeRemaining ?? remaining)
+                : Math.min(active?.remaining ?? remaining, remaining),
+            until: Math.max(active?.until ?? 0, until),
+            ...(refreshesSchedule && !changedLimit && !conservativeProbe && next !== undefined
+                ? { next: Math.max(active?.next ?? 0, next) }
+                : !refreshesSchedule && active?.next !== undefined
+                  ? { next: active.next }
+                  : {}),
+            ...(retainedLimit === undefined ? {} : { limit: retainedLimit }),
+            sequence: Math.max(active?.sequence ?? 0, sequence),
+            ...(!refreshedProbe && active?.probeRoute !== undefined
+                ? {
+                      probeRoute: active.probeRoute,
+                      ...(active.probeSequence === undefined ? {} : { probeSequence: active.probeSequence }),
+                      ...(observedProbeRemaining === undefined ? {} : { probeRemaining: observedProbeRemaining }),
+                      ...(conservativeProbe ? { probeIncomplete: true as const } : {}),
+                  }
+                : {}),
         })
     }
 
@@ -134,7 +205,7 @@ export class RateLimits {
             if (!previous || sequence >= previous.sequence) {
                 if (!previous && this.#aliases.size >= capacity) {
                     for (const [candidate, alias] of this.#aliases) {
-                        if (this.#wait(alias.key, now) <= now && alias.carryUntil <= now) {
+                        if (!this.#protected(alias.key, now) && alias.carryUntil <= now) {
                             this.#aliases.delete(candidate)
                             break
                         }
@@ -157,24 +228,67 @@ export class RateLimits {
         }
         const remainingText = response.headers.get("x-ratelimit-remaining")
         const resetText = response.headers.get("x-ratelimit-reset-after")
+        const limitText = response.headers.get("x-ratelimit-limit")
         const remaining = remainingText !== null && /^\d+$/.test(remainingText) ? Number(remainingText) : NaN
         const delay = resetText !== null && /^\d+(?:\.\d+)?$/.test(resetText) ? Number(resetText) * 1000 : NaN
+        const limit = limitText !== null && /^\d+$/.test(limitText) ? Number(limitText) : NaN
         if (Number.isSafeInteger(remaining) && remaining >= 0 && Number.isFinite(delay) && delay > 0) {
             const until = now + delay
-            this.#store(key, remaining, until, now)
+            const complete = Number.isSafeInteger(limit) && limit > 0 && remaining <= limit
+            // With zero integer remaining, the hidden bucket level is in
+            // (limit - 1, limit]. A limit-th of the full-drain delay is therefore
+            // never earlier than the first instant one whole request fits. One
+            // in-flight probe then refreshes the schedule. No leak rate is inferred
+            // from (limit - remaining), whose fractional level is not observable
+            const next = complete && remaining === 0 ? now + Math.ceil(delay / limit) : undefined
+            this.#store(key, remaining, until, now, sequence, complete ? limit : undefined, next)
             if (missingParameters) this.#overflowUntil = Math.max(this.#overflowUntil, until)
+        } else {
+            const bucket = this.#buckets.get(key)
+            if (bucket?.probeRoute !== undefined && sequence !== bucket.probeSequence) bucket.probeIncomplete = true
+            if (bucket && sequence >= bucket.sequence) {
+                // Incomplete or changing metadata cannot keep a speculative refill
+                // schedule. Preserve the known full-drain pause instead
+                delete bucket.next
+                bucket.sequence = sequence
+            }
         }
         // Missing resource bindings or pinned-capacity pressure must not let the
         // attempt's later body-only denial bypass the conservative overflow gate
         return missingParameters ? "overflow" : key
     }
 
-    pause(key: string, until: number, now: number) {
+    pause(key: string, until: number, now: number, sequence?: number) {
         if (key === "overflow") {
             this.#overflowUntil = Math.max(this.#overflowUntil, until)
             return
         }
-        this.#store(key, 0, until, now)
+        const bucket = this.#buckets.get(key)
+        if (sequence !== undefined && bucket?.probeRoute !== undefined && sequence !== bucket.probeSequence)
+            bucket.probeRemaining = 0
+        if (
+            sequence !== undefined &&
+            bucket !== undefined &&
+            bucket.until > now &&
+            bucket.limit !== undefined &&
+            sequence >= bucket.sequence
+        ) {
+            // A confirmed 429 body gives the precise first-admission delay. It
+            // may shorten only the matching observation's refill probe, never
+            // the full-drain horizon or a newer response's schedule
+            bucket.remaining = 0
+            bucket.until = Math.max(bucket.until, until)
+            bucket.next = until
+            bucket.sequence = sequence
+            if (bucket.probeSequence !== undefined && sequence === bucket.probeSequence) {
+                delete bucket.probeRoute
+                delete bucket.probeSequence
+                delete bucket.probeRemaining
+                delete bucket.probeIncomplete
+            }
+            return
+        }
+        this.#store(key, 0, until, now, sequence ?? ++this.#sequence)
     }
 
     clear() {

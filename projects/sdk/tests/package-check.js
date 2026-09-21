@@ -15,6 +15,7 @@ import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { API } from "typescript/unstable/sync"
+import { format } from "prettier"
 import { stageRelease } from "../scripts/packages.js"
 import { authoredGuides } from "../../web/scripts/generate.js"
 
@@ -45,6 +46,10 @@ function examples(source) {
 }
 
 const checkedExampleSources = new Map()
+
+function normalizeJavaScriptExample(source) {
+    return format(source, { parser: "babel", semi: false, printWidth: 100 })
+}
 
 function rememberExample(consumer, example) {
     const checked = checkedExampleSources.get(consumer) ?? new Set()
@@ -121,12 +126,14 @@ function guideCodeBlocks(guides) {
 }
 
 function guideImportSpecifiers(source) {
-    // Authored guide snippets use single-line static ESM imports. The packed tsc
-    // checks own complete syntax and type validation after this entry-point selection
+    // Authored guide snippets use static ESM imports, including formatted multiline named imports.
+    // The packed tsc checks own complete syntax and type validation after this entry-point selection
     return new Set(
-        [...source.matchAll(/^\s*import(?:\s+type)?(?:\s+[^"'\r\n]+?\s+from)?\s*["']([^"'\r\n]+)["']/gm)].map(
-            (match) => match[1],
-        ),
+        [
+            ...source.matchAll(
+                /^\s*import(?:\s+type)?(?:\s+(?:[^"'`;]|\r?\n)*?\s+from)?\s*["']([^"'\r\n]+)["']\s*;?/gm,
+            ),
+        ].map((match) => match[1]),
     )
 }
 
@@ -181,7 +188,7 @@ function completeEffectStarter() {
         return (
             guideImportSpecifiers(example.source).has(`${manifest.name}/effect`) &&
             programs.length === 1 &&
-            (example.source.match(/YOUR_BOT_TOKEN/g) ?? []).length === 1
+            (example.source.match(/process\.env\.FLUXER_BOT_TOKEN/g) ?? []).length === 1
         )
     })
     assert.equal(starters.length, 1, "Expected one complete authored Effect starter")
@@ -573,14 +580,14 @@ try {
                 1,
                 "Expected one exact website bot block shared by JavaScript and TypeScript",
             )
-            assert.equal((websiteExamples[0][1].match(/YOUR_BOT_TOKEN/g) ?? []).length, 1)
+            assert.equal((websiteExamples[0][1].match(/process\.env\.FLUXER_BOT_TOKEN/g) ?? []).length, 1)
             for (const readme of [join(sdk, "../../docs/README.md"), join(installed, "README.md")]) {
                 const markdown = readFileSync(readme, "utf8")
                 const examples = [...markdown.matchAll(/```js\r?\n([\s\S]*?)```/g)]
                 assert.equal(examples.length, 1, `Expected one first-bot example in ${readme}`)
                 assert.equal(
-                    examples[0][1].replaceAll("\r\n", "\n"),
-                    websiteExamples[0][1].replaceAll("\r\n", "\n"),
+                    await normalizeJavaScriptExample(examples[0][1]),
+                    await normalizeJavaScriptExample(websiteExamples[0][1]),
                     `README bot must match the executable first-bot guide: ${readme}`,
                 )
                 for (const instruction of ['"type": "module"', "node bot.js", "node bot.ts"]) {
@@ -589,17 +596,14 @@ try {
             }
             copyFileSync(join(fixtureDirectory, "website-guide.js"), join(consumer, "website-guide.js"))
             for (const filename of ["bot.js", "bot.ts"]) {
-                writeFileSync(
-                    join(consumer, filename),
-                    `${websiteExamples[0][1].replace("YOUR_BOT_TOKEN", "fixture-only")}\nexport { client }\n`,
-                )
+                writeFileSync(join(consumer, filename), websiteExamples[0][1])
                 process.stdout.write(run(process.execPath, ["website-guide.js", filename], consumer, 15_000))
             }
         }
         if (kind === "effect") {
             const starter = completeEffectStarter()
             const filename = "effect-website-guide.ts"
-            writeFileSync(join(consumer, filename), starter.source.replace("YOUR_BOT_TOKEN", "fixture-only"))
+            writeFileSync(join(consumer, filename), starter.source)
             copyFileSync(join(fixtureDirectory, "effect-website-guide.js"), join(consumer, "effect-website-guide.js"))
             process.stdout.write(run(process.execPath, ["effect-website-guide.js", filename], consumer, 15_000))
         }
@@ -609,6 +613,19 @@ try {
         process.stdout.write(
             run(process.execPath, ["--enable-source-maps", "sharding-workflow.js", kind], consumer, 15_000),
         )
+        copyFileSync(join(fixtureDirectory, "conformance-reference.js"), join(consumer, "conformance-reference.js"))
+        copyFileSync(
+            join(sdk, "tests/conformance-reference-cases.json"),
+            join(consumer, "conformance-reference-cases.json"),
+        )
+        process.stdout.write(run(process.execPath, ["conformance-reference.js", kind], consumer, 15_000))
+
+        if (kind === "default") {
+            copyFileSync(join(fixtureDirectory, "migration-fluxerly.js"), join(consumer, "migration-fluxerly.js"))
+            copyFileSync(join(fixtureDirectory, "migration-fluxerly.ts"), join(consumer, "migration-fluxerly.ts"))
+            copyFileSync(join(sdk, "tests/migration/nonvoice-contract.js"), join(consumer, "nonvoice-contract.js"))
+            process.stdout.write(run(process.execPath, ["migration-fluxerly.js"], consumer, 15_000))
+        }
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
         if (kind === "effect")
@@ -865,6 +882,8 @@ try {
                 },
                 include: ["*.ts"],
                 exclude: [
+                    "bot.ts",
+                    "logging-example.ts",
                     "run-bot-example.ts",
                     "effect-website-guide.ts",
                     ...additionalExamples,
@@ -891,7 +910,10 @@ try {
                     noEmit: true,
                     lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                 },
-                files: ["run-bot-example.ts"],
+                files:
+                    kind === "default"
+                        ? ["run-bot-example.ts", "logging-example.ts", "bot.ts"]
+                        : ["run-bot-example.ts", "logging-example.ts"],
             }),
         )
         run(process.execPath, [compiler, "-p", "run-bot-tsconfig.json"], consumer)

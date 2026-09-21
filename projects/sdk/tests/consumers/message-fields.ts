@@ -6,6 +6,8 @@ import {
     type Message,
     type MessageCore,
     type MessageField,
+    type MessageUser,
+    type ReferencedMessage,
     type SelectedMessage,
 } from "@neontechspace/fluxerly"
 import {
@@ -28,6 +30,25 @@ export const selectedTypeContracts = [
     exact<Equal<SelectedMessage<readonly ["embeds"]>["embeds"], Message["embeds"]>>(true),
     exact<Equal<Chosen["editedAt"], string | null | undefined>>(true),
     exact<Equal<Chosen["messageSnapshots"], Message["messageSnapshots"]>>(true),
+    exact<Equal<SelectedMessage<readonly ["nsfwEmojiIds"]>["nsfwEmojiIds"], readonly string[] | undefined>>(true),
+    exact<
+        Equal<
+            SelectedMessage<readonly ["referencedUsers"]>["referencedUsers"],
+            readonly MessageUser[] | null | undefined
+        >
+    >(true),
+    exact<
+        Equal<
+            SelectedMessage<readonly ["referencedMessage"]>["referencedMessage"],
+            ReferencedMessage | null | undefined
+        >
+    >(true),
+    exact<
+        Equal<
+            SelectedMessage<readonly ["nsfwEmojiIds"] | readonly ["referencedUsers"]>,
+            SelectedMessage<readonly ["nsfwEmojiIds"]> | SelectedMessage<readonly ["referencedUsers"]>
+        >
+    >(true),
     exact<
         Equal<
             SelectedMessage<readonly ["embeds"] | readonly ["attachments"]>,
@@ -132,10 +153,14 @@ export async function defaultDynamicAndDefault(token: string, fields: readonly M
     const message = await dynamic.messages.fetch({ id: "10", channelId: "20" })
     if (message.isOk()) {
         const embeds: Message["embeds"] | undefined = message.value.embeds
+        const nsfwEmojiIds: Message["nsfwEmojiIds"] = message.value.nsfwEmojiIds
+        const referencedUsers: Message["referencedUsers"] = message.value.referencedUsers
         const author: Message["author"] = message.value.author
         // @ts-expect-error Dynamic array membership cannot promise an embeds array
         const required: Message["embeds"] = message.value.embeds
         void embeds
+        void nsfwEmojiIds
+        void referencedUsers
         void author
         void required
     }
@@ -158,6 +183,25 @@ export async function defaultDynamicAndDefault(token: string, fields: readonly M
     // @ts-expect-error A narrower full-message policy cannot influence field inference
     createClient({ token, messageFields: [], cache: { messages: { maxAgeMs: (_message: Message) => null } } })
     return { dynamic, full, core }
+}
+
+export async function defaultReceivedContext(token: string) {
+    const client = createClient({
+        token,
+        messageFields: ["nsfwEmojiIds", "referencedUsers", "referencedMessage"],
+    })._unsafeUnwrap()
+    const result = await client.messages.fetch({ id: "10", channelId: "20" })
+    if (result.isErr()) return result
+    const message = result.value
+    const emojiIds: readonly string[] | undefined = message.nsfwEmojiIds
+    const users: readonly MessageUser[] | null | undefined = message.referencedUsers
+    const reply: ReferencedMessage | null | undefined = message.referencedMessage
+    const preference: 0 | 1 | 2 | undefined = reply?.author.mentionFlags
+    // @ts-expect-error Embedded webhook and deleted-user placeholders are not complete User values
+    const completeUser: import("@neontechspace/fluxerly").User = message.author
+    // @ts-expect-error Selecting received context does not widen the message to unrelated media
+    message.attachments
+    return { emojiIds, users, reply, preference, completeUser }
 }
 
 interface Reporter {

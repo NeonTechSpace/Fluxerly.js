@@ -5,6 +5,7 @@ import type { GuildEmoji, GuildSticker } from "#sdk/expressions"
 import type { EventMap, EventName } from "#sdk/events"
 import type { ResourceCacheSettings } from "#sdk/cache"
 import { decodeGuild, decodeGuildSnapshot } from "./guilds.js"
+import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 import { identifier, record } from "./message.js"
 
 export type ResourceKind = "guilds" | "members" | "roles" | "emojis" | "stickers"
@@ -52,11 +53,12 @@ export class GuildCache {
     #requests = new Set<ResourceGuard>()
     #generation = 0
     #closed = false
-    #timer: ReturnType<typeof setTimeout> | undefined
+    #timer: ReturnType<typeof setTimeout> | LogicalTimer | undefined
 
     constructor(
         private readonly settings: ResourceConfiguration,
         private readonly now: () => number,
+        private readonly logical?: LogicalScheduler,
     ) {}
 
     get<K extends ResourceKind>(kind: K, guildId: string, id?: string): Resources[K] | undefined {
@@ -264,7 +266,9 @@ export class GuildCache {
     }
 
     #schedule() {
-        if (this.#timer !== undefined) clearTimeout(this.#timer)
+        if (this.#timer !== undefined)
+            if (this.logical) this.logical.clear(this.#timer as LogicalTimer)
+            else clearTimeout(this.#timer as ReturnType<typeof setTimeout>)
         this.#timer = undefined
         if (this.#closed) return
         let next = Infinity
@@ -272,14 +276,17 @@ export class GuildCache {
             for (const entry of this.#entries[kind].values())
                 if (entry.expires !== null) next = Math.min(next, entry.expires)
         if (next !== Infinity) {
-            this.#timer = setTimeout(
-                () => {
-                    this.#purge()
-                    this.#schedule()
-                },
-                Math.min(2_147_483_647, Math.max(1, Math.ceil(next - this.now()))),
-            )
-            this.#timer.unref()
+            const callback = () => {
+                this.#purge()
+                this.#schedule()
+            }
+            const delay = Math.min(2_147_483_647, Math.max(1, Math.ceil(next - this.now())))
+            if (this.logical) this.#timer = this.logical.set(callback, delay, "guild cache")
+            else {
+                const timer = setTimeout(callback, delay)
+                timer.unref()
+                this.#timer = timer
+            }
         }
     }
 

@@ -1,0 +1,1335 @@
+import { createRequire } from "node:module"
+
+const require = createRequire(import.meta.url)
+
+export const conformanceReferenceCases = require("./conformance-reference-cases.json") as Readonly<{
+    membersSetRoles: {
+        readonly target: { readonly guildId: string; readonly userId: string }
+        readonly acceptedRoleIds: readonly string[]
+        readonly rejectedRoleIds: readonly string[]
+        readonly schemaAcceptedHandlerRejectedRoleIds: readonly string[]
+        readonly request: {
+            readonly method: string
+            readonly path: string
+            readonly authorizationPrefix: string
+        }
+    }
+}>
+
+export const providerRevision = "70e1ce682ac1da6502ea08253296aa4727330ce8"
+
+export const registryScope = {
+    coverage: "partial",
+    established: [
+        "default/native Client namespace-object and operation inventory",
+        "explicit local-only operation exclusions",
+        "pinned provider source owners by namespace",
+        "existing positive and negative SDK test owners by namespace",
+        "selected field-specific validation contracts",
+        "one shared source and packed Members.setRoles field, method, path, authorization, and handler-over-schema case",
+        "method, path, credential, request owner, response owner, rate scope, pagination, and audit metadata for every current provider-facing operation",
+    ],
+    remaining: [
+        "complete request and response schemas including nullability and defaults",
+        "complete length-unit and normalization rules",
+        "shared packed-package reference cases beyond Members.setRoles",
+        "standalone OAuthClient operations",
+        "standalone WebhookClient operations",
+        "Client lifecycle methods and top-level callable surfaces",
+    ],
+} as const
+
+export interface NamespaceConformance {
+    readonly providerOperations: readonly string[]
+    readonly localOperations?: Readonly<Record<string, string>>
+    readonly providerSources: readonly string[]
+    readonly positiveEvidence: readonly string[]
+    readonly negativeEvidence: readonly string[]
+}
+
+const localLookup = "Local cache lookup, not a provider operation"
+
+/**
+ * Authored inventory of the namespace objects exposed by both Client entry points.
+ *
+ * This intentionally excludes standalone OAuthClient and WebhookClient operations, Client lifecycle methods and other
+ * top-level callables. It is a coverage index rather than a generated provider client. Provider-facing members point
+ * to pinned source owners and executable SDK tests. Local-only members are explicit exclusions from provider parity.
+ */
+export const namespaceConformance = {
+    Instance: {
+        providerOperations: ["resolve"],
+        providerSources: ["fluxer_api/src/api/instance/InstanceController.ts"],
+        positiveEvidence: ["tests/instance.test.ts", "tests/instance-loopback.test.ts"],
+        negativeEvidence: ["tests/instance.test.ts", "tests/instance-loopback.test.ts"],
+    },
+    Discovery: {
+        providerOperations: ["search", "fetchStatus", "fetchCategories", "apply", "edit", "withdraw"],
+        providerSources: [
+            "packages/schema/src/domains/guild/GuildDiscoverySchemas.ts",
+            "fluxer_api/src/api/guild/controllers/GuildDiscoveryController.ts",
+        ],
+        positiveEvidence: ["tests/discovery.test.ts"],
+        negativeEvidence: ["tests/discovery.test.ts", "tests/input-validation.test.ts"],
+    },
+    Presence: {
+        providerOperations: ["set", "setMembers"],
+        providerSources: ["fluxer_docs/src/content/docs/gateway/commands.md"],
+        positiveEvidence: ["tests/presence.test.ts"],
+        negativeEvidence: ["tests/presence.test.ts"],
+    },
+    CurrentBotApplication: {
+        providerOperations: ["fetchCurrent"],
+        providerSources: ["fluxer_api/src/api/oauth/OAuth2ApplicationsController.ts"],
+        positiveEvidence: ["tests/applications.test.ts"],
+        negativeEvidence: ["tests/applications.test.ts"],
+    },
+    Users: {
+        providerOperations: ["fetch", "fetchProfile", "fetchSelf"],
+        localOperations: { get: localLookup },
+        providerSources: [
+            "packages/schema/src/domains/user/UserResponseSchemas.ts",
+            "fluxer_api/src/api/user/controllers/UserController.ts",
+        ],
+        positiveEvidence: ["tests/users.test.ts", "tests/user-profiles.test.ts"],
+        negativeEvidence: ["tests/users.test.ts", "tests/input-validation.test.ts"],
+    },
+    DirectMessages: {
+        providerOperations: [
+            "send",
+            "open",
+            "fetch",
+            "fetchAll",
+            "fetchLatestMessages",
+            "editGroup",
+            "close",
+            "removeRecipient",
+        ],
+        localOperations: { get: localLookup },
+        providerSources: [
+            "packages/schema/src/domains/channel/ChannelRequestSchemas.ts",
+            "fluxer_api/src/api/user/controllers/UserChannelController.ts",
+        ],
+        positiveEvidence: ["tests/users.test.ts"],
+        negativeEvidence: ["tests/users.test.ts", "tests/input-validation.test.ts"],
+    },
+    Webhooks: {
+        providerOperations: ["create", "fetch", "fetchChannel", "fetchGuild", "edit", "delete"],
+        providerSources: [
+            "packages/schema/src/domains/webhook/WebhookRequestSchemas.ts",
+            "fluxer_api/src/api/webhook/WebhookController.ts",
+        ],
+        positiveEvidence: ["tests/webhooks.test.ts"],
+        negativeEvidence: ["tests/webhooks.test.ts"],
+    },
+    Roles: {
+        providerOperations: [
+            "fetchAll",
+            "create",
+            "edit",
+            "delete",
+            "reorder",
+            "setHoistPositions",
+            "resetHoistPositions",
+        ],
+        localOperations: { get: localLookup },
+        providerSources: [
+            "packages/schema/src/domains/guild/GuildRequestSchemas.ts",
+            "fluxer_api/src/api/guild/controllers/GuildRoleController.ts",
+        ],
+        positiveEvidence: ["tests/guilds.test.ts"],
+        negativeEvidence: ["tests/guilds.test.ts", "tests/input-validation.test.ts"],
+    },
+    PermissionHelpers: {
+        providerOperations: ["fetch"],
+        localOperations: { calculate: "Pure calculation over caller-supplied snapshots" },
+        providerSources: ["fluxer_api/src/api/guild/controllers/GuildMemberController.ts"],
+        positiveEvidence: ["tests/permissions.test.ts"],
+        negativeEvidence: ["tests/permissions.test.ts"],
+    },
+    Guilds: {
+        providerOperations: [
+            "fetchCounts",
+            "fetchPage",
+            "iterate",
+            "leave",
+            "deleteMine",
+            "fetchVanityUrl",
+            "editVanityUrl",
+            "edit",
+            "ban",
+            "unban",
+            "fetchBans",
+            "fetch",
+        ],
+        localOperations: { get: localLookup },
+        providerSources: [
+            "packages/schema/src/domains/guild/GuildRequestSchemas.ts",
+            "fluxer_api/src/api/guild/controllers/GuildBaseController.ts",
+        ],
+        positiveEvidence: ["tests/guilds.test.ts", "tests/guild-lifecycle.test.ts", "tests/counts.test.ts"],
+        negativeEvidence: ["tests/guilds.test.ts", "tests/guild-lifecycle.test.ts", "tests/counts.test.ts"],
+    },
+    Invites: {
+        providerOperations: ["fetch", "create", "fetchChannel", "fetchGuild", "delete"],
+        providerSources: [
+            "packages/schema/src/domains/invite/InviteSchemas.ts",
+            "fluxer_api/src/api/invite/InviteController.ts",
+        ],
+        positiveEvidence: ["tests/invites.test.ts"],
+        negativeEvidence: ["tests/invites.test.ts"],
+    },
+    AuditLogs: {
+        providerOperations: ["fetchPage", "iterate"],
+        providerSources: [
+            "packages/schema/src/domains/guild/GuildAuditLogSchemas.ts",
+            "fluxer_api/src/api/guild/controllers/GuildAuditLogController.ts",
+        ],
+        positiveEvidence: ["tests/audit-logs.test.ts", "tests/audit-pagination.test.ts"],
+        negativeEvidence: ["tests/audit-logs.test.ts", "tests/audit-pagination.test.ts"],
+    },
+    Emojis: {
+        providerOperations: ["fetchAll", "fetchMetadata", "create", "createMany", "clone", "edit", "delete"],
+        localOperations: { get: localLookup },
+        providerSources: [
+            "packages/schema/src/domains/guild/GuildRequestSchemas.ts",
+            "fluxer_api/src/api/guild/controllers/GuildEmojiController.ts",
+        ],
+        positiveEvidence: ["tests/expressions.test.ts"],
+        negativeEvidence: ["tests/expressions.test.ts"],
+    },
+    Stickers: {
+        providerOperations: ["edit", "fetchAll", "fetchMetadata", "create", "createMany", "clone", "delete"],
+        localOperations: { get: localLookup },
+        providerSources: [
+            "packages/schema/src/domains/guild/GuildRequestSchemas.ts",
+            "fluxer_api/src/api/guild/controllers/GuildStickerController.ts",
+        ],
+        positiveEvidence: ["tests/expressions.test.ts"],
+        negativeEvidence: ["tests/expressions.test.ts"],
+    },
+    Channels: {
+        providerOperations: [
+            "fetchMemberCounts",
+            "fetch",
+            "fetchAll",
+            "create",
+            "edit",
+            "delete",
+            "reorder",
+            "setPermissionOverwrite",
+            "removePermissionOverwrite",
+        ],
+        localOperations: { get: localLookup },
+        providerSources: [
+            "packages/schema/src/domains/channel/ChannelRequestSchemas.ts",
+            "fluxer_api/src/api/guild/controllers/GuildChannelController.ts",
+            "fluxer_api/src/api/channel/controllers/ChannelController.ts",
+        ],
+        positiveEvidence: ["tests/channels.test.ts", "tests/counts.test.ts"],
+        negativeEvidence: ["tests/channels.test.ts", "tests/counts.test.ts"],
+    },
+    Members: {
+        providerOperations: [
+            "iterateChunks",
+            "setRoles",
+            "search",
+            "iterateSearch",
+            "editSelf",
+            "setNickname",
+            "move",
+            "disconnect",
+            "setMute",
+            "setDeaf",
+            "timeout",
+            "clearTimeout",
+            "kick",
+            "iterate",
+            "fetch",
+            "fetchSelf",
+            "fetchHierarchyCheck",
+            "fetchPage",
+            "addRole",
+            "removeRole",
+        ],
+        localOperations: { get: localLookup },
+        providerSources: [
+            "packages/schema/src/domains/guild/GuildRequestSchemas.ts",
+            "packages/schema/src/domains/guild/GuildMemberSearchSchemas.ts",
+            "fluxer_api/src/api/guild/controllers/GuildMemberController.ts",
+        ],
+        positiveEvidence: [
+            "tests/guilds.test.ts",
+            "tests/member-role-set.test.ts",
+            "tests/member-chunks.test.ts",
+            "tests/member-search.test.ts",
+        ],
+        negativeEvidence: [
+            "tests/guilds.test.ts",
+            "tests/member-role-set.test.ts",
+            "tests/member-chunks.test.ts",
+            "tests/member-search.test.ts",
+        ],
+    },
+    Attachments: {
+        providerOperations: ["download", "stream", "refreshUrls"],
+        providerSources: ["fluxer_api/src/api/attachment/AttachmentController.ts"],
+        positiveEvidence: ["tests/attachments.test.ts", "tests/transfer-source.test.ts"],
+        negativeEvidence: ["tests/attachments.test.ts", "tests/transfer-source.test.ts"],
+    },
+    Messages: {
+        providerOperations: [
+            "iterateHistory",
+            "search",
+            "iterateSearch",
+            "iterateReactionUsers",
+            "iteratePins",
+            "pin",
+            "unpin",
+            "fetchPins",
+            "removeUserReaction",
+            "clearReaction",
+            "clearReactions",
+            "fetchReactionUsers",
+            "addReaction",
+            "removeReaction",
+            "collect",
+            "collectReactions",
+            "send",
+            "forward",
+            "typing",
+            "keepTyping",
+            "reply",
+            "fetch",
+            "fetchHistory",
+            "cleanup",
+            "edit",
+            "delete",
+            "deleteAttachment",
+            "deleteMany",
+            "deleteMine",
+        ],
+        localOperations: {
+            get: localLookup,
+            previewCleanup: "Local selection and deletion-plan construction without dispatch",
+        },
+        providerSources: [
+            "packages/schema/src/domains/channel/ChannelRequestSchemas.ts",
+            "packages/schema/src/domains/channel/ChannelSchemas.ts",
+            "fluxer_api/src/api/channel/controllers/MessageController.ts",
+        ],
+        positiveEvidence: [
+            "tests/messages.test.ts",
+            "tests/message-management.test.ts",
+            "tests/message-history.test.ts",
+            "tests/reactions.test.ts",
+            "tests/pins.test.ts",
+        ],
+        negativeEvidence: [
+            "tests/messages.test.ts",
+            "tests/message-management.test.ts",
+            "tests/message-fields-decoder.test.ts",
+            "tests/reactions.test.ts",
+            "tests/pins.test.ts",
+        ],
+    },
+    ClientCache: {
+        providerOperations: [],
+        localOperations: {
+            entries: "Local bounded-cache snapshot",
+            clear: "Local cache mutation",
+        },
+        providerSources: [],
+        positiveEvidence: ["tests/message-cache.test.ts", "tests/user-cache.test.ts"],
+        negativeEvidence: ["tests/message-cache.test.ts", "tests/user-cache.test.ts"],
+    },
+} as const satisfies Readonly<Record<string, NamespaceConformance>>
+
+export interface OperationConformance {
+    readonly method: string
+    readonly path: string
+    readonly credential: string
+    readonly requestOwner: string
+    readonly responseOwner: string
+    readonly rateScope: string
+    readonly pagination: string
+    readonly audit: string
+}
+
+type NamespaceName = keyof typeof namespaceConformance
+
+const namespaceOwners: Readonly<Record<NamespaceName, Pick<OperationConformance, "requestOwner" | "responseOwner">>> = {
+    Instance: { requestOwner: "src/internal/instance.ts", responseOwner: "src/internal/instance.ts" },
+    Discovery: {
+        requestOwner: "src/internal/guild-discovery.ts",
+        responseOwner: "src/internal/guild-discovery.ts",
+    },
+    Presence: { requestOwner: "src/internal/presence.ts", responseOwner: "gateway session acknowledgement" },
+    CurrentBotApplication: {
+        requestOwner: "src/internal/application.ts",
+        responseOwner: "src/internal/application.ts",
+    },
+    Users: { requestOwner: "src/internal/users.ts", responseOwner: "src/internal/users.ts" },
+    DirectMessages: { requestOwner: "src/internal/users.ts", responseOwner: "src/internal/users.ts" },
+    Webhooks: { requestOwner: "src/internal/webhooks.ts", responseOwner: "src/internal/webhooks.ts" },
+    Roles: { requestOwner: "src/internal/guilds.ts", responseOwner: "src/internal/guilds.ts" },
+    PermissionHelpers: {
+        requestOwner: "src/internal/permissions.ts",
+        responseOwner: "src/internal/permissions.ts",
+    },
+    Guilds: { requestOwner: "src/internal/guilds.ts", responseOwner: "src/internal/guilds.ts" },
+    Invites: { requestOwner: "src/internal/invites.ts", responseOwner: "src/internal/invites.ts" },
+    AuditLogs: { requestOwner: "src/internal/audit-logs.ts", responseOwner: "src/internal/audit-logs.ts" },
+    Emojis: { requestOwner: "src/internal/expressions.ts", responseOwner: "src/internal/expressions.ts" },
+    Stickers: { requestOwner: "src/internal/expressions.ts", responseOwner: "src/internal/expressions.ts" },
+    Channels: { requestOwner: "src/internal/channels.ts", responseOwner: "src/internal/channels.ts" },
+    Members: { requestOwner: "src/internal/guilds.ts", responseOwner: "src/internal/guilds.ts" },
+    Attachments: {
+        requestOwner: "src/internal/transfer-source.ts",
+        responseOwner: "src/internal/transfer-source.ts",
+    },
+    Messages: { requestOwner: "src/internal/rest.ts", responseOwner: "src/internal/message.ts" },
+    ClientCache: { requestOwner: "not-applicable", responseOwner: "not-applicable" },
+}
+
+const botRest = {
+    credential: "bot-authorization",
+    rateScope: "shared-client-rest",
+    pagination: "none",
+    audit: "not-applicable",
+} as const
+const gateway = {
+    credential: "authenticated-bot-session",
+    rateScope: "gateway-session",
+    pagination: "none",
+    audit: "not-applicable",
+} as const
+const audited = { audit: "supported-via-X-Audit-Log-Reason" } as const
+const unsupportedAudit = { audit: "not-supported-by-sdk" } as const
+
+function operations(
+    namespace: NamespaceName,
+    names: readonly string[],
+    metadata: Omit<OperationConformance, "requestOwner" | "responseOwner"> &
+        Partial<Pick<OperationConformance, "requestOwner" | "responseOwner">>,
+): readonly (readonly [string, OperationConformance])[] {
+    return names.map((name) => [`${namespace}.${name}`, Object.freeze({ ...namespaceOwners[namespace], ...metadata })])
+}
+
+const operationEntries = [
+    ...operations("Instance", ["resolve"], {
+        method: "GET",
+        path: "/.well-known/fluxer",
+        credential: "none",
+        rateScope: "not-applicable-no-shared-rate-bucket",
+        pagination: "none",
+        audit: "not-applicable",
+    }),
+    ...operations("Discovery", ["search"], {
+        ...botRest,
+        method: "GET",
+        path: "/discovery/guilds?query={query}&category_id={categoryId}&limit={limit}&offset={offset}",
+        rateScope: "shared-client-rest:discovery:search",
+        pagination: "single offset page",
+    }),
+    ...operations("Discovery", ["fetchStatus"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/discovery",
+        rateScope: "shared-client-rest:guild:discovery:status",
+    }),
+    ...operations("Discovery", ["fetchCategories"], {
+        ...botRest,
+        method: "GET",
+        path: "/discovery/categories",
+        rateScope: "shared-client-rest:discovery:categories",
+    }),
+    ...operations("Discovery", ["apply"], {
+        ...botRest,
+        ...unsupportedAudit,
+        method: "POST",
+        path: "/guilds/{guildId}/discovery",
+        rateScope: "shared-client-rest:guild:discovery:update",
+    }),
+    ...operations("Discovery", ["edit"], {
+        ...botRest,
+        ...unsupportedAudit,
+        method: "PATCH",
+        path: "/guilds/{guildId}/discovery",
+        rateScope: "shared-client-rest:guild:discovery:update",
+    }),
+    ...operations("Discovery", ["withdraw"], {
+        ...botRest,
+        ...unsupportedAudit,
+        method: "DELETE",
+        path: "/guilds/{guildId}/discovery",
+        rateScope: "shared-client-rest:guild:discovery:update",
+    }),
+    ...operations("Presence", ["set"], { ...gateway, method: "gateway-command", path: "gateway-opcode-3" }),
+    ...operations("Presence", ["setMembers"], {
+        ...gateway,
+        method: "gateway-command",
+        path: "gateway-opcode-14",
+    }),
+    ...operations("CurrentBotApplication", ["fetchCurrent"], {
+        ...botRest,
+        method: "GET",
+        path: "/oauth2/applications/@me",
+        rateScope: "shared-client-rest:application:current",
+    }),
+    ...operations("Users", ["fetch"], {
+        ...botRest,
+        method: "GET",
+        path: "/users/{userId}",
+        rateScope: "shared-client-rest:user:fetch",
+    }),
+    ...operations("Users", ["fetchProfile"], {
+        ...botRest,
+        method: "GET",
+        path: "/users/{userId}/profile[?guild_id={guildId}]",
+        rateScope: "shared-client-rest:user:fetchProfile",
+    }),
+    ...operations("Users", ["fetchSelf"], {
+        ...botRest,
+        method: "GET",
+        path: "/users/@me",
+        rateScope: "shared-client-rest:user:fetchSelf",
+    }),
+    ...operations("DirectMessages", ["send"], {
+        ...botRest,
+        method: "conditional POST, then POST",
+        path: "/users/@me/channels when uncached, then /channels/{directMessageChannelId}/messages",
+        rateScope: "shared-client-rest:user:directMessages.open and message route",
+        requestOwner: "src/internal/users.ts; src/internal/rest.ts",
+        responseOwner: "src/internal/users.ts; src/internal/message.ts",
+    }),
+    ...operations("DirectMessages", ["open"], {
+        ...botRest,
+        method: "POST",
+        path: "/users/@me/channels",
+        rateScope: "shared-client-rest:user:directMessages.open",
+    }),
+    ...operations("DirectMessages", ["fetch"], {
+        ...botRest,
+        method: "GET",
+        path: "/channels/{channelId}",
+        rateScope: "shared-client-rest:user:directMessages.fetch",
+    }),
+    ...operations("DirectMessages", ["fetchAll"], {
+        ...botRest,
+        method: "GET",
+        path: "/users/@me/channels",
+        rateScope: "shared-client-rest:user:directMessages.fetchAll",
+    }),
+    ...operations("DirectMessages", ["fetchLatestMessages"], {
+        ...botRest,
+        method: "POST",
+        path: "/users/@me/channels/messages/preload",
+        rateScope: "shared-client-rest:user:directMessages.fetchLatestMessages",
+    }),
+    ...operations("DirectMessages", ["editGroup"], {
+        ...botRest,
+        ...unsupportedAudit,
+        method: "PATCH",
+        path: "/channels/{channelId}",
+        rateScope: "shared-client-rest:user:directMessages.editGroup",
+    }),
+    ...operations("DirectMessages", ["close"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/channels/{channelId}",
+        rateScope: "shared-client-rest:user:directMessages.close",
+    }),
+    ...operations("DirectMessages", ["removeRecipient"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/channels/{channelId}/recipients/{userId}",
+        rateScope: "shared-client-rest:user:directMessages.removeRecipient",
+    }),
+    ...operations("Webhooks", ["create"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/channels/{channelId}/webhooks",
+        rateScope: "shared-client-rest:webhook:create",
+    }),
+    ...operations("Webhooks", ["fetch"], {
+        ...botRest,
+        method: "GET",
+        path: "/webhooks/{webhookId}",
+        rateScope: "shared-client-rest:webhook:fetch",
+    }),
+    ...operations("Webhooks", ["fetchChannel"], {
+        ...botRest,
+        method: "GET",
+        path: "/channels/{channelId}/webhooks",
+        rateScope: "shared-client-rest:webhook:fetchChannel",
+    }),
+    ...operations("Webhooks", ["fetchGuild"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/webhooks",
+        rateScope: "shared-client-rest:webhook:fetchGuild",
+    }),
+    ...operations("Webhooks", ["edit"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/webhooks/{webhookId}",
+        rateScope: "shared-client-rest:webhook:edit",
+    }),
+    ...operations("Webhooks", ["delete"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/webhooks/{webhookId}",
+        rateScope: "shared-client-rest:webhook:delete",
+    }),
+    ...operations("Roles", ["fetchAll"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/roles",
+        rateScope: "shared-client-rest:guild:role:list",
+    }),
+    ...operations("Roles", ["create"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/guilds/{guildId}/roles",
+        rateScope: "shared-client-rest:guild:role:create",
+    }),
+    ...operations("Roles", ["edit"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/roles/{roleId}",
+        rateScope: "shared-client-rest:guild:role:update",
+    }),
+    ...operations("Roles", ["delete"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/guilds/{guildId}/roles/{roleId}",
+        rateScope: "shared-client-rest:guild:role:delete",
+    }),
+    ...operations("Roles", ["reorder"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/roles",
+        rateScope: "shared-client-rest:guild:role:positions",
+    }),
+    ...operations("Roles", ["setHoistPositions"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/roles/hoist-positions",
+        rateScope: "shared-client-rest:guild:role:hoist-positions",
+    }),
+    ...operations("Roles", ["resetHoistPositions"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/guilds/{guildId}/roles/hoist-positions",
+        rateScope: "shared-client-rest:guild:role:hoist-positions",
+    }),
+    ...operations("PermissionHelpers", ["fetch"], {
+        ...botRest,
+        method: "GET composed",
+        path: "/guilds/{guildId}, /guilds/{guildId}/members/{userId}, and /guilds/{guildId}/roles",
+        rateScope: "three shared-client-rest guild route admissions",
+        responseOwner: "src/internal/permissions.ts; src/internal/guilds.ts",
+    }),
+    ...operations("Guilds", ["fetchCounts"], {
+        ...gateway,
+        method: "gateway-command",
+        path: "gateway-opcode-15",
+        rateScope: "shared-gateway-request-budget",
+    }),
+    ...operations("Guilds", ["fetchPage"], {
+        ...botRest,
+        method: "GET",
+        path: "/users/@me/guilds?limit={limit}&before={before}|after={after}",
+        rateScope: "shared-client-rest:user:guilds:list",
+        pagination: "single before-or-after cursor page",
+        requestOwner: "src/internal/guild-lifecycle.ts",
+        responseOwner: "src/internal/guild-lifecycle.ts",
+    }),
+    ...operations("Guilds", ["iterate"], {
+        ...botRest,
+        method: "GET repeated",
+        path: "/users/@me/guilds?limit={limit}&before={before}|after={after}",
+        rateScope: "one shared-client-rest:user:guilds:list admission per page",
+        pagination: "before-or-after cursor composition",
+        requestOwner: "src/internal/guild-lifecycle.ts; src/internal/pagination.ts",
+        responseOwner: "src/internal/guild-lifecycle.ts",
+    }),
+    ...operations("Guilds", ["leave"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/users/@me/guilds/{guildId}?delete_messages=false",
+        rateScope: "shared-client-rest:user:guilds:leave",
+        requestOwner: "src/internal/guild-lifecycle.ts",
+        responseOwner: "src/internal/guild-lifecycle.ts",
+    }),
+    ...operations("Guilds", ["deleteMine"], {
+        ...botRest,
+        method: "POST",
+        path: "/users/@me/guilds/{guildId}/messages/bulk-delete-mine",
+        rateScope: "shared-client-rest:user:guilds:bulk-delete-mine",
+        requestOwner: "src/internal/guild-lifecycle.ts",
+        responseOwner: "src/internal/guild-lifecycle.ts",
+    }),
+    ...operations("Guilds", ["fetchVanityUrl"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/vanity-url",
+        rateScope: "shared-client-rest:guild:vanity:read",
+        requestOwner: "src/internal/vanity-url.ts",
+        responseOwner: "src/internal/vanity-url.ts",
+    }),
+    ...operations("Guilds", ["editVanityUrl"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/vanity-url",
+        rateScope: "shared-client-rest:guild:vanity:update",
+        requestOwner: "src/internal/vanity-url.ts",
+        responseOwner: "src/internal/vanity-url.ts",
+    }),
+    ...operations("Guilds", ["edit"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}",
+        rateScope: "shared-client-rest:guild:settings:update",
+        requestOwner: "src/internal/guild-settings.ts",
+        responseOwner: "src/internal/guild-settings.ts",
+    }),
+    ...operations("Guilds", ["ban"], {
+        ...botRest,
+        ...audited,
+        method: "PUT",
+        path: "/guilds/{guildId}/bans/{userId}",
+        rateScope: "shared-client-rest:guild:bans",
+        requestOwner: "src/internal/moderation.ts",
+        responseOwner: "src/internal/moderation.ts",
+    }),
+    ...operations("Guilds", ["unban"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/guilds/{guildId}/bans/{userId}",
+        rateScope: "shared-client-rest:guild:bans",
+        requestOwner: "src/internal/moderation.ts",
+        responseOwner: "src/internal/moderation.ts",
+    }),
+    ...operations("Guilds", ["fetchBans"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/bans",
+        rateScope: "shared-client-rest:guild:bans",
+        requestOwner: "src/internal/moderation.ts",
+        responseOwner: "src/internal/moderation.ts",
+    }),
+    ...operations("Guilds", ["fetch"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}",
+        rateScope: "shared-client-rest:guild:read",
+    }),
+    ...operations("Invites", ["fetch"], {
+        ...botRest,
+        method: "GET",
+        path: "/invites/{code}",
+        rateScope: "shared-client-rest:invites:code",
+    }),
+    ...operations("Invites", ["create"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/channels/{channelId}/invites",
+        rateScope: "shared-client-rest:channels:invites",
+    }),
+    ...operations("Invites", ["fetchChannel"], {
+        ...botRest,
+        method: "GET",
+        path: "/channels/{channelId}/invites",
+        rateScope: "shared-client-rest:channels:invites",
+    }),
+    ...operations("Invites", ["fetchGuild"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/invites",
+        rateScope: "shared-client-rest:guilds:invites",
+    }),
+    ...operations("Invites", ["delete"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/invites/{code}",
+        rateScope: "shared-client-rest:invites:code",
+    }),
+    ...operations("AuditLogs", ["fetchPage"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/audit-logs?limit={limit}&before={before}|after={after}",
+        rateScope: "shared-client-rest:guild:audit-logs",
+        pagination: "single before-or-after cursor page",
+    }),
+    ...operations("AuditLogs", ["iterate"], {
+        ...botRest,
+        method: "GET repeated",
+        path: "/guilds/{guildId}/audit-logs?limit={limit}&before={before}|after={after}",
+        rateScope: "one shared-client-rest:guild:audit-logs admission per page",
+        pagination: "before-or-after cursor composition",
+        requestOwner: "src/internal/audit-logs.ts; src/internal/pagination.ts",
+    }),
+    ...operations("Emojis", ["fetchAll"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/emojis",
+        rateScope: "shared-client-rest:guild:emojis",
+    }),
+    ...operations("Emojis", ["fetchMetadata"], {
+        ...botRest,
+        method: "GET",
+        path: "/emojis/{emojiId}/metadata",
+        rateScope: "shared-client-rest:emojis:metadata",
+    }),
+    ...operations("Emojis", ["create"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/guilds/{guildId}/emojis",
+        rateScope: "shared-client-rest:guild:emojis",
+    }),
+    ...operations("Emojis", ["createMany"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/guilds/{guildId}/emojis/bulk",
+        rateScope: "shared-client-rest:guild:emojis",
+    }),
+    ...operations("Emojis", ["clone"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/guilds/{guildId}/emojis/clone",
+        rateScope: "shared-client-rest:guild:emojis",
+    }),
+    ...operations("Emojis", ["edit"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/emojis/{emojiId}",
+        rateScope: "shared-client-rest:guild:emojis",
+    }),
+    ...operations("Emojis", ["delete"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/guilds/{guildId}/emojis/{emojiId}?purge={boolean}",
+        rateScope: "shared-client-rest:guild:emojis",
+    }),
+    ...operations("Stickers", ["fetchAll"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/stickers",
+        rateScope: "shared-client-rest:guild:stickers",
+    }),
+    ...operations("Stickers", ["fetchMetadata"], {
+        ...botRest,
+        method: "GET",
+        path: "/stickers/{stickerId}/metadata",
+        rateScope: "shared-client-rest:stickers:metadata",
+    }),
+    ...operations("Stickers", ["create"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/guilds/{guildId}/stickers",
+        rateScope: "shared-client-rest:guild:stickers",
+    }),
+    ...operations("Stickers", ["createMany"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/guilds/{guildId}/stickers/bulk",
+        rateScope: "shared-client-rest:guild:stickers",
+    }),
+    ...operations("Stickers", ["clone"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/guilds/{guildId}/stickers/clone",
+        rateScope: "shared-client-rest:guild:stickers",
+    }),
+    ...operations("Stickers", ["edit"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/stickers/{stickerId}",
+        rateScope: "shared-client-rest:guild:stickers",
+    }),
+    ...operations("Stickers", ["delete"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/guilds/{guildId}/stickers/{stickerId}?purge={boolean}",
+        rateScope: "shared-client-rest:guild:stickers",
+    }),
+    ...operations("Channels", ["fetchMemberCounts"], {
+        ...gateway,
+        method: "gateway-command",
+        path: "gateway-opcode-16",
+        rateScope: "shared-gateway-request-budget",
+    }),
+    ...operations("Channels", ["fetch"], {
+        ...botRest,
+        method: "GET",
+        path: "/channels/{channelId}",
+        rateScope: "shared-client-rest:channel:read",
+    }),
+    ...operations("Channels", ["fetchAll"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/channels",
+        rateScope: "shared-client-rest:guild:channels:list",
+    }),
+    ...operations("Channels", ["create"], {
+        ...botRest,
+        ...audited,
+        method: "POST",
+        path: "/guilds/{guildId}/channels",
+        rateScope: "shared-client-rest:guild:channel:create",
+    }),
+    ...operations("Channels", ["edit"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/channels/{channelId}",
+        rateScope: "shared-client-rest:channel:update",
+    }),
+    ...operations("Channels", ["delete"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/channels/{channelId}",
+        rateScope: "shared-client-rest:channel:delete",
+    }),
+    ...operations("Channels", ["reorder"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/channels",
+        rateScope: "shared-client-rest:guild:channel:positions",
+    }),
+    ...operations("Channels", ["setPermissionOverwrite"], {
+        ...botRest,
+        ...audited,
+        method: "PUT",
+        path: "/channels/{channelId}/permissions/{targetId}",
+        rateScope: "shared-client-rest:channel:update",
+    }),
+    ...operations("Channels", ["removePermissionOverwrite"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/channels/{channelId}/permissions/{targetId}",
+        rateScope: "shared-client-rest:channel:update",
+    }),
+    ...operations("Members", ["iterateChunks"], {
+        ...gateway,
+        method: "gateway-command",
+        path: "gateway-opcode-8",
+        rateScope: "shared-gateway-request-budget",
+        pagination: "provider member chunks",
+        requestOwner: "src/internal/member-chunks.ts",
+        responseOwner: "src/internal/member-chunks.ts",
+    }),
+    ...operations("Members", ["setRoles"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/members/{userId}",
+        rateScope: "shared-client-rest:guild:member:roles:set",
+    }),
+    ...operations("Members", ["search"], {
+        ...botRest,
+        method: "POST",
+        path: "/guilds/{guildId}/members-search",
+        rateScope: "shared-client-rest:guild:members",
+        pagination: "single offset page",
+        requestOwner: "src/internal/member-search.ts",
+        responseOwner: "src/internal/member-search.ts",
+    }),
+    ...operations("Members", ["iterateSearch"], {
+        ...botRest,
+        method: "POST repeated",
+        path: "/guilds/{guildId}/members-search",
+        rateScope: "one shared-client-rest:guild:members admission per page",
+        pagination: "offset page composition",
+        requestOwner: "src/internal/member-search-workflow.ts",
+        responseOwner: "src/internal/member-search.ts",
+    }),
+    ...operations("Members", ["editSelf"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/members/@me",
+        rateScope: "shared-client-rest:guild:member:self:update",
+    }),
+    ...operations("Members", ["setNickname"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/members/{userId}",
+        rateScope: "shared-client-rest:guild:member:nickname:update",
+    }),
+    ...operations("Members", ["move", "disconnect", "setMute", "setDeaf"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/members/{userId}",
+        rateScope: "shared-client-rest:guild:member:voice:update",
+        requestOwner: "src/internal/moderation.ts",
+        responseOwner: "src/internal/moderation.ts",
+    }),
+    ...operations("Members", ["timeout", "clearTimeout"], {
+        ...botRest,
+        ...audited,
+        method: "PATCH",
+        path: "/guilds/{guildId}/members/{userId}",
+        rateScope: "shared-client-rest:guild:members",
+        requestOwner: "src/internal/moderation.ts",
+        responseOwner: "src/internal/moderation.ts",
+    }),
+    ...operations("Members", ["kick"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/guilds/{guildId}/members/{userId}",
+        rateScope: "shared-client-rest:guild:members",
+        requestOwner: "src/internal/moderation.ts",
+        responseOwner: "src/internal/moderation.ts",
+    }),
+    ...operations("Members", ["iterate"], {
+        ...botRest,
+        method: "GET repeated",
+        path: "/guilds/{guildId}/members?limit={limit}&after={after}",
+        rateScope: "one shared-client-rest:guild:members admission per page",
+        pagination: "after cursor composition",
+        requestOwner: "src/internal/guilds.ts; src/internal/pagination.ts",
+    }),
+    ...operations("Members", ["fetch"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/members/{userId}",
+        rateScope: "shared-client-rest:guild:members",
+    }),
+    ...operations("Members", ["fetchSelf"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/members/@me",
+        rateScope: "shared-client-rest:guild:members",
+    }),
+    ...operations("Members", ["fetchHierarchyCheck"], {
+        ...botRest,
+        method: "GET composed",
+        path: "/guilds/{guildId}/members/{targetUserId}, /guilds/{guildId}/members/@me, and /guilds/{guildId}/roles",
+        rateScope: "three shared-client-rest guild route admissions",
+        requestOwner: "src/internal/role-hierarchy-workflow.ts",
+        responseOwner: "src/internal/role-hierarchy.ts",
+    }),
+    ...operations("Members", ["fetchPage"], {
+        ...botRest,
+        method: "GET",
+        path: "/guilds/{guildId}/members?limit={limit}&after={after}",
+        rateScope: "shared-client-rest:guild:members",
+        pagination: "single after cursor page",
+    }),
+    ...operations("Members", ["addRole"], {
+        ...botRest,
+        ...audited,
+        method: "PUT",
+        path: "/guilds/{guildId}/members/{userId}/roles/{roleId}",
+        rateScope: "shared-client-rest:guild:member:role:add",
+    }),
+    ...operations("Members", ["removeRole"], {
+        ...botRest,
+        ...audited,
+        method: "DELETE",
+        path: "/guilds/{guildId}/members/{userId}/roles/{roleId}",
+        rateScope: "shared-client-rest:guild:member:role:remove",
+    }),
+    ...operations("Attachments", ["download", "stream"], {
+        method: "GET",
+        path: "caller-supplied selected-instance media URL",
+        credential: "none",
+        rateScope: "not-applicable-no-shared-rate-bucket",
+        pagination: "none",
+        audit: "not-applicable",
+    }),
+    ...operations("Attachments", ["refreshUrls"], {
+        ...botRest,
+        method: "POST",
+        path: "/attachments/refresh-urls",
+        rateScope: "shared-client-rest:attachments:refresh",
+        requestOwner: "src/internal/attachment-refresh.ts",
+        responseOwner: "src/internal/attachment-refresh.ts",
+    }),
+    ...operations("Messages", ["iterateHistory"], {
+        ...botRest,
+        method: "GET repeated",
+        path: "/channels/{channelId}/messages?limit={limit}&before={before}|after={after}",
+        rateScope: "one shared-client-rest:history admission per page",
+        pagination: "before-or-after cursor composition",
+        requestOwner: "src/internal/rest.ts; src/internal/pagination.ts",
+    }),
+    ...operations("Messages", ["search"], {
+        ...botRest,
+        method: "POST",
+        path: "/search/messages",
+        rateScope: "shared-client-rest:search",
+        pagination: "single numbered page",
+        requestOwner: "src/internal/message-search.ts",
+    }),
+    ...operations("Messages", ["iterateSearch"], {
+        ...botRest,
+        method: "POST repeated",
+        path: "/search/messages",
+        rateScope: "one shared-client-rest:search admission per page",
+        pagination: "numbered page composition",
+        requestOwner: "src/internal/message-search-workflow.ts",
+    }),
+    ...operations("Messages", ["iterateReactionUsers"], {
+        ...botRest,
+        method: "GET repeated",
+        path: "/channels/{channelId}/messages/{messageId}/reactions/{emoji}/users?limit={limit}&after={after}",
+        rateScope: "one shared-client-rest:reaction admission per page",
+        pagination: "after cursor composition",
+        requestOwner: "src/internal/reactions.ts; src/internal/pagination.ts",
+    }),
+    ...operations("Messages", ["iteratePins"], {
+        ...botRest,
+        method: "GET repeated",
+        path: "/channels/{channelId}/messages/pins?limit={limit}&before={before}",
+        rateScope: "one shared-client-rest:pins admission per page",
+        pagination: "pin-time cursor composition",
+        requestOwner: "src/internal/pins.ts; src/internal/pagination.ts",
+    }),
+    ...operations("Messages", ["pin"], {
+        ...botRest,
+        method: "PUT",
+        path: "/channels/{channelId}/pins/{messageId}",
+        rateScope: "shared-client-rest:pins",
+    }),
+    ...operations("Messages", ["unpin"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/channels/{channelId}/pins/{messageId}",
+        rateScope: "shared-client-rest:pins",
+    }),
+    ...operations("Messages", ["fetchPins"], {
+        ...botRest,
+        method: "GET",
+        path: "/channels/{channelId}/messages/pins?limit={limit}&before={before}",
+        rateScope: "shared-client-rest:pins",
+        pagination: "single pin-time cursor page",
+    }),
+    ...operations("Messages", ["removeUserReaction"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/channels/{channelId}/messages/{messageId}/reactions/{emoji}/{userId}",
+        rateScope: "shared-client-rest:reaction",
+    }),
+    ...operations("Messages", ["clearReaction"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/channels/{channelId}/messages/{messageId}/reactions/{emoji}",
+        rateScope: "shared-client-rest:reaction",
+    }),
+    ...operations("Messages", ["clearReactions"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/channels/{channelId}/messages/{messageId}/reactions",
+        rateScope: "shared-client-rest:reaction",
+    }),
+    ...operations("Messages", ["fetchReactionUsers"], {
+        ...botRest,
+        method: "GET",
+        path: "/channels/{channelId}/messages/{messageId}/reactions/{emoji}/users?limit={limit}&after={after}",
+        rateScope: "shared-client-rest:reaction",
+        pagination: "single after cursor page",
+    }),
+    ...operations("Messages", ["addReaction"], {
+        ...botRest,
+        method: "PUT",
+        path: "/channels/{channelId}/messages/{messageId}/reactions/{emoji}/@me",
+        rateScope: "shared-client-rest:reaction",
+    }),
+    ...operations("Messages", ["removeReaction"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/channels/{channelId}/messages/{messageId}/reactions/{emoji}/@me",
+        rateScope: "shared-client-rest:reaction",
+    }),
+    ...operations("Messages", ["collect"], {
+        method: "gateway-event intake",
+        path: "MESSAGE_CREATE gateway dispatch",
+        credential: "authenticated-bot-session",
+        rateScope: "not-applicable-no-outbound-request",
+        pagination: "none",
+        audit: "not-applicable",
+        requestOwner: "src/internal/collector.ts",
+        responseOwner: "src/internal/collector.ts",
+    }),
+    ...operations("Messages", ["collectReactions"], {
+        method: "gateway-event intake",
+        path: "MESSAGE_REACTION_ADD gateway dispatch",
+        credential: "authenticated-bot-session",
+        rateScope: "not-applicable-no-outbound-request",
+        pagination: "none",
+        audit: "not-applicable",
+        requestOwner: "src/internal/reaction-collector.ts",
+        responseOwner: "src/internal/reaction-collector.ts",
+    }),
+    ...operations("Messages", ["send", "forward", "reply"], {
+        ...botRest,
+        method: "POST with conditional POST/PUT attachment upload workflow",
+        path: "/channels/{channelId}/messages; attachments use /channels/{channelId}/attachments, signed upload URL, and /channels/{channelId}/attachments/complete",
+        rateScope: "shared-client-rest message route plus conditional upload admissions",
+    }),
+    ...operations("Messages", ["typing", "keepTyping"], {
+        ...botRest,
+        method: "POST once or repeated",
+        path: "/channels/{channelId}/typing",
+        rateScope: "one shared-client-rest:typing admission per send",
+    }),
+    ...operations("Messages", ["fetch"], {
+        ...botRest,
+        method: "GET",
+        path: "/channels/{channelId}/messages/{messageId}",
+        rateScope: "shared-client-rest message route",
+    }),
+    ...operations("Messages", ["fetchHistory"], {
+        ...botRest,
+        method: "GET",
+        path: "/channels/{channelId}/messages?limit={limit}&before={before}|after={after}",
+        rateScope: "shared-client-rest:history",
+        pagination: "single before-or-after cursor page",
+    }),
+    ...operations("Messages", ["cleanup"], {
+        ...botRest,
+        method: "DELETE and POST composed",
+        path: "/channels/{channelId}/messages/{messageId} and /channels/{channelId}/messages/bulk-delete",
+        rateScope: "one shared-client-rest admission per deletion batch",
+        requestOwner: "src/internal/message-cleanup.ts; src/internal/rest.ts",
+    }),
+    ...operations("Messages", ["edit"], {
+        ...botRest,
+        method: "PATCH with conditional POST/PUT attachment upload workflow",
+        path: "/channels/{channelId}/messages/{messageId}; new attachments use the upload workflow",
+        rateScope: "shared-client-rest message route plus conditional upload admissions",
+    }),
+    ...operations("Messages", ["delete"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/channels/{channelId}/messages/{messageId}",
+        rateScope: "shared-client-rest message route",
+    }),
+    ...operations("Messages", ["deleteAttachment"], {
+        ...botRest,
+        method: "DELETE",
+        path: "/channels/{channelId}/messages/{messageId}/attachments/{attachmentId}",
+        rateScope: "shared-client-rest message route",
+    }),
+    ...operations("Messages", ["deleteMany"], {
+        ...botRest,
+        method: "POST",
+        path: "/channels/{channelId}/messages/bulk-delete",
+        rateScope: "shared-client-rest:bulk-delete",
+    }),
+    ...operations("Messages", ["deleteMine"], {
+        ...botRest,
+        method: "POST",
+        path: "/channels/{channelId}/messages/bulk-delete-mine",
+        rateScope: "shared-client-rest:bulk-delete-mine",
+    }),
+] as const
+
+const operationKeys = operationEntries.map(([key]) => key)
+if (new Set(operationKeys).size !== operationKeys.length) throw new Error("Duplicate operation conformance entry")
+
+export const operationConformance: Readonly<Record<string, OperationConformance>> = Object.freeze(
+    Object.fromEntries(operationEntries),
+)
+
+export function requestReferenceViolations(
+    expected: { readonly method: string; readonly path: string; readonly authorizationPrefix: string },
+    observed: { readonly method: string; readonly path: string; readonly authorization: string | null },
+): readonly string[] {
+    return Object.freeze([
+        ...(observed.method === expected.method ? [] : ["method"]),
+        ...(observed.path === expected.path ? [] : ["path"]),
+        ...(observed.authorization?.startsWith(expected.authorizationPrefix) === true ? [] : ["authorization"]),
+    ])
+}
+
+export const fieldValidationCases = {
+    handlerOverSchema: {
+        name: "guild default role",
+        value: "20",
+        schemaOwner: "packages/schema/src/domains/guild/GuildRequestSchemas.ts:GuildMemberUpdateRequest.roles",
+        schemaDisposition: "accepted by SnowflakeType",
+        handlerOwner: "fluxer_api/src/api/guild/services/member/GuildMemberValidationService.ts:ensureNotEveryoneRole",
+        handlerDisposition: "rejected when roleId equals guildId",
+        sdkDisposition: "rejected before dispatch",
+    },
+    restSnowflake: [
+        { name: "zero", value: "0", providerAccepted: true, sdkAccepted: false, disposition: "stricter-sdk-policy" },
+        {
+            name: "signed-63-bit maximum",
+            value: "9223372036854775807",
+            providerAccepted: true,
+            sdkAccepted: true,
+            disposition: "aligned",
+        },
+        {
+            name: "signed-63-bit maximum plus one",
+            value: "9223372036854775808",
+            providerAccepted: false,
+            sdkAccepted: false,
+            disposition: "aligned",
+        },
+        {
+            name: "uint64 maximum",
+            value: "18446744073709551615",
+            providerAccepted: false,
+            sdkAccepted: false,
+            disposition: "aligned",
+        },
+        {
+            name: "overlong decimal",
+            value: "100000000000000000000",
+            providerAccepted: false,
+            sdkAccepted: false,
+            disposition: "aligned",
+        },
+    ],
+    responseSnowflake: [
+        { name: "zero", value: "0", accepted: true },
+        { name: "signed-63-bit maximum", value: "9223372036854775807", accepted: true },
+        { name: "uint64 maximum", value: "18446744073709551615", accepted: true },
+        { name: "overlong decimal", value: "100000000000000000000", accepted: true },
+        { name: "leading zero", value: "01", accepted: false },
+        { name: "negative", value: "-1", accepted: false },
+    ],
+    permissions: [
+        { name: "zero", value: 0n, accepted: true },
+        { name: "signed-63-bit maximum", value: 9223372036854775807n, accepted: true },
+        { name: "signed-63-bit maximum plus one", value: 9223372036854775808n, accepted: false },
+        { name: "uint64 maximum", value: 18446744073709551615n, accepted: false },
+    ],
+} as const

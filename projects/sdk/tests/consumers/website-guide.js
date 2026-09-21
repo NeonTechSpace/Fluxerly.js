@@ -35,6 +35,7 @@ const hooks = registerHooks({
 })
 
 let rejectConnection = false
+let stallReply = false
 let sequence = 0
 let identifies = 0
 const sockets = new Set()
@@ -72,13 +73,28 @@ function deliver(id, content) {
 }
 
 const originalFetch = globalThis.fetch
+const originalToken = process.env.FLUXER_BOT_TOKEN
+const originalConsoleWarn = console.warn
+const initialSigintListeners = process.listeners("SIGINT")
+const initialSigtermListeners = process.listeners("SIGTERM")
 const requests = []
+const replyWarnings = []
+let rejectReply = false
 globalThis.fetch = withHostedDiscovery(async (url, options) => {
     assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages")
     assert.equal(options.method, "POST")
     assert.equal(new Headers(options.headers).get("authorization"), "Bot fixture-only")
     const body = JSON.parse(options.body)
     requests.push(body)
+    if (stallReply) {
+        return await new Promise((resolve, reject) => {
+            const abort = () => reject(options.signal.reason ?? new DOMException("Aborted", "AbortError"))
+            options.signal.addEventListener("abort", abort, { once: true })
+        })
+    }
+    if (rejectReply) {
+        return Response.json({ code: "MISSING_PERMISSIONS", message: "private fixture detail" }, { status: 403 })
+    }
     return Response.json({
         id: "40",
         channel_id: "20",
@@ -88,23 +104,23 @@ globalThis.fetch = withHostedDiscovery(async (url, options) => {
         message_reference: body.message_reference,
     })
 })
+process.env.FLUXER_BOT_TOKEN = "fixture-only"
+console.warn = (...values) => replyWarnings.push(values)
 
-let client
+function assertSignalHandlersRestored() {
+    assert.deepEqual(process.listeners("SIGINT"), initialSigintListeners)
+    assert.deepEqual(process.listeners("SIGTERM"), initialSigtermListeners)
+}
+
 try {
-    ;({ client } = await import(`./${filename}?success`))
-    assert.equal(client.state, "Connected", "The authored connect call must make the bot ready")
+    const running = import(`./${filename}?success`)
+    await waitFor(() => identifies === 1 && sockets.size === 1, "The authored bot did not become ready")
     assert.equal(identifies, 1)
-    const seen = []
-    assert.ok(client.on("messageCreate", (message) => seen.push(message.content)).isOk())
     deliver("10", "Hello")
     deliver("12", "!ping extra")
     deliver("13", "Done")
     const ping = deliver("11", "!ping")
-    await waitFor(() => requests.length === 1 && seen.length === 4, "The authored bot did not process fixture messages")
-    assert.deepEqual(seen, ["Hello", "!ping extra", "Done", "!ping"])
-    assert.ok((await client.shutdown()).isOk())
-    assert.equal(client.state, "Closed")
-    await waitFor(() => sockets.size === 0, "Bot shutdown did not close its gateway socket")
+    await waitFor(() => requests.length === 1, "The authored bot did not process the fixture ping")
     assert.equal(requests.length, 1, "Unrelated messages must not produce replies")
     const { nonce, ...body } = requests[0]
     assert.match(nonce, /^[a-f\d]{32}$/)
@@ -114,17 +130,44 @@ try {
         message_reference: { message_id: ping.id, channel_id: ping.channel_id, type: 0 },
     })
 
+    rejectReply = true
+    deliver("14", "!ping")
+    await waitFor(() => replyWarnings.length === 1, "The authored bot hid a forbidden reply")
+    assert.deepEqual(replyWarnings, [["Reply failed", { kind: "MessageError" }]])
+    assert.equal(sockets.size, 1, "An expected reply failure must not stop the bot")
+    assert.equal(process.emit("SIGINT"), true, "The authored bot did not install its signal handler")
+    await running
+    await waitFor(() => sockets.size === 0, "Bot shutdown did not close its gateway socket")
+    assertSignalHandlersRestored()
+
     rejectConnection = true
     await assert.rejects(import(`./${filename}?authentication-failure`), (error) => {
         assert.equal(error._tag, "AuthenticationError", "The authored connect check must surface its failure")
         return true
     })
     await waitFor(() => sockets.size === 0, "Rejected connection did not release its gateway socket")
+    assertSignalHandlersRestored()
     assert.equal(identifies, 2, "Permanent authentication rejection must not reconnect")
-    assert.equal(requests.length, 1, "Failed startup must not send a reply")
+    assert.equal(requests.length, 2, "Failed startup must not send a reply")
+
+    rejectConnection = false
+    rejectReply = false
+    stallReply = true
+    const overflowed = import(`./${filename}?subscription-overflow`)
+    const overflowAssertion = assert.rejects(overflowed, (error) => {
+        assert.equal(error._tag, "EventOverflowError", "The authored bot must surface critical subscription closure")
+        return true
+    })
+    await waitFor(() => identifies === 3 && sockets.size === 1, "The overflow fixture bot did not become ready")
+    for (let index = 0; index < 260; index += 1) deliver(String(1000 + index), "!ping")
+    await overflowAssertion
+    await waitFor(() => sockets.size === 0, "Subscription overflow did not release the gateway socket")
+    assertSignalHandlersRestored()
 } finally {
-    if (client && client.state !== "Closed") assert.ok((await client.shutdown()).isOk())
+    if (originalToken === undefined) delete process.env.FLUXER_BOT_TOKEN
+    else process.env.FLUXER_BOT_TOKEN = originalToken
     globalThis.fetch = originalFetch
+    console.warn = originalConsoleWarn
     hooks.deregister()
     for (const socket of sockets) socket.terminate()
     await new Promise((resolve, reject) => gateway.close((error) => (error ? reject(error) : resolve())))
