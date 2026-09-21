@@ -53,6 +53,8 @@ Cancellation waits for SDK cleanup. A provider can still complete work it alread
 
 Global HTTP 429 rejections pause unrelated API routes on the same client, including when a valid global header accompanies an unreadable error body. Waiting still counts toward each operation's deadline, and cancelling one queued operation does not clear the shared pause. The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) explains scope metadata and retry boundaries
 
+Server-provided bucket identifiers also refine request grouping automatically, so bot code does not need to configure rate-limit groups. Matching limits share a wait, while known independently limited resources stay separate. Initial requests can still receive a 429 before the server's grouping is learned
+
 ## Let one function own connection lifetime
 
 Use `run` when one signal should own startup, recovery and shutdown. Pass a disconnected client with its handlers already registered and an `AbortSignal` owned by your application

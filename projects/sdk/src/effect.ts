@@ -3680,10 +3680,19 @@ export interface ClientCache<M extends MessageCore = Message> {
  * A valid global assertion wins over conflicting local metadata. Malformed scope values are ignored.
  * A global header with a valid Retry-After starts the pause before body inspection, including when
  * the body is missing, malformed, oversized or too slow. Body inspection stays bounded to 8 KiB and 100 ms before awaited cleanup.
- * Without global metadata, the wait remains route-local. Without a usable delay, the rejection fails rather than inventing a wait.
+ * Without global metadata, the wait stays in the applicable route bucket. Without a usable delay, the rejection fails rather than inventing a wait.
  * Waits remain within each call's original deadline. Interruption removes only that queued call, not the shared pause.
  * Separate clients do not coordinate these waits. Attachment downloads do not wait for API rate limits.
  * Writes retry only confirmed rate-limit rejection, never an uncertain outcome
+ *
+ * Valid X-RateLimit-Bucket metadata refines provisional local groups automatically, without application configuration.
+ * Known Fluxer templates retain their channel, guild, user, webhook or invite resource partitions.
+ * Unknown templates conservatively share one bucket across this client's routes that report that identifier.
+ * Initial requests can still receive 429 before the server's grouping is learned.
+ * Learning retains at most 2,048 route aliases and 2,048 bucket states per client. Idle aliases expire after five minutes unless preserving an active pause.
+ * Old responses cannot undo newer mappings or reopen an exhausted window. A changed mapping preserves any known prior pause until it expires.
+ * Tracking pressure discards nonblocking observations first. If active pauses fill capacity or resource metadata cannot be bound,
+ * the client waits conservatively rather than dropping a known limit. Closing the client clears this transient state
  */
 export interface Client<M extends MessageCore = Message> extends ClientState {
     /** Immutable endpoint discovery and pure URL helpers for this client's selected instance */

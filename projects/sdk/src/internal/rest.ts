@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Cause, Deferred, Effect, Exit, Random, Redacted } from "effect"
 import { mapFailureCause, withDeadline } from "./effect-failures.js"
+import { RateLimits, rateRoute, type RateRoute } from "./rate-limits.js"
 import { ClientClosedError, ConnectionError, RateLimitError } from "#sdk/errors"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import { apiErrorDetail, type ApiErrorDetail } from "#sdk/api-errors"
@@ -77,7 +78,6 @@ type Pending = {
     media: boolean
     resume: (effect: Effect.Effect<() => void, RestFailure | ClientClosedError>) => void
 }
-type Bucket = { remaining: number; until: number }
 const activeRequestCapacity = 4
 const activeMediaCapacity = 4
 const queuedRequestCapacity = 256
@@ -652,7 +652,7 @@ export class RestOwner<M extends MessageCore = Message> {
     #activeMedia = 0
     #pending: Pending[] = []
     #bytes = 0
-    #buckets = new Map<string, Bucket>()
+    #rates = new RateLimits()
     #globalUntil = 0
     #timer: ReturnType<typeof setTimeout> | undefined
     #controllers = new Set<AbortController>()
@@ -678,7 +678,6 @@ export class RestOwner<M extends MessageCore = Message> {
         if (this.#timer !== undefined) clearTimeout(this.#timer)
         this.#timer = undefined
         const now = performance.now()
-        for (const [key, bucket] of this.#buckets) if (bucket.until <= now) this.#buckets.delete(key)
         if (this.#closed) return
         let earliest = Infinity
         for (let index = 0; index < this.#pending.length;) {
@@ -688,9 +687,8 @@ export class RestOwner<M extends MessageCore = Message> {
                 index++
                 continue
             }
-            const bucket = item.rateLimited ? this.#buckets.get(item.route) : undefined
             const until = item.rateLimited
-                ? Math.max(item.until, this.#globalUntil, bucket && bucket.remaining <= 0 ? bucket.until : 0)
+                ? Math.max(item.until, this.#globalUntil, this.#rates.wait(item.route, now))
                 : item.until
             if (until > now) {
                 earliest = Math.min(earliest, until)
@@ -701,7 +699,7 @@ export class RestOwner<M extends MessageCore = Message> {
             this.#bytes -= item.bytes
             if (item.media) this.#activeMedia++
             else this.#active++
-            if (bucket) bucket.remaining--
+            if (item.rateLimited) this.#rates.reserve(item.route, now)
             let released = false
             item.resume(
                 Effect.succeed(() => {
@@ -749,33 +747,19 @@ export class RestOwner<M extends MessageCore = Message> {
         })
     }
 
-    #headers(route: string, response: Response) {
-        const remainingText = response.headers.get("x-ratelimit-remaining")
-        const resetText = response.headers.get("x-ratelimit-reset-after")
-        if (remainingText === null || resetText === null) return
-        const remaining = Number(remainingText)
-        const delay = Number(resetText) * 1000
-        if (Number.isSafeInteger(remaining) && remaining >= 0 && Number.isFinite(delay) && delay > 0) {
-            const previous = this.#buckets.get(route)
-            this.#buckets.set(route, {
-                remaining: Math.min(previous?.remaining ?? remaining, remaining),
-                until: Math.max(previous?.until ?? 0, performance.now() + delay),
-            })
-        }
-    }
-
     #request<A>(
         token: Redacted.Redacted<string>,
         request: Request<A>,
-        route: string,
+        route: RateRoute,
         progress: { outcome: Outcome },
         generation: number,
     ): Effect.Effect<
         | { kind: "success"; value: A }
-        | { kind: "retry"; retry: number; global: boolean; apiError: ApiErrorDetail | null },
+        | { kind: "retry"; retry: number; global: boolean; bucket: string; apiError: ApiErrorDetail | null },
         RestFailure | ClientClosedError
     > {
         const owner = this
+        const rateAttempt = owner.#rates.begin(route)
         const failure = (error: unknown, state?: { cleanupDefects: unknown[] }): RestFailure | ClientClosedError => {
             if (error instanceof AttachmentTransferCleanupError) throw error
             if (error instanceof AttachmentTransferVerificationCleanupError) {
@@ -904,7 +888,9 @@ export class RestOwner<M extends MessageCore = Message> {
                     catch: (error) => failure(error, state),
                 }).pipe(
                     Effect.flatMap((response) => {
-                        if (!request.put) owner.#headers(route, response)
+                        const bucket = request.put
+                            ? route.key
+                            : owner.#rates.observe(rateAttempt, response, performance.now())
                         return Effect.tryPromise({
                             try: () => {
                                 const work = (async () => {
@@ -964,8 +950,14 @@ export class RestOwner<M extends MessageCore = Message> {
                                         const global = headerGlobal || apiRead.global
                                         const until = performance.now() + retry
                                         if (global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
-                                        else owner.#buckets.set(route, { remaining: 0, until })
-                                        return { kind: "retry" as const, retry, global, apiError: apiRead.detail }
+                                        else owner.#rates.pause(bucket, until, performance.now())
+                                        return {
+                                            kind: "retry" as const,
+                                            retry,
+                                            global,
+                                            bucket,
+                                            apiError: apiRead.detail,
+                                        }
                                     }
                                     if (!response.ok) {
                                         let apiRead: ApiErrorRead | undefined
@@ -1929,7 +1921,7 @@ export class RestOwner<M extends MessageCore = Message> {
         retainedBytes = 0,
     ): Effect.Effect<A, RestFailure | ClientClosedError> {
         const owner = this
-        const route = `${request.bucket ?? request.method}:${request.channel}`
+        const route = rateRoute(request.method, request.path, request.channel, request.bucket, request.webhookId)
         const bytes = retainedBytes + Buffer.byteLength(request.body?.json ?? "")
         return Effect.gen(function* () {
             let retries = 0
@@ -1939,7 +1931,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     Effect.exit(
                         restore(
                             Effect.acquireUseRelease(
-                                Effect.interruptible(owner.#acquire(route, bytes, until)).pipe(
+                                Effect.interruptible(owner.#acquire(route.key, bytes, until)).pipe(
                                     mapFailureCause((error) =>
                                         error instanceof RestFailure
                                             ? new RestFailure(
@@ -1997,7 +1989,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     )
                 until = performance.now() + response.retry
                 if (response.global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
-                else owner.#buckets.set(route, { remaining: 0, until })
+                else owner.#rates.pause(response.bucket, until, performance.now())
                 if (until >= deadline)
                     return yield* Effect.fail(
                         new RestFailure("rateLimit", progress.outcome, 429, response.retry, false, response.apiError),
@@ -2587,7 +2579,7 @@ export class RestOwner<M extends MessageCore = Message> {
         const pending = this.#pending
         this.#pending = []
         this.#bytes = 0
-        this.#buckets.clear()
+        this.#rates.clear()
         this.#instance = undefined
         for (const item of pending) item.resume(Effect.fail(new ClientClosedError()))
         for (const source of this.#downloads) source.fail(new ClientClosedError())

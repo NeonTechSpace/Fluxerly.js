@@ -387,6 +387,52 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
     } finally {
         globalThis.fetch = originalFetch
     }
+    await verifyBucketLearning(client, guildId, userId, run, fail)
+}
+
+async function verifyBucketLearning(client, guildId, userId, run, fail) {
+    stage = "bucket_learning_live_headers"
+    const originalFetch = globalThis.fetch
+    let requests = 0
+    let headersObserved = 0
+    globalThis.fetch = async (input, init) => {
+        const url = new URL(String(input))
+        assert.equal(url.origin, "https://api.fluxer.app")
+        assert.equal(init?.method, "GET")
+        assert.ok(url.pathname === "/v1/users/@me" || url.pathname === `/v1/guilds/${guildId}`)
+        requests++
+        const response = await originalFetch(input, init)
+        assert.ok(response.ok)
+        if (/^[a-f0-9]{16}$/.test(response.headers.get("x-ratelimit-bucket") ?? "")) headersObserved++
+        if (requests > 3) return response
+        const headers = new Headers(response.headers)
+        // Override only scheduling metadata on real read responses. This opaque,
+        // unrecognized template is intentionally treated as account-wide
+        headers.set("x-ratelimit-bucket", "fixture-shared-read-bucket")
+        headers.set("x-ratelimit-remaining", requests === 3 ? "0" : "10")
+        headers.set("x-ratelimit-reset-after", "1")
+        return new Response(response.body, { status: response.status, headers })
+    }
+    try {
+        assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
+        assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
+        assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
+        stage = "bucket_learning_shared_wait"
+        const rejected = await fail(client.guilds.fetch(guildId, { timeoutMs: 100 }))
+        assert.equal(rejected.reason, "timeout")
+        assert.equal(rejected.outcome, "notDispatched")
+        assert.equal(requests, 3)
+        assert.equal(client.diagnostics().rest.queuedRequests, 0)
+        report(stage, { passed: true, injectedHeaderSets: 3, realBucketHeadersObserved: headersObserved })
+        await sleep(1100)
+        stage = "bucket_learning_live_recovery"
+        assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
+        assert.equal(requests, 4)
+        assert.equal(client.diagnostics().rest.activeRequests, 0)
+        report(stage, { passed: true, remoteReads: requests, remoteMutations: false })
+    } finally {
+        globalThis.fetch = originalFetch
+    }
 }
 
 // A watchdog is failure containment, never evidence of successful cleanup

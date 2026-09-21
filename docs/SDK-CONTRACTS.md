@@ -103,15 +103,23 @@ Downloads accept only the selected instance's media attachment URLs, enforce a c
 
 ## Message-management boundaries
 
-Fetch, edit and delete reuse [REST admission](/projects/sdk/src/internal/rest.ts), with method/channel rate state and shared global limits.
+Fetch, edit and delete reuse [REST admission](/projects/sdk/src/internal/rest.ts), with provisional route groups, learned server buckets and shared global limits.
 Keep management failures separate from the send/reply delivery contract.
 Repeated deletion or a missing target does not prove a prior operation succeeded
 
 ## Message-history boundary
 
 [REST admission](/projects/sdk/src/internal/rest.ts) owns explicit history pages independently of cache reads and gateway events.
-Keep history's channel rate bucket separate from single-message fetches while sharing global admission.
+Keep history and single-message fetches in separate provisional groups while sharing global admission, then honor learned server bucket identities.
 Do not introduce background traversal or prefetch through this path
+
+The [rate-state owner](/projects/sdk/src/internal/rate-limits.ts) bounds learned aliases and bucket windows per REST owner.
+The [template registry](/projects/sdk/src/internal/rate-limit-templates.ts) maps pinned Fluxer template hashes to their declared resource parameters, not rate values.
+Fluxer hashes unresolved templates but enforces resolved resources, so a hash alone cannot establish cross-resource sharing.
+Unknown hashes group conservatively within that bucket on the client. Unbound resource parameters and exhausted tracking capacity retain conservative client-wide waits.
+Preserve known active pauses across remapping or eviction, and never let an older dispatched response overwrite a newer alias.
+SDK-built paths supply resource bindings without retaining credential-bearing URLs or query strings in alias keys.
+No bucket learning crosses REST owners, client credentials or immutable instance selections
 
 The [pagination owner](/projects/sdk/src/internal/pagination.ts) composes existing remote page operations without changing their retries, rate state or cache admission.
 Each consumption owns one buffered page and bounded pin-deduplication state, released on termination or client closure.
