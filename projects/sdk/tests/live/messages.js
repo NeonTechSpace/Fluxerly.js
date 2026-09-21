@@ -3620,6 +3620,11 @@ try {
                 }
                 const attachmentOps = {
                     send: (input, options) => unwrap(client.messages.send(channel.id, input, options)),
+                    sendFailure: async (input, options) => {
+                        const result = await client.messages.send(channel.id, input, options)
+                        assert.ok(result.isErr())
+                        return result.error
+                    },
                     reply: (target, input) => unwrap(client.messages.reply(target, input)),
                     edit: (target, input) => unwrap(client.messages.edit(target, input)),
                     editFailure: async (target, input) => {
@@ -4456,6 +4461,13 @@ try {
                         }
                         const attachmentOps = {
                             send: (input, options) => run(client.messages.send(channel.id, input, options)),
+                            sendFailure: async (input, options) => {
+                                const result = await Effect.runPromise(
+                                    Effect.result(client.messages.send(channel.id, input, options)),
+                                )
+                                assert.equal(result._tag, "Failure")
+                                return result.failure
+                            },
                             reply: (target, input) => run(client.messages.reply(target, input)),
                             edit: (target, input) => run(client.messages.edit(target, input)),
                             editFailure: (target, input) =>

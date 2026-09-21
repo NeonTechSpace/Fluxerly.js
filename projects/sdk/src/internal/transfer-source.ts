@@ -1,3 +1,4 @@
+import { setImmediate as yieldToHost } from "node:timers/promises"
 import type { AttachmentStreamReadResult, AttachmentStreamReader, AttachmentStreamSource } from "#sdk/attachments"
 import type { FilePart } from "./attachments.js"
 
@@ -43,6 +44,24 @@ function readResult(value: unknown): AttachmentStreamReadResult | undefined {
     return { done: false, value: value.value }
 }
 
+async function readNonempty(reader: AttachmentStreamReader, closed: () => boolean, invalid: string) {
+    let emptyReads = 0
+    for (;;) {
+        if (closed()) throw new Error("Attachment source closed")
+        const next = readResult(await reader.read())
+        if (closed()) throw new Error("Attachment source closed")
+        if (!next) throw new Error(invalid)
+        if (next.done) return undefined
+        if (next.value.byteLength !== 0) return next.value
+        // Empty chunks are valid, but immediately resolved reads must not starve
+        // host timers and cancellation, including during the final EOF check
+        if (++emptyReads === 256) {
+            emptyReads = 0
+            await yieldToHost()
+        }
+    }
+}
+
 async function completeCleanup(actions: readonly (() => void | PromiseLike<void>)[]) {
     const failures: unknown[] = []
     for (const action of actions) {
@@ -73,6 +92,7 @@ export class AttachmentTransferSource {
     }
 
     async #closeStream(cancel: boolean) {
+        this.#closed = !this.replayable
         const reader = this.#streamReader
         this.#streamReader = undefined
         this.#streamPending = undefined
@@ -100,13 +120,14 @@ export class AttachmentTransferSource {
     }
 
     async #nextStreamChunk(): Promise<Uint8Array | undefined> {
-        while (!this.#streamPending || this.#streamOffset === this.#streamPending.byteLength) {
+        if (!this.#streamPending || this.#streamOffset === this.#streamPending.byteLength) {
             this.#streamPending = undefined
             this.#streamOffset = 0
-            const next = readResult(await this.#streamReaderForRead().read())
-            if (!next) throw new Error("Invalid attachment stream result")
-            if (next.done) return undefined
-            this.#streamPending = next.value
+            this.#streamPending = await readNonempty(
+                this.#streamReaderForRead(),
+                () => this.#closed,
+                "Invalid attachment stream result",
+            )
         }
         return this.#streamPending
     }
@@ -175,24 +196,23 @@ export class AttachmentTransferSource {
 
     #rangeStream(stream: AttachmentStreamSource, size: number): AttachmentTransferBody {
         let reader: AttachmentStreamReader | undefined
+        let closed = false
         let pending: Uint8Array | undefined
         let pendingOffset = 0
         let remaining = size
         let ended = false
         let controller: ReadableStreamDefaultController<Uint8Array> | undefined
         const take = async (): Promise<Uint8Array | undefined> => {
+            if (closed) throw new Error("Attachment source closed")
             if (!reader) {
                 const candidate = stream.getReader()
                 if (!isAttachmentStreamReader(candidate)) throw new Error("Invalid attachment file stream reader")
                 reader = candidate
             }
-            while (!pending || pendingOffset === pending.byteLength) {
+            if (!pending || pendingOffset === pending.byteLength) {
                 pending = undefined
                 pendingOffset = 0
-                const next = readResult(await reader.read())
-                if (!next) throw new Error("Invalid attachment file stream result")
-                if (next.done) return undefined
-                pending = next.value
+                pending = await readNonempty(reader, () => closed, "Invalid attachment file stream result")
             }
             return pending
         }
@@ -222,6 +242,7 @@ export class AttachmentTransferSource {
             { highWaterMark: 0 },
         )
         const release = async (cancel: boolean) => {
+            closed = true
             if (!reader) return
             const current = reader
             reader = undefined

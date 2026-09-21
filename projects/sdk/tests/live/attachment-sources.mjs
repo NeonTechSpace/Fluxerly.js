@@ -18,6 +18,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 const chunkBytes = 65_536
 const fileBytes = 3 * chunkBytes
 const streamBytes = 10 * 1024 * 1024 + chunkBytes
+const sustainedEmptyReadLimit = 20_000_000
 
 function generatedChunk(offset, length, salt) {
     const value = new Uint8Array(length)
@@ -282,6 +283,107 @@ async function verifyCancellation(ops, attachment, size, getFetch, setFetch, set
     }
 }
 
+function sustainedEmptySource(kind) {
+    let reads = 0
+    let cancellations = 0
+    let releases = 0
+    let readers = 0
+    let slices = 0
+    const empty = new Uint8Array(0)
+    const reader = {
+        async read() {
+            reads += 1
+            return reads === sustainedEmptyReadLimit ? { done: true } : { value: empty }
+        },
+        async cancel() {
+            cancellations += 1
+        },
+        releaseLock() {
+            releases += 1
+        },
+    }
+    const stream = {
+        getReader() {
+            readers += 1
+            assert.equal(readers, 1)
+            return reader
+        },
+    }
+    const file = {
+        size: 1,
+        slice(start, end) {
+            slices += 1
+            assert.equal(start, 0)
+            assert.equal(end, 1)
+            return file
+        },
+        stream() {
+            return stream
+        },
+    }
+    return {
+        input: kind === "stream" ? { stream, size: 1 } : { file },
+        stats: () => ({ reads, cancellations, releases, readers, slices }),
+    }
+}
+
+async function verifySustainedEmptyFailure(ops, rawFetch, getFetch, setFetch, channelId, setStage, report, kind) {
+    const filename = `attachment-${kind}-empty-${randomUUID()}.bin`
+    const planUrl = `https://api.fluxer.app/v1/channels/${channelId}/attachments`
+    const source = sustainedEmptySource(kind)
+    const previous = getFetch()
+    let injected = 0
+    setFetch(async (input, init) => {
+        if (!matchingPlan(input, init, planUrl, filename, 1)) return previous(input, init)
+        injected += 1
+        assert.equal(injected, 1)
+        return Response.json({ code: "FEATURE_TEMPORARILY_DISABLED" }, { status: 403 })
+    })
+    try {
+        setStage(`attachment_sources_${kind}_sustained_empty_timeout`)
+        const failure = await ops.sendFailure(
+            {
+                attachments: [
+                    {
+                        ...source.input,
+                        filename,
+                        contentType: "application/octet-stream",
+                    },
+                ],
+            },
+            { timeoutMs: 1_000 },
+        )
+        const stats = source.stats()
+        assert.equal(failure?._tag, "MessageError")
+        assert.equal(failure?.reason, "timeout")
+        // The real inline message request has been dispatched before its incomplete body times out
+        assert.equal(failure?.delivery, "unknown")
+        assert.equal(injected, 1)
+        assert.ok(stats.reads >= 256)
+        assert.ok(stats.reads < sustainedEmptyReadLimit)
+        assert.equal(stats.cancellations, 1)
+        assert.equal(stats.releases, 1)
+        assert.equal(stats.readers, 1)
+        assert.equal(stats.slices, kind === "file" ? 1 : 0)
+        report(`attachment_sources_${kind}_sustained_empty_timeout`, true)
+    } finally {
+        setFetch(previous)
+    }
+
+    const salt = kind === "stream" ? 53 : 59
+    await sendAndReadback(
+        ops,
+        rawFetch,
+        setStage,
+        report,
+        { data: generatedChunk(0, 1, salt) },
+        `attachment-${kind}-empty-recovery-${randomUUID()}.bin`,
+        1,
+        generatedDigest(1, salt),
+        `attachment_sources_${kind}_sustained_empty_recovery`,
+    )
+}
+
 async function verifyInlineFallback(ops, rawFetch, getFetch, setFetch, channelId, setStage, report) {
     const filename = `attachment-inline-${randomUUID()}.bin`
     const bytes = 2 * chunkBytes
@@ -384,6 +486,9 @@ export async function verifyAttachmentSources({ ops, channelId, rawFetch, getFet
         await verifyStreamEarlyReturn(ops, fileAttachment, fileBytes)
         report("attachment_sources_stream_early_return_and_slot_reuse", true)
         await verifyCancellation(ops, fileAttachment, fileBytes, getFetch, setFetch, setStage, report)
+
+        await verifySustainedEmptyFailure(ops, rawFetch, getFetch, setFetch, channelId, setStage, report, "stream")
+        await verifySustainedEmptyFailure(ops, rawFetch, getFetch, setFetch, channelId, setStage, report, "file")
 
         const streamSalt = 29
         const source = streamSource(streamBytes, streamSalt)

@@ -31,7 +31,10 @@ export type AttachmentStreamReadResult =
  * The SDK releases it on normal completion and cancels then releases it after a read, transport or cancellation failure
  */
 export interface AttachmentStreamReader {
-    /** Resolve with the next Uint8Array chunk, or done true when no bytes remain. A rejected read stops the upload */
+    /** Resolve with the next Uint8Array chunk, or done true when no bytes remain. A rejected read stops the upload.
+     * Empty chunks are accepted. Sustained empty reads periodically yield to host timers and cancellation,
+     * including while checking for EOF. This does not impose a time limit on a caller's read or cancel implementation
+     */
     read(): PromiseLike<AttachmentStreamReadResult>
     /** Stop reading and release source resources. The SDK awaits this after an interrupted or failed read, normally without a reason */
     cancel(reason?: unknown): PromiseLike<void>
