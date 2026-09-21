@@ -454,6 +454,8 @@ test.each(modes)("%s bounds each recovery handshake to thirty seconds", async (m
     await clock.advance(500)
     await vi.waitFor(() => expect(server.sockets).toHaveLength(2), { interval: 5 })
     await clock.waiting(30_000)
+    // Server acceptance can precede the client's upgrade callback under concurrent test load
+    await vi.waitFor(() => expect(transport.sockets[1]!.readyState).toBe(WebSocket.OPEN), { interval: 5 })
     await clock.advance(29_999)
     expect(transport.sockets[1]!.readyState).toBe(WebSocket.OPEN)
     await clock.advance(1)

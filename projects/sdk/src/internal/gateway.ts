@@ -37,6 +37,10 @@ import {
     type ConnectionFailure,
 } from "#sdk/errors"
 
+// Preserve the selected transport's 100 MiB compatibility ceiling explicitly.
+// Fluxer's outbound-command and replay-retention limits do not bound live inbound messages
+const maxGatewayMessageBytes = 100 * 1024 * 1024
+
 export interface Session {
     id: string | undefined
     sequence: number | null
@@ -154,7 +158,11 @@ export const runSelectedGateway = <M extends MessageCore>(
             const protocolFailure = () => fail(new AttemptFailure(new ConnectionError("gateway", "protocol"), false))
             const socket = yield* Effect.acquireRelease(
                 Effect.sync(() => {
-                    const socket = new WebSocket(url, { perMessageDeflate: false, followRedirects: false })
+                    const socket = new WebSocket(url, {
+                        perMessageDeflate: false,
+                        followRedirects: false,
+                        maxPayload: maxGatewayMessageBytes,
+                    })
                     const send = (op: number, d: unknown) => {
                         if (stopping) return
                         if (socket.readyState !== WebSocket.OPEN) {
@@ -177,9 +185,15 @@ export const runSelectedGateway = <M extends MessageCore>(
                             protocolFailure()
                             return
                         }
+                        const buffer = Buffer.isBuffer(data)
+                            ? data
+                            : Array.isArray(data)
+                              ? Buffer.concat(data)
+                              : Buffer.from(data)
+                        const bytes = buffer.byteLength
                         let payload: unknown
                         try {
-                            payload = JSON.parse(data.toString())
+                            payload = JSON.parse(buffer.toString("utf8"))
                         } catch {
                             protocolFailure()
                             return
@@ -287,7 +301,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                 )
                                     onGuild?.(payload.t, body)
                                 if (payload.t === "GUILD_MEMBERS_CHUNK") {
-                                    memberChunks?.receive(body, Buffer.byteLength(data.toString()))
+                                    memberChunks?.receive(body, bytes)
                                 } else if (payload.t === "RATE_LIMITED") {
                                     memberChunks?.rateLimited(body)
                                 } else if (payload.t === "GUILD_COUNTS_UPDATE") {
@@ -300,7 +314,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("userUpdate", user, Buffer.byteLength(data.toString()))
+                                    onDispatch("userUpdate", user, bytes)
                                 } else if (Object.hasOwn(guildLifecycleEvents, payload.t)) {
                                     const event = payload.t as keyof typeof guildLifecycleEvents
                                     const update =
@@ -311,15 +325,11 @@ export const runSelectedGateway = <M extends MessageCore>(
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch(guildLifecycleEvents[event], update, Buffer.byteLength(data.toString()))
+                                    onDispatch(guildLifecycleEvents[event], update, bytes)
                                     if (payload.t === "GUILD_CREATE") {
                                         presence?.guildCreate(update.id)
                                         if (guildCreateVoiceSnapshot)
-                                            onDispatch(
-                                                "voiceStateSnapshot",
-                                                guildCreateVoiceSnapshot,
-                                                Buffer.byteLength(data.toString()),
-                                            )
+                                            onDispatch("voiceStateSnapshot", guildCreateVoiceSnapshot, bytes)
                                     }
                                 } else if (payload.t === "VOICE_STATE_UPDATE") {
                                     // Private calls use the same dispatch name with an explicit null guild ID
@@ -329,21 +339,21 @@ export const runSelectedGateway = <M extends MessageCore>(
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("voiceStateUpdate", voiceState, Buffer.byteLength(data.toString()))
+                                    onDispatch("voiceStateUpdate", voiceState, bytes)
                                 } else if (payload.t === "PRESENCE_UPDATE") {
                                     const presence = decodePresenceUpdate(body)
                                     if (!presence) {
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("presenceUpdate", presence, Buffer.byteLength(data.toString()))
+                                    onDispatch("presenceUpdate", presence, bytes)
                                 } else if (payload.t === "PRESENCE_UPDATE_BULK") {
                                     const presences = decodePresenceUpdateBulk(body)
                                     if (!presences) {
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("presenceUpdateBulk", presences, Buffer.byteLength(data.toString()))
+                                    onDispatch("presenceUpdateBulk", presences, bytes)
                                 } else if (
                                     payload.t === "GUILD_EMOJIS_UPDATE" ||
                                     payload.t === "GUILD_STICKERS_UPDATE"
@@ -361,7 +371,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                             ? "guildEmojisUpdate"
                                             : "guildStickersUpdate",
                                         update,
-                                        Buffer.byteLength(data.toString()),
+                                        bytes,
                                     )
                                 } else if (
                                     payload.t === "CHANNEL_RECIPIENT_ADD" ||
@@ -381,7 +391,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                             ? "directMessageRecipientAdd"
                                             : "directMessageRecipientRemove",
                                         Object.freeze({ channelId: body.channel_id, userId: body.user.id }),
-                                        Buffer.byteLength(data.toString()),
+                                        bytes,
                                     )
                                 } else if (payload.t === "WEBHOOKS_UPDATE") {
                                     if (!record(body) || !identifier(body.guild_id) || !identifier(body.channel_id)) {
@@ -391,7 +401,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                     onDispatch(
                                         "webhooksUpdate",
                                         Object.freeze({ guildId: body.guild_id, channelId: body.channel_id }),
-                                        Buffer.byteLength(data.toString()),
+                                        bytes,
                                     )
                                 } else if (payload.t === "INVITE_CREATE") {
                                     const invite = decodeInviteMetadata(body, inviteBase)
@@ -399,14 +409,14 @@ export const runSelectedGateway = <M extends MessageCore>(
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("inviteCreate", invite, Buffer.byteLength(data.toString()))
+                                    onDispatch("inviteCreate", invite, bytes)
                                 } else if (payload.t === "INVITE_DELETE") {
                                     const invite = decodeInviteDelete(body)
                                     if (!invite) {
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("inviteDelete", invite, Buffer.byteLength(data.toString()))
+                                    onDispatch("inviteDelete", invite, bytes)
                                 } else if (payload.t === "GUILD_AUDIT_LOG_ENTRY_CREATE") {
                                     const audit = decodeAuditLogEntry(body)
                                     if (
@@ -427,7 +437,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                             userId: body.user_id,
                                             targetId: body.target_id,
                                         }),
-                                        Buffer.byteLength(data.toString()),
+                                        bytes,
                                     )
                                 } else if (payload.t === "MESSAGE_CREATE" || payload.t === "MESSAGE_UPDATE") {
                                     const message = messageDecoder(body)
@@ -438,7 +448,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                     onDispatch(
                                         payload.t === "MESSAGE_CREATE" ? "messageCreate" : "messageUpdate",
                                         message,
-                                        Buffer.byteLength(data.toString()),
+                                        bytes,
                                     )
                                 } else if (payload.t === "TYPING_START") {
                                     const typing = decodeTypingStart(body)
@@ -446,7 +456,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("typingStart", typing, Buffer.byteLength(data.toString()))
+                                    onDispatch("typingStart", typing, bytes)
                                 } else if (Object.hasOwn(guildEvents, payload.t)) {
                                     const event = payload.t as keyof typeof guildEvents
                                     const update = decodeGuildEvent(event, body)
@@ -454,16 +464,12 @@ export const runSelectedGateway = <M extends MessageCore>(
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch(guildEvents[event], update, Buffer.byteLength(data.toString()))
+                                    onDispatch(guildEvents[event], update, bytes)
                                 } else if (Object.hasOwn(channelEvents, payload.t)) {
                                     if (record(body) && (body.guild_id === undefined || body.guild_id === null)) {
                                         if (body.type === 999) return
                                         if (payload.t === "CHANNEL_DELETE" && identifier(body.id))
-                                            onDispatch(
-                                                "directMessageDelete",
-                                                Object.freeze({ id: body.id }),
-                                                Buffer.byteLength(data.toString()),
-                                            )
+                                            onDispatch("directMessageDelete", Object.freeze({ id: body.id }), bytes)
                                         else {
                                             const channel = decodeDirectMessage(body)
                                             if (!channel) {
@@ -475,7 +481,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                                     ? "directMessageCreate"
                                                     : "directMessageUpdate",
                                                 channel,
-                                                Buffer.byteLength(data.toString()),
+                                                bytes,
                                             )
                                         }
                                         return
@@ -486,28 +492,28 @@ export const runSelectedGateway = <M extends MessageCore>(
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch(channelEvents[event], update, Buffer.byteLength(data.toString()))
+                                    onDispatch(channelEvents[event], update, bytes)
                                 } else if (payload.t === "CHANNEL_PINS_UPDATE") {
                                     const update = decodePinsUpdate(body)
                                     if (!update) {
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("channelPinsUpdate", update, Buffer.byteLength(data.toString()))
+                                    onDispatch("channelPinsUpdate", update, bytes)
                                 } else if (payload.t === "MESSAGE_DELETE") {
                                     const deletion = decodeDeletion(body)
                                     if (!deletion) {
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("messageDelete", deletion, Buffer.byteLength(data.toString()))
+                                    onDispatch("messageDelete", deletion, bytes)
                                 } else if (payload.t === "MESSAGE_DELETE_BULK") {
                                     const deletion = decodeBulkDeletion(body)
                                     if (!deletion) {
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch("messageDeleteBulk", deletion, Buffer.byteLength(data.toString()))
+                                    onDispatch("messageDeleteBulk", deletion, bytes)
                                 } else if (Object.hasOwn(reactionEvents, payload.t)) {
                                     const event = payload.t as keyof typeof reactionEvents
                                     const reaction = decodeReaction(event, body)
@@ -515,7 +521,7 @@ export const runSelectedGateway = <M extends MessageCore>(
                                         protocolFailure()
                                         return
                                     }
-                                    onDispatch(reactionEvents[event], reaction, Buffer.byteLength(data.toString()))
+                                    onDispatch(reactionEvents[event], reaction, bytes)
                                 }
                                 if (payload.t === "READY" || payload.t === "RESUMED")
                                     Deferred.doneUnsafe(ready, Effect.void)
@@ -550,8 +556,22 @@ export const runSelectedGateway = <M extends MessageCore>(
                             Deferred.doneUnsafe(ended, Effect.die(defect))
                         }
                     }
-                    const onError = () => {
-                        if (!stopping) fail(new AttemptFailure(new ConnectionError("gateway", "network"), true))
+                    const onError = (error: Error & { code?: string }) => {
+                        if (stopping) return
+                        const status =
+                            error.code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH" ||
+                            error.code === "WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH"
+                                ? 1009
+                                : error.code === "WS_ERR_INVALID_UTF8"
+                                  ? 1007
+                                  : null
+                        // Retrying a local receive rejection can replay the same rejected message indefinitely
+                        fail(
+                            new AttemptFailure(
+                                new ConnectionError("gateway", status === null ? "network" : "protocol", status),
+                                status === null,
+                            ),
+                        )
                     }
                     const onClose = (code: number) => {
                         if (!stopping) fail(classifyClose(code, resuming && !receivedReady))

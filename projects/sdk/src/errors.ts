@@ -171,6 +171,10 @@ export class AuthenticationError extends Error {
 // Reviewed against Fluxer's GatewayConstants and gateway handler call sites, not Discord close-code semantics
 function gatewayExplanation(status: number | null): string {
     switch (status) {
+        case 1007:
+            return "The WebSocket connection rejected invalid payload encoding"
+        case 1009:
+            return "The WebSocket connection rejected a message exceeding its receive limit"
         case 4000:
             return "The gateway reported an unspecified error"
         case 4001:
@@ -204,6 +208,8 @@ function gatewayExplanation(status: number | null): string {
  * Inspect phase, reason and status to distinguish network failure, invalid protocol data and gateway closure.
  * The message includes a reviewed Fluxer close-code explanation when available, but no provider body or close-reason text.
  * An explanation does not establish whether the session can resume or whether the SDK will retry
+ * Local gateway receive-limit and UTF-8 failures use reason protocol and status 1009 and 1007 respectively.
+ * These failures do not retry automatically. No rejected payload or transport error text is retained
  */
 export class ConnectionError extends Error {
     /** Discriminator for identifying an expected discovery or gateway connection failure */
@@ -213,7 +219,7 @@ export class ConnectionError extends Error {
         readonly phase: "discovery" | "gateway",
         /** Network failure, invalid protocol data, or a closed gateway connection */
         readonly reason: "network" | "protocol" | "closed",
-        /** HTTP status during discovery or WebSocket close code at the gateway, or null when unavailable */
+        /** HTTP status during discovery or WebSocket close code at the gateway, including local receive rejection, or null when unavailable */
         readonly status: number | null = null,
     ) {
         super(

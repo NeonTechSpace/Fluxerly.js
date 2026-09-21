@@ -4133,6 +4133,13 @@ export interface ClientCache<M extends MessageCore = Message> {
  * Old responses cannot undo newer mappings or reopen an exhausted window. A changed mapping preserves any known prior pause until it expires.
  * Tracking pressure discards nonblocking observations first. If active pauses fill capacity or resource metadata cannot be bound,
  * the client waits conservatively rather than dropping a known limit. Closing the client clears this transient state
+ *
+ * Each gateway connection accepts complete uncompressed text messages up to 100 MiB (104,857,600 bytes), including fragments combined.
+ * The transport enforces this fixed receive ceiling before UTF-8 decoding and JSON parsing. It preserves the previous transport default.
+ * This is not a Fluxer server-to-client maximum, an outbound command limit, a subscription budget or a JavaScript heap bound.
+ * Larger messages fail with ConnectionError, phase gateway, reason protocol and status 1009. Invalid UTF-8 uses status 1007.
+ * Neither rejection retries automatically. Standalone connect failure awaits cleanup and permits another explicit connect,
+ * while a managed run or an established connection ends the client lifetime. Later failures are observable through waitForClose
  */
 export interface Client<M extends MessageCore = Message> extends ClientState {
     /**

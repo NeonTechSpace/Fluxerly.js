@@ -38,6 +38,12 @@ Creation validates local configuration without opening sockets or starting backg
 The client owns its credential reference, per-shard sessions and recovery loops, and one retained lifetime outcome.
 Connection readiness requires authentication and the required READY processing, not merely an open socket
 
+The [gateway transport](/projects/sdk/src/internal/gateway.ts) owns the complete-message receive ceiling before text decoding and JSON parsing, including fragmented messages.
+Keep that explicit compatibility policy separate from Fluxer's outbound command limits, replay retention, subscription byte accounting and actual heap usage.
+Decode each accepted message once and reuse its received byte length for downstream admission.
+Local size and UTF-8 rejection are terminal protocol failures, not transient network failures to replay through automatic recovery.
+Public limits and failure behavior belong to the default/native Client and ConnectionError source contracts
+
 Startup, a managed run and an outcome observer have distinct ownership.
 Reject competing ownership without cancelling or cleaning up the accepted operation.
 An expected standalone startup failure permits reuse only after cleanup, while an accepted managed run owns one permanent client lifetime

@@ -26,7 +26,11 @@ afterEach(() => {
     vi.restoreAllMocks()
     transport.sockets = []
 })
-const member = (id: string) => ({ user: { id, username: "fixture" }, roles: [], joined_at: "2026-09-10T00:00:00.000Z" })
+const member = (id: string, roles: string[] = []) => ({
+    user: { id, username: "fixture" },
+    roles,
+    joined_at: "2026-09-10T00:00:00.000Z",
+})
 const presence = (id: string) => ({ user: { id }, status: "online", mobile: false, afk: false })
 type Mode = "default" | "native"
 
@@ -190,6 +194,45 @@ async function fixture(mode: Mode, connect = true) {
 }
 
 for (const mode of ["default", "native"] as const) {
+    test(`${mode} receives a large 1,000-member chunk beyond the replay retention cutoff`, async () => {
+        const f = await fixture(mode)
+        const iterator = f.iterate()
+        const pending = iterator.next()
+        const sent = await f.request(1)
+        const roles = Array.from({ length: 100 }, (_, index) => String(1750000000000000000n + BigInt(index)))
+        const members = Array.from({ length: 1000 }, (_, index) => ({
+            ...member(String(1760000000000000000n + BigInt(index))),
+            user: {
+                id: String(1760000000000000000n + BigInt(index)),
+                username: "fixture_".repeat(4),
+                discriminator: "0001",
+                global_name: null,
+                avatar: null,
+                avatar_color: null,
+            },
+            nick: "界".repeat(32),
+            avatar: null,
+            banner: null,
+            accent_color: null,
+            mute: false,
+            deaf: false,
+            communication_disabled_until: null,
+            roles,
+        }))
+        const bytes = Buffer.byteLength(JSON.stringify(members))
+        expect(bytes).toBeGreaterThan(2 * 1024 * 1024)
+        expect(bytes).toBeLessThan(4 * 1024 * 1024)
+        f.chunk(sent.nonce, members)
+        const received = (await pending).value!
+        expect(received.members).toHaveLength(1000)
+        expect(received.members[999]).toMatchObject({
+            userId: members[999]!.user.id,
+            roleIds: roles,
+        })
+        expect((await iterator.next()).done).toBe(true)
+        expect(f.state()).toBe("Connected")
+    })
+
     test(`${mode} drains a multi-batch response after its arrival deadline without retaining the member slot`, async () => {
         const f = await fixture(mode)
         const iterator = f.iterate({ all: true }, { timeoutMs: 250 })

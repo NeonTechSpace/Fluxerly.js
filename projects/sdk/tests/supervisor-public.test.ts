@@ -607,20 +607,47 @@ test.each(["default", "native"] as const)(
                 FLUXERLY_SUPERVISOR_DISCONNECT_COORDINATION: "startup",
             },
         })
-        onTestFinished(async () => {
-            await owner.shutdown().catch(() => undefined)
-            await barrier.close()
+        // Child startup and IPC retain real time. Only advance parent deadlines after coordination
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+        const observationScheduled = Promise.withResolvers<void>()
+        const schedule = globalThis.setTimeout
+        const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, milliseconds, ...args) => {
+            const handle = schedule(callback, milliseconds, ...args)
+            if (milliseconds === 1_000) observationScheduled.resolve()
+            return handle
         })
-        const starting = owner.start()
-        await barrier.entered
-        barrier.release()
-        await vi.waitFor(
-            () => expect(owner.status().children[0]).toMatchObject({ pid: expect.any(Number), connectionState: null }),
-            { interval: 5, timeout: 2_000 },
+        onTestFinished(async () => {
+            try {
+                const closing = owner.shutdown().catch(() => undefined)
+                await vi.runAllTimersAsync()
+                await closing
+                await barrier.close()
+            } finally {
+                timer.mockRestore()
+                vi.useRealTimers()
+            }
+        })
+        const starting = owner.start().then(
+            () => ({ ok: true as const }),
+            (error: unknown) => ({ ok: false as const, error }),
         )
-        await new Promise<void>((resolve) => setTimeout(resolve, 600))
+        await Promise.race([
+            barrier.entered,
+            starting.then(() => {
+                throw new Error("Supervisor settled before the startup disconnect barrier")
+            }),
+        ])
+        barrier.release()
+        await observationScheduled.promise
+        await vi.advanceTimersByTimeAsync(500)
         expect(owner.status()).toMatchObject({ state: "starting", children: [{ pid: expect.any(Number) }] })
-        await expect(starting).rejects.toMatchObject({ _tag: "SupervisorError", childId: "startup", reason: "closed" })
+        await vi.advanceTimersByTimeAsync(499)
+        expect(owner.status().state).toBe("starting")
+        await vi.advanceTimersByTimeAsync(1)
+        expect(await starting).toMatchObject({
+            ok: false,
+            error: { _tag: "SupervisorError", childId: "startup", reason: "closed" },
+        })
         await expect(owner.waitForClose()).rejects.toMatchObject({
             _tag: "SupervisorError",
             childId: "startup",

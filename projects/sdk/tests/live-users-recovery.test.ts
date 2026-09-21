@@ -172,29 +172,27 @@ function readState(root: string) {
     return JSON.parse(readFileSync(join(root, "state.json"), "utf8"))
 }
 
-test("users live script rejects missing or invalid process-only selections before HTTP", () => {
-    const root = fixture()
-    expect(expectNoHttp(run(root, "users.mjs", ["default"]))).toContain("DM recipient")
-    expect(expectNoHttp(run(root, "users.mjs", ["default"], { FLUXER_TEST_DM_USER_ID: "invalid" }))).toContain(
-        "DM recipient",
-    )
-    expect(
-        expectNoHttp(
-            run(root, "users.mjs", ["default"], {
-                FLUXER_TEST_DM_USER_ID: "400",
-                FLUXER_TEST_GROUP_DM_ID: "invalid",
-            }),
-        ),
-    ).toContain("group ID")
-    expect(
-        expectNoHttp(
-            run(root, "users.mjs", ["default"], {
-                FLUXER_TEST_DM_USER_ID: "400",
-                FLUXER_TEST_GROUP_EXTRA_USER_ID: "invalid",
-            }),
-        ),
-    ).toContain("group participant")
-})
+test.each<{ name: string; environment: Record<string, string>; diagnostic: string }>([
+    { name: "missing recipient", environment: {}, diagnostic: "DM recipient" },
+    { name: "invalid recipient", environment: { FLUXER_TEST_DM_USER_ID: "invalid" }, diagnostic: "DM recipient" },
+    {
+        name: "invalid group",
+        environment: { FLUXER_TEST_DM_USER_ID: "400", FLUXER_TEST_GROUP_DM_ID: "invalid" },
+        diagnostic: "group ID",
+    },
+    {
+        name: "invalid participant",
+        environment: { FLUXER_TEST_DM_USER_ID: "400", FLUXER_TEST_GROUP_EXTRA_USER_ID: "invalid" },
+        diagnostic: "group participant",
+    },
+])(
+    "users live script rejects $name before HTTP",
+    ({ environment, diagnostic }) => {
+        expect(expectNoHttp(run(fixture(), "users.mjs", ["default"], environment))).toContain(diagnostic)
+    },
+    // One process per case, with room for its existing ten-second deadline and fixture cleanup
+    12_000,
+)
 
 test("users live script ignores stored participant selections and preserves another lock", () => {
     const root = fixture()

@@ -55,6 +55,10 @@ Global HTTP 429 rejections pause unrelated API routes on the same client, includ
 
 Server-provided bucket identifiers also refine request grouping automatically, so bot code does not need to configure rate-limit groups. Matching limits share a wait, while known independently limited resources stay separate. Initial requests can still receive a 429 before the server's grouping is learned
 
+## Handle rejected gateway messages
+
+Gateway receive protection is automatic and needs no bot configuration. A message beyond the fixed receive ceiling, or invalid UTF-8, stops the connection rather than repeatedly reconnecting to the same rejected data. The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) documents the ceiling and failure codes. Subscription queue limits apply separately and do not bound JSON parsing memory
+
 ## Let one function own connection lifetime
 
 Use `run` when one signal should own startup, recovery and shutdown. Pass a disconnected client with its handlers already registered and an `AbortSignal` owned by your application
