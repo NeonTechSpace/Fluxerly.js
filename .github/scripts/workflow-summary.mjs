@@ -49,10 +49,10 @@ export const summaryProfiles = {
             ["snapshots", "Verified exact-source release snapshots"],
             ["workspace", "Aggregate workspace and Preview content check"],
             ["source", "Checked checkout recorded in deployment.json"],
-            ["deploy", "Cloudflare Preview deployment and endpoint readback"],
+            ["deploy", "Exact Cloudflare deployment verification and custom-domain access check"],
         ],
-        scope: "Preview-only delivery, not production deployment. A failed deployment step may follow a submitted deployment",
-        next: "Inspect the verified Preview URL and source marker before sharing it",
+        scope: "Preview-only delivery, not production deployment. A successful exact deployment check does not establish custom-domain access when Cloudflare challenges that request",
+        next: "Inspect the verified deployment URL and custom-domain status before sharing the Preview",
     },
     prepare: {
         title: "Immutable release candidate preparation",
@@ -136,6 +136,7 @@ function outcome(step) {
 export function renderSummary({ kind, steps = {}, details = {}, runId, workflowCommit }) {
     const profile = summaryProfiles[kind]
     if (!profile) throw new Error("Unknown workflow summary profile")
+    const output = (id, key) => steps[id]?.outputs?.[key]
     const unpublished =
         kind === "reconcile" &&
         outcome(steps.status) === "success" &&
@@ -147,6 +148,14 @@ export function renderSummary({ kind, steps = {}, details = {}, runId, workflowC
         (details.complete === true || details.complete === "true") &&
         details.publishResult === "failure" &&
         outcome(steps.announce) === "success"
+    const previewDomainStatus = kind === "preview" ? output("deploy", "custom_domain_status") : undefined
+    const previewDeploymentUrl = kind === "preview" ? output("deploy", "deployment_url") : undefined
+    const previewChallenged =
+        kind === "preview" && outcome(steps.deploy) === "success" && previewDomainStatus === "challenged"
+    const previewEvidenceMissing =
+        kind === "preview" &&
+        outcome(steps.deploy) === "success" &&
+        (!previewDeploymentUrl || !["verified", "challenged"].includes(previewDomainStatus))
     const required = profile.checks.filter(
         ([id]) => id !== "browser_evidence" && !(unpublished && ["release_token", "announce"].includes(id)),
     )
@@ -163,9 +172,13 @@ export function renderSummary({ kind, steps = {}, details = {}, runId, workflowC
             ? "The npm version is missing. The GitHub announcement is deliberately skipped"
             : recoveredComplete
               ? "The npm version is published after the publication job failed. Final reconciliation proceeds from current npm status"
-              : skipped.length
-                ? "Incomplete, some checks or effects were skipped or not reported"
-                : "Listed checks and effects succeeded"
+              : previewEvidenceMissing
+                ? "Incomplete, exact deployment verification details were not reported"
+                : previewChallenged
+                  ? "Exact deployment verified. The configured custom domain was challenged, so public access is not verified"
+                  : skipped.length
+                    ? "Incomplete, some checks or effects were skipped or not reported"
+                    : "Listed checks and effects succeeded"
     const lines = [
         `## ${profile.title}`,
         "",
@@ -180,7 +193,6 @@ export function renderSummary({ kind, steps = {}, details = {}, runId, workflowC
         ...profile.checks.map(([id, label]) => `| ${label} | ${outcome(steps[id])} |`),
         "",
     ]
-    const output = (id, key) => steps[id]?.outputs?.[key]
     const values = []
     if (kind === "consumers") values.push(["Node runtime policy", details.runtimePolicy])
     if (kind === "browser") {
@@ -221,7 +233,25 @@ export function renderSummary({ kind, steps = {}, details = {}, runId, workflowC
             ["PR URL", output("pull_request", "pull-request-url")],
         )
     if (kind === "preview")
-        values.push(["Checked source commit", details.sourceCommit], ["Configured Preview URL", details.previewUrl])
+        values.push(
+            ["Checked source commit", details.sourceCommit],
+            ["Exact deployment URL", previewDeploymentUrl],
+            [
+                "Exact deployment verification",
+                previewDeploymentUrl && ["verified", "challenged"].includes(previewDomainStatus)
+                    ? "Verified source marker and documentation response"
+                    : "Unconfirmed, inspect deployment verification",
+            ],
+            ["Configured custom domain", details.previewUrl],
+            [
+                "Custom-domain access",
+                previewDomainStatus === "verified"
+                    ? "Verified"
+                    : previewDomainStatus === "challenged"
+                      ? "Cloudflare challenge, public access not verified"
+                      : "Unconfirmed, inspect deployment verification",
+            ],
+        )
     if (kind === "publish-npm")
         values.push(
             [
@@ -270,7 +300,17 @@ export function renderSummary({ kind, steps = {}, details = {}, runId, workflowC
                 "Inspect Cloudflare deployment state and the deployment.json source marker before retrying the checked source",
                 "",
             )
-    } else if (unpublished)
+    } else if (previewEvidenceMissing)
+        lines.push(
+            "Inspect the deployment step log first. Missing verification outputs do not establish the exact deployment or custom-domain access",
+            "",
+        )
+    else if (previewChallenged)
+        lines.push(
+            "Use the exact verified deployment URL for inspection. Treat custom-domain access as unverified until a separate check passes without weakening Cloudflare protection",
+            "",
+        )
+    else if (unpublished)
         lines.push(
             "The GitHub release and Docs Preview remain unannounced until the npm version is published and reconciliation is rerun with the same reviewed candidate",
             "",

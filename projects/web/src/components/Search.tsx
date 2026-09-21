@@ -34,7 +34,9 @@ export default function Search({ version, ...props }: SharedProps & { version: s
             >
                 <SearchDialogHeader>
                     <SearchDialogIcon />
-                    <SearchDialogInput aria-label={`Search ${version === "dev" ? "Canary" : version} documentation`} />
+                    <SearchDialogInput
+                        aria-label={`Search ${version === "latest" ? "latest" : version === "dev" ? "Canary" : version} documentation`}
+                    />
                     <SearchDialogClose />
                 </SearchDialogHeader>
                 <SearchDialogList

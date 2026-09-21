@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { tmpdir } from "node:os"
@@ -35,6 +35,19 @@ export function previewSettings(env) {
 const webRoot = fileURLToPath(new URL("../", import.meta.url))
 const deploymentId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
 const noindex = (value) => /(?:^|[\s,:])noindex(?:$|[\s,])/i.test(value ?? "")
+
+export function deploymentOrigin(project, deployment) {
+    let url
+    try { url = new URL(deployment.url) } catch { throw new Error("The uploaded deployment URL is not verified") }
+    const domain = project.subdomain
+    if (!/^[a-z0-9][a-z0-9-]*\.pages\.dev$/.test(domain ?? "") ||
+        url.protocol !== "https:" || url.username || url.password || url.port ||
+        url.pathname !== "/" || url.search || url.hash ||
+        !url.hostname.endsWith(`.${domain}`) ||
+        !/^[a-z0-9-]+$/.test(url.hostname.slice(0, -(domain.length + 1))))
+        throw new Error("The uploaded deployment URL is not verified")
+    return url.origin
+}
 
 async function upload(settings, source) {
     const require = createRequire(import.meta.url)
@@ -171,9 +184,35 @@ export async function deployPreview(env = process.env, io = {}) {
         if (data?.success !== true || !data.result) throw new Error("Cloudflare rejected the readback")
         return data.result
     }
+    async function verifyContent(origin, timeout, allowChallenge) {
+        const route = await get(`${origin}/docs/latest/`, false, timeout())
+        const challenged = route.headers.get("cf-mitigated") === "challenge"
+        await discard(route)
+        if (challenged && allowChallenge) return "challenged"
+        if ([401, 403].includes(route.status) || challenged)
+            throw new Error("The documentation readback is not publicly accessible")
+        if (route.status !== 200 || !noindex(route.headers.get("x-robots-tag")) ||
+            !/^text\/html(?:;|$)/i.test(route.headers.get("content-type") ?? "")) return null
+
+        const response = await get(`${origin}/deployment.json`, false, timeout())
+        if (response.headers.get("cf-mitigated") === "challenge" && allowChallenge) {
+            await discard(response)
+            return "challenged"
+        }
+        if ([401, 403].includes(response.status) || response.headers.get("cf-mitigated") === "challenge") {
+            await discard(response)
+            throw new Error("The preview source marker is not publicly accessible")
+        }
+        if (!response.ok) { await discard(response); return null }
+        let served
+        try { served = await response.json() } catch { return null }
+        return served?.sourceCommit === source ? "verified" : null
+    }
     const project = await api()
     if (project.name !== settings.project || typeof project.id !== "string" || !project.id)
         throw new Error("Cloudflare project identity was not verified")
+    if (!/^[a-z0-9][a-z0-9-]*\.pages\.dev$/.test(project.subdomain ?? ""))
+        throw new Error("Cloudflare project Pages subdomain was not verified")
     if (typeof project.production_branch !== "string" || !project.production_branch)
         throw new Error("Cloudflare Production branch was not verified")
     if (project.production_branch === settings.branch)
@@ -216,23 +255,11 @@ export async function deployPreview(env = process.env, io = {}) {
                     "Cloudflare Preview deployment failed or was canceled; inspect it before another upload",
                 )
             if (deployment.latest_stage?.name === "deploy" && deployment.latest_stage.status === "success") {
-                const route = await get(`${settings.origin}/docs/dev/`, false, timeout())
-                await discard(route)
-                if ([401, 403].includes(route.status))
-                    throw new Error("The configured preview route is not publicly accessible")
-                if (route.ok && noindex(route.headers.get("x-robots-tag"))) {
-                    const response = await get(`${settings.origin}/deployment.json`, false, timeout())
-                    if (!response.ok) await discard(response)
-                    if ([401, 403].includes(response.status))
-                        throw new Error("The configured preview marker is not publicly accessible")
-                    let served
-                    try {
-                        served = response.ok ? await response.json() : null
-                    } catch {
-                        served = null
-                    }
-                    if (served?.sourceCommit === source && now() < deadline)
-                        return { origin: settings.origin, deploymentId: id, sourceCommit: source }
+                const deploymentUrl = deploymentOrigin(project, deployment)
+                if (await verifyContent(deploymentUrl, timeout, false) === "verified") {
+                    const customDomainStatus = await verifyContent(settings.origin, timeout, true)
+                    if (customDomainStatus && now() < deadline)
+                        return { origin: settings.origin, deploymentId: id, sourceCommit: source, deploymentUrl, customDomainStatus }
                 }
             }
         } catch (error) {
@@ -248,7 +275,12 @@ export async function deployPreview(env = process.env, io = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     try {
         const result = await deployPreview()
-        console.log(`Verified Preview deployment at ${result.origin}`)
+        if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT,
+            `deployment_url=${result.deploymentUrl}\ncustom_domain_status=${result.customDomainStatus}\n`)
+        console.log(`Verified exact Preview deployment at ${result.deploymentUrl}`)
+        if (result.customDomainStatus === "challenged")
+            console.warn("::warning::The exact deployment is verified, but Cloudflare bot protection challenged the custom-domain check. Custom-domain content and public access are not verified by this run. No security setting was changed")
+        else console.log(`Verified custom-domain content at ${result.origin}`)
     } catch (error) {
         console.error(
             error instanceof ReadUnavailable

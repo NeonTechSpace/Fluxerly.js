@@ -15,26 +15,31 @@ export async function getStaticPaths() {
 interface Props { entry: CollectionEntry<'docs'> }
 const { entry } = Astro.props
 const { Content, headings } = await render(entry)
-const version = Astro.params.slug!.split('/')[0]!
-const channel = version === 'dev' ? 'canary' : parseVersion(version).channel
+const routeSlugs = Astro.params.slug!.split('/')
+const routeVersion = routeSlugs[0]!
+const sourceVersion = routeVersion === 'latest' ? versions.defaultVersion : routeVersion
+const channel = sourceVersion === 'dev' ? 'canary' : parseVersion(sourceVersion).channel
 const channelTabs = versions.targets.map((target) => ({
   label: target.label,
-  url: source.getPage([target.version, ...Astro.params.slug!.split('/').slice(1)])?.url ?? `/docs/${target.version}/`,
+  url: source.getPage([
+    routeVersion === 'latest' && target.version === sourceVersion ? 'latest' : target.version,
+    ...routeSlugs.slice(1),
+  ])?.url ?? `/docs/${routeVersion === 'latest' && target.version === sourceVersion ? 'latest' : target.version}/`,
   active: channel === (target.version === 'dev' ? 'canary' : parseVersion(target.version).channel),
 }))
 const toc = headings.map((h) => ({ depth: h.depth, title: h.text === 'Remarks' ? 'Usage details' : h.text, url: `#${h.slug}` }))
 ---
 <Layout title={entry.data.title}>
   <Docs tree={source.getPageTree()} pathname={Astro.url.pathname} params={Astro.params}
-    page={{ toc, footer: { enabled: Astro.params.slug!.split('/')[1] !== 'api' } }} version={version} channelTabs={channelTabs} client:load>
-    <div class="version-label">{version === 'dev' ? 'Canary · Unreleased' : `SDK ${version}`}</div>
+    page={{ toc, footer: { enabled: routeSlugs[1] !== 'api' } }} version={routeVersion} channelTabs={channelTabs} client:load>
+    <div class="version-label">{sourceVersion === 'dev' ? 'Canary · Unreleased' : `SDK ${sourceVersion}`}</div>
     <h1>{entry.data.title}</h1>
     <aside class="preview-notice" aria-label="Important preview notice">
       <strong>IMPORTANT</strong>
       <span>This is a quick preview build of the docs, not the final website or documentation</span>
     </aside>
     {entry.data.description && <p class="description">{entry.data.description}</p>}
-    <div class="prose docs-content flex-1" data-api-reference={Astro.params.slug!.split('/')[1] === 'api' || undefined}><Content /></div>
+    <div class="prose docs-content flex-1" data-api-reference={routeSlugs[1] === 'api' || undefined}><Content /></div>
   </Docs>
 </Layout>
 

@@ -16,6 +16,7 @@ const released = join(root, "released")
 await mkdir(released)
 const fixtures = [
     ["1000.0.0", "Promise<void>", "Stableonlymarker"],
+    ["1000.0.1", "Promise<boolean>", "Lateststablemarker"],
     ["1000.1.0-rc.0", "Promise<string>", "Rconlymarker"],
     ["1000.2.0-canary.0", "Promise<{ id: string }>", "Canaryonlymarker"],
     ["1000.2.0-canary.1", "Promise<{ id: string }>", "Latestcanarymarker"],

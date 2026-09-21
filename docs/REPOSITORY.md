@@ -487,5 +487,5 @@ A passing run establishes only its checked scenarios, not complete replay, prolo
 
 Use [releasing](/docs/RELEASING.md) for registry verification, manual workflow inputs and external setup.
 Use [documentation maintenance](/docs/DOCUMENTATION.md) for generated reference ownership, version archives and Preview delivery.
-The workflows share [.github/actions/setup](/.github/actions/setup/action.yml), which reads `projects/.node-version` and uses the pinned `Neonsy/setup` fork to install Node, pnpm and locked dependencies.
+The workflows share [.github/actions/setup](/.github/actions/setup/action.yml), which reads `projects/.node-version` and uses the pinned upstream `pnpm/setup` action to install Node, pnpm and locked dependencies.
 There is no separate `setup-node` step or second authored Node version

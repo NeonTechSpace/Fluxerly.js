@@ -18,12 +18,18 @@ const workflows = {
 }
 
 function successfulSteps(kind) {
-    return Object.fromEntries(
+    const steps = Object.fromEntries(
         summaryProfiles[kind].checks.map(([id]) => [
             id,
             { outcome: id === "browser_evidence" ? "skipped" : "success", outputs: {} },
         ]),
     )
+    if (kind === "preview")
+        steps.deploy.outputs = {
+            deployment_url: "https://exact-deployment.pages.dev",
+            custom_domain_status: "verified",
+        }
+    return steps
 }
 
 function withTemporaryDirectory(check) {
@@ -94,6 +100,41 @@ test("Preview credentials are read from the website environment", () => {
     const source = readFileSync(join(repository, ".github/workflows/docs-preview.yml"), "utf8")
     assert.match(source, /environment:\r?\n      name: website\r?\n      url: \$\{\{ vars\.CLOUDFLARE_PREVIEW_URL \}\}/)
     assert.match(source, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/)
+})
+
+test("Preview summaries distinguish exact deployment verification from custom-domain access", () => {
+    const details = {
+        sourceCommit: "b".repeat(40),
+        previewUrl: "https://preview.example.invalid",
+    }
+    const verifiedSteps = successfulSteps("preview")
+    const verified = renderSummary({ kind: "preview", steps: verifiedSteps, details })
+    assert.match(verified, /Listed checks and effects succeeded/)
+    assert.match(verified, /Exact deployment URL: https:\/\/exact-deployment\.pages\.dev/)
+    assert.match(verified, /Exact deployment verification: Verified source marker and documentation response/)
+    assert.match(verified, /Custom-domain access: Verified/)
+
+    const challengedSteps = structuredClone(verifiedSteps)
+    challengedSteps.deploy.outputs.custom_domain_status = "challenged"
+    const challenged = renderSummary({ kind: "preview", steps: challengedSteps, details })
+    assert.match(
+        challenged,
+        /Exact deployment verified\. The configured custom domain was challenged, so public access is not verified/,
+    )
+    assert.match(challenged, /Exact deployment URL: https:\/\/exact-deployment\.pages\.dev/)
+    assert.match(challenged, /Custom-domain access: Cloudflare challenge, public access not verified/)
+    assert.match(challenged, /without weakening Cloudflare protection/)
+    assert.doesNotMatch(challenged, /Listed checks and effects succeeded/)
+})
+
+test("Preview summaries remain incomplete when deployment verification outputs are absent", () => {
+    const steps = successfulSteps("preview")
+    steps.deploy.outputs = {}
+    const summary = renderSummary({ kind: "preview", steps })
+    assert.match(summary, /Incomplete, exact deployment verification details were not reported/)
+    assert.match(summary, /Exact deployment verification: Unconfirmed/)
+    assert.match(summary, /Custom-domain access: Unconfirmed/)
+    assert.doesNotMatch(summary, /Listed checks and effects succeeded/)
 })
 
 test("Successful summaries describe each checked surface and retain their proof boundaries", () => {

@@ -102,7 +102,8 @@ For rendered checks, install Chromium with `pnpm --filter fluxerly-docs exec pla
 Run `pnpm --filter fluxerly-docs test:browser` for the development documentation.
 Run `pnpm --filter fluxerly-docs test:versions` for isolated exact-version fixtures
 
-The browser harness owns loopback port 4322 and refuses to reuse an existing server.
+The browser harness runs Wrangler Pages locally, owns loopback port 4322 and refuses to reuse an existing server.
+This checks the emitted hosting worker as well as the static pages. Astro development and preview alone do not establish HTTP redirect behavior
 Fixture versions are test data, not published releases
 
 Inspect desktop and mobile reading, keyboard navigation, search, version switching, public reference links and fragments.
@@ -140,6 +141,37 @@ Older exact versions stay accessible by URL without adding more selector entries
 Exact version URLs remain tied to the retained snapshot even when a channel target advances
 
 No channel or version should imply that a prepared version was actually published
+
+### Latest alias and missing pages
+
+The stable address `/docs/latest/` contains a build-time copy of the newest imported Stable snapshot, otherwise the newest RC, otherwise the newest Canary.
+Only when no published snapshot is available does it use the unreleased development content.
+The visible SDK label identifies the selected source version. Navigation, reference previews and search remain under `latest`, while changing to another channel opens its exact version
+
+The generator rebases documentation link destinations in the alias without rewriting code examples or changing retained exact-version pages.
+An updated alias requires another build and separately authorized deployment. It does not query release metadata on each request
+
+The hosting integration (`projects/web/scripts/hosting.mjs`) inventories the emitted HTML and produces a self-contained Cloudflare Pages `_worker.js` and `_routes.json` in the selected build directory.
+The routing policy (`projects/web/scripts/docs-routing.mjs`) handles `/`, `/docs` and documentation paths. Both documentation entrances return HTTP 302 to `/docs/latest/`, without waiting for page JavaScript or a meta refresh
+
+Existing exact-version and latest pages pass through unchanged. Unknown versions and broken documentation paths redirect to an existing equivalent latest page when unambiguous, otherwise to its introduction.
+Malformed encoded paths fall back to the introduction rather than being interpreted as another path.
+Queries are preserved, and redirect targets come only from the built page inventory. Browsers retain fragments across redirects when the response supplies none
+
+Fallback applies only to GET and HEAD document requests. Assets, scripts, search JSON, unrelated routes and other methods are not redirected into documentation.
+Reference pages under `/docs/<version>/api/` remain documentation, not HTTP API endpoints.
+An explicit `404.html` prevents missing resources from becoming a successful single-page-app fallback
+
+Pages advanced mode supplies the built-in `ASSETS` binding for static responses, with invocation limited by the emitted route configuration.
+No Astro server adapter, custom binding or new hosting configuration file is required. Upload the complete build directory through the existing Wrangler Pages deployment path, not HTML alone.
+See [Pages advanced mode](https://developers.cloudflare.com/pages/functions/advanced-mode/) and [invocation routes](https://developers.cloudflare.com/pages/functions/routing/#functions-invocation-routes)
+
+Redirect responses are temporary, non-cacheable and noindex. Static responses retain the existing Pages header rules.
+Worker availability and the selected account's Functions allowance remain hosting prerequisites. A static-only host cannot supply this routing contract
+
+The external Pages fail-open setting bypasses Functions when the Free-plan allowance is exhausted, degrading HTTP redirects to static behavior.
+Fail-closed instead returns an error. Verify the account allowance and runtime setting before promising uninterrupted edge redirects, without changing either as part of local validation.
+See [Pages quota behavior](https://developers.cloudflare.com/pages/functions/routing/#fail-open--closed)
 
 ## Preview setup
 
@@ -181,7 +213,18 @@ Do not change repository visibility or deploy Production as part of Preview deli
 
 The deploy script (`projects/web/scripts/preview-deploy.mjs`) validates project identity, hostname association, branch settings, built noindex headers and the checked source marker before upload.
 It uses Wrangler to deploy only the `preview` branch, independently of the GitHub environment named `website`.
-It then verifies the provider deployment identity and Preview environment, source commit, public documentation route, noindex response header and served source marker.
+It then verifies the provider deployment identity and Preview environment, source commit, documentation route, noindex response header and served source marker at that deployment's unique Pages URL.
+The URL must be HTTPS and belong to the subdomain returned for the verified Pages project. Cloudflare credentials are sent only to the provider API, never to either website
+
+The configured custom domain is checked separately for the same content.
+Only a positively identified Cloudflare challenge response, `cf-mitigated: challenge`, changes that check to a warning after exact-deployment verification succeeds.
+That outcome does not prove custom-domain content or public access. Other access denials, stale source, missing noindex and redirects remain failures, not accepted deployment evidence.
+The workflow summary distinguishes exact-deployment verification from the custom-domain result
+
+Cloudflare Bot Fight Mode can challenge CI requests even when the website works in a browser.
+Keep that protection enabled rather than treating a challenge as an upload failure or disabling domain-wide protection.
+See [challenge-response detection](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/) and [Pages deployment URLs](https://developers.cloudflare.com/pages/configuration/preview-deployments/)
+
 Readback is bounded and retries transient reads, including provider rate-limit delays
 
 The wrapper does not repeat uploads after an uncertain acknowledgement.

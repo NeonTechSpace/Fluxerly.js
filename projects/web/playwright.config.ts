@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test"
 
 export default defineConfig({
     testDir: "./tests/browser",
-    testMatch: process.env.DOCS_TEST_VERSIONS ? "**/versions.spec.ts" : ["**/docs.spec.ts", "**/reference-previews.spec.ts", "**/example-languages.spec.ts"],
+    testMatch: process.env.DOCS_TEST_VERSIONS ? "**/versions.spec.ts" : ["**/docs.spec.ts", "**/reference-previews.spec.ts", "**/example-languages.spec.ts", "**/latest.spec.ts"],
     outputDir: process.env.DOCS_TEST_VERSIONS ? "./test-results/versions" : "./test-results/reading",
     timeout: 45_000,
     retries: 0,

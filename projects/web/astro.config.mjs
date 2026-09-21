@@ -9,6 +9,7 @@ import { remarkCommandBlocks } from "./scripts/command-blocks.mjs"
 import { remarkExampleBlocks } from "./scripts/example-blocks.mjs"
 import { remarkProse } from "./scripts/prose.mjs"
 import { rehypeSignatureColors } from "./scripts/signature-colors.mjs"
+import { docsHosting } from "./scripts/hosting.mjs"
 
 export default defineConfig({
     output: "static",
@@ -20,6 +21,6 @@ export default defineConfig({
             rehypePlugins: [rehypeSignatureColors],
         }),
     },
-    integrations: [react(), mdx({ extendMarkdownConfig: true })],
+    integrations: [react(), mdx({ extendMarkdownConfig: true }), docsHosting()],
     vite: { plugins: [tailwindcss()] },
 })

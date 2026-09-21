@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { deployPreview, previewSettings } from "../scripts/preview-deploy.mjs"
+import { deploymentOrigin, deployPreview, previewSettings } from "../scripts/preview-deploy.mjs"
 
 const source = "a".repeat(40)
 const id = "11111111-1111-1111-1111-111111111111"
@@ -11,9 +11,11 @@ const env = {
     CLOUDFLARE_PREVIEW_URL: "https://preview.example.com",
     DOCS_SOURCE_COMMIT: source,
 }
-const project = { name: "test-docs", id: "project-id", production_branch: "main", domains: ["preview.example.com"] }
+const project = { name: "test-docs", id: "project-id", subdomain: "test-docs.pages.dev", production_branch: "main", domains: ["preview.example.com"] }
+const deploymentUrl = "https://01234567.test-docs.pages.dev"
 const deployment = {
     id,
+    url: deploymentUrl,
     project_id: "project-id",
     project_name: "test-docs",
     environment: "preview",
@@ -54,12 +56,17 @@ function fixture(options = {}) {
                 if (options.readStatus && reads === 1) return json({}, options.readStatus, options.readHeaders)
                 return json({ success: true, result: options.deployment?.(reads) ?? deployment })
             }
-            if (url.endsWith("/docs/dev/"))
+            const custom = url.startsWith(env.CLOUDFLARE_PREVIEW_URL)
+            if (url.endsWith("/docs/latest/"))
                 return new Response("Docs", {
-                    status: options.routeStatus ?? 200,
-                    headers: { "x-robots-tag": options.routeHeader ?? "noindex, nofollow" },
+                    status: (custom ? options.customRouteStatus : options.routeStatus) ?? 200,
+                    headers: { "x-robots-tag": options.routeHeader ?? "noindex, nofollow", "content-type": options.routeContentType ?? "text/html; charset=utf-8",
+                        ...((custom ? options.customChallenge : options.deploymentChallenge) ? { "cf-mitigated": "challenge" } : {}),
+                    },
                 })
-            return json(options.servedMarker?.(reads) ?? { sourceCommit: source }, options.markerStatus ?? 200)
+            return json(options.servedMarker?.(reads) ?? { sourceCommit: source },
+                (custom ? options.customMarkerStatus : options.markerStatus) ?? 200,
+                custom && options.customMarkerChallenge ? { "cf-mitigated": "challenge" } : {})
         },
     }
     return { io, calls, reads: () => reads }
@@ -102,6 +109,7 @@ test("Project, Production and Git-auto-production mismatches fail before upload"
     const projects = [
         { ...project, name: "wrong-project" },
         { ...project, id: undefined },
+        { ...project, subdomain: undefined },
         { ...project, production_branch: undefined },
         { ...project, production_branch: "preview" },
         { ...project, source: { config: { production_branch: "main", production_deployments_enabled: true } } },
@@ -142,6 +150,8 @@ test("Orchestration uploads once to the explicit Preview branch and verifies the
         origin: env.CLOUDFLARE_PREVIEW_URL,
         deploymentId: id,
         sourceCommit: source,
+        deploymentUrl,
+        customDomainStatus: "verified",
     })
     assert.deepEqual(
         calls.filter(([kind]) => kind === "upload"),
@@ -156,6 +166,39 @@ test("Orchestration uploads once to the explicit Preview branch and verifies the
             url.startsWith("https://api.cloudflare.com/") ? `Bearer ${env.CLOUDFLARE_API_TOKEN}` : undefined,
         )
     }
+})
+
+test("Deployment readback trusts only the verified project's unique Pages origin", () => {
+    assert.equal(deploymentOrigin(project, deployment), deploymentUrl)
+    for (const url of [undefined, "https://other.pages.dev", "https://test-docs.pages.dev",
+        "https://hash.test-docs.pages.dev.attacker.example", "http://hash.test-docs.pages.dev",
+        "https://user:password@hash.test-docs.pages.dev", `${deploymentUrl}/path`, `${deploymentUrl}?token=x`,
+        "https://hash.test-docs.pages.dev:8443", "https://nested.hash.test-docs.pages.dev"]) {
+        assert.throws(() => deploymentOrigin(project, { ...deployment, url }), /not verified/)
+    }
+    assert.throws(() => deploymentOrigin({ ...project, subdomain: "attacker.example" }, deployment), /not verified/)
+})
+
+test("A positively identified custom-domain challenge does not invalidate verified deployment content", async () => {
+    for (const options of [
+        { customRouteStatus: 403, customChallenge: true },
+        { customMarkerStatus: 403, customMarkerChallenge: true },
+    ]) {
+        const { io, calls } = fixture(options)
+        const result = await deployPreview(env, io)
+        assert.equal(result.customDomainStatus, "challenged")
+        assert.equal(result.deploymentUrl, deploymentUrl)
+        assert.equal(result.sourceCommit, source)
+        const urls = calls.filter(([kind]) => kind === "fetch").map(([, url]) => url)
+        assert.ok(urls.indexOf(`${deploymentUrl}/deployment.json`) < urls.indexOf(`${env.CLOUDFLARE_PREVIEW_URL}/docs/latest/`))
+        assert.equal(calls.filter(([kind]) => kind === "upload").length, 1)
+    }
+    for (const options of [{ customRouteStatus: 403 }, { customMarkerStatus: 401 }, { routeStatus: 403, deploymentChallenge: true }]) {
+        await assert.rejects(deployPreview(env, fixture(options).io), /not publicly accessible/)
+    }
+    const stale = fixture({ customChallenge: true, servedMarker: () => ({ sourceCommit: "b".repeat(40) }) })
+    await assert.rejects(deployPreview(env, stale.io), /did not converge/)
+    assert.ok(stale.calls.every(([kind, url]) => kind !== "fetch" || !url.startsWith(env.CLOUDFLARE_PREVIEW_URL)))
 })
 
 test("Readback waits for deployment completion and custom hostname source convergence without reupload", async () => {
@@ -212,6 +255,7 @@ test("Stale source, missing noindex and nonpublic hostname remain failures withi
     for (const options of [
         { servedMarker: () => ({ sourceCommit: "b".repeat(40) }) },
         { routeHeader: "not-noindex" },
+        { routeContentType: "application/json" },
         { markerStatus: 404 },
     ]) {
         const { io, calls, reads } = fixture(options)

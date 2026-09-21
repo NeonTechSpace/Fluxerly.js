@@ -37,7 +37,7 @@ runs:
         appendFileSync(process.env.GITHUB_OUTPUT, `runtime=node@${version}\nversion=${version}\n`)
         NODE
     - name: Install pnpm, Node and locked dependencies
-      uses: Neonsy/setup@703c52620218391530e48b9e8870d5c0082e1b9b # Fork of pnpm/setup, no release
+      uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # Pinned upstream commit
       with:
         working-directory: projects
         require-lockfile: true

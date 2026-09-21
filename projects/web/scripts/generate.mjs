@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { dirname, join, resolve } from "node:path"
 import { channelTargets, defaultVersion, parseVersion, validateSnapshot } from "./versions.mjs"
+import { latestAliasFiles } from "./latest-alias.mjs"
 
 export const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdkRoot = resolve(webRoot, "../sdk")
@@ -225,16 +226,22 @@ export async function generate({ releasesDirectory = join(webRoot, "released") }
             }),
         )
     }
+    const selectedVersion = defaultVersion(versions)
+    for (const file of latestAliasFiles(await filesIn(join(generatedRoot, selectedVersion)), selectedVersion)) {
+        const target = join(generatedRoot, "latest", file.path)
+        await mkdir(dirname(target), { recursive: true })
+        await writeFile(target, file.content)
+    }
     const selected = new Set(targets.map((target) => target.version))
     await writeFile(
         join(generatedRoot, "meta.json"),
         JSON.stringify({
-            pages: [...targets.map((target) => target.version), ...versions.filter((v) => !selected.has(v))],
+            pages: ["latest", ...targets.map((target) => target.version), ...versions.filter((v) => !selected.has(v))],
         }),
     )
     await writeFile(
         join(webRoot, "content/versions.json"),
-        JSON.stringify({ versions, targets, defaultVersion: defaultVersion(versions) }, null, 2) + "\n",
+        JSON.stringify({ versions, targets, defaultVersion: selectedVersion }, null, 2) + "\n",
     )
     console.log(`Generated development reference and ${versions.length} released documentation snapshots`)
 }
