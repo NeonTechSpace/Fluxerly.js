@@ -3,7 +3,7 @@ import { promisify } from "node:util"
 import { expect, test } from "vitest"
 
 test("built pagination releases buffered snapshots on early exit and shutdown in both APIs", async () => {
-    const { stdout } = await promisify(execFile)(process.execPath, ["--expose-gc", "tests/pagination-runtime.mjs"], {
+    const { stdout } = await promisify(execFile)(process.execPath, ["--expose-gc", "tests/pagination-runtime.js"], {
         timeout: 15_000,
         windowsHide: true,
     })

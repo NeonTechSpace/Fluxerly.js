@@ -1,4 +1,4 @@
-import { commandVariant } from "../../scripts/command-blocks.mjs"
+import { commandVariant } from "../../scripts/command-blocks.js"
 import { exampleLanguageEvent, getExampleLanguage } from "./example-preferences.ts"
 
 type Preferences = { manager: "npm" | "pnpm" }

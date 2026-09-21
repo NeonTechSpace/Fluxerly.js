@@ -80,7 +80,7 @@ async function failureFixture() {
 }
 
 function options(mode: Mode, origin: string): SupervisorOptions {
-    const worker = new URL("./supervisor-child-failure-worker.mjs", import.meta.url)
+    const worker = new URL("./supervisor-child-failure-worker.js", import.meta.url)
     return {
         entry: mode === "default" ? fileURLToPath(worker) : worker,
         totalShards: 1,

@@ -28,7 +28,7 @@ afterEach(() => {
 })
 
 function sourceBetween(file: string, start: string, end: string) {
-    const source = readFileSync(new URL(`./live/${file}.mjs`, import.meta.url), "utf8").replaceAll("\r\n", "\n")
+    const source = readFileSync(new URL(`./live/${file}.js`, import.meta.url), "utf8").replaceAll("\r\n", "\n")
     expect(source.split(start)).toHaveLength(2)
     const body = source.slice(source.indexOf(start) + start.length)
     expect(body).toContain(end)

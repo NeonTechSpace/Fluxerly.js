@@ -23,8 +23,8 @@ for (const [script, helper, variable, selected, args] of [
         const root = mkdtempSync(join(parent, "fluxerly-manual-live-"))
         roots.push(root)
         mkdirSync(join(root, "tests/live"), { recursive: true })
-        for (const name of [script, helper])
-            copyFileSync(new URL(`./live/${name}.mjs`, import.meta.url), join(root, `tests/live/${name}.mjs`))
+        copyFileSync(new URL(`./live/${script}.js`, import.meta.url), join(root, `tests/live/${script}.mjs`))
+        copyFileSync(new URL(`./live/${helper}.mjs`, import.meta.url), join(root, `tests/live/${helper}.mjs`))
         const credential = "fixture-not-a-credential"
         writeFileSync(
             join(root, ".env.test.local"),

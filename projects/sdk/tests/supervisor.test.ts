@@ -45,7 +45,7 @@ test("a delayed child grant cannot compress actual cross-process Identify sends"
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Expected loopback fixture address")
     const created = supervisor.create({
-        entry: fixture("supervisor-worker.mjs"),
+        entry: fixture("supervisor-worker.js"),
         totalShards: 2,
         assignments: [
             { id: "first", shardIds: [0] },
@@ -100,7 +100,7 @@ test("a canceled in-flight grant is benign and releases the next child permit", 
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Expected loopback fixture address")
     const created = supervisor.create({
-        entry: fixture("supervisor-cancel-race-worker.mjs"),
+        entry: fixture("supervisor-cancel-race-worker.js"),
         totalShards: 2,
         assignments: [
             { id: "cancel", shardIds: [0] },
@@ -130,7 +130,7 @@ test("a canceled in-flight grant is benign and releases the next child permit", 
 
 test("partial assignments snapshot status without retaining launch configuration", async () => {
     const created = supervisor.create({
-        entry: fixture("supervisor-never-hello-worker.mjs"),
+        entry: fixture("supervisor-never-hello-worker.js"),
         totalShards: 3,
         assignments: [{ id: "partial", shardIds: [1] }],
         args: ["selected-worker"],
@@ -154,7 +154,7 @@ test("partial assignments snapshot status without retaining launch configuration
 
 test("a child that never acknowledges startup fails within the configured budget and is cleaned up", async () => {
     const created = supervisor.create({
-        entry: fixture("supervisor-never-hello-worker.mjs"),
+        entry: fixture("supervisor-never-hello-worker.js"),
         totalShards: 1,
         assignments: [{ id: "silent", shardIds: [0] }],
         startupTimeoutMs: 30,
@@ -175,7 +175,7 @@ test("a child that never acknowledges startup fails within the configured budget
 
 test("a startup failure keeps terminal observers pending until the owned child exits", async () => {
     const created = supervisor.create({
-        entry: fixture("supervisor-sigterm-worker.mjs"),
+        entry: fixture("supervisor-sigterm-worker.js"),
         totalShards: 1,
         assignments: [{ id: "late-exit", shardIds: [0] }],
         startupTimeoutMs: 30,
@@ -207,7 +207,7 @@ test("a startup failure keeps terminal observers pending until the owned child e
 
 test("shutdown force-terminates only an unresponsive owned child and waits for verified exit", async () => {
     const created = supervisor.create({
-        entry: fixture("supervisor-sigterm-worker.mjs"),
+        entry: fixture("supervisor-sigterm-worker.js"),
         totalShards: 1,
         assignments: [{ id: "resistant", shardIds: [0] }],
         shutdownTimeoutMs: 30,
@@ -230,7 +230,7 @@ test("shutdown force-terminates only an unresponsive owned child and waits for v
 test("a canceled native terminal observer detaches without stopping its supervisor", async () => {
     const managed = await Effect.runPromise(
         nativeSupervisor.create({
-            entry: fixture("supervisor-sigterm-worker.mjs"),
+            entry: fixture("supervisor-sigterm-worker.js"),
             totalShards: 1,
             assignments: [{ id: "native-observer", shardIds: [0] }],
             shutdownTimeoutMs: 30,
@@ -249,7 +249,7 @@ test("a canceled native terminal observer detaches without stopping its supervis
 
 test("a replacement that misses its own startup budget fails after a successful initial start", async () => {
     const created = supervisor.create({
-        entry: fixture("supervisor-restart-worker.mjs"),
+        entry: fixture("supervisor-restart-worker.js"),
         totalShards: 1,
         assignments: [{ id: "replacement", shardIds: [0] }],
         restart: { maxAttempts: 1, minDelayMs: 10, maxDelayMs: 10 },
@@ -270,7 +270,7 @@ test("a replacement that misses its own startup budget fails after a successful 
 
 test("replacement is opt-in and its supplied budget is bounded", async () => {
     const noReplacement = supervisor.create({
-        entry: fixture("supervisor-restart-worker.mjs"),
+        entry: fixture("supervisor-restart-worker.js"),
         totalShards: 1,
         assignments: [{ id: "once", shardIds: [0] }],
     })
@@ -282,7 +282,7 @@ test("replacement is opt-in and its supplied budget is bounded", async () => {
     await onceStart
 
     const restarting = supervisor.create({
-        entry: fixture("supervisor-restart-worker.mjs"),
+        entry: fixture("supervisor-restart-worker.js"),
         totalShards: 1,
         assignments: [{ id: "restart", shardIds: [0] }],
         restart: { maxAttempts: 1, minDelayMs: 10, maxDelayMs: 10 },

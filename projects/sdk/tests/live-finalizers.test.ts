@@ -43,7 +43,7 @@ function fixture() {
         join(root, "node_modules/effect"),
         "junction",
     )
-    copyFileSync(new URL("./live/expressions.mjs", import.meta.url), join(root, "tests/live/expressions.mjs"))
+    copyFileSync(new URL("./live/expressions.js", import.meta.url), join(root, "tests/live/expressions.mjs"))
     writeFileSync(
         join(root, "trap.mjs"),
         `
@@ -143,7 +143,7 @@ function usersFixture() {
     installDependency(root, "effect")
     installDependency(root, "ws")
     writeFileSync(join(root, ".env.test.local"), "FLUXER_TEST_BOT_TOKEN=x\nFLUXER_TEST_GUILD_ID=1\n")
-    copyFileSync(new URL("./live/users.mjs", import.meta.url), join(root, "tests/live/users.mjs"))
+    copyFileSync(new URL("./live/users.js", import.meta.url), join(root, "tests/live/users.mjs"))
     writeFileSync(
         join(root, "trap.mjs"),
         `
@@ -194,7 +194,7 @@ function voiceFixture() {
     mkdirSync(join(root, "tests/live"), { recursive: true })
     mkdirSync(join(root, "node_modules"))
     installDependency(root, "effect")
-    copyFileSync(new URL("./live/voice-controls.mjs", import.meta.url), join(root, "tests/live/voice-controls.mjs"))
+    copyFileSync(new URL("./live/voice-controls.js", import.meta.url), join(root, "tests/live/voice-controls.mjs"))
     writeFileSync(
         join(root, "trap.mjs"),
         `
@@ -246,7 +246,7 @@ function supervisorFixture() {
     const root = mkdtempSync(join(temporaryParent, "fluxerly-supervisor-finalizers-"))
     temporaryRoots.push(root)
     mkdirSync(join(root, "tests/live"), { recursive: true })
-    copyFileSync(new URL("./live/supervisor.mjs", import.meta.url), join(root, "tests/live/supervisor.mjs"))
+    copyFileSync(new URL("./live/supervisor.js", import.meta.url), join(root, "tests/live/supervisor.mjs"))
     writeFileSync(
         join(root, "trap.mjs"),
         `
@@ -288,7 +288,7 @@ function supervisorFixture() {
 }
 
 function finalizerBody(file: string) {
-    const source = readFileSync(new URL(`./live/${file}.mjs`, import.meta.url), "utf8")
+    const source = readFileSync(new URL(`./live/${file}.js`, import.meta.url), "utf8")
     const marker = source.lastIndexOf("} finally {")
     expect(marker).toBeGreaterThanOrEqual(0)
     const start = marker + "} finally ".length
@@ -599,7 +599,7 @@ test("supervisor releases its lock only after child shutdown and proof-server cl
 })
 
 test("messages default shutdown rejection retains the recovery lock", async () => {
-    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const source = readFileSync(new URL("./live/messages.js", import.meta.url), "utf8")
     const shutdownBody = finalizerBodyAfter(source, "} finally {\n            clearTimeout(timer)")
     const runShutdown = new AsyncFunction(
         "client",
@@ -668,7 +668,7 @@ test("messages default shutdown rejection retains the recovery lock", async () =
 })
 
 test("messages native scope-close failure is reported and folded into the scenario exit", async () => {
-    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const source = readFileSync(new URL("./live/messages.js", import.meta.url), "utf8")
     const scopeBody = finalizerBodyAfter(source, "} finally {\n            const scenarioExit")
     const runScope = new AsyncFunction(
         "effectScope",
@@ -706,7 +706,7 @@ test("messages native scope-close failure is reported and folded into the scenar
 })
 
 test("messages native scenario failure releases recovery protection after successful scope close", async () => {
-    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const source = readFileSync(new URL("./live/messages.js", import.meta.url), "utf8")
     const scopeBody = finalizerBodyAfter(source, "} finally {\n            const scenarioExit")
     const runScope = new AsyncFunction(
         "effectScope",
@@ -743,7 +743,7 @@ test("messages native scenario failure releases recovery protection after succes
 })
 
 test("messages native scope-close failure preserves the scenario failure", async () => {
-    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const source = readFileSync(new URL("./live/messages.js", import.meta.url), "utf8")
     const scopeBody = finalizerBodyAfter(source, "} finally {\n            const scenarioExit")
     const runScope = new AsyncFunction(
         "effectScope",

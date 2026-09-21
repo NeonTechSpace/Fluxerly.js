@@ -187,7 +187,7 @@ Package and npm checks reuse pnpm's cache but may fetch missing public registry 
 A frozen workspace install does not guarantee the metadata needed to resolve a standalone consumer is cached.
 Dependency installation scripts are disabled for isolated SDK consumers, and the checks remove their own temporary packages after success or failure
 
-[Package preparation](/projects/sdk/scripts/packages.mjs) copies compiled JavaScript, declarations, maps, sources, license and consumer guidance into a new directory.
+[Package preparation](/projects/sdk/scripts/packages.js) copies compiled JavaScript, declarations, maps, sources, license and consumer guidance into a new directory.
 It creates a public npm package directory and verifies the matching `sdk.tgz` inventory.
 The canonical SDK manifest remains `private`, while the staged npm manifest receives the reviewed release version.
 Read the [registry publication contract](/docs/RELEASING.md#registry-publication-contract) before any release operation.
@@ -221,7 +221,7 @@ It refuses existing non-null display assignments, then uses two journaled zero-p
 No member assignments are changed.
 Cleanup verifies test-role deletion and retains `.env.test.role-reset.local` on unresolved cleanup
 
-After building the SDK, run `pnpm --filter @neontechspace/fluxerly exec node tests/live/text-validation.mjs default`
+After building the SDK, run `pnpm --filter @neontechspace/fluxerly exec node tests/live/text-validation.js default`
 and then the same command with `effect` for the bounded text-validation check.
 Each mode creates one journaled zero-permission role in the designated sandbox, checks local rejection and normalized
 UTF-16 boundary writes, and reconciles an intentionally lost edit response without replaying the write.
@@ -313,7 +313,7 @@ These checks are excluded from `pnpm check`, CI, schedules and unattended runs
 Whole-own-history guild checks require current authorization to erase all messages authored by the designated bot in the sandbox server.
 This deletion is irreversible and cannot be limited to messages created by the test
 
-After building, run `node tests/live/own-history.mjs default --guild` and then the `effect` mode from the SDK directory.
+After building, run `node tests/live/own-history.js default --guild` and then the `effect` mode from the SDK directory.
 Supply process-only `FLUXER_TEST_DELETE_MINE_GUILD_ID` matching the configured sandbox, never another server
 
 The harness verifies bot/application/server identity and membership, uses the shared lock and journals test-owned channels in `.env.test.own-history.local`.
@@ -333,9 +333,9 @@ It journals the baseline, test-channel marker and pending operation in `.env.tes
 Recovery uses fresh gateway and REST observations, refuses unexpected state and retains the journal if restoration or resource removal is uncertain.
 When a journal exists, the next invocation performs recovery only; start a fresh test in a separate invocation after verified cleanup
 
-Use `node tests/live/voice-controls.mjs default --flags-only` (or `effect`) from the SDK directory to isolate mute/deafen checks without moving or disconnecting the participant.
+Use `node tests/live/voice-controls.js default --flags-only` (or `effect`) from the SDK directory to isolate mute/deafen checks without moving or disconnecting the participant.
 Use `--no-move` instead to include disconnect and participant rejoin without creating a channel or testing move handoff.
-Run `node tests/live/voice-controls.mjs --self-test` from the SDK directory for the local journal-state check; this is not live recovery proof
+Run `node tests/live/voice-controls.js --self-test` from the SDK directory for the local journal-state check; this is not live recovery proof
 
 The shared `.env.test.local.lock` prevents concurrent runs through these harnesses, not sessions started by other tools
 
@@ -343,12 +343,12 @@ The command-convenience harness uses `.env.test.command-conveniences.local` to j
 An existing journal triggers cleanup-only recovery.
 Run the check again only after verified recovery to start fresh tests
 
-For the scoped latest-private-message batch check, run `node tests/live/users.mjs default --latest-only` and then the `effect` mode from the built SDK directory.
+For the scoped latest-private-message batch check, run `node tests/live/users.js default --latest-only` and then the `effect` mode from the built SDK directory.
 Set process-only `FLUXER_TEST_DM_USER_ID` to a currently authorized sandbox member.
 This mode verifies membership, creates marker-owned test DMs, checks batch failure/recovery and deletes the test messages, without profile, presence or group changes.
 It restores whether the bot had the conversation open and retains the users recovery journal if cleanup cannot be verified
 
-For read-only local-validation and user/private-channel cache checks, run `node tests/live/sdk.mjs default --quality` and then the `effect` mode from the built SDK directory.
+For read-only local-validation and user/private-channel cache checks, run `node tests/live/sdk.js default --quality` and then the `effect` mode from the built SDK directory.
 Supply currently authorized targets through process-only `FLUXER_TEST_DM_USER_ID` and `FLUXER_TEST_GROUP_DM_ID`; the selected group must be owned by that member.
 This mode uses the shared lock, verifies identity, rejects invalid inputs without dispatch and then reads the authorized account and existing group without sending messages or changing remote state
 
@@ -440,7 +440,7 @@ It deliberately loses one response after the marker write, verifies the SDK repo
 Member-moderation scripts are manual opt-in checks, never part of `pnpm check`, CI, schedules or unattended reruns
 
 Guild leave checks are also manual: Coordinate with the person who can re-add the bot before each invocation.
-After building, run `node tests/live/guild-lifecycle.mjs default --leave` or the `effect` mode from the SDK directory with the currently authorized `FLUXER_TEST_LEAVE_GUILD_ID` in the process environment.
+After building, run `node tests/live/guild-lifecycle.js default --leave` or the `effect` mode from the SDK directory with the currently authorized `FLUXER_TEST_LEAVE_GUILD_ID` in the process environment.
 The optional `--lose-response` flag discards a successful leave response to verify reconciliation without replay
 
 The harness explicitly preserves authored messages and checks independent membership-list removal, but cannot re-add the bot or prove continued access to its former messages.

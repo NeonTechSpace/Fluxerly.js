@@ -39,7 +39,7 @@ function fixture() {
         join(root, "node_modules/effect"),
         "junction",
     )
-    copyFileSync(new URL("./live/webhooks.mjs", import.meta.url), join(root, "tests/live/webhooks.mjs"))
+    copyFileSync(new URL("./live/webhooks.js", import.meta.url), join(root, "tests/live/webhooks.mjs"))
     writeFileSync(
         join(root, "trap.mjs"),
         `

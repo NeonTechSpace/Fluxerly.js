@@ -65,12 +65,12 @@ jobs:
           import { execFileSync } from 'node:child_process'
           import { appendFileSync } from 'node:fs'
           import { join } from 'node:path'
-          import { readCandidate } from './release/candidate.mjs'
+          import { readCandidate } from './release/candidate.js'
           const source = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
           if (!/^[a-f0-9]{40}$/.test(source)) throw new Error('Invalid selected source commit')
           const docs = join(process.env.RUNNER_TEMP, 'docs-snapshot.json')
           const directory = join(process.env.RUNNER_TEMP, 'release-candidate')
-          execFileSync(process.execPath, ['web/scripts/snapshot.mjs', '--out', docs], { stdio: 'inherit', timeout: 300000 })
+          execFileSync(process.execPath, ['web/scripts/snapshot.js', '--out', docs], { stdio: 'inherit', timeout: 300000 })
           const args = ['release:prepare', '--output', directory, '--docs', docs]
           if (process.env.RELEASE_LINE) args.push('--line', process.env.RELEASE_LINE)
           if (process.env.RELEASE_BOOTSTRAP === 'true') args.push('--bootstrap')

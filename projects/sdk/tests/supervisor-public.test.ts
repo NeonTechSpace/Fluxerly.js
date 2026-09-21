@@ -27,7 +27,7 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function entry(mode: Mode): string | URL {
-    const value = new URL("./supervisor-public-loopback-child.mjs", import.meta.url)
+    const value = new URL("./supervisor-public-loopback-child.js", import.meta.url)
     return mode === "default" ? fileURLToPath(value) : value
 }
 
@@ -429,7 +429,7 @@ test("default parent stop aborts held configure work without a late managed run"
 test.each(["default", "native"] as const)(
     "%s ignores pre-configuration and stale-generation Connected state before current readiness",
     async (mode) => {
-        const entryPath = new URL("./supervisor-stale-state-worker.mjs", import.meta.url)
+        const entryPath = new URL("./supervisor-stale-state-worker.js", import.meta.url)
         if (mode === "default") {
             const created = defaultSupervisor.create({
                 entry: fileURLToPath(entryPath),
@@ -462,7 +462,7 @@ test.each(["default", "native"] as const)(
 )
 
 test("default clears a current-generation connection observation as soon as owned child IPC disconnects", async () => {
-    const entry = new URL("./supervisor-stale-state-worker.mjs", import.meta.url)
+    const entry = new URL("./supervisor-stale-state-worker.js", import.meta.url)
     const created = defaultSupervisor.create({
         entry: fileURLToPath(entry),
         totalShards: 1,
@@ -487,7 +487,7 @@ test.each(["default", "native"] as const)(
     async (mode) => {
         const timeoutMs = 250
         const barrier = await disconnectBarrier()
-        const disconnectWorker = new URL("./supervisor-disconnect-worker.mjs", import.meta.url)
+        const disconnectWorker = new URL("./supervisor-disconnect-worker.js", import.meta.url)
         const owner = await managed(mode, {
             entry: mode === "default" ? fileURLToPath(disconnectWorker) : disconnectWorker,
             totalShards: 2,
@@ -552,7 +552,7 @@ test.each(["default", "native"] as const)(
     "%s parent shutdown remains successful while a current child is in its IPC-disconnect observation window",
     async (mode) => {
         const barrier = await disconnectBarrier()
-        const disconnectWorker = new URL("./supervisor-disconnect-worker.mjs", import.meta.url)
+        const disconnectWorker = new URL("./supervisor-disconnect-worker.js", import.meta.url)
         const owner = await managed(mode, {
             entry: mode === "default" ? fileURLToPath(disconnectWorker) : disconnectWorker,
             totalShards: 1,
@@ -595,7 +595,7 @@ test.each(["default", "native"] as const)(
     "%s IPC loss during startup uses the disconnect observation window instead of startupTimeout",
     async (mode) => {
         const barrier = await disconnectBarrier("startup")
-        const worker = new URL("./supervisor-disconnect-coordination-worker.mjs", import.meta.url)
+        const worker = new URL("./supervisor-disconnect-coordination-worker.js", import.meta.url)
         const owner = await managed(mode, {
             entry: mode === "default" ? fileURLToPath(worker) : worker,
             totalShards: 1,
@@ -636,7 +636,7 @@ test.each(["default", "native"] as const)(
     "%s IPC loss freezes a queued Identify without replacing the observation failure",
     async (mode) => {
         const barrier = await disconnectBarrier("queued")
-        const worker = new URL("./supervisor-disconnect-coordination-worker.mjs", import.meta.url)
+        const worker = new URL("./supervisor-disconnect-coordination-worker.js", import.meta.url)
         const owner = await managed(mode, {
             entry: mode === "default" ? fileURLToPath(worker) : worker,
             totalShards: 1,
@@ -672,7 +672,7 @@ test.each(["default", "native"] as const)(
     "%s IPC loss freezes an outstanding Identify acknowledgement without replacing the observation failure",
     async (mode) => {
         const barrier = await disconnectBarrier("outstanding")
-        const worker = new URL("./supervisor-disconnect-coordination-worker.mjs", import.meta.url)
+        const worker = new URL("./supervisor-disconnect-coordination-worker.js", import.meta.url)
         const owner = await managed(mode, {
             entry: mode === "default" ? fileURLToPath(worker) : worker,
             totalShards: 1,

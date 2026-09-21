@@ -5,12 +5,12 @@
     "license": "Apache-2.0",
     "scripts": {
         "dev": "astro dev",
-        "generate": "node scripts/generate.mjs",
+        "generate": "node scripts/generate.js",
         "build": "pnpm run generate && astro build",
         "preview": "astro preview",
-        "check": "pnpm run build && astro check && node --test tests/*.test.mjs",
+        "check": "pnpm run build && astro check && node --test tests/*.test.js",
         "test:browser": "playwright test",
-        "test:versions": "node tests/version-fixtures.mjs"
+        "test:versions": "node tests/version-fixtures.js"
     },
     "dependencies": {
         "@astrojs/markdown-remark": "7.3.1",

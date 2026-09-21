@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 import { expect, onTestFinished, test } from "vitest"
 import { startServer } from "./transport/server.js"
 
-function runChild(mode: string, url: string, entry = "./transport/sdk-process.mjs") {
+function runChild(mode: string, url: string, entry = "./transport/sdk-process.js") {
     const child = spawn(process.execPath, [fileURLToPath(new URL(entry, import.meta.url)), mode, url], {
         stdio: ["ignore", "pipe", "pipe", "ipc"],
         windowsHide: true,
@@ -36,7 +36,7 @@ function runChild(mode: string, url: string, entry = "./transport/sdk-process.mj
 test.each(["ws", "ws-pending"])("selected %s transport releases the child process after completion", async (mode) => {
     const pending = mode === "ws-pending"
     const server = await startServer({ holdHandshake: pending, holdClose: mode === "ws" })
-    const run = runChild(mode, server.socketUrl, "./transport/ws-process.mjs")
+    const run = runChild(mode, server.socketUrl, "./transport/ws-process.js")
     onTestFinished(async () => {
         await run.stop()
         await server.close()

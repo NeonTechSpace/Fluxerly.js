@@ -32,13 +32,13 @@ Reduce avoidable cognitive load by leading with the reader's next task, explaini
 
 Choose that reading flow before applying punctuation. Omit the final period only at the end of a rendered paragraph, including a visually standalone sentence. Keep periods between sentences sharing that paragraph, even when their source lines differ
 
-Use a blank line between Markdown paragraphs and an empty comment line between JSDoc paragraphs. Source wrapping and hard line breaks do not end a paragraph. The prose renderer (`projects/web/scripts/prose.mjs`) preserves standard Markdown boundaries, including those inside lists, quotes and generated API descriptions, rather than repairing missing source boundaries
+Use a blank line between Markdown paragraphs and an empty comment line between JSDoc paragraphs. Source wrapping and hard line breaks do not end a paragraph. The prose renderer (`projects/web/scripts/prose.js`) preserves standard Markdown boundaries, including those inside lists, quotes and generated API descriptions, rather than repairing missing source boundaries
 
 Technical vocabulary, numeric values and uppercase code constants receive consistent emphasis in prose, while code and existing links keep their own styling
 
-The signature highlighter (`projects/web/scripts/signature-colors.mjs`) uses TypeScript syntax colours for linked signatures, return types and inline code without replacing their links or changing copied text
+The signature highlighter (`projects/web/scripts/signature-colors.js`) uses TypeScript syntax colours for linked signatures, return types and inline code without replacing their links or changing copied text
 
-Reference generation (`projects/web/scripts/generate.mjs`) reads TypeScript 7-emitted `dist/index.d.ts` and `dist/effect.d.ts`.
+Reference generation (`projects/web/scripts/generate.js`) reads TypeScript 7-emitted `dist/index.d.ts` and `dist/effect.d.ts`.
 TypeDoc and its Markdown plugins run with TypeScript 6 as a documentation-tooling exception, not SDK consumer support.
 Internal, private, protected and external declarations are excluded.
 The reference theme and route integration own generated links and fragment targets.
@@ -47,7 +47,7 @@ Do not hand-edit generated Markdown, declarations or output under `content/docs/
 ### Command blocks and navigation
 
 Use a fenced `command` block with JSON metadata for package installation and executable guide commands.
-The command renderer (`projects/web/scripts/command-blocks.mjs`) owns the supported `install`, `add`, `list` and `run` variants
+The command renderer (`projects/web/scripts/command-blocks.js`) owns the supported `install`, `add`, `list` and `run` variants
 
 The generator reads the guide inventory and fills SDK and Effect versions from the selected release and SDK manifest before taking a snapshot.
 Unpublished Canary installation uses an explicit `VERSION` placeholder, never a claimed registry release
@@ -64,7 +64,7 @@ The docs layout (`projects/web/src/components/Docs.tsx`) renders a compact API s
 Do not remove generated symbol pages to reduce sidebar size
 
 Default API examples offer remembered JavaScript and TypeScript choices.
-The example renderer (`projects/web/scripts/example-blocks.mjs`) keeps authored TypeScript and derives JavaScript at build time.
+The example renderer (`projects/web/scripts/example-blocks.js`) keeps authored TypeScript and derives JavaScript at build time.
 Effect-native examples remain TypeScript-only, regardless of the saved preference.
 The starter's filename and run command follow its selected language, using `bot.js` or `bot.ts` with `"type": "module"` in `package.json`
 
@@ -116,12 +116,12 @@ See [the public API documentation gate](/docs/TECHNOLOGY.md#public-api-documenta
 The local Canary preview is regenerated from the current SDK build and marked Unreleased.
 Released docs come from retained snapshots, not the latest declarations relabeled with an old version
 
-Snapshot creation (`projects/web/scripts/snapshot.mjs`) requires a prepared release version and clean reviewed source checkout.
+Snapshot creation (`projects/web/scripts/snapshot.js`) requires a prepared release version and clean reviewed source checkout.
 It records the exact version, source commit and generated Markdown and metadata.
 Release preparation binds that snapshot to the immutable package candidate.
 Publication requires the [registry contract and external setup](/docs/RELEASING.md#registry-publication-contract)
 
-Release import (`projects/web/scripts/fetch-releases.mjs`) uses authenticated `gh` reads for `NeonTechSpace/Fluxerly.js`.
+Release import (`projects/web/scripts/fetch-releases.js`) uses authenticated `gh` reads for `NeonTechSpace/Fluxerly.js`.
 It checks the unique `docs.json` asset, SHA256 digest, size, version tag and resolved tag commit against the snapshot source
 
 Imported archives live under ignored `projects/web/released/`.
@@ -134,7 +134,7 @@ The selector has one entry per available channel, ordered Stable, RC and Canary.
 The default uses that same order.
 Until a published Canary exists, the local unpublished preview occupies the Canary entry rather than adding a Development group
 
-Release and documentation version parsing share the [release planner](/projects/release/planning.mjs)
+Release and documentation version parsing share the [release planner](/projects/release/planning.js)
 
 Changing channels keeps the same page when it exists in the destination version, otherwise it opens that version's introduction.
 Older exact versions stay accessible by URL without adding more selector entries.
@@ -151,8 +151,8 @@ The visible SDK label identifies the selected source version. Navigation, refere
 The generator rebases documentation link destinations in the alias without rewriting code examples or changing retained exact-version pages.
 An updated alias requires another build and separately authorized deployment. It does not query release metadata on each request
 
-The hosting integration (`projects/web/scripts/hosting.mjs`) inventories the emitted HTML and produces a self-contained Cloudflare Pages `_worker.js` and `_routes.json` in the selected build directory.
-The routing policy (`projects/web/scripts/docs-routing.mjs`) handles `/`, `/docs` and documentation paths. Both documentation entrances return HTTP 302 to `/docs/latest/`, without waiting for page JavaScript or a meta refresh
+The hosting integration (`projects/web/scripts/hosting.js`) inventories the emitted HTML and produces a self-contained Cloudflare Pages `_worker.js` and `_routes.json` in the selected build directory.
+The routing policy (`projects/web/scripts/docs-routing.js`) handles `/`, `/docs` and documentation paths. Both documentation entrances return HTTP 302 to `/docs/latest/`, without waiting for page JavaScript or a meta refresh
 
 Existing exact-version and latest pages pass through unchanged. Unknown versions and broken documentation paths redirect to an existing equivalent latest page when unambiguous, otherwise to its introduction.
 Malformed encoded paths fall back to the introduction rather than being interpreted as another path.
@@ -211,7 +211,7 @@ Do not change repository visibility or deploy Production as part of Preview deli
 
 ## Preview readback and recovery
 
-The deploy script (`projects/web/scripts/preview-deploy.mjs`) validates project identity, hostname association, branch settings, built noindex headers and the checked source marker before upload.
+The deploy script (`projects/web/scripts/preview-deploy.js`) validates project identity, hostname association, branch settings, built noindex headers and the checked source marker before upload.
 It uses Wrangler to deploy only the `preview` branch, independently of the GitHub environment named `website`.
 It then verifies the provider deployment identity and Preview environment, source commit, documentation route, noindex response header and served source marker at that deployment's unique Pages URL.
 The URL must be HTTPS and belong to the subdomain returned for the verified Pages project. Cloudflare credentials are sent only to the provider API, never to either website

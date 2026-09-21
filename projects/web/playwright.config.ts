@@ -15,7 +15,7 @@ export default defineConfig({
         screenshot: "only-on-failure",
     },
     webServer: {
-        command: "node tests/serve.mjs",
+        command: "node tests/serve.js",
         url: "http://127.0.0.1:4322",
         reuseExistingServer: false,
         timeout: 30_000,

@@ -4,7 +4,7 @@ import { Docs } from '../../components/Docs'
 import Layout from '../../components/Layout.astro'
 import { source } from '../../lib/source'
 import versions from '../../../content/versions.json'
-import { parseVersion } from '../../../scripts/versions.mjs'
+import { parseVersion } from '../../../scripts/versions.js'
 
 export async function getStaticPaths() {
   return source.getPages().map((page) => ({

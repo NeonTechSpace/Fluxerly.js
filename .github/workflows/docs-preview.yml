@@ -25,7 +25,7 @@ jobs:
         id: setup
       - name: Read verified release snapshots
         id: snapshots
-        run: node web/scripts/fetch-releases.mjs
+        run: node web/scripts/fetch-releases.js
         working-directory: projects
         env:
           GH_TOKEN: ${{ github.token }}
@@ -42,7 +42,7 @@ jobs:
           printf '{"sourceCommit":"%s"}\n' "$source" > projects/web/dist/deployment.json
       - name: Deploy and verify Preview only
         id: deploy
-        run: node scripts/preview-deploy.mjs
+        run: node scripts/preview-deploy.js
         working-directory: projects/web
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

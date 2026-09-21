@@ -33,7 +33,7 @@ function fixture() {
     temporaryRoots.push(root)
     mkdirSync(join(root, "tests/live"), { recursive: true })
     mkdirSync(join(root, "node_modules/@neontechspace"), { recursive: true })
-    copyFileSync(new URL("./live/messages.mjs", import.meta.url), join(root, "tests/live/messages.mjs"))
+    copyFileSync(new URL("./live/messages.js", import.meta.url), join(root, "tests/live/messages.mjs"))
     for (const helper of [
         "upload-diagnostics.mjs",
         "channel-fixture.mjs",
@@ -149,7 +149,7 @@ test("native message cancellation accepts no paired defect", () => {
     expect(Cause.hasDies(mixed)).toBe(true)
     expect(Cause.hasInterruptsOnly(mixed)).toBe(false)
 
-    const source = readFileSync(new URL("./live/messages.mjs", import.meta.url), "utf8")
+    const source = readFileSync(new URL("./live/messages.js", import.meta.url), "utf8")
     const history = source.lastIndexOf("cancelHistory: async")
     const download = source.lastIndexOf("cancelDownload: async")
     expect(history).toBeGreaterThanOrEqual(0)

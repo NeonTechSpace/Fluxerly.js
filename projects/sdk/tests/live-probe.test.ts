@@ -21,7 +21,7 @@ function fixture(applicationId = "200") {
     const root = mkdtempSync(join(temporaryParent, "fluxerly-probe-tests-"))
     temporaryRoots.push(root)
     mkdirSync(join(root, "tests/live"), { recursive: true })
-    copyFileSync(new URL("./live/sandbox.mjs", import.meta.url), join(root, "tests/live/sandbox.mjs"))
+    copyFileSync(new URL("./live/sandbox.js", import.meta.url), join(root, "tests/live/sandbox.mjs"))
     writeFileSync(
         join(root, ".env.test.local"),
         [

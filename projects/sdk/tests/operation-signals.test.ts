@@ -37,7 +37,7 @@ test("default malformed signals return configuration failures before work across
     const auth = oauth.create({ clientId: "1", clientSecret: "fixture" })._unsafeUnwrap()
     const parent = supervisor
         .create({
-            entry: new URL("./supervisor-child.mjs", import.meta.url),
+            entry: new URL("./supervisor-child.js", import.meta.url),
             totalShards: 1,
             assignments: [{ id: "one", shardIds: [0] }],
         })

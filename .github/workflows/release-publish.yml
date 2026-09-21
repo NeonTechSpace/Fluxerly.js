@@ -42,7 +42,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PREPARATION_RUN_ID: ${{ inputs.preparation_run_id }}
-        run: node projects/release/github.mjs preparation
+        run: node projects/release/github.js preparation
       - name: Download only the verified preparation candidate
         id: download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -57,7 +57,7 @@ jobs:
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
           CANDIDATE_SOURCE_COMMIT: ${{ steps.preparation.outputs.sourceCommit }}
-        run: node projects/release/github.mjs inspect
+        run: node projects/release/github.js inspect
       - name: Summarize protected-release inspection
         if: always()
         shell: bash
@@ -109,7 +109,7 @@ jobs:
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
           CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
-        run: node projects/release/github.mjs inspect
+        run: node projects/release/github.js inspect
       - name: Publish the npm version
         id: publish
         working-directory: projects
@@ -175,7 +175,7 @@ jobs:
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
           CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
-        run: node projects/release/github.mjs inspect
+        run: node projects/release/github.js inspect
       - name: Read npm version availability
         id: status
         working-directory: projects
@@ -211,7 +211,7 @@ jobs:
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
           CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
-        run: node projects/release/github.mjs announce
+        run: node projects/release/github.js announce
       - name: Summarize final reconciliation
         if: always()
         shell: bash

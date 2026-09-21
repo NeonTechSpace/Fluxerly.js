@@ -5,7 +5,7 @@ import { expect, onTestFinished, test } from "vitest"
 import { startServer } from "../../transport/server.js"
 
 function runChild(mode: string, url: string) {
-    const child = spawn(process.execPath, [fileURLToPath(new URL("./process.mjs", import.meta.url)), mode, url], {
+    const child = spawn(process.execPath, [fileURLToPath(new URL("./process.js", import.meta.url)), mode, url], {
         stdio: ["ignore", "pipe", "pipe", "ipc"],
         windowsHide: true,
     })

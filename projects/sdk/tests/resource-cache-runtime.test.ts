@@ -3,14 +3,10 @@ import { promisify } from "node:util"
 import { expect, test } from "vitest"
 
 test("built resource caches bound dense member pages and release snapshots without lookups", async () => {
-    const { stdout } = await promisify(execFile)(
-        process.execPath,
-        ["--expose-gc", "tests/resource-cache-runtime.mjs"],
-        {
-            timeout: 25_000,
-            windowsHide: true,
-        },
-    )
+    const { stdout } = await promisify(execFile)(process.execPath, ["--expose-gc", "tests/resource-cache-runtime.js"], {
+        timeout: 25_000,
+        windowsHide: true,
+    })
     const reports = stdout
         .trim()
         .split("\n")

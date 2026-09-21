@@ -107,7 +107,7 @@ async function selectedInstanceFixture() {
 }
 
 async function managed(mode: Mode, origin: string, variant: Variant): Promise<Managed> {
-    const worker = new URL("./supervisor-child-options-worker.mjs", import.meta.url)
+    const worker = new URL("./supervisor-child-options-worker.js", import.meta.url)
     const options: SupervisorOptions = {
         entry: mode === "default" ? fileURLToPath(worker) : worker,
         totalShards: 1,

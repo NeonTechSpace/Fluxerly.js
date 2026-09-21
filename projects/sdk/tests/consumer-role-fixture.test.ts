@@ -2,7 +2,7 @@ import { expect, test } from "vitest"
 
 type Api = (method: string, path: string, body?: { roles: string[] }) => Promise<{ status: number; data: unknown }>
 // @ts-expect-error This live-test helper is runtime JavaScript, not part of the public SDK
-const { restoreConsumerBotRoles } = (await import("./live/consumer-role-fixture.mjs")) as {
+const { restoreConsumerBotRoles } = (await import("./live/consumer-role-fixture.js")) as {
     restoreConsumerBotRoles: (
         api: Api,
         journal: Record<string, unknown>,

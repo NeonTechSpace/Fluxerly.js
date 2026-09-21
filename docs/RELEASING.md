@@ -11,7 +11,7 @@ The canonical SDK manifest remains `private` before, during and after release pr
 Never publish directly from the SDK checkout
 
 The staged npm manifest receives the reviewed release version and retains Effect as an exact required peer.
-[The prerequisite check](/projects/release/support.mjs) requires that exact Effect version to match the SDK development dependency and rejects an optional peer.
+[The prerequisite check](/projects/release/support.js) requires that exact Effect version to match the SDK development dependency and rejects an optional peer.
 It does not authenticate an npm account or grant permission to publish
 
 Candidate schema 1 binds the npm package inventory, the staged manifest and tarball checksums, the source commit and the checked documentation snapshot checksum.
@@ -51,7 +51,7 @@ The release guard selects the previous published npm version on the same readine
 An absent baseline requires explicit bootstrap, and bootstrap is forbidden when a baseline exists.
 Registry inventory failures are not permission to bootstrap
 
-[Content fingerprints](/projects/release/content.mjs) ignore package-version fields and changelog bookkeeping, not arbitrary SDK bytes.
+[Content fingerprints](/projects/release/content.js) ignore package-version fields and changelog bookkeeping, not arbitrary SDK bytes.
 An unchanged fingerprint skips version preparation without consuming fragments or creating a version PR.
 Candidate preparation also skips unchanged content without retaining a candidate artifact.
 On the same channel, changed publishable bytes require a pending Changesets fragment rather than an undocumented version bump.
@@ -192,7 +192,7 @@ For the initial publication, publish the reviewed npm tarball interactively befo
 Subsequent npm releases publish through GitHub OIDC, not a token fallback
 
 The protected `package` environment needs no npm token secret.
-[Release authentication](/projects/release/authentication.mjs) requires GitHub OIDC, removes inherited registry tokens and supplies an isolated token-free npm configuration.
+[Release authentication](/projects/release/authentication.js) requires GitHub OIDC, removes inherited registry tokens and supplies an isolated token-free npm configuration.
 Missing or incomplete OIDC stops automated publication before npm requests or publication
 
 The workflows use GitHub's automatic `GITHUB_TOKEN` for repository reads, version PRs and artifacts.
