@@ -54,7 +54,9 @@ export interface CreatedWebhook {
  * Fields are sampled once when create starts, then validated and encoded from that snapshot
  */
 export interface WebhookCreate {
-    /** Default sender name, with 1–80 Unicode code points and at least one non-whitespace character */
+    /** Default sender name, 1–80 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
+     * trimming. The original string is sent unchanged
+     */
     readonly name: string
     /** Base64 image data URI, or null for the default avatar. Fluxer validates image format and size */
     readonly avatar?: string | null
@@ -67,7 +69,9 @@ export interface WebhookCreate {
  * Fields are sampled once when edit starts, then validated and encoded from that snapshot
  */
 export interface WebhookEdit {
-    /** New default sender name, with 1–80 Unicode code points and at least one non-whitespace character */
+    /** New default sender name, 1–80 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
+     * trimming. The original string is sent unchanged
+     */
     readonly name?: string
     /** Base64 image data URI, or null to remove the avatar */
     readonly avatar?: string | null
@@ -99,7 +103,9 @@ type WebhookMessageOptions = {
     readonly flags?: number
     /** Which mentions may notify people. By default, mention text does not enable notifications */
     readonly allowedMentions?: AllowedMentions
-    /** Override the sender name for this message only, using 1–80 Unicode code points with non-whitespace content */
+    /** Override the sender name for this message only, using 1–80 UTF-16 code units after U+000C and U+202E removal
+     * and surrounding-whitespace trimming. The original string is sent unchanged
+     */
     readonly username?: string
     /** Override the avatar for this message only. Use an HTTP(S) URL without credentials, at most 8,192 characters, fetched by Fluxer */
     readonly avatarUrl?: string
@@ -130,7 +136,9 @@ export type WebhookMessageInput =
  * Fields are sampled once when edit starts, then validated and encoded from that snapshot
  */
 export interface WebhookTokenEdit {
-    /** New default sender name, with 1–80 Unicode code points and at least one non-whitespace character */
+    /** New default sender name, 1–80 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
+     * trimming. The original string is sent unchanged
+     */
     readonly name?: string
     /** Base64 image data URI, or null to remove the avatar */
     readonly avatar?: string | null

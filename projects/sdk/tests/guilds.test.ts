@@ -128,8 +128,7 @@ test("timeout reasons retain Unicode payloads, allow null, and never project ont
     expect(clear).not.toBeInstanceOf(InputValidationFailure)
     if (clear instanceof InputValidationFailure) throw Error("Expected clear-timeout request")
     expect(JSON.parse(clear.json!)).toEqual({ communication_disabled_until: null, timeout_reason: null })
-    expect(memberTimeout(target, 60_000, { timeoutReason: " " })).not.toBeInstanceOf(InputValidationFailure)
-    for (const timeoutReason of ["", "😀".repeat(513)]) {
+    for (const timeoutReason of ["", " ", "😀".repeat(257)]) {
         const result = memberTimeout(target, 60_000, { timeoutReason })
         expect(result).toBeInstanceOf(InputValidationFailure)
         expect((result as InputValidationFailure).detail.path).toBe("options.timeoutReason")

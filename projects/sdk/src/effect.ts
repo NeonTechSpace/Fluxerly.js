@@ -3216,7 +3216,9 @@ export interface Members {
         options?: GuildOperationOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
     /** Set or clear one member nickname without replacing that member's roles or profile fields.
-     * nickname is 1–32 Unicode code points. Null clears it. Fluxer decides ManageNicknames, hierarchy and self rules.
+     * Null clears it. A raw empty string fails, while a nonempty string containing only trim whitespace is accepted as
+     * Fluxer's clear value. Otherwise, validation removes U+000C and U+202E, trims surrounding whitespace, and requires
+     * 1–32 UTF-16 code units. The original string is sent unchanged. Fluxer decides ManageNicknames, hierarchy and self rules.
      * The frozen HTTP response is not an event acknowledgement. Interruption awaits request cleanup but cannot undo dispatch.
      * An uncertain result evicts the targeted member cache. A definite rejection preserves its prior snapshot
      * @example

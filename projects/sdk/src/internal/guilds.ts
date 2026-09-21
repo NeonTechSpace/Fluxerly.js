@@ -24,6 +24,7 @@ import type { ResourceRequest } from "./guild-cache.js"
 import type { ChannelCacheRequest } from "./channel-cache.js"
 import type { InstanceEndpointContext } from "./instance.js"
 import { validCalendarTimestamp } from "./timestamp.js"
+import { memberNickname, normalizedText as text } from "./field-text.js"
 
 /** Validated request description; the shared REST owner retains admission, cleanup and rate state */
 export interface GuildRequest<A> {
@@ -65,8 +66,6 @@ const guildExplicitContentFilter = (value: unknown): value is GuildExplicitConte
 const guildContentWarningLevel = (value: unknown): value is GuildContentWarningLevel => value === 0 || value === 1
 const guildSplashCardAlignment = (value: unknown): value is GuildSplashCardAlignment =>
     value === 0 || value === 1 || value === 2
-const text = (value: unknown, minimum: number, maximum: number): value is string =>
-    typeof value === "string" && [...value].length >= minimum && [...value].length <= maximum
 const imageDataUri = (value: unknown): value is string =>
     typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
 const timestamp = (value: unknown): value is string =>
@@ -398,16 +397,28 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
             "allowedFields",
             "Member profile input may contain only documented profile fields",
         )
-    if (input.nickname !== undefined && input.nickname !== null && !text(input.nickname, 1, 32))
-        return inputValidationFailure("nickname", "length", "Nickname must contain 1 through 32 Unicode code points")
+    if (input.nickname !== undefined && input.nickname !== null && !memberNickname(input.nickname))
+        return inputValidationFailure(
+            "nickname",
+            "length",
+            "Nickname must contain 1 through 32 UTF-16 code units after provider normalization, or be nonempty trim-blank text to clear",
+        )
     if (input.avatar !== undefined && input.avatar !== null && !imageDataUri(input.avatar))
         return inputValidationFailure("avatar", "format", "Avatar must be null or a base64 image data URI")
     if (input.banner !== undefined && input.banner !== null && !imageDataUri(input.banner))
         return inputValidationFailure("banner", "format", "Banner must be null or a base64 image data URI")
     if (input.bio !== undefined && input.bio !== null && !text(input.bio, 1, 320))
-        return inputValidationFailure("bio", "length", "Bio must contain 1 through 320 Unicode code points")
+        return inputValidationFailure(
+            "bio",
+            "length",
+            "Bio must contain 1 through 320 UTF-16 code units after provider normalization",
+        )
     if (input.pronouns !== undefined && input.pronouns !== null && !text(input.pronouns, 1, 40))
-        return inputValidationFailure("pronouns", "length", "Pronouns must contain 1 through 40 Unicode code points")
+        return inputValidationFailure(
+            "pronouns",
+            "length",
+            "Pronouns must contain 1 through 40 UTF-16 code units after provider normalization",
+        )
     if (input.accentColor !== undefined && input.accentColor !== null && !color(input.accentColor))
         return inputValidationFailure(
             "accentColor",
@@ -457,8 +468,12 @@ export function memberNicknameEdit(
         return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
     if (!identifier(target.userId))
         return inputValidationFailure("target.userId", "format", "User IDs must be decimal strings")
-    if (nickname !== null && !text(nickname, 1, 32))
-        return inputValidationFailure("nickname", "length", "Nickname must be null or contain 1 through 32 characters")
+    if (nickname !== null && !memberNickname(nickname))
+        return inputValidationFailure(
+            "nickname",
+            "length",
+            "Nickname must be null, contain 1 through 32 UTF-16 code units after provider normalization, or be nonempty trim-blank text to clear",
+        )
     const { guildId, userId } = target
     return {
         guildId,
@@ -641,14 +656,11 @@ function roleBody(input: RoleCreate | RoleEdit, create: boolean): string | Input
         return inputValidationFailure("input", "allowedFields", "Role input may contain only documented role fields")
     const { name, color, permissions, hoist, hoistPosition, mentionable } = input
     if (create && name === undefined) return inputValidationFailure("name", "required", "Role name is required")
-    if (
-        name !== undefined &&
-        (typeof name !== "string" || name.length > 200 || name.trim().length === 0 || [...name].length > 100)
-    )
+    if (name !== undefined && !text(name, 1, 100))
         return inputValidationFailure(
             "name",
             "length",
-            "Role name must contain 1 through 100 Unicode code points, at most 200 UTF-16 code units, and at least one non-whitespace character",
+            "Role name must contain 1 through 100 UTF-16 code units after provider normalization",
         )
     if (color !== undefined && (!int32(color) || color < 0 || color > 0xffffff))
         return inputValidationFailure("color", "range", "Role color must be an integer from 0 through 16,777,215")

@@ -1,6 +1,7 @@
 import type { Attachment, AttachmentFileSource, AttachmentStreamSource } from "#sdk/attachments"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
+import { normalizedText } from "./field-text.js"
 
 const attachmentMaxBytes = 52_428_800
 
@@ -48,14 +49,11 @@ function metadata(
         ["title", 1024],
         ["description", 4096],
     ] as const)
-        if (
-            item[key] !== undefined &&
-            (typeof item[key] !== "string" || item[key].length < 1 || item[key].length > max)
-        )
+        if (item[key] !== undefined && !normalizedText(item[key], 1, max))
             return inputValidationFailure(
                 `attachments[].${key}`,
                 "length",
-                `Attachment ${key} must contain 1 through ${max} UTF-16 code units`,
+                `Attachment ${key} must contain 1 through ${max} UTF-16 code units after provider normalization`,
             )
     if (item.spoiler !== undefined && typeof item.spoiler !== "boolean")
         return inputValidationFailure("attachments[].spoiler", "type", "Attachment spoiler must be a boolean")
@@ -117,15 +115,11 @@ export function encodeAttachments(value: unknown, edit: boolean) {
                 ["title", 1024],
                 ["description", 4096],
             ] as const)
-                if (
-                    item[key] !== undefined &&
-                    item[key] !== null &&
-                    (typeof item[key] !== "string" || item[key].length < 1 || item[key].length > max)
-                )
+                if (item[key] !== undefined && item[key] !== null && !normalizedText(item[key], 1, max))
                     return inputValidationFailure(
                         `attachments[].${key}`,
                         "length",
-                        `Retained attachment ${key} must be null or contain 1 through ${max} UTF-16 code units`,
+                        `Retained attachment ${key} must be null or contain 1 through ${max} UTF-16 code units after provider normalization`,
                     )
             retained.add(item.id)
             metadataValues.push({

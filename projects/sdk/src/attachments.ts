@@ -82,9 +82,9 @@ interface AttachmentMetadata {
      * Fluxer's upload plan determines the transport MIME type and may override this hint using the filename
      */
     readonly contentType?: string
-    /** Optional display title, 1 to 1,024 `string.length` units */
+    /** Optional display title, 1–1,024 normalized UTF-16 code units */
     readonly title?: string
-    /** Optional alternative-text description, 1 to 4,096 `string.length` units */
+    /** Optional alternative-text description, 1–4,096 normalized UTF-16 code units */
     readonly description?: string
     /** Mark the file as a spoiler. Defaults to false */
     readonly spoiler?: boolean
@@ -142,6 +142,9 @@ export interface AttachmentStreamInput extends AttachmentMetadata {
 /** A file to send with a message, using exactly one source: Data bytes, a sized file, or a finite stream with its exact size.
  * All forms also require a display filename. A filesystem path or URL alone is not accepted
  *
+ * Title and description limits are measured after U+000C and U+202E removal and surrounding-whitespace trimming.
+ * This normalization is validation-only, and the original metadata strings are sent unchanged
+ *
  * Bytes are copied when the operation starts, while file and stream sources are read after upload planning. Default API calls start immediately, while native Effects prepare separately on each execution
  *
  * Files upload before message creation/editing, using Fluxer's presigned upload plan or a direct multipart fallback when the instance disables preuploads.
@@ -181,14 +184,16 @@ export type AttachmentInput = AttachmentBytesInput | AttachmentFileInput | Attac
 
 /** Keep an existing attachment during an edit, optionally changing its display metadata. Unknown IDs may be ignored by Fluxer.
  * Omit title and description to preserve their current values. Pass null to clear either value.
+ * Non-null title and description limits are measured after U+000C and U+202E removal and surrounding-whitespace
+ * trimming. This normalization is validation-only, and the original metadata strings are sent unchanged.
  * No hidden fetch, positional lookup or filename or flag update is performed by the SDK
  */
 export interface AttachmentReference {
     /** Decimal attachment ID from the message being edited, not its message ID */
     readonly id: string
-    /** Replacement display title, 1 to 1,024 characters, or null to clear */
+    /** Replacement display title, 1–1,024 normalized UTF-16 code units, or null to clear */
     readonly title?: string | null
-    /** Replacement alternative-text description, 1 to 4,096 characters, or null to clear */
+    /** Replacement alternative-text description, 1–4,096 normalized UTF-16 code units, or null to clear */
     readonly description?: string | null
     /** Keeping an attachment does not accept new byte data */
     readonly data?: never

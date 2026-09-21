@@ -92,9 +92,15 @@ export interface GuildChannel {
  * Unknown input keys fail locally. The encoded request body must fit within 4,194,304 bytes
  */
 export interface ChannelCreateBase {
-    /** Nonblank channel name, 1–100 Unicode code points */
+    /** Channel name. Raw input may contain at most 10,000 UTF-16 code units. For validation, Fluxer's general-name
+     * rules remove U+000C and U+202E, trim surrounding whitespace, strip provider-defined invisible characters,
+     * normalize whitespace and collapse its runs, then require 1–100 UTF-16 code units. The SDK sends the original
+     * string without lowercasing or hyphenating it
+     */
     readonly name: string
-    /** Description shown for the channel, 1–1,024 Unicode code points, or null to clear */
+    /** Description shown for the channel, 1–1,024 UTF-16 code units after U+000C and U+202E removal and
+     * surrounding-whitespace trimming, or null to clear. The original string is sent unchanged
+     */
     readonly topic?: string | null
     /** Absolute URL for a link channel, or null to clear. The SDK does not open or fetch the URL */
     readonly url?: string | null
@@ -116,7 +122,9 @@ export interface ChannelCreateBase {
     readonly nsfwOverride?: boolean | null
     /** 0 inherits the content-warning level, 1 requests a channel content warning */
     readonly contentWarningLevel?: number
-    /** Warning shown before viewing content, at most 200 Unicode code points, with null inheriting */
+    /** Warning shown before viewing content, with 0–200 raw UTF-16 code units and null inheriting.
+     * No text normalization is applied before validation
+     */
     readonly contentWarningText?: string | null
     /** Delay between a user's messages in seconds, integer 0–21,600 or null. Zero disables slowmode */
     readonly rateLimitPerUser?: number | null
@@ -155,9 +163,15 @@ export type ChannelCreate = TextChannelCreate | VoiceChannelCreate | CategoryCha
  * Fluxer checks channel-type compatibility and permissions after local validation
  */
 export interface ChannelEdit {
-    /** Nonblank channel name, 1–100 Unicode code points */
+    /** Channel name. Raw input may contain at most 10,000 UTF-16 code units. For validation, Fluxer's general-name
+     * rules remove U+000C and U+202E, trim surrounding whitespace, strip provider-defined invisible characters,
+     * normalize whitespace and collapse its runs, then require 1–100 UTF-16 code units. The SDK sends the original
+     * string without lowercasing or hyphenating it
+     */
     readonly name?: string
-    /** Channel description, 1–1,024 Unicode code points, or null to clear */
+    /** Channel description, 1–1,024 UTF-16 code units after U+000C and U+202E removal and
+     * surrounding-whitespace trimming, or null to clear. The original string is sent unchanged
+     */
     readonly topic?: string | null
     /** Absolute link-channel URL, or null to clear. No URL is fetched by this request */
     readonly url?: string | null
@@ -175,13 +189,17 @@ export interface ChannelEdit {
     readonly nsfwOverride?: boolean | null
     /** 0 inherits the content-warning level, 1 requests a channel content warning */
     readonly contentWarningLevel?: number
-    /** Warning text of at most 200 Unicode code points, with null inheriting */
+    /** Warning text with 0–200 raw UTF-16 code units, with null inheriting.
+     * No text normalization is applied before validation
+     */
     readonly contentWarningText?: string | null
     /** Delay between a user's messages in seconds, integer 0–21,600, or null. Zero disables slowmode */
     readonly rateLimitPerUser?: number | null
     /** Replace all explicit overwrites, with [] clearing them and omission preserving them */
     readonly permissionOverwrites?: readonly PermissionOverwrite[]
-    /** Voice region ID of 1–64 Unicode code points, with null selecting automatic routing */
+    /** Voice region ID of 1–64 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
+     * trimming, with null selecting automatic routing. The original string is sent unchanged
+     */
     readonly rtcRegion?: string | null
 }
 

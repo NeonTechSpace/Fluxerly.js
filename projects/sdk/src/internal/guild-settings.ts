@@ -10,9 +10,8 @@ import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { validCalendarTimestamp } from "./timestamp.js"
+import { normalizedText as text, rawText } from "./field-text.js"
 
-const text = (value: unknown, minimum: number, maximum: number): value is string =>
-    typeof value === "string" && [...value].length >= minimum && [...value].length <= maximum
 const imageDataUri = (value: unknown): value is string =>
     typeof value === "string" &&
     /^data:image\/[a-zA-Z0-9.+-]+(?:;[a-zA-Z0-9.+-]+(?:=[a-zA-Z0-9!#$&^_.+-]+)?)*;base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$/.test(
@@ -75,7 +74,11 @@ export function guildEdit(
     )
         return inputValidationFailure("input", "allowedFields", "Guild settings input contains an unsupported field")
     if (input.name !== undefined && !text(input.name, 1, 100))
-        return inputValidationFailure("name", "length", "Guild name must contain 1 through 100 Unicode code points")
+        return inputValidationFailure(
+            "name",
+            "length",
+            "Guild name must contain 1 through 100 UTF-16 code units after provider normalization",
+        )
     for (const [path, value] of [
         ["icon", input.icon],
         ["banner", input.banner],
@@ -134,12 +137,12 @@ export function guildEdit(
     if (
         input.contentWarningText !== undefined &&
         input.contentWarningText !== null &&
-        !text(input.contentWarningText, 0, 200)
+        !rawText(input.contentWarningText, 0, 200)
     )
         return inputValidationFailure(
             "contentWarningText",
             "length",
-            "Content warning text must be null or contain at most 200 Unicode code points",
+            "Content warning text must be null or contain at most 200 raw UTF-16 code units",
         )
     if (
         input.explicitContentFilter !== undefined &&

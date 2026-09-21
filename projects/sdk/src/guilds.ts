@@ -247,7 +247,9 @@ export interface GuildVanityUrlUsage extends GuildVanityUrl {
  * ```
  */
 export interface GuildEdit {
-    /** Guild name, 1–100 Unicode code points */
+    /** Guild name, 1–100 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace trimming.
+     * Normalization is validation-only, and the original string is sent unchanged
+     */
     readonly name?: string
     /** Image data URI for the guild icon, or null to clear it */
     readonly icon?: string | null
@@ -273,7 +275,9 @@ export interface GuildEdit {
     readonly nsfw?: boolean
     /** Whether Fluxer displays a guild-wide content warning before entry */
     readonly contentWarningLevel?: GuildContentWarningLevel
-    /** Warning text up to 200 Unicode code points, or null to restore Fluxer's localized default */
+    /** Warning text with 0–200 raw UTF-16 code units, or null to restore Fluxer's localized default.
+     * No text normalization is applied before validation
+     */
     readonly contentWarningText?: string | null
     /** Explicit-media filtering level */
     readonly explicitContentFilter?: GuildExplicitContentFilter
@@ -311,8 +315,9 @@ export interface MemberReference {
 
 /** Identifies one member and, optionally, one of that member's active voice connections */
 export interface VoiceConnectionReference extends MemberReference {
-    /** Connection ID from a voice-state observation, 1–32 Unicode code points.
-     * Omit to target every active connection for this member
+    /** Connection ID from a voice-state observation, 1–32 UTF-16 code units after U+000C and U+202E removal
+     * and surrounding-whitespace trimming. The original string is sent unchanged. Omit to target every active
+     * connection for this member
      */
     readonly connectionId?: string
 }
@@ -388,15 +393,22 @@ export type MemberMentionPreference = (typeof MemberMentionPreferences)[keyof ty
  * permission checks after this SDK validates the input shape
  */
 export interface MemberProfileEdit {
-    /** Guild nickname, 1–32 Unicode code points, or null to clear */
+    /** Guild nickname, or null to clear. A raw empty string fails. A nonempty string containing only trim whitespace
+     * is accepted as Fluxer's clear value. Otherwise, validation removes U+000C and U+202E, trims surrounding
+     * whitespace, and requires 1–32 UTF-16 code units. The original string is sent unchanged
+     */
     readonly nickname?: string | null
     /** Image data URI, or null to clear. Fluxer validates the decoded image and may silently ignore it */
     readonly avatar?: string | null
     /** Image data URI, or null to clear. Fluxer validates the decoded image and may silently ignore it */
     readonly banner?: string | null
-    /** Guild-profile biography, 1–320 Unicode code points, or null to clear. The response does not return it */
+    /** Guild-profile biography, 1–320 normalized UTF-16 code units, or null to clear. The response does not return it.
+     * Validation removes U+000C and U+202E and trims surrounding whitespace. The original string is sent unchanged
+     */
     readonly bio?: string | null
-    /** Guild-profile pronouns, 1–40 Unicode code points, or null to clear. The response does not return them */
+    /** Guild-profile pronouns, 1–40 normalized UTF-16 code units, or null to clear. The response does not return them.
+     * Validation removes U+000C and U+202E and trims surrounding whitespace. The original string is sent unchanged
+     */
     readonly pronouns?: string | null
     /** RGB integer from 0 through 16,777,215, or null to clear. Fluxer may silently ignore it */
     readonly accentColor?: number | null
@@ -472,7 +484,9 @@ export interface DefaultModerationOptions extends ModerationOptions, OperationOp
 
 /** Timeout-only request settings. A timeoutReason is provider audit metadata, not a stored GuildMember field */
 export interface TimeoutOptions extends ModerationOptions {
-    /** Optional timeout audit metadata. Null or omission sends no meaningful reason. Nonempty strings allow 1–512 Unicode code points */
+    /** Optional timeout audit metadata. Null or omission sends no meaningful reason. A string must contain 1–512
+     * UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace trimming. The original string is sent unchanged
+     */
     readonly timeoutReason?: string | null
 }
 
@@ -484,7 +498,9 @@ export interface DefaultTimeoutOptions extends TimeoutOptions, OperationOptions 
  * or deleted messages
  */
 export interface BanInput {
-    /** Stored ban reason, up to 512 Unicode code points. Omit to use auditReason when supplied, otherwise no reason */
+    /** Stored ban reason, up to 512 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
+     * trimming. The original string is sent unchanged. Omit to use auditReason when supplied, otherwise no reason
+     */
     readonly reason?: string
     /** Integer seconds, zero/default for permanent or 60–63,072,000 for a provider-managed temporary ban.
      * Expiry does not rejoin the user. No SDK timer or automatic unban request is created.
@@ -551,7 +567,9 @@ export interface GuildRole extends RoleReference {
  * Role creation does not assign the role to a member, and Fluxer chooses its initial hierarchy position
  */
 export interface RoleCreate {
-    /** Nonblank role name, 1–100 Unicode code points */
+    /** Role name, 1–100 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace trimming.
+     * The original string is sent unchanged
+     */
     readonly name: string
     /** RGB integer 0–16,777,215, default 0 */
     readonly color?: number
@@ -564,7 +582,9 @@ export interface RoleCreate {
  * adding to them. The implicit everyone role accepts only color and permissions. Use roles.reorder for hierarchy rank
  */
 export interface RoleEdit {
-    /** Nonblank role name, 1–100 Unicode code points */
+    /** Role name, 1–100 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace trimming.
+     * The original string is sent unchanged
+     */
     readonly name?: string
     /** RGB integer 0–16,777,215 */
     readonly color?: number

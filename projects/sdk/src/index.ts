@@ -3399,7 +3399,9 @@ export interface Members {
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set one member's nickname, or pass null to clear it.
-     * A nickname must contain 1–32 Unicode code points.
+     * A raw empty string fails. A nonempty string containing only trim whitespace is accepted as Fluxer's clear value.
+     * Otherwise, validation removes U+000C and U+202E, trims surrounding whitespace, and requires 1–32 UTF-16 code units.
+     * The original string is sent unchanged.
      * Other profile fields and roles stay unchanged.
      * Fluxer checks ManageNicknames, role hierarchy and self-target rules.
      * The frozen result follows HTTP, not a gateway event.

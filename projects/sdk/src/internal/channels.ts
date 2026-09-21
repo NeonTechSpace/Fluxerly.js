@@ -9,6 +9,7 @@ import type {
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { identifier, record } from "./message.js"
 import { validCalendarTimestamp } from "./timestamp.js"
+import { channelName, normalizedText, rawText } from "./field-text.js"
 
 /** Validated request description, with the shared REST owner retaining admission, cleanup and rate state */
 export interface ChannelRequest<A> {
@@ -234,17 +235,17 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
         return inputValidationFailure("type", "allowedValue", "Channel type must be 0, 2, 4, or 998")
     if (create && input.name === undefined)
         return inputValidationFailure("name", "required", "Channel name is required")
-    if (input.name !== undefined && (!text(input.name, 1, 100) || input.name.trim().length === 0))
+    if (input.name !== undefined && !channelName(input.name))
         return inputValidationFailure(
             "name",
             "length",
-            "Channel name must contain 1 through 100 Unicode code points and at least one non-whitespace character",
+            "Channel name must fit 10,000 raw UTF-16 code units and 1 through 100 after provider normalization",
         )
-    if (input.topic !== undefined && !nullableValue(input.topic, (candidate) => text(candidate, 1, 1024)))
+    if (input.topic !== undefined && !nullableValue(input.topic, (candidate) => normalizedText(candidate, 1, 1024)))
         return inputValidationFailure(
             "topic",
             "length",
-            "Channel topic must be null or contain 1 through 1,024 characters",
+            "Channel topic must be null or contain 1 through 1,024 UTF-16 code units after provider normalization",
         )
     if (input.url !== undefined && !nullableValue(input.url, url))
         return inputValidationFailure("url", "format", "Channel URL must be null or a valid absolute URL")
@@ -292,12 +293,12 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
         )
     if (
         input.contentWarningText !== undefined &&
-        !nullableValue(input.contentWarningText, (candidate) => text(candidate, 0, 200))
+        !nullableValue(input.contentWarningText, (candidate) => rawText(candidate, 0, 200))
     )
         return inputValidationFailure(
             "contentWarningText",
             "length",
-            "Channel contentWarningText must be null or contain at most 200 characters",
+            "Channel contentWarningText must be null or contain at most 200 raw UTF-16 code units",
         )
     if (
         input.rateLimitPerUser !== undefined &&
@@ -308,11 +309,14 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
             "range",
             "Channel rateLimitPerUser must be null or an integer from 0 through 21,600",
         )
-    if (input.rtcRegion !== undefined && !nullableValue(input.rtcRegion, (candidate) => text(candidate, 1, 64)))
+    if (
+        input.rtcRegion !== undefined &&
+        !nullableValue(input.rtcRegion, (candidate) => normalizedText(candidate, 1, 64))
+    )
         return inputValidationFailure(
             "rtcRegion",
             "length",
-            "Channel rtcRegion must be null or contain 1 through 64 characters",
+            "Channel rtcRegion must be null or contain 1 through 64 UTF-16 code units after provider normalization",
         )
     return true
 }

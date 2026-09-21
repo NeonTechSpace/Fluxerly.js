@@ -11,6 +11,7 @@ import type { MessageCore } from "#sdk/messages"
 import type { MessageDecoder } from "./message-fields.js"
 import { decodeMessage, identifier, record } from "./message.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { channelName, normalizedText } from "./field-text.js"
 
 /** Validated requests executed by the client's shared REST scheduler */
 export interface UserRequest<A> {
@@ -320,7 +321,7 @@ export function directMessageEdit(
             "Group DM input may contain only name, icon, ownerId, and nicknames",
         )
     if (
-        (input.name !== undefined && input.name !== null && !text(input.name, 1, 100)) ||
+        (input.name !== undefined && input.name !== null && !channelName(input.name)) ||
         (input.icon !== undefined &&
             input.icon !== null &&
             (typeof input.icon !== "string" ||
@@ -337,13 +338,13 @@ export function directMessageEdit(
         input.nicknames !== null &&
         (!record(input.nicknames) ||
             Object.entries(input.nicknames).some(
-                ([id, value]) => !identifier(id) || (value !== null && !text(value, 1, 32)),
+                ([id, value]) => !identifier(id) || (value !== null && (value === "" || !normalizedText(value, 0, 32))),
             ))
     )
         return inputValidationFailure(
             "nicknames",
             "format",
-            "Group DM nicknames must map decimal user IDs to null or 1 through 32 characters",
+            "Group DM nicknames must map decimal user IDs to null or nonempty strings of at most 32 UTF-16 code units after provider normalization",
         )
     const json = JSON.stringify({ name: input.name, icon: input.icon, owner_id: input.ownerId, nicks: input.nicknames })
     if (json === "{}") return inputValidationFailure("input", "required", "Group DM input must encode a change")

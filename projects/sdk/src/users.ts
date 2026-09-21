@@ -99,13 +99,20 @@ export interface DirectMessageChannel {
  * ownership, and an error after dispatch does not prove that earlier changes were rolled back
  */
 export interface DirectMessageGroupEdit {
-    /** Group name, 1–100 code points, or null to clear it */
+    /** Group name, or null to clear it. Raw input may contain at most 10,000 UTF-16 code units. For validation,
+     * Fluxer's general-name rules remove U+000C and U+202E, trim surrounding whitespace, strip provider-defined
+     * invisible characters, normalize whitespace and collapse its runs, then require 1–100 UTF-16 code units. The SDK
+     * sends the original string without lowercasing or hyphenating it
+     */
     readonly name?: string | null
     /** Image data URI, or null to clear. Fluxer validates the image */
     readonly icon?: string | null
     /** Transfer ownership to an existing non-bot recipient. Requires current ownership */
     readonly ownerId?: string
-    /** Nicknames of 1–32 code points, or null to clear a nickname. Non-owners may change only their own */
+    /** Nicknames keyed by user ID. A nickname must be a nonempty raw string and contain at most 32 UTF-16 code units
+     * after U+000C and U+202E removal and surrounding-whitespace trimming. A normalized-empty string is allowed.
+     * The original string is sent unchanged, and null clears a nickname. Non-owners may change only their own
+     */
     readonly nicknames?: Readonly<Record<string, string | null>> | null
 }
 

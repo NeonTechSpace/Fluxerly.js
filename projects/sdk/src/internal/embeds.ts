@@ -1,6 +1,7 @@
 import type { Embed } from "#sdk/embeds"
 import { InputValidationFailure, inputValidationFailure, type InputValidationConstraint } from "#sdk/input-validation"
 import { validCalendarTimestamp } from "./timestamp.js"
+import { normalizedText } from "./field-text.js"
 
 const object = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value)
@@ -19,7 +20,7 @@ const integer: Reader = (value) =>
 const length =
     (min: number, max: number): Reader =>
     (value) =>
-        typeof value === "string" && value.length >= min && value.length <= max ? value : undefined
+        normalizedText(value, min, max) ? value : undefined
 const url: Reader = (value) => {
     if (typeof value !== "string" || value.length > 2048) return undefined
     try {
@@ -129,12 +130,22 @@ function inputList(
 }
 
 const inputAuthor: Shape = {
-    name: ["name", length(1, 256), true, ["length", "Embed author name must contain 1 through 256 code units"]],
+    name: [
+        "name",
+        length(1, 256),
+        true,
+        ["length", "Embed author name must contain 1 through 256 UTF-16 code units after provider normalization"],
+    ],
     url: ["url", url, false, ["format", "Embed author URL must be an HTTP URL up to 2,048 characters"]],
     iconUrl: ["icon_url", url, false, ["format", "Embed author iconUrl must be an HTTP URL up to 2,048 characters"]],
 }
 const inputFooter: Shape = {
-    text: ["text", length(1, 2048), true, ["length", "Embed footer text must contain 1 through 2,048 code units"]],
+    text: [
+        "text",
+        length(1, 2048),
+        true,
+        ["length", "Embed footer text must contain 1 through 2,048 UTF-16 code units after provider normalization"],
+    ],
     iconUrl: ["icon_url", url, false, ["format", "Embed footer iconUrl must be an HTTP URL up to 2,048 characters"]],
 }
 const inputMedia = (uploadedFilenames: readonly string[] | undefined): Shape => ({
@@ -148,21 +159,42 @@ const inputMedia = (uploadedFilenames: readonly string[] | undefined): Shape => 
         "description",
         length(1, 4096),
         false,
-        ["length", "Embed media description must contain 1 through 4,096 code units"],
+        [
+            "length",
+            "Embed media description must contain 1 through 4,096 UTF-16 code units after provider normalization",
+        ],
     ],
 })
 const inputField: Shape = {
-    name: ["name", length(1, 256), true, ["length", "Embed field name must contain 1 through 256 code units"]],
-    value: ["value", length(0, 1024), true, ["length", "Embed field value must contain at most 1,024 code units"]],
+    name: [
+        "name",
+        length(1, 256),
+        true,
+        ["length", "Embed field name must contain 1 through 256 UTF-16 code units after provider normalization"],
+    ],
+    value: [
+        "value",
+        length(0, 1024),
+        true,
+        ["length", "Embed field value must contain at most 1,024 UTF-16 code units after provider normalization"],
+    ],
     inline: ["inline", boolean, false, ["type", "Embed field inline must be a boolean"]],
 }
 const inputEmbed = (uploadedFilenames: readonly string[] | undefined): Shape => ({
-    title: ["title", length(0, 256), false, ["length", "Embed title must contain at most 256 code units"]],
+    title: [
+        "title",
+        length(0, 256),
+        false,
+        ["length", "Embed title must contain at most 256 UTF-16 code units after provider normalization"],
+    ],
     description: [
         "description",
-        length(0, 4096),
+        (value) => (value === "" ? value : length(1, 4096)(value)),
         false,
-        ["length", "Embed description must contain at most 4,096 code units"],
+        [
+            "length",
+            "Embed description must be empty or contain 1 through 4,096 UTF-16 code units after provider normalization",
+        ],
     ],
     url: ["url", url, false, ["format", "Embed URL must be an HTTP URL up to 2,048 characters"]],
     color: [

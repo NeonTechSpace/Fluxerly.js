@@ -20,6 +20,7 @@ import type { EncodedBody } from "./attachments.js"
 import { RestOwner } from "./rest.js"
 import { InstanceResolver, type InstanceConfiguration, instanceConfiguration } from "./instance.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { normalizedText } from "./field-text.js"
 
 export type WebhookRequest<A> = {
     majorId: string
@@ -35,8 +36,7 @@ type WebhookValidationResult<A> = WebhookRequest<A> | InputValidationFailure
 
 const validToken = (value: unknown): value is string =>
     typeof value === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(value)
-const name = (value: unknown): value is string =>
-    typeof value === "string" && value.trim().length > 0 && [...value].length <= 80
+const name = (value: unknown): value is string => normalizedText(value, 1, 80)
 const messageTarget = (value: unknown): value is { id: string; channelId: string } =>
     record(value) && identifier(value.id) && identifier(value.channelId)
 
@@ -76,7 +76,7 @@ function settings(value: unknown, create: boolean, move: boolean) {
         return inputValidationFailure(
             "name",
             "length",
-            "Webhook name must contain 1 through 80 Unicode code points and at least one non-whitespace character",
+            "Webhook name must contain 1 through 80 UTF-16 code units after provider normalization",
         )
     const avatar = value.avatar
     if (
@@ -291,7 +291,7 @@ export function webhookSend(id: string, input: WebhookMessageInput): WebhookVali
         return inputValidationFailure(
             "username",
             "length",
-            "Webhook username must contain 1 through 80 Unicode code points and at least one non-whitespace character",
+            "Webhook username must contain 1 through 80 UTF-16 code units after provider normalization",
         )
     if (avatarUrl !== undefined) {
         if (typeof avatarUrl !== "string" || avatarUrl.length > 8192)

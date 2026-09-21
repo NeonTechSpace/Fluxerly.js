@@ -1,7 +1,8 @@
 /** A rich card to include in a message's embeds array, with optional text, images and named sections.
  * Message operations reject unknown keys and null values locally
  *
- * Length limits use JavaScript `string.length`, so some emoji count as multiple units, before the server changes any text
+ * Text length limits use JavaScript UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
+ * trimming. This normalization is validation-only, and the original text is sent unchanged
  *
  * URLs must use HTTP/HTTPS and contain at most 2048 characters, except image and thumbnail URLs may use attachment://filename.
  * An attachment URL must exactly and case-sensitively match one new PNG, JPG, JPEG, WEBP or GIF upload filename in the same send, reply or edit.
@@ -31,9 +32,9 @@
  * Pass this object in the embeds array of send, reply or edit. The example URLs are placeholders
  */
 export interface EmbedInput {
-    /** Heading text, up to 256 `string.length` units. Supply url to make it a link */
+    /** Heading text, up to 256 normalized UTF-16 code units. Supply url to make it a link */
     readonly title?: string
-    /** Main body text, up to 4096 `string.length` units. Empty text is omitted by Fluxer */
+    /** Main body text. An empty string is omitted by Fluxer. A nonempty value must contain 1–4,096 normalized UTF-16 code units */
     readonly description?: string
     /** Destination URL for the title */
     readonly url?: string
@@ -57,7 +58,7 @@ export interface EmbedInput {
 
 /** Label above the embed body, with optional links for its name and icon */
 export interface EmbedAuthorInput {
-    /** Required author name, 1 through 256 `string.length` units */
+    /** Required author name, 1–256 normalized UTF-16 code units */
     readonly name: string
     /** Destination for the author label */
     readonly url?: string
@@ -67,7 +68,7 @@ export interface EmbedAuthorInput {
 
 /** Text beneath the embed body, with an optional icon */
 export interface EmbedFooterInput {
-    /** Required footer text, 1 through 2048 `string.length` units */
+    /** Required footer text, 1–2,048 normalized UTF-16 code units */
     readonly text: string
     /** HTTP(S) icon URL, at most 2048 characters. Attachment URLs are not accepted here */
     readonly iconUrl?: string
@@ -79,15 +80,15 @@ export interface EmbedFooterInput {
 export interface EmbedMediaInput {
     /** Required HTTP(S) image URL or attachment://filename for image and thumbnail fields */
     readonly url: string
-    /** Optional description for readers who cannot see the image, 1 through 4096 `string.length` units */
+    /** Optional description for readers who cannot see the image, 1–4,096 normalized UTF-16 code units */
     readonly description?: string
 }
 
 /** One heading and body pair within an embed, such as a Status field with value Passed */
 export interface EmbedFieldInput {
-    /** Required heading, 1 through 256 `string.length` units */
+    /** Required heading, 1–256 normalized UTF-16 code units */
     readonly name: string
-    /** Required body, 0 through 1024 `string.length` units. An empty string is accepted */
+    /** Required body, 0–1,024 normalized UTF-16 code units. An empty string is accepted */
     readonly value: string
     /** Request side-by-side display when space permits. Defaults to false */
     readonly inline?: boolean

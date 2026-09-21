@@ -72,11 +72,17 @@ export interface EmojiCreate {
  * moderation and guild capacity after local input validation
  */
 export interface StickerCreate {
-    /** 2–30 Unicode code points */
+    /** Sticker name, 2–30 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace trimming.
+     * The original string is sent unchanged
+     */
     readonly name: string
-    /** Omitted/null means no description. Otherwise 1–500 Unicode code points */
+    /** Omitted/null means no description. Otherwise the value must contain 1–500 normalized UTF-16 code units.
+     * Validation removes U+000C and U+202E and trims surrounding whitespace. The original string is sent unchanged
+     */
     readonly description?: string | null
-    /** Up to ten tags of 1–30 Unicode code points each. Omitted means empty. Entries are copied by index when the operation starts */
+    /** Up to ten tags of 1–30 normalized UTF-16 code units each. Omitted means empty. Validation removes U+000C and
+     * U+202E and trims surrounding whitespace without changing the strings sent. Entries are copied by index when the operation starts
+     */
     readonly tags?: readonly string[]
     /** Base64 image data or image data URI, at most 512 KiB decoded */
     readonly image: string
@@ -92,11 +98,17 @@ export interface EmojiEdit {
  * A fetched sticker can be spread into this input. Its matching identity and animation fields are ignored
  */
 export interface StickerEdit {
-    /** Required replacement name, 2–30 Unicode code points */
+    /** Required replacement name, 2–30 normalized UTF-16 code units. Validation removes U+000C and U+202E and
+     * trims surrounding whitespace without changing the string sent
+     */
     readonly name: string
-    /** Required replacement description, up to 500 Unicode code points. Empty/null clears it */
+    /** Required replacement description, 1–500 normalized UTF-16 code units. Empty/null clears it. Validation removes
+     * U+000C and U+202E and trims surrounding whitespace without changing a nonempty string sent
+     */
     readonly description: string | null
-    /** Required replacement list, at most ten tags of 1–30 Unicode code points. [] clears it. Entries are copied by index when the operation starts */
+    /** Required replacement list, at most ten tags of 1–30 normalized UTF-16 code units. [] clears it. Validation
+     * removes U+000C and U+202E and trims surrounding whitespace without changing the strings sent. Entries are copied by index when the operation starts
+     */
     readonly tags: readonly string[]
 }
 

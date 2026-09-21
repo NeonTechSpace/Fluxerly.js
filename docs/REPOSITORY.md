@@ -30,6 +30,7 @@ Registry release commands enforce the [registry publication contract](/docs/RELE
 | [oauth.ts](/projects/sdk/src/internal/oauth.ts) | Standalone confidential OAuth client, explicit token operations and bearer reads, with application-owned consent callbacks, token storage and refresh coordination |
 | [api-errors.ts](/projects/sdk/src/api-errors.ts) | SDK-owned rejection classifications, carried through operation errors after bounded shared REST response inspection |
 | [input-validation.ts](/projects/sdk/src/input-validation.ts) | Safe local-input failure metadata; resource validators own constraints and applications own presentation |
+| [field-text.ts](/projects/sdk/src/internal/field-text.ts) | Request-only provider text normalization and UTF-16 length predicates, without rewriting serialized input |
 | [instance.ts](/projects/sdk/src/internal/instance.ts) | Shared lifetime endpoint discovery, selected-instance trust and unauthenticated bootstrap cleanup |
 | [effect-failures.ts](/projects/sdk/src/internal/effect-failures.ts) | REST/discovery cause-preserving error translation and deadlines, including cleanup defects during interruption |
 | [gateway.ts](/projects/sdk/src/internal/gateway.ts) | Gateway transport and protocol |
@@ -219,6 +220,13 @@ Cleanup deletes only the journaled test channel, retaining `.env.test.typing.loc
 It refuses existing non-null display assignments, then uses two journaled zero-permission roles for successful and lost-response resets through both APIs.
 No member assignments are changed.
 Cleanup verifies test-role deletion and retains `.env.test.role-reset.local` on unresolved cleanup
+
+After building the SDK, run `pnpm --filter @neontechspace/fluxerly exec node tests/live/text-validation.mjs default`
+and then the same command with `effect` for the bounded text-validation check.
+Each mode creates one journaled zero-permission role in the designated sandbox, checks local rejection and normalized
+UTF-16 boundary writes, and reconciles an intentionally lost edit response without replaying the write.
+No human membership or existing role is changed. Cleanup verifies test-role absence, retaining
+`.env.test.text-validation.local` if ownership or cleanup cannot be established
 
 `test:live:expressions` checks emoji/sticker lifecycle, gateway updates, partial batches and sticker messages through both built APIs.
 It creates temporary expressions and a channel, deletes test-owned resources without media purging, and preserves a recovery journal on unresolved outcomes

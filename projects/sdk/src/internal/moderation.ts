@@ -11,11 +11,10 @@ import { identifier, record } from "./message.js"
 import { decodeMember, memberFetch, type GuildRequest } from "./guilds.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 import { validCalendarTimestamp } from "./timestamp.js"
+import { normalizedText as text } from "./field-text.js"
 
 const integer = (value: unknown, min: number, max: number): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
-const text = (value: unknown, min: number, max: number): value is string =>
-    typeof value === "string" && [...value].length >= min && [...value].length <= max
 const timestamp = (value: unknown): value is string =>
     typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && validCalendarTimestamp(value)
 
@@ -52,7 +51,7 @@ function timeoutSettings(
         return inputValidationFailure(
             "options.timeoutReason",
             "length",
-            "Timeout reason must contain 1 through 512 Unicode code points",
+            "Timeout reason must contain 1 through 512 UTF-16 code units after provider normalization",
         )
     return settings
 }
@@ -112,11 +111,11 @@ export function memberKick(
 function voiceConnectionId(target: VoiceConnectionReference): string | undefined | InputValidationFailure {
     const connectionId = target.connectionId
     if (connectionId === undefined) return undefined
-    if (typeof connectionId !== "string" || [...connectionId].length < 1 || [...connectionId].length > 32)
+    if (!text(connectionId, 1, 32))
         return inputValidationFailure(
             "target.connectionId",
             "length",
-            "Voice connection IDs must contain 1 through 32 Unicode code points",
+            "Voice connection IDs must contain 1 through 32 UTF-16 code units after provider normalization",
         )
     return connectionId
 }
@@ -205,7 +204,7 @@ export function guildBan(
     if (
         (duration !== 0 && !integer(duration, 60, 63_072_000)) ||
         !integer(removal, 0, 604_800) ||
-        (value.reason !== undefined && (typeof value.reason !== "string" || [...value.reason].length > 512))
+        (value.reason !== undefined && !text(value.reason, 0, 512))
     )
         return inputValidationFailure(
             "input",

@@ -11,6 +11,7 @@ import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./message.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { normalizedText as text } from "./field-text.js"
 
 export type ExpressionKind = "emojis" | "stickers"
 export type ExpressionResources = { emojis: GuildEmoji; stickers: GuildSticker }
@@ -18,8 +19,6 @@ export type ExpressionUpdate<K extends ExpressionKind> = Readonly<{
     guildId: string
     items: readonly ExpressionResources[K][]
 }>
-const text = (value: unknown, min: number, max: number): value is string =>
-    typeof value === "string" && [...value].length >= min && [...value].length <= max
 
 function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
     if (!Array.isArray(value)) return undefined
@@ -151,7 +150,7 @@ function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = 
         return inputValidationFailure(
             path("name"),
             "length",
-            "Sticker name must contain 2 through 30 Unicode code points",
+            "Sticker name must contain 2 through 30 UTF-16 code units after provider normalization",
         )
     if (create) {
         if (typeof value.image !== "string" || value.image.length > 699_150)
@@ -178,7 +177,7 @@ function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = 
             return inputValidationFailure(
                 path("description"),
                 "length",
-                "Sticker description must be null or contain 1 through 500 Unicode code points",
+                "Sticker description must be null or contain 1 through 500 UTF-16 code units after provider normalization",
             )
         const rawTags = value.tags
         const snapshot = rawTags === undefined ? undefined : snapshotArray(rawTags, 10)
@@ -186,7 +185,7 @@ function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = 
             return inputValidationFailure(
                 path("tags[]"),
                 "format",
-                "Sticker tags must contain at most ten entries of 1 through 30 Unicode code points",
+                "Sticker tags must contain at most ten entries of 1 through 30 UTF-16 code units after provider normalization",
             )
         tags = snapshot as readonly string[] | undefined
     }
