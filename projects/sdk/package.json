@@ -76,6 +76,7 @@
         "test:live:oauth:effect": "pnpm run build && node tests/live/oauth.js effect",
         "test:live:oauth:no-consent": "pnpm run build && node tests/live/oauth.js default --no-consent && node tests/live/oauth.js effect --no-consent",
         "test:live:diagnostics": "pnpm run build && node tests/live/sdk.js default --diagnostics && node tests/live/sdk.js effect --diagnostics",
+        "test:live:rate-limits": "pnpm run build && node tests/live/sdk.js default --rate-limits && node tests/live/sdk.js effect --rate-limits",
         "test:live:instance": "pnpm run build && node tests/live/sdk.js default --instance && node tests/live/sdk.js effect --instance",
         "test:live:presence": "pnpm run build && node tests/live/presence.js default && node tests/live/presence.js effect",
         "test:live:messages": "pnpm run build && node tests/live/messages.js default && node tests/live/messages.js effect",

@@ -51,6 +51,8 @@ The remote read returns a message, a typed operation failure, or `CancelledError
 
 Cancellation waits for SDK cleanup. A provider can still complete work it already received. Keep the controller with the operation that owns the user request
 
+Global HTTP 429 rejections pause unrelated API routes on the same client, including when a valid global header accompanies an unreadable error body. Waiting still counts toward each operation's deadline, and cancelling one queued operation does not clear the shared pause. The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) explains scope metadata and retry boundaries
+
 ## Let one function own connection lifetime
 
 Use `run` when one signal should own startup, recovery and shutdown. Pass a disconnected client with its handlers already registered and an `AbortSignal` owned by your application

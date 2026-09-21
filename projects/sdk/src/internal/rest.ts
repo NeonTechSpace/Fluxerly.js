@@ -419,6 +419,15 @@ function retryAfter(response: Response): number | null {
     return Number.isFinite(delay) ? Math.max(0, Math.ceil(delay)) : null
 }
 
+function globalRateLimit(response: Response): boolean {
+    // A positive scope assertion wins over conflicting local metadata. Do not
+    // interpret malformed or combined header values as a global rejection
+    return (
+        response.headers.get("x-ratelimit-global")?.trim().toLowerCase() === "true" ||
+        response.headers.get("x-ratelimit-scope")?.trim().toLowerCase() === "global"
+    )
+}
+
 const errorBodyMaxBytes = 8_192
 const errorBodyReadTimeoutMs = 100
 
@@ -922,6 +931,14 @@ export class RestOwner<M extends MessageCore = Message> {
                                         let delay = header === null ? NaN : Number(header) * 1000
                                         if (header !== null && !Number.isFinite(delay))
                                             delay = Date.parse(header) - Date.now()
+                                        const headerGlobal = globalRateLimit(response)
+                                        // Protect other routes before bounded body inspection, including
+                                        // when the request is interrupted while waiting for that body
+                                        if (headerGlobal && Number.isFinite(delay) && delay > 0)
+                                            owner.#globalUntil = Math.max(
+                                                owner.#globalUntil,
+                                                performance.now() + Math.ceil(delay),
+                                            )
                                         const apiRead = await readApiError(
                                             response,
                                             state.controller.signal,
@@ -944,7 +961,7 @@ export class RestOwner<M extends MessageCore = Message> {
                                                 apiRead.detail,
                                             )
                                         const retry = Math.ceil(delay)
-                                        const global = apiRead.global
+                                        const global = headerGlobal || apiRead.global
                                         const until = performance.now() + retry
                                         if (global) owner.#globalUntil = Math.max(owner.#globalUntil, until)
                                         else owner.#buckets.set(route, { remaining: 0, until })

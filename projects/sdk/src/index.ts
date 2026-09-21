@@ -3960,6 +3960,7 @@ export interface Webhooks {
  * No cache or persistent token store is created, and other clients' caches are not updated.
  * Calls start immediately and return ResultAsync for expected successes and failures.
  * The default 30,000 ms total deadline includes capacity, rate-limit, retry and HTTP waits.
+ * Confirmed HTTP 429 responses use this client's shared rate-limit state as described on Client.
  * Abort cancels only the operation and waits for request and body cleanup, without reversing remote changes.
  * Errors include safe categories and status, not token-bearing paths or response bodies.
  * Successful JSON is capped at 16 MiB before parsing, not total memory.
@@ -4113,6 +4114,16 @@ export interface ClientCache<M extends MessageCore = Message> {
  * Cleanup failure stops retries and preserves safe details of an accompanying failure or cancellation.
  * Shared REST success JSON is limited to 16 MiB before parsing, not total memory.
  * Upload-plan and completion responses have a separate 1 MiB limit
+ *
+ * Confirmed HTTP 429 responses with a valid retry delay pause all of this client's API routes when
+ * X-RateLimit-Global is true, X-RateLimit-Scope is global, or the bounded JSON body has global: true.
+ * A valid global assertion wins over conflicting local metadata. Malformed scope values are ignored.
+ * A global header with a valid Retry-After starts the pause before body inspection, including when
+ * the body is missing, malformed, oversized or too slow. Body inspection stays bounded to 8 KiB and 100 ms before awaited cleanup.
+ * Without global metadata, the wait remains route-local. Without a usable delay, the rejection fails rather than inventing a wait.
+ * Waits remain within each call's original deadline. Cancelling a queued call removes only that call, not the shared pause.
+ * Separate clients do not coordinate these waits. Attachment downloads do not wait for API rate limits.
+ * Writes retry only confirmed rate-limit rejection, never an uncertain outcome
  */
 export interface Client<M extends MessageCore = Message> extends ClientState {
     /**

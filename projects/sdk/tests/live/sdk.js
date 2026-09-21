@@ -10,6 +10,7 @@ const applicationCheck = process.argv[3] === "--application"
 const diagnosticsCheck = process.argv[3] === "--diagnostics"
 const instanceCheck = process.argv[3] === "--instance"
 const qualityCheck = process.argv[3] === "--quality"
+const rateLimitsCheck = process.argv[3] === "--rate-limits"
 const processId = /^[1-9][0-9]{0,19}$/
 const qualityUserId = qualityCheck ? process.env.FLUXER_TEST_DM_USER_ID : undefined
 const qualityGroupId = qualityCheck ? process.env.FLUXER_TEST_GROUP_DM_ID : undefined
@@ -340,6 +341,54 @@ async function verifyQuality(client, token, run, fail) {
     report(stage, { passed: true, remoteMutations: false })
 }
 
+async function verifyRateLimits(client, guildId, userId, run, fail) {
+    stage = "rate_limits_discovery"
+    await run(client.instance.resolve())
+    const originalFetch = globalThis.fetch
+    let injected = 0
+    let remoteReads = 0
+    globalThis.fetch = async (input, init) => {
+        const url = new URL(String(input))
+        assert.equal(url.origin, "https://api.fluxer.app")
+        assert.equal(init?.method, "GET")
+        assert.ok(url.pathname === "/v1/users/@me" || url.pathname === `/v1/guilds/${guildId}`)
+        if (injected === 0) {
+            assert.equal(url.pathname, "/v1/users/@me")
+            injected++
+            // A controlled rejection avoids deliberately exhausting the hosted bot's global limit
+            return new Response("fixture non-JSON rejection", {
+                status: 429,
+                headers: { "retry-after": "1", "x-ratelimit-global": "true" },
+            })
+        }
+        remoteReads++
+        return originalFetch(input, init)
+    }
+    try {
+        stage = "rate_limits_injected_header_rejection"
+        const rejected = await fail(client.users.fetchSelf({ timeoutMs: 500 }))
+        assert.equal(rejected.status, 429)
+        assert.equal(rejected.reason, "rateLimit")
+        const queued = await fail(client.guilds.fetch(guildId, { timeoutMs: 100 }))
+        assert.equal(queued.reason, "timeout")
+        assert.equal(queued.outcome, "notDispatched")
+        assert.equal(remoteReads, 0)
+        assert.equal(client.diagnostics().rest.queuedRequests, 0)
+        report(stage, { passed: true, injectedRejections: injected, remoteRequests: remoteReads })
+
+        stage = "rate_limits_live_read_recovery"
+        await sleep(1100)
+        assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
+        assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
+        assert.equal(remoteReads, 2)
+        assert.equal(client.diagnostics().rest.activeRequests, 0)
+        assert.equal(client.diagnostics().rest.queuedRequests, 0)
+        report(stage, { passed: true, remoteReads, remoteMutations: false })
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+}
+
 // A watchdog is failure containment, never evidence of successful cleanup
 // Keep it unreferenced so a successful check must exit naturally
 setTimeout(() => {
@@ -355,7 +404,8 @@ try {
             applicationCheck ||
             diagnosticsCheck ||
             instanceCheck ||
-            qualityCheck,
+            qualityCheck ||
+            rateLimitsCheck,
     )
     stage = "sandbox_lock"
     lock = openSync(lockPath, "wx")
@@ -395,7 +445,23 @@ try {
         const controller = new AbortController()
         let running
         try {
-            if (qualityCheck) {
+            if (rateLimitsCheck) {
+                await verifyRateLimits(
+                    client,
+                    guildId,
+                    user.id,
+                    async (operation) => {
+                        const result = await operation
+                        assert.ok(result.isOk())
+                        return result.value
+                    },
+                    async (operation) => {
+                        const result = await operation
+                        assert.ok(result.isErr())
+                        return result.error
+                    },
+                )
+            } else if (qualityCheck) {
                 await verifyQuality(
                     client,
                     token,
@@ -485,7 +551,15 @@ try {
                         ...(qualityCheck ? { cache: { users: true, directMessages: true } } : {}),
                     })
                     assert.equal(client.state, "Disconnected")
-                    if (qualityCheck) {
+                    if (rateLimitsCheck) {
+                        yield* Effect.promise(() =>
+                            verifyRateLimits(client, guildId, user.id, Effect.runPromise, async (operation) => {
+                                const result = await Effect.runPromise(Effect.result(operation))
+                                assert.equal(result._tag, "Failure")
+                                return result.failure
+                            }),
+                        )
+                    } else if (qualityCheck) {
                         yield* Effect.promise(() =>
                             verifyQuality(client, token, Effect.runPromise, async (operation) => {
                                 const result = await Effect.runPromise(Effect.result(operation))

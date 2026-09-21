@@ -3576,6 +3576,7 @@ export interface Webhooks {
  * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause
  *
  * Requests default to a 30-second total deadline across queue waits, rate-limit waits, retries and HTTP.
+ * Confirmed HTTP 429 responses use this client's shared rate-limit state as described on Client.
  * Cancellation interrupts only that operation and awaits request/body cleanup, without rolling back remote effects
  *
  * Errors contain only safe categories and status, never credential-bearing paths or upstream bodies
@@ -3673,6 +3674,16 @@ export interface ClientCache<M extends MessageCore = Message> {
  * Expected errors use Effect's error channel. Unexpected faults and cancellation remain in Cause.
  * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause.
  * Shared REST success JSON is limited to 16 MiB of response-body bytes before parsing, not total heap usage. Upload-plan/completion responses retain their separate 1 MiB limit
+ *
+ * Confirmed HTTP 429 responses with a valid retry delay pause all of this client's API routes when
+ * X-RateLimit-Global is true, X-RateLimit-Scope is global, or the bounded JSON body has global: true.
+ * A valid global assertion wins over conflicting local metadata. Malformed scope values are ignored.
+ * A global header with a valid Retry-After starts the pause before body inspection, including when
+ * the body is missing, malformed, oversized or too slow. Body inspection stays bounded to 8 KiB and 100 ms before awaited cleanup.
+ * Without global metadata, the wait remains route-local. Without a usable delay, the rejection fails rather than inventing a wait.
+ * Waits remain within each call's original deadline. Interruption removes only that queued call, not the shared pause.
+ * Separate clients do not coordinate these waits. Attachment downloads do not wait for API rate limits.
+ * Writes retry only confirmed rate-limit rejection, never an uncertain outcome
  */
 export interface Client<M extends MessageCore = Message> extends ClientState {
     /** Immutable endpoint discovery and pure URL helpers for this client's selected instance */
