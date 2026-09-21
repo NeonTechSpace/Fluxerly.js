@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process"
+import { spawn } from "node:child_process"
 import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
@@ -35,6 +35,62 @@ export function previewSettings(env) {
 const webRoot = fileURLToPath(new URL("../", import.meta.url))
 const deploymentId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
 const noindex = (value) => /(?:^|[\s,:])noindex(?:$|[\s,])/i.test(value ?? "")
+const elapsed = (milliseconds) => `${Math.max(0, Math.floor(milliseconds / 1_000))}s`
+
+export function runSilentProcess(file, args, options, io = {}) {
+    const start = io.spawn ?? spawn
+    const now = io.now ?? Date.now
+    const schedule = io.setTimeout ?? setTimeout
+    const cancel = io.clearTimeout ?? clearTimeout
+    const repeat = io.setInterval ?? setInterval
+    const cancelRepeat = io.clearInterval ?? clearInterval
+    const progress = io.progress ?? (() => {})
+    const { timeout, progressEvery = 30_000, killGrace = 5_000, ...spawnOptions } = options
+    return new Promise((resolve) => {
+        let child
+        try {
+            child = start(file, args, { ...spawnOptions, stdio: "ignore" })
+        } catch {
+            resolve({ status: "spawn-error", timedOut: false })
+            return
+        }
+        const started = now()
+        let settled = false
+        let timedOut = false
+        let hadError = false
+        let forceKill
+        const heartbeat = repeat(
+            () => progress(
+                timedOut
+                    ? `Waiting for Wrangler child cleanup (${elapsed(now() - started)} elapsed)`
+                    : `Wrangler upload is still running (${elapsed(now() - started)} elapsed)`,
+            ),
+            progressEvery,
+        )
+        let deadline
+        const settle = (code, signal) => {
+            if (settled) return
+            settled = true
+            cancelRepeat(heartbeat)
+            cancel(deadline)
+            if (forceKill) cancel(forceKill)
+            resolve({ status: timedOut ? "timed-out" : hadError ? "spawn-error" : "exited", timedOut, code, signal })
+        }
+        child.on("error", () => { hadError = true })
+        child.once("close", (code, signal) => settle(code, signal))
+        deadline = schedule(() => {
+            if (settled) return
+            timedOut = true
+            progress(`Wrangler upload timed out (${elapsed(now() - started)} elapsed). Stopping the child process`)
+            forceKill = schedule(() => {
+                if (settled) return
+                progress(`Wrangler child is still stopping (${elapsed(now() - started)} elapsed). Forcing cleanup`)
+                try { child.kill("SIGKILL") } catch { /* Wait for the child close boundary */ }
+            }, killGrace)
+            try { child.kill("SIGTERM") } catch { /* Wait for the child close boundary */ }
+        }, timeout)
+    })
+}
 
 export function deploymentOrigin(project, deployment) {
     let url
@@ -49,7 +105,7 @@ export function deploymentOrigin(project, deployment) {
     return url.origin
 }
 
-async function upload(settings, source) {
+async function upload(settings, source, progress) {
     const require = createRequire(import.meta.url)
     const manifestPath = require.resolve("wrangler/package.json")
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
@@ -58,39 +114,35 @@ async function upload(settings, source) {
     const output = join(temporary, "output.ndjson")
     try {
         // Keep provider output and exception details out of CI logs, including on failure
-        try {
-            execFileSync(
-                process.execPath,
-                [
-                    join(dirname(manifestPath), bin),
-                    "pages",
-                    "deploy",
-                    "dist",
-                    "--project-name",
-                    settings.project,
-                    "--branch",
-                    settings.branch,
-                    "--commit-hash",
-                    source,
-                    "--commit-dirty=false",
-                ],
-                {
-                    cwd: webRoot,
-                    stdio: "ignore",
-                    timeout: 300_000,
-                    windowsHide: true,
-                    env: {
-                        ...process.env,
-                        CLOUDFLARE_ACCOUNT_ID: settings.account,
-                        CLOUDFLARE_API_TOKEN: settings.token,
-                        WRANGLER_OUTPUT_FILE_PATH: output,
-                        WRANGLER_SEND_METRICS: "false",
-                    },
+        await runSilentProcess(
+            process.execPath,
+            [
+                join(dirname(manifestPath), bin),
+                "pages",
+                "deploy",
+                "dist",
+                "--project-name",
+                settings.project,
+                "--branch",
+                settings.branch,
+                "--commit-hash",
+                source,
+                "--commit-dirty=false",
+            ],
+            {
+                cwd: webRoot,
+                timeout: 300_000,
+                windowsHide: true,
+                env: {
+                    ...process.env,
+                    CLOUDFLARE_ACCOUNT_ID: settings.account,
+                    CLOUDFLARE_API_TOKEN: settings.token,
+                    WRANGLER_OUTPUT_FILE_PATH: output,
+                    WRANGLER_SEND_METRICS: "false",
                 },
-            )
-        } catch {
-            /* Read a recorded deployment identity before deciding the outcome */
-        }
+            },
+            { progress },
+        )
         let record
         try {
             record = (await readFile(output, "utf8"))
@@ -124,6 +176,8 @@ export async function deployPreview(env = process.env, io = {}) {
     const publish = io.upload ?? upload
     const now = io.now ?? Date.now
     const sleep = io.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
+    const progress = io.progress ?? (() => {})
+    progress("Checking the local Preview artifact")
     let marker, headers
     try {
         marker = JSON.parse(await read(join(webRoot, "dist/deployment.json"), "utf8"))
@@ -208,6 +262,7 @@ export async function deployPreview(env = process.env, io = {}) {
         try { served = await response.json() } catch { return null }
         return served?.sourceCommit === source ? "verified" : null
     }
+    progress("Verifying the Cloudflare Pages Preview target")
     const project = await api()
     if (project.name !== settings.project || typeof project.id !== "string" || !project.id)
         throw new Error("Cloudflare project identity was not verified")
@@ -229,9 +284,12 @@ export async function deployPreview(env = process.env, io = {}) {
     // Never rerun Wrangler after an uncertain acknowledgement
     // Wrangler itself may retry Cloudflare UNKNOWN_ERROR during deployment creation
     // Pages has no conditional upload guard against concurrent project-setting changes
-    const id = await publish(settings, source)
+    progress("Uploading the checked Preview artifact with Wrangler")
+    const id = await publish(settings, source, progress)
     if (!deploymentId.test(id ?? ""))
         throw new Error("Upload identity is unknown; reconcile Cloudflare before another upload")
+    progress("Upload acknowledged. Verifying the exact Preview deployment")
+    const readbackStarted = now()
     const deadline = now() + 120_000
     for (let attempt = 0; attempt < 24 && now() < deadline; attempt++) {
         let delay = 5_000
@@ -266,7 +324,10 @@ export async function deployPreview(env = process.env, io = {}) {
             if (!(error instanceof ReadUnavailable)) throw error
             if (Number.isFinite(error.retryAfter)) delay = Math.max(delay, error.retryAfter)
         }
-        if (attempt < 23 && now() < deadline) await sleep(Math.min(delay, deadline - now()))
+        if (attempt < 23 && now() < deadline) {
+            progress(`Waiting for Preview readback (${elapsed(now() - readbackStarted)} elapsed)`)
+            await sleep(Math.min(delay, deadline - now()))
+        }
     }
     throw new Error(
         `Preview readback did not converge for deployment ${id}; reconcile its status and custom-domain routing before another upload`,
@@ -274,7 +335,7 @@ export async function deployPreview(env = process.env, io = {}) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     try {
-        const result = await deployPreview()
+        const result = await deployPreview(process.env, { progress: (message) => console.log(message) })
         if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT,
             `deployment_url=${result.deploymentUrl}\ncustom_domain_status=${result.customDomainStatus}\n`)
         console.log(`Verified exact Preview deployment at ${result.deploymentUrl}`)

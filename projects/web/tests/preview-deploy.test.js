@@ -1,6 +1,12 @@
 import assert from "node:assert/strict"
+import { EventEmitter } from "node:events"
 import test from "node:test"
-import { deploymentOrigin, deployPreview, previewSettings } from "../scripts/preview-deploy.js"
+import {
+    deploymentOrigin,
+    deployPreview,
+    previewSettings,
+    runSilentProcess,
+} from "../scripts/preview-deploy.js"
 
 const source = "a".repeat(40)
 const id = "11111111-1111-1111-1111-111111111111"
@@ -166,6 +172,154 @@ test("Orchestration uploads once to the explicit Preview branch and verifies the
             url.startsWith("https://api.cloudflare.com/") ? `Bearer ${env.CLOUDFLARE_API_TOKEN}` : undefined,
         )
     }
+})
+
+test("Deployment progress names each phase and reports elapsed waits without exposing credentials", async () => {
+    const { io } = fixture({
+        deployment: (count) =>
+            count === 1 ? { ...deployment, latest_stage: { name: "deploy", status: "active" } } : deployment,
+    })
+    const messages = []
+    io.progress = (message) => messages.push(message)
+    await deployPreview(env, io)
+    assert.ok(messages.some((message) => /local Preview artifact/i.test(message)))
+    assert.ok(messages.some((message) => /Cloudflare Pages Preview target/i.test(message)))
+    assert.ok(messages.some((message) => /Uploading.*Wrangler/i.test(message)))
+    assert.ok(messages.some((message) => /acknowledged.*verifying/i.test(message)))
+    assert.ok(messages.some((message) => /Waiting.*\(0s elapsed\)/i.test(message)))
+    assert.ok(messages.every((message) => !message.includes(env.CLOUDFLARE_API_TOKEN)))
+})
+
+test("Silent child progress suppresses output and resolves only after the child closes", async () => {
+    const child = new EventEmitter()
+    const messages = []
+    const secret = env.CLOUDFLARE_API_TOKEN
+    let clock = 0
+    let heartbeat
+    let deadline
+    let heartbeatCleared = false
+    let deadlineCleared = false
+    const result = runSilentProcess("node", ["wrangler.js"], {
+        env: { CLOUDFLARE_API_TOKEN: secret },
+        timeout: 300_000,
+    }, {
+        spawn: (_file, _args, options) => {
+            assert.equal(options.stdio, "ignore")
+            return child
+        },
+        now: () => clock,
+        progress: (message) => messages.push(message),
+        setInterval: (callback, milliseconds) => {
+            assert.equal(milliseconds, 30_000)
+            heartbeat = callback
+            return "heartbeat"
+        },
+        clearInterval: (handle) => {
+            assert.equal(handle, "heartbeat")
+            heartbeatCleared = true
+        },
+        setTimeout: (callback, milliseconds) => {
+            assert.equal(milliseconds, 300_000)
+            deadline = callback
+            return "deadline"
+        },
+        clearTimeout: (handle) => {
+            assert.equal(handle, "deadline")
+            deadlineCleared = true
+        },
+    })
+    clock = 30_000
+    heartbeat()
+    child.emit("close", 0, null)
+    assert.deepEqual(await result, { status: "exited", timedOut: false, code: 0, signal: null })
+    assert.equal(typeof deadline, "function")
+    assert.deepEqual(messages, ["Wrangler upload is still running (30s elapsed)"])
+    assert.ok(messages.every((message) => !message.includes(secret)))
+    assert.equal(heartbeatCleared, true)
+    assert.equal(deadlineCleared, true)
+})
+
+test("Silent child errors are consumed but cannot settle the process before close", async () => {
+    const child = new EventEmitter()
+    const secret = env.CLOUDFLARE_API_TOKEN
+    let resolved = false
+    const result = runSilentProcess("node", [], { timeout: 300_000 }, {
+        spawn: () => child,
+        setInterval: () => "heartbeat",
+        clearInterval: () => {},
+        setTimeout: () => "deadline",
+        clearTimeout: () => {},
+        progress: (message) => assert.ok(!message.includes(secret)),
+    }).then((outcome) => {
+        resolved = true
+        return outcome
+    })
+    child.emit("error", new Error(secret))
+    child.emit("error", new Error(secret))
+    await Promise.resolve()
+    assert.equal(resolved, false)
+    child.emit("close", null, null)
+    assert.deepEqual(await result, { status: "spawn-error", timedOut: false, code: null, signal: null })
+
+    const failed = await runSilentProcess("node", [], { timeout: 1 }, {
+        spawn: () => { throw new Error(secret) },
+        progress: (message) => assert.ok(!message.includes(secret)),
+    })
+    assert.deepEqual(failed, { status: "spawn-error", timedOut: false })
+})
+
+test("Silent child timeout escalates termination and awaits close", async () => {
+    const child = new EventEmitter()
+    const secret = env.CLOUDFLARE_API_TOKEN
+    const kills = []
+    const messages = []
+    let clock = 0
+    let heartbeat
+    let deadline
+    let forceKill
+    let resolved = false
+    child.kill = (signal) => {
+        kills.push(signal)
+        return true
+    }
+    const result = runSilentProcess("node", [], { timeout: 1, killGrace: 5 }, {
+        spawn: () => child,
+        now: () => clock,
+        setInterval: (callback) => {
+            heartbeat = callback
+            return "heartbeat"
+        },
+        clearInterval: () => {},
+        setTimeout: (callback, milliseconds) => {
+            if (milliseconds === 1) deadline = callback
+            if (milliseconds === 5) forceKill = callback
+            return milliseconds
+        },
+        clearTimeout: () => {},
+        progress: (message) => messages.push(message),
+    }).then((outcome) => {
+        resolved = true
+        return outcome
+    })
+    clock = 1
+    deadline()
+    await Promise.resolve()
+    assert.equal(resolved, false)
+    assert.deepEqual(kills, ["SIGTERM"])
+    clock = 2
+    heartbeat()
+    clock = 6
+    forceKill()
+    await Promise.resolve()
+    assert.equal(resolved, false)
+    assert.deepEqual(kills, ["SIGTERM", "SIGKILL"])
+    child.emit("close", null, "SIGKILL")
+    assert.deepEqual(await result, { status: "timed-out", timedOut: true, code: null, signal: "SIGKILL" })
+    assert.ok(messages.some((message) => /timed out.*Stopping the child process/i.test(message)))
+    assert.ok(messages.some((message) => /Waiting for Wrangler child cleanup/i.test(message)))
+    assert.ok(messages.some((message) => /still stopping.*Forcing cleanup/i.test(message)))
+    assert.ok(messages.every((message) => !message.includes(secret)))
+    assert.ok(messages.every((message) => !/upload is still running/i.test(message)))
 })
 
 test("Deployment readback trusts only the verified project's unique Pages origin", () => {

@@ -102,6 +102,22 @@ test("Preview credentials are read from the website environment", () => {
     assert.match(source, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/)
 })
 
+test("Preview reuses exact-source CI without dropping the full published documentation check", () => {
+    const source = readFileSync(join(repository, ".github/workflows/docs-preview.yml"), "utf8")
+    assert.match(source, /actions: read/)
+    assert.match(source, /pnpm --filter @neontechspace\/fluxerly build/)
+    assert.match(source, /pnpm --filter fluxerly-docs check/)
+    assert.doesNotMatch(source, /run: pnpm check/)
+    assert.match(source, /node web\/scripts\/checked-source\.js/)
+    assert.ok(source.indexOf("id: workspace") < source.indexOf("id: ci"))
+    assert.ok(source.indexOf("id: ci") < source.indexOf("id: source"))
+    assert.ok(source.indexOf("id: source") < source.indexOf("id: deploy"))
+    assert.match(source, /if \[ "\$source" != "\$CHECKED_SOURCE" \]; then/)
+    assert.match(source, /CHECKED_SOURCE: \$\{\{ steps\.ci\.outputs\.source_commit \}\}/)
+    const caller = readFileSync(join(repository, ".github/workflows/release-publish.yml"), "utf8")
+    assert.match(caller.split("  docs-preview:")[1], /permissions:\r?\n      contents: read\r?\n      actions: read/)
+})
+
 test("Preview summaries distinguish exact deployment verification from custom-domain access", () => {
     const details = {
         sourceCommit: "b".repeat(40),

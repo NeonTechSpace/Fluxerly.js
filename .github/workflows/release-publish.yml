@@ -231,5 +231,6 @@ jobs:
     if: ${{ !cancelled() && needs.reconcile.result == 'success' && needs.reconcile.outputs.complete == 'true' }}
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/docs-preview.yml
     secrets: inherit

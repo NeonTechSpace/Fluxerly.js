@@ -176,7 +176,10 @@ See [Pages quota behavior](https://developers.cloudflare.com/pages/functions/rou
 ## Preview setup
 
 [Docs preview](/.github/workflows/docs-preview.yml) is manually dispatched or called after the gated package publisher.
-It always checks out `main`, imports verified released snapshots and runs the aggregate check before upload.
+It always checks out `main`, imports verified released snapshots, builds the SDK declarations and checks the full Preview documentation inventory.
+Before upload, it requires a successful main-push [Check workflow](/.github/workflows/ci.yml) for that exact checkout through the [source gate](/projects/web/scripts/checked-source.js), rather than repeating SDK and release-tooling checks.
+Documentation work runs while Check can still be in progress. The gate waits up to ten minutes and rejects failed, cancelled, missing or mismatched evidence instead of silently skipping validation.
+The newest matching run must pass, including its current attempt. No build artifact or test result from another source commit is reused
 Set these values in the `website` environment before separately authorized delivery:
 
 | Setting | Store as | Required value |
@@ -188,7 +191,7 @@ Set these values in the `website` environment before separately authorized deliv
 
 Add these under GitHub Settings, Environments, website.
 The workflow reads the three non-secret settings through `vars` and the token through `secrets`.
-GitHub supplies its repository-read token automatically.
+GitHub supplies its repository and Actions read token automatically, including when the publisher calls this workflow.
 The local documentation server needs none of these credentials
 
 The `website` environment name does not select the deployment target.
@@ -226,6 +229,10 @@ Keep that protection enabled rather than treating a challenge as an upload failu
 See [challenge-response detection](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/) and [Pages deployment URLs](https://developers.cloudflare.com/pages/configuration/preview-deployments/)
 
 Readback is bounded and retries transient reads, including provider rate-limit delays
+
+The deployment log identifies preflight, upload and readback phases, with elapsed upload messages every 30 seconds and elapsed readback waits.
+Raw Wrangler output and child-process error details remain suppressed to protect credentials.
+An upload timeout starts child termination and waits for its close before reconciling the recorded deployment identity
 
 The wrapper does not repeat uploads after an uncertain acknowledgement.
 Wrangler has internal provider retries, so this is not exactly-once deployment.

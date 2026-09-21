@@ -47,7 +47,9 @@ export const summaryProfiles = {
         checks: [
             ...common,
             ["snapshots", "Verified exact-source release snapshots"],
-            ["workspace", "Aggregate workspace and Preview content check"],
+            ["build", "SDK declarations built for documentation"],
+            ["workspace", "Full Preview documentation build, types and content checks"],
+            ["ci", "Successful Check reused for the exact main checkout"],
             ["source", "Checked checkout recorded in deployment.json"],
             ["deploy", "Exact Cloudflare deployment verification and custom-domain access check"],
         ],
@@ -235,6 +237,7 @@ export function renderSummary({ kind, steps = {}, details = {}, runId, workflowC
     if (kind === "preview")
         values.push(
             ["Checked source commit", details.sourceCommit],
+            ["Reused Check run", output("ci", "run_url")],
             ["Exact deployment URL", previewDeploymentUrl],
             [
                 "Exact deployment verification",

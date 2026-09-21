@@ -4,6 +4,7 @@ on:
   workflow_call:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: docs-preview
   cancel-in-progress: false
@@ -29,17 +30,33 @@ jobs:
         working-directory: projects
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Build and check preview content
-        id: workspace
-        run: pnpm check
+      - name: Build the SDK declarations for documentation
+        id: build
+        run: pnpm --filter @neontechspace/fluxerly build
         working-directory: projects
+      - name: Build and check the full Preview documentation inventory
+        id: workspace
+        run: pnpm --filter fluxerly-docs check
+        working-directory: projects
+      - name: Require successful Check for the exact checkout
+        id: ci
+        run: node web/scripts/checked-source.js
+        working-directory: projects
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Record the checked source
         id: source
         shell: bash
         run: |
           source="$(git rev-parse HEAD)"
+          if [ "$source" != "$CHECKED_SOURCE" ]; then
+            printf 'Checkout changed after CI verification\n' >&2
+            exit 1
+          fi
           printf 'DOCS_SOURCE_COMMIT=%s\n' "$source" >> "$GITHUB_ENV"
           printf '{"sourceCommit":"%s"}\n' "$source" > projects/web/dist/deployment.json
+        env:
+          CHECKED_SOURCE: ${{ steps.ci.outputs.source_commit }}
       - name: Deploy and verify Preview only
         id: deploy
         run: node scripts/preview-deploy.js
