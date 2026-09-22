@@ -18,6 +18,7 @@ import { API } from "typescript/unstable/sync"
 import { format } from "prettier"
 import { stageRelease } from "../scripts/packages.js"
 import { authoredGuides } from "../../web/scripts/generate.js"
+import { guideImportSpecifiers } from "./guide-imports.js"
 
 const sdk = fileURLToPath(new URL("../", import.meta.url))
 const fixtureDirectory = fileURLToPath(new URL("./consumers/", import.meta.url))
@@ -125,20 +126,8 @@ function guideCodeBlocks(guides) {
     return blocks
 }
 
-function guideImportSpecifiers(source) {
-    // Authored guide snippets use static ESM imports, including formatted multiline named imports.
-    // The packed tsc checks own complete syntax and type validation after this entry-point selection
-    return new Set(
-        [
-            ...source.matchAll(
-                /^\s*import(?:\s+type)?(?:\s+(?:[^"'`;]|\r?\n)*?\s+from)?\s*["']([^"'\r\n]+)["']\s*;?/gm,
-            ),
-        ].map((match) => match[1]),
-    )
-}
-
 function guideImportKind(example) {
-    const imports = guideImportSpecifiers(example.source)
+    const imports = example.imports
     const entries = new Set(
         [...imports].flatMap((specifier) =>
             specifier === manifest.name ? ["default"] : specifier === `${manifest.name}/effect` ? ["effect"] : [],
@@ -154,10 +143,12 @@ function topLevelConstPrograms(source) {
 }
 
 const websiteGuides = await authoredGuides()
-const authoredGuideExamples = guideCodeBlocks(websiteGuides).map((example) => ({
-    ...example,
-    kind: guideImportKind(example),
-}))
+const authoredGuideExamples = await Promise.all(
+    guideCodeBlocks(websiteGuides).map(async (example) => {
+        const imports = await guideImportSpecifiers(example.source)
+        return { ...example, imports, kind: guideImportKind({ ...example, imports }) }
+    }),
+)
 const guideExampleCounts = Object.fromEntries(
     ["default", "effect"].map((kind) => [
         kind,
@@ -186,7 +177,7 @@ function completeEffectStarter() {
         if (example.guide !== "effect-first-bot" || example.language !== "ts" || example.kind !== "effect") return false
         const programs = topLevelConstPrograms(example.source)
         return (
-            guideImportSpecifiers(example.source).has(`${manifest.name}/effect`) &&
+            example.imports.has(`${manifest.name}/effect`) &&
             programs.length === 1 &&
             (example.source.match(/process\.env\.FLUXER_BOT_TOKEN/g) ?? []).length === 1
         )
@@ -628,6 +619,18 @@ try {
             join(consumer, "standalone-conformance-reference-cases.json"),
         )
         process.stdout.write(run(process.execPath, ["standalone-conformance-reference.js", kind], consumer, 15_000))
+        copyFileSync(join(fixtureDirectory, "module-conformance.js"), join(consumer, "module-conformance.js"))
+        copyFileSync(
+            join(sdk, "tests/module-conformance-registry.js"),
+            join(consumer, "module-conformance-registry.js"),
+        )
+        process.stdout.write(run(process.execPath, ["module-conformance.js", kind], consumer, 10_000))
+        copyFileSync(join(fixtureDirectory, "gateway-conformance.js"), join(consumer, "gateway-conformance.js"))
+        copyFileSync(
+            join(sdk, "tests/gateway-conformance-fixture.js"),
+            join(consumer, "gateway-conformance-fixture.js"),
+        )
+        process.stdout.write(run(process.execPath, ["gateway-conformance.js", kind], consumer, 15_000))
 
         if (kind === "default") {
             copyFileSync(join(fixtureDirectory, "migration-fluxerly.js"), join(consumer, "migration-fluxerly.js"))

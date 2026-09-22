@@ -1,12 +1,52 @@
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { packageManifest, prepareNpmPackage, validateVersion } from "../scripts/packages.js"
+import { guideImportSpecifiers } from "./guide-imports.js"
 
 const sdk = fileURLToPath(new URL("../", import.meta.url))
+
+test("Guide imports use syntax rather than comments, strings or dynamic imports", async () => {
+    const source = [
+        'import client, { createClient as create } from "@neontechspace/fluxerly"',
+        'import type {\n ClientOptions,\n} from "@neontechspace/fluxerly"',
+        'import * as native from "@neontechspace/fluxerly/effect"',
+        'import /* comment */ "side-effect"',
+        '// import "comment-only"',
+        '/* import "block-comment-only" */',
+        'const text = `import "string-only"`',
+        'const lazy = import("dynamic-only")',
+    ].join("\n")
+    assert.deepEqual(
+        [...(await guideImportSpecifiers(source))],
+        ["@neontechspace/fluxerly", "@neontechspace/fluxerly/effect", "side-effect"],
+    )
+    await assert.rejects(guideImportSpecifiers("import { unfinished"))
+})
+
+test("Malformed multiline guide imports terminate without regex backtracking", () => {
+    // A child timeout can terminate a synchronous parser regression, unlike a test-runner timer
+    const helper = new URL("./guide-imports.js", import.meta.url).href
+    const script = `
+        import assert from "node:assert/strict"
+        import { guideImportSpecifiers } from ${JSON.stringify(helper)}
+        for (const whitespace of ["\\n", "\\r\\n", " \\t\\n"]) {
+            await assert.rejects(guideImportSpecifiers("import " + whitespace.repeat(1_000)))
+            assert.deepEqual([...await guideImportSpecifiers(
+                "import {" + whitespace.repeat(1_000) + '} from "control"'
+            )], ["control"])
+        }
+    `
+    execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+        timeout: 10_000,
+        windowsHide: true,
+        stdio: "pipe",
+    })
+})
 
 function temporary(check) {
     const root = realpathSync(tmpdir())

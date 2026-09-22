@@ -177,8 +177,13 @@ It does not establish behavioral parity, assess comment accuracy, or cover every
 
 The [conformance registry](/projects/sdk/tests/conformance-registry.ts) and [standalone/lifecycle inventory](/projects/sdk/tests/standalone-conformance-registry.ts) record provider contracts, local exclusions and existing test owners.
 The [inventory gate](/projects/sdk/tests/conformance-registry.test.ts) checks both public entry points, including standalone OAuth/Webhook clients and Client top-level members, and rejects missing or unregistered members.
-Shared reference cases run against source and packed exports for selected member-role, OAuth, webhook and local shutdown behavior.
-This is bounded behavioral evidence, not exhaustive field-schema parity, gateway lifecycle replay or live OAuth consent qualification
+The [runtime export inventory](/projects/sdk/tests/module-conformance-registry.js) also checks exact value exports and intentional entrypoint differences.
+The [field coverage gate](/projects/sdk/tests/conformance-fields-coverage.test.ts) matches source-derived request, response and event fields to authored rules or explicit local exclusions.
+The [semantic baseline](/projects/sdk/tests/conformance-fields-shapes.snapshot.txt) records operation signatures, union variants, field types, optionality and nullability.
+After reviewing an intentional public shape change, update it from the SDK directory with `pnpm exec vitest run -u tests/conformance-fields-inventory.test.ts`, and review the generated diff with the affected field rules and behavioral tests.
+Shared reference cases run against source and packed exports for selected member-role, OAuth, webhook and local shutdown behavior,
+plus [gateway lifecycle replay](/projects/sdk/tests/gateway-conformance-fixture.js).
+This is bounded behavioral evidence, not exhaustive provider-schema parity or live OAuth consent qualification
 
 The upstream guild-feature check pins one current Fluxer commit per run and fails on changed values or unrecognized source structure.
 It is a manual source-drift signal, not hosted behavior proof; the live feature-toggle check owns semantic round trips and restoration
@@ -190,6 +195,12 @@ Both build first and use controlled responses, not Fluxer credentials or product
 Run `pnpm --filter @neontechspace/fluxerly test:rest:queue` to compare JSON queue-byte budgets through both built APIs.
 The benchmark uses isolated processes and controlled HTTP responses, changing only the loaded queue constant without editing source or build output.
 It reports rejection, timeout, latency and process-memory observations; it does not measure hosted service limits or select a default automatically
+
+After building the SDK, run `pnpm --filter @neontechspace/fluxerly exec node tests/performance-logging.js` for logging-overhead measurements
+or `pnpm --filter @neontechspace/fluxerly exec node tests/performance-local.js` for cold import/client lifecycle, cache-workload and retention measurements.
+Both are opt-in, use controlled responses without credentials and emit JSON Lines with input hashes, environment, raw samples and descriptive summaries.
+Run them serially without concurrent builds or test workers. The optional `--smoke` flag checks harness correctness with reduced work, not performance.
+These measurements are local evidence, not hosted throughput claims or mandatory CI speed thresholds
 
 ### Package preparation
 
@@ -237,6 +248,11 @@ Each mode creates one journaled zero-permission role in the designated sandbox, 
 UTF-16 boundary writes, and reconciles an intentionally lost edit response without replaying the write.
 No human membership or existing role is changed. Cleanup verifies test-role absence, retaining
 `.env.test.text-validation.local` if ownership or cleanup cannot be established
+
+After building the SDK, run `pnpm --filter @neontechspace/fluxerly exec node tests/live/recovery-window.js default`
+and then the same command with `effect` for a bounded gateway recovery window.
+Each mode observes at least 165 seconds and interrupts only its own authenticated sockets, including one locally delayed Hello frame.
+The check uses the shared live-test lock and makes no server mutations. Cleanup closes the client and owned sockets before releasing the verified lock
 
 `test:live:expressions` checks emoji/sticker lifecycle, gateway updates, partial batches and sticker messages through both built APIs.
 It creates temporary expressions and a channel, deletes test-owned resources without media purging, and preserves a recovery journal on unresolved outcomes
