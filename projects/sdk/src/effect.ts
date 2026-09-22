@@ -1245,6 +1245,7 @@ export type {
  * Use an Effect logger with the JavaScript & TypeScript API without adding Effect types to that API.
  * Pass the returned value as logging.logger to createClient from the default entry point.
  * Delivery is synchronous. Thrown logger failures are swallowed without retry, while a blocking logger can delay SDK work.
+ * Returned promises or thenables are not awaited, and their rejections are discarded.
  * No queue, sink flushing or persistence guarantee is added. Effect callers use their own Effect logger directly.
  * The SDK supplies safe messages and empty causes.
  * You remain responsible for any context you add and for what the logger's output destination does

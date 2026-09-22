@@ -8,7 +8,8 @@ import type {
 /**
  * Names, help text and positional arguments for a command such as `!repeat hello 3`.
  * Each API's command type adds the callback that runs when this name or an alias matches.
- * Registration copies this data, so later edits do not change an existing router
+ * Registration copies this data, so later edits do not change an existing router.
+ * Individual and batch command registration read recognized fields once, including inherited and non-enumerable fields
  */
 export interface PrefixCommandDefinition {
     /** Name without the prefix, such as `repeat`, beginning with an ASCII letter or digit and using only ASCII letters, digits, `_` or `-` */

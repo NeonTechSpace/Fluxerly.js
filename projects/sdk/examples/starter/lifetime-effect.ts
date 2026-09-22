@@ -91,9 +91,17 @@ function superviseWithSignals<M extends MessageCore>(
             client.state !== "Closed"
         )
             unexpected = Exit.fail(new CriticalWorkerStoppedError(first.index - 1))
+        // A pending run may report ClientClosedError only because this supervisor closes its client.
+        const supervisorCanCloseRun =
+            fibers[0]!.pollUnsafe() === undefined && client.state !== "Closing" && client.state !== "Closed"
         const shutdown = yield* Effect.exit(client.shutdown())
         const outcomes = yield* Fiber.awaitAll(fibers)
-        return yield* combine([...outcomes, shutdown, ...(unexpected ? [unexpected] : [])])
+        const run = outcomes[0]!
+        const reason = Exit.isFailure(run) && run.cause.reasons.length === 1 ? run.cause.reasons[0] : undefined
+        const expectedClosure =
+            supervisorCanCloseRun && reason?._tag === "Fail" && reason.error._tag === "ClientClosedError"
+        const normalizedRun = expectedClosure ? Exit.void : run
+        return yield* combine([normalizedRun, ...outcomes.slice(1), shutdown, ...(unexpected ? [unexpected] : [])])
     })
 }
 

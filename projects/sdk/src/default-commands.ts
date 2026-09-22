@@ -27,7 +27,7 @@ import {
     type LocalMemoryCooldownStore,
     PrefixCommandRegistry,
     snapshotCommandDefinition,
-    validateCommandCooldown,
+    snapshotCommandCooldown,
     validateCommandShape,
 } from "#sdk/internal/commands"
 import { convertCommandArguments } from "#sdk/internal/command-arguments"
@@ -271,7 +271,9 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
     /**
      * Validate and add a nonempty keyed command object to one new router, in JavaScript own enumerable string-key order and under the same optional parent group.
      * Each object key supplies its command name. Set `arguments: {}` to reject positional arguments, or `arguments: undefined` to leave raw args unrestricted.
-     * Every definition is snapshotted before registration. Inherited keys are ignored. If any definition is invalid or any name collides, the whole call returns
+     * Every definition is snapshotted before registration. Inherited batch keys are ignored.
+     * Recognized fields inside each definition are read once, including inherited and non-enumerable fields.
+     * If any definition is invalid or any name collides, the whole call returns
      * Err(ConfigurationError), without a partially registered router or changes to this router and its attachments.
      * The optional parent is validated and snapshotted once for the whole batch. Unexpected getter defects throw a safe SdkDefect for `commands`.
      * Each entry retains its own inferred argument-value type
@@ -500,6 +502,7 @@ function snapshotDefaultOnUnmatched<M extends MessageCore>(
 
 function snapshotDefaultCommand<S extends CommandArgumentSchema, M extends MessageCore>(
     command: DefaultPrefixCommand<S, M>,
+    keyedName?: string,
 ): StoredDefaultCommand<M> {
     validateCommandShape(command, [
         "name",
@@ -512,19 +515,19 @@ function snapshotDefaultCommand<S extends CommandArgumentSchema, M extends Messa
         "cooldown",
         "execute",
     ])
-    if (typeof command.execute !== "function") throw new ConfigurationError("command", "A command must provide execute")
-    if (command.guard !== undefined && typeof command.guard !== "function")
+    const { execute, guard, onReject, cooldown: sourceCooldown } = command
+    if (typeof execute !== "function") throw new ConfigurationError("command", "A command must provide execute")
+    if (guard !== undefined && typeof guard !== "function")
         throw new ConfigurationError("command", "guard must be a function when supplied")
-    if (command.onReject !== undefined && typeof command.onReject !== "function")
+    if (onReject !== undefined && typeof onReject !== "function")
         throw new ConfigurationError("command", "onReject must be a function when supplied")
-    validateCommandCooldown(command.cooldown)
-    const definition = snapshotCommandDefinition(command)
-    const cooldown = command.cooldown
+    const cooldown = snapshotCommandCooldown(sourceCooldown)
+    const definition = snapshotCommandDefinition(command, keyedName)
     return Object.freeze({
         ...definition,
-        execute: command.execute as StoredDefaultCommand<M>["execute"],
-        ...(command.guard === undefined ? {} : { guard: command.guard }),
-        ...(command.onReject === undefined ? {} : { onReject: command.onReject }),
+        execute: execute as StoredDefaultCommand<M>["execute"],
+        ...(guard === undefined ? {} : { guard }),
+        ...(onReject === undefined ? {} : { onReject }),
         ...(cooldown === undefined
             ? {}
             : {
@@ -556,7 +559,7 @@ function snapshotDefaultCommandBatch<M extends MessageCore>(
             throw new ConfigurationError("command", "A command batch entry must be an object")
         if (Object.prototype.hasOwnProperty.call(value, "name"))
             throw new ConfigurationError("command", "A command batch entry must use its object key as the name")
-        stored.push(snapshotDefaultCommand({ ...(value as DefaultPrefixCommand<CommandArgumentSchema, M>), name }))
+        stored.push(snapshotDefaultCommand(value as DefaultPrefixCommand<CommandArgumentSchema, M>, name))
     }
     return Object.freeze(stored)
 }

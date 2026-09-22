@@ -253,51 +253,52 @@ export function createMemoryCooldownStore(options: MemoryCooldownOptions | undef
     return new LocalMemoryCooldownStoreOwner(maxEntries)
 }
 
-/** Validate command-level cooldown metadata before an adapter snapshots its intentional store and key references */
-export function validateCommandCooldown(value: unknown): void {
+/** Snapshot cooldown fields before validation, retaining only the intentional store and key references */
+export function snapshotCommandCooldown<
+    T extends { readonly store: unknown; readonly durationMs: number; readonly key?: unknown },
+>(value: T | undefined): T | undefined {
     if (value === undefined) return
     validateObjectShape(value, ["store", "durationMs", "key"], "cooldown", "cooldown")
-    const cooldown = value as { durationMs?: unknown; store?: unknown; key?: unknown }
+    const { durationMs, store, key } = value
     if (
-        typeof cooldown.durationMs !== "number" ||
-        !Number.isSafeInteger(cooldown.durationMs) ||
-        cooldown.durationMs < 1 ||
-        cooldown.durationMs > maxDurationMs
+        typeof durationMs !== "number" ||
+        !Number.isSafeInteger(durationMs) ||
+        durationMs < 1 ||
+        durationMs > maxDurationMs
     )
         throw new ConfigurationError(
             "cooldown",
             `cooldown durationMs must be a positive safe integer no greater than ${maxDurationMs}`,
         )
-    if (
-        typeof cooldown.store !== "object" ||
-        cooldown.store === null ||
-        typeof (cooldown.store as { claim?: unknown }).claim !== "function"
-    )
+    if (typeof store !== "object" || store === null || typeof (store as { claim?: unknown }).claim !== "function")
         throw new ConfigurationError("cooldown", "cooldown store must provide claim")
-    if (cooldown.key !== undefined && typeof cooldown.key !== "function")
+    if (key !== undefined && typeof key !== "function")
         throw new ConfigurationError("cooldown", "cooldown key must be a function when supplied")
+    return Object.freeze({ store, durationMs, ...(key === undefined ? {} : { key }) }) as T
 }
 
 /** Validate and copy the shared definition fields once before an adapter adds its callback and cooldown references */
-export function snapshotCommandDefinition(value: PrefixCommandDefinition): PrefixCommandDefinition {
+export function snapshotCommandDefinition(value: PrefixCommandDefinition, keyedName?: string): PrefixCommandDefinition {
     if (typeof value !== "object" || value === null)
         throw new ConfigurationError("command", "A command must be an object")
-    if (!isCommandName(value.name))
+    const name = keyedName ?? value.name
+    if (!isCommandName(name))
         throw new ConfigurationError(
             "command",
             "Command names must use ASCII letters, numbers, `_` or `-` and begin alphanumerically",
         )
-    const aliases = value.aliases === undefined ? undefined : copyCommandNames(value.aliases, "aliases")
-    if (value.description !== undefined && typeof value.description !== "string")
+    const { aliases: sourceAliases, description, usage, arguments: sourceArguments } = value
+    const aliases = sourceAliases === undefined ? undefined : copyCommandNames(sourceAliases, "aliases")
+    if (description !== undefined && typeof description !== "string")
         throw new ConfigurationError("command", "Command description must be a string when supplied")
-    if (value.usage !== undefined && typeof value.usage !== "string")
+    if (usage !== undefined && typeof usage !== "string")
         throw new ConfigurationError("command", "Command usage must be a string when supplied")
-    const argumentsSchema = snapshotCommandArguments(value.arguments)
+    const argumentsSchema = snapshotCommandArguments(sourceArguments)
     return Object.freeze({
-        name: value.name,
+        name,
         ...(aliases === undefined ? {} : { aliases }),
-        ...(value.description === undefined ? {} : { description: value.description }),
-        ...(value.usage === undefined ? {} : { usage: value.usage }),
+        ...(description === undefined ? {} : { description }),
+        ...(usage === undefined ? {} : { usage }),
         ...(argumentsSchema === undefined ? {} : { arguments: argumentsSchema }),
     })
 }

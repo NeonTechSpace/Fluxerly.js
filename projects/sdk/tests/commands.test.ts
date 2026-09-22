@@ -113,6 +113,197 @@ async function nativeClient() {
     return { client, scope, registration }
 }
 
+for (const api of ["default", "native"] as const) {
+    test(`${api} batch keeps a prototype guard when the action and arguments are own fields`, async () => {
+        const remote = await fixture()
+        const seen: string[] = []
+        const adapt = (value: string) =>
+            api === "native"
+                ? Effect.sync(() => {
+                      seen.push(value)
+                  })
+                : void seen.push(value)
+        class RestrictedCommand {
+            arguments = {}
+            guard() {
+                return api === "native" ? Effect.succeed(false) : false
+            }
+            onReject = () => adapt("denied")
+            execute = () => adapt("executed")
+        }
+        if (api === "default") {
+            const client = await defaultClient()
+            const router = value(
+                value(commands.create({ prefix: "!" })).registerMany({ restricted: new RestrictedCommand() } as never),
+            )
+            value(router.attach(client))
+        } else {
+            const { client, registration } = await nativeClient()
+            const root = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+            const router = await Effect.runPromise(root.registerMany({ restricted: new RestrictedCommand() } as never))
+            await Effect.runPromise(router.attach(client).pipe(Scope.provide(registration)))
+        }
+        remote.deliver("!restricted")
+        await vi.waitFor(() => expect(seen).toHaveLength(1))
+        expect(seen).toEqual(["denied"])
+    })
+
+    test(`${api} batch validates original entry keys and ignores only inherited names`, async () => {
+        const entry = () => ({ arguments: {}, execute: () => (api === "native" ? Effect.void : undefined) })
+        const good = Object.setPrototypeOf(
+            entry(),
+            Object.defineProperty({}, "name", {
+                get() {
+                    throw new Error("Inherited name must not be read")
+                },
+            }),
+        )
+        const bad = ["name", "privateOption", Symbol("unknown")].map((key) =>
+            Object.defineProperty(entry(), key, { value: "invalid", enumerable: false }),
+        )
+        if (api === "default") {
+            const root = value(commands.create({ prefix: "!" }))
+            expect(value(root.registerMany({ keyed: good } as never)).commands[0]?.name).toBe("keyed")
+            for (const invalid of bad)
+                expect(root.registerMany({ first: entry(), invalid } as never).isErr()).toBe(true)
+            expect(root.commands).toEqual([])
+        } else {
+            const root = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+            expect((await Effect.runPromise(root.registerMany({ keyed: good } as never))).commands[0]?.name).toBe(
+                "keyed",
+            )
+            for (const invalid of bad)
+                expect(
+                    Exit.isFailure(
+                        await Effect.runPromiseExit(root.registerMany({ first: entry(), invalid } as never)),
+                    ),
+                ).toBe(true)
+            expect(root.commands).toEqual([])
+        }
+    })
+
+    for (const storage of ["enumerable", "prototype", "nonenumerable", "getter"] as const) {
+        for (const registrationMode of ["register", "registerMany"] as const) {
+            test(`${api} ${registrationMode} preserves ${storage} command policies and validated field snapshots`, async () => {
+                const remote = await fixture()
+                const seen: string[] = []
+                const executed: number[] = []
+                const guards: string[] = []
+                const claims: string[] = []
+                const reads = new Map<string, number>()
+                const adapt = <A>(thunk: () => A) => (api === "native" ? Effect.sync(thunk) : thunk())
+                const definitions: Record<string, object> = {}
+                const keys = ["guard", "arguments", "cooldown", "allowed"] as const
+                for (const name of keys) {
+                    const cooldown = {}
+                    const cooldownFields = {
+                        durationMs: 1000,
+                        store: {
+                            claim: () =>
+                                adapt(() => {
+                                    claims.push(name)
+                                    return {
+                                        _tag: name === "cooldown" ? "CooldownActive" : "CooldownAcquired",
+                                        retryAtMs: Date.now() + 1000,
+                                    }
+                                }),
+                        },
+                        key: () => "fixture",
+                    }
+                    for (const [key, value] of Object.entries(cooldownFields)) {
+                        Object.defineProperty(cooldown, key, {
+                            enumerable: true,
+                            get() {
+                                const id = `${name}.cooldown.${key}`
+                                const count = (reads.get(id) ?? 0) + 1
+                                reads.set(id, count)
+                                return count === 1 ? value : undefined
+                            },
+                        })
+                    }
+                    const fields = {
+                        aliases: [`alias-${name}`],
+                        description: `${name} policy`,
+                        usage: "<count>",
+                        arguments: { count: { type: "integer" } },
+                        guard: () =>
+                            adapt(() => {
+                                guards.push(name)
+                                return name !== "guard"
+                            }),
+                        cooldown,
+                        onReject: (_context: unknown, rejection: { _tag: string }) =>
+                            adapt(() => {
+                                seen.push(`${name}:${rejection._tag}`)
+                            }),
+                    }
+                    const definition = storage === "prototype" ? Object.create(fields) : {}
+                    if (storage !== "prototype")
+                        for (const [key, value] of Object.entries(fields)) {
+                            Object.defineProperty(
+                                definition,
+                                key,
+                                storage === "getter"
+                                    ? {
+                                          enumerable: true,
+                                          get() {
+                                              const id = `${name}.${key}`
+                                              const count = (reads.get(id) ?? 0) + 1
+                                              reads.set(id, count)
+                                              return count === 1 ? value : undefined
+                                          },
+                                      }
+                                    : { enumerable: storage === "enumerable", value },
+                            )
+                        }
+                    // Keep execute enumerable so losing a guard cannot be masked by rejecting a missing action
+                    definition.execute = ({ values }: { values: { count: number } }) =>
+                        adapt(() => {
+                            executed.push(values.count)
+                            seen.push(name)
+                        })
+                    if (registrationMode === "register") definition.name = name
+                    definitions[name] = definition
+                }
+                // Descriptor-built definitions exercise JavaScript shapes. Packed consumers own inference coverage
+                if (api === "default") {
+                    const client = await defaultClient()
+                    let router = value(commands.create({ prefix: "!" }))
+                    if (registrationMode === "registerMany") router = value(router.registerMany(definitions as never))
+                    else
+                        for (const definition of Object.values(definitions))
+                            router = value(router.register(definition as never))
+                    value(router.attach(client))
+                } else {
+                    const { client, registration } = await nativeClient()
+                    let router = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+                    if (registrationMode === "registerMany")
+                        router = await Effect.runPromise(router.registerMany(definitions as never))
+                    else
+                        for (const definition of Object.values(definitions))
+                            router = await Effect.runPromise(router.register(definition as never))
+                    await Effect.runPromise(router.attach(client).pipe(Scope.provide(registration)))
+                }
+                remote.deliver("!alias-guard 2")
+                remote.deliver("!alias-arguments invalid")
+                remote.deliver("!alias-cooldown 2")
+                remote.deliver("!alias-allowed 2")
+                await vi.waitFor(() => expect(seen).toHaveLength(4))
+                expect(seen).toEqual([
+                    "guard:CommandGuardRejected",
+                    "arguments:CommandArgumentRejected",
+                    "cooldown:CommandCooldownActive",
+                    "allowed",
+                ])
+                expect(executed).toEqual([2])
+                expect(guards).toEqual(keys)
+                expect(claims).toEqual(["cooldown", "allowed"])
+                expect([...reads.values()].every((count) => count === 1)).toBe(true)
+            })
+        }
+    }
+}
+
 test("default batch commands bind reply targets, Results and handler cancellation", async () => {
     const requests: Record<string, unknown>[] = []
     let requestSignal: AbortSignal | undefined

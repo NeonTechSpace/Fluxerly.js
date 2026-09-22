@@ -89,7 +89,7 @@ export function adaptLogger(logger: Logger.Logger<unknown, unknown>): DefaultLog
         integration,
         Logger.make((entry) => {
             try {
-                return log(entry)
+                discardInvalidCallbackReturn(log(entry))
             } catch {
                 /* Logging failure must not change SDK outcomes or recurse */
             }

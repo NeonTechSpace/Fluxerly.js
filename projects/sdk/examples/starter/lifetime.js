@@ -15,7 +15,7 @@ export class CriticalWorkerStoppedError extends Error {
 
 /** @param {unknown[]} errors */
 function throwFailures(errors) {
-    const unique = errors.filter((error, index) => errors.indexOf(error) === index)
+    const unique = [...new Set(errors)]
     if (unique.length === 1) throw unique[0]
     if (unique.length > 1) throw new AggregateError(unique, "Bot lifetime failed")
 }

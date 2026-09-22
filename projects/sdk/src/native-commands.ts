@@ -26,7 +26,7 @@ import {
     type LocalMemoryCooldownStore,
     PrefixCommandRegistry,
     snapshotCommandDefinition,
-    validateCommandCooldown,
+    snapshotCommandCooldown,
     validateCommandShape,
 } from "#sdk/internal/commands"
 import { convertCommandArguments } from "#sdk/internal/command-arguments"
@@ -288,7 +288,9 @@ export interface NativePrefixCommandRouter<R = never, M extends MessageCore = Me
     /**
      * Return an Effect that validates and adds a nonempty keyed command object to one new router, in JavaScript own enumerable string-key order and under one optional parent.
      * Each object key supplies its command name. Set `arguments: {}` to reject positional arguments, or `arguments: undefined` to leave raw args unrestricted.
-     * Every definition is snapshotted before registration. Inherited keys are ignored. If any definition is invalid or any name collides, the Effect fails with
+     * Every definition is snapshotted before registration. Inherited batch keys are ignored.
+     * Recognized fields inside each definition are read once, including inherited and non-enumerable fields.
+     * If any definition is invalid or any name collides, the Effect fails with
      * ConfigurationError and produces no partially registered router. Earlier routers and attachments remain unchanged.
      * The optional parent is validated and snapshotted once when the Effect runs. Unexpected getter defects remain in the Effect cause.
      * Each entry retains its inferred argument values, and the returned router records every callback service requirement
@@ -563,6 +565,7 @@ function snapshotNativeOnUnmatched<E, R, M extends MessageCore>(
 
 function snapshotNativeCommand<E, R, S extends CommandArgumentSchema, M extends MessageCore>(
     command: NativePrefixCommand<E, R, S, M>,
+    keyedName?: string,
 ): StoredNativeCommand<M> {
     validateCommandShape(command, [
         "name",
@@ -575,19 +578,19 @@ function snapshotNativeCommand<E, R, S extends CommandArgumentSchema, M extends 
         "cooldown",
         "execute",
     ])
-    if (typeof command.execute !== "function") throw new ConfigurationError("command", "A command must provide execute")
-    if (command.guard !== undefined && typeof command.guard !== "function")
+    const { execute, guard, onReject, cooldown: sourceCooldown } = command
+    if (typeof execute !== "function") throw new ConfigurationError("command", "A command must provide execute")
+    if (guard !== undefined && typeof guard !== "function")
         throw new ConfigurationError("command", "guard must be a function when supplied")
-    if (command.onReject !== undefined && typeof command.onReject !== "function")
+    if (onReject !== undefined && typeof onReject !== "function")
         throw new ConfigurationError("command", "onReject must be a function when supplied")
-    validateCommandCooldown(command.cooldown)
-    const definition = snapshotCommandDefinition(command)
-    const cooldown = command.cooldown
+    const cooldown = snapshotCommandCooldown(sourceCooldown)
+    const definition = snapshotCommandDefinition(command, keyedName)
     return Object.freeze({
         ...definition,
-        execute: command.execute as StoredNativeCommand<M>["execute"],
-        ...(command.guard === undefined ? {} : { guard: command.guard as StoredNativeCommand<M>["guard"] }),
-        ...(command.onReject === undefined ? {} : { onReject: command.onReject as StoredNativeCommand<M>["onReject"] }),
+        execute: execute as StoredNativeCommand<M>["execute"],
+        ...(guard === undefined ? {} : { guard: guard as StoredNativeCommand<M>["guard"] }),
+        ...(onReject === undefined ? {} : { onReject: onReject as StoredNativeCommand<M>["onReject"] }),
         ...(cooldown === undefined
             ? {}
             : {
@@ -620,10 +623,7 @@ function snapshotNativeCommandBatch<M extends MessageCore>(
         if (Object.prototype.hasOwnProperty.call(value, "name"))
             throw new ConfigurationError("command", "A command batch entry must use its object key as the name")
         stored.push(
-            snapshotNativeCommand({
-                ...(value as NativePrefixCommand<unknown, unknown, CommandArgumentSchema, M>),
-                name,
-            }),
+            snapshotNativeCommand(value as NativePrefixCommand<unknown, unknown, CommandArgumentSchema, M>, name),
         )
     }
     return Object.freeze(stored)
