@@ -220,7 +220,7 @@ function auditOptions(operation) {
     return { auditReason }
 }
 
-async function waitForAuditEntry(botId, actionType, targetId, auditReason, channelId, required = true) {
+async function waitForAuditEntry(botId, actionType, targetId, auditReason, channelId) {
     const query = new URLSearchParams({ user_id: botId, action_type: String(actionType), limit: "100" })
     const targetIds = Array.isArray(targetId) ? targetId : [targetId]
     let diagnostics
@@ -251,7 +251,6 @@ async function waitForAuditEntry(botId, actionType, targetId, auditReason, chann
         await sleep(500)
     }
     console.log(JSON.stringify({ mode, check: `${stage}_audit_match_diagnostic`, passed: false, ...diagnostics }))
-    if (!required) return undefined
     assert.fail(`Audit entry deadline for action ${actionType}`)
 }
 
@@ -576,7 +575,6 @@ async function verifyGuildCache(ops, target, roleId, botId) {
 
 async function verifyGuildRoles(ops, roleId, botId) {
     stage = "role_management_after_resume"
-    let roleAuditReadbackComplete = true
     const seen = []
     const stops = []
     for (const event of ["guildRoleCreate", "guildRoleUpdate", "guildRoleUpdateBulk", "guildRoleDelete"]) {
@@ -608,8 +606,25 @@ async function verifyGuildRoles(ops, roleId, botId) {
         stage = "role_create_event"
         await waitEvent("guildRoleCreate", (role) => role.id === secondId && role.permissions === 0n)
         await waitForAuditEntry(botId, auditActions.roleCreate, secondId, secondRoleCreate.auditReason)
+        stage = "role_distinct_position_setup"
+        const initial = await ops.roles()
+        const initialFirst = initial.find((role) => role.id === roleId)
+        const initialSecond = initial.find((role) => role.id === secondId)
+        assert.ok(initialFirst && initialSecond)
+        if (initialFirst.position === initialSecond.position) {
+            // New roles share position 1. Normalize without changing their order before auditing a swap:
+            // Fluxer intersects numerically changed roles with LCS-moved roles, which can be disjoint for ties
+            await ops.reorderRoles([
+                { id: roleId, position: initialFirst.position },
+                { id: secondId, position: initialSecond.position },
+            ])
+        }
         stage = "role_list_readback"
         const listed = await ops.roles()
+        assert.deepEqual(
+            listed.map((role) => role.id),
+            initial.map((role) => role.id),
+        )
         const raw = (await api("GET", `/guilds/${guildId}/roles`)).data
         assert.deepEqual(
             listed.map((role) => role.id),
@@ -623,6 +638,8 @@ async function verifyGuildRoles(ops, roleId, botId) {
         const first = listed.find((role) => role.id === roleId)
         const second = listed.find((role) => role.id === secondId)
         assert.ok(first && second)
+        assert.notEqual(first.position, second.position)
+        report("role_distinct_position_setup", true)
         const beforeOrder = listed.indexOf(first) - listed.indexOf(second)
         stage = "role_edit_readback"
         const roleEdit = auditOptions("role-edit")
@@ -641,14 +658,8 @@ async function verifyGuildRoles(ops, roleId, botId) {
         const reorderEventStart = seen.length
         await ops.reorderRoles(
             [
-                {
-                    id: roleId,
-                    position: first.position === second.position ? (beforeOrder < 0 ? 0 : 1) : second.position,
-                },
-                {
-                    id: secondId,
-                    position: first.position === second.position ? (beforeOrder < 0 ? 1 : 0) : first.position,
-                },
+                { id: roleId, position: second.position },
+                { id: secondId, position: first.position },
             ],
             roleReorder,
         )
@@ -662,7 +673,7 @@ async function verifyGuildRoles(ops, roleId, botId) {
             ...(firstAfter.position === first.position ? [] : [roleId]),
             ...(secondAfter.position === second.position ? [] : [secondId]),
         ]
-        assert.ok(changedRoleIds.length > 0)
+        assert.equal(changedRoleIds.length, 2)
         const untouched = (roles) =>
             roles.filter((role) => role.id !== roleId && role.id !== secondId).map((role) => role.id)
         assert.deepEqual(untouched(reordered), untouched(listed))
@@ -683,19 +694,8 @@ async function verifyGuildRoles(ops, roleId, botId) {
             reorderEventStart,
         )
         stage = "role_reorder_audit_readback"
-        const reorderAudit = await waitForAuditEntry(
-            botId,
-            auditActions.roleUpdate,
-            changedRoleIds,
-            roleReorder.auditReason,
-            undefined,
-            false,
-        )
-        report("role_reorder_audit_reason_readback", reorderAudit !== undefined)
-        if (reorderAudit === undefined) {
-            roleAuditReadbackComplete = false
-            process.exitCode = 1
-        }
+        await waitForAuditEntry(botId, auditActions.roleUpdate, changedRoleIds, roleReorder.auditReason)
+        report("role_reorder_audit_reason_readback", true)
         stage = "role_hoist_positions"
         const roleHoist = auditOptions("role-hoist")
         await ops.setHoistPositions(
@@ -776,7 +776,7 @@ async function verifyGuildRoles(ops, roleId, botId) {
         assert.deepEqual(untouched(after), untouched(listed))
         const member = (await api("GET", `/guilds/${guildId}/members/@me`)).data
         assert.ok(!member.roles.includes(roleId) && !member.roles.includes(secondId))
-        report("role_audit_reason_readback", roleAuditReadbackComplete)
+        report("role_audit_reason_readback", true)
         stage = "role_management_after_resume"
         report(stage, true)
     } finally {
