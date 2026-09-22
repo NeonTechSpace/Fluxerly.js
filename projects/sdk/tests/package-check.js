@@ -360,6 +360,7 @@ try {
             (file) =>
                 ["package.json", "README.md", "consumer/AGENTS.md", "LICENSE", "CHANGELOG.md"].includes(file) ||
                 file.startsWith("dist/") ||
+                file.startsWith("examples/starter/") ||
                 file.startsWith("src/"),
         ),
     )
@@ -367,6 +368,13 @@ try {
     assert.ok(files.includes("README.md"))
     assert.ok(files.includes("LICENSE"))
     assert.ok(!files.includes("AGENTS.md"), "Contributor instructions must not ship as consumer guidance")
+    assert.deepEqual(
+        files.filter((file) => file.startsWith("examples/starter/")).toSorted(),
+        ["bot-effect.ts", "bot.js", "bot.ts", "lifetime-effect.ts", "lifetime.js"].map(
+            (file) => `examples/starter/${file}`,
+        ),
+        "The package must ship the complete copyable starter inventory",
+    )
 
     copyFileSync(join(sdk, "tests/hosted-discovery.mjs"), join(temporary, "hosted-discovery.mjs"))
     for (const kind of ["default", "effect"]) {
@@ -563,8 +571,11 @@ try {
         }
 
         if (kind === "default") assert.equal(existsSync(join(consumer, "node_modules/effect")), false)
+        for (const file of kind === "default" ? ["lifetime.js"] : ["lifetime-effect.ts"]) {
+            copyFileSync(join(installed, "examples/starter", file), join(consumer, file))
+        }
         if (kind === "default") {
-            const websiteGuide = readFileSync(join(sdk, "../web/content/guides/quick-start.md"), "utf8")
+            const websiteGuide = websiteGuides.find((guide) => guide.slug === "quick-start").content
             const websiteExamples = [...websiteGuide.matchAll(/```js\r?\n([\s\S]*?)```/g)]
             assert.equal(
                 websiteExamples.length,
@@ -572,6 +583,13 @@ try {
                 "Expected one exact website bot block shared by JavaScript and TypeScript",
             )
             assert.equal((websiteExamples[0][1].match(/process\.env\.FLUXER_BOT_TOKEN/g) ?? []).length, 1)
+            for (const file of ["bot.js", "bot.ts"]) {
+                assert.equal(
+                    await normalizeJavaScriptExample(readFileSync(join(installed, "examples/starter", file), "utf8")),
+                    await normalizeJavaScriptExample(websiteExamples[0][1]),
+                    `The installed ${file} must match the rendered runnable starter`,
+                )
+            }
             for (const readme of [join(sdk, "../../docs/README.md"), join(installed, "README.md")]) {
                 const markdown = readFileSync(readme, "utf8")
                 const examples = [...markdown.matchAll(/```js\r?\n([\s\S]*?)```/g)]
@@ -593,6 +611,11 @@ try {
         }
         if (kind === "effect") {
             const starter = completeEffectStarter()
+            assert.equal(
+                starter.source.trim(),
+                readFileSync(join(installed, "examples/starter/bot-effect.ts"), "utf8").trim(),
+                "The rendered native starter must use the installed application source",
+            )
             const filename = "effect-website-guide.ts"
             writeFileSync(join(consumer, filename), starter.source)
             copyFileSync(join(fixtureDirectory, "effect-website-guide.js"), join(consumer, "effect-website-guide.js"))
@@ -898,6 +921,7 @@ try {
                     "logging-example.ts",
                     "run-bot-example.ts",
                     "effect-website-guide.ts",
+                    "lifetime-effect.ts",
                     ...additionalExamples,
                     ...authoredGuideFixtures.typescript,
                 ],
@@ -920,12 +944,16 @@ try {
                     exactOptionalPropertyTypes: true,
                     noUncheckedIndexedAccess: true,
                     noEmit: true,
+                    allowJs: true,
+                    checkJs: true,
+                    allowImportingTsExtensions: true,
+                    erasableSyntaxOnly: true,
                     lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                 },
                 files:
                     kind === "default"
                         ? ["run-bot-example.ts", "logging-example.ts", "bot.ts"]
-                        : ["run-bot-example.ts", "logging-example.ts"],
+                        : ["run-bot-example.ts", "logging-example.ts", "effect-website-guide.ts"],
             }),
         )
         run(process.execPath, [compiler, "-p", "run-bot-tsconfig.json"], consumer)
@@ -941,6 +969,7 @@ try {
                         exactOptionalPropertyTypes: true,
                         noUncheckedIndexedAccess: true,
                         noEmit: true,
+                        allowImportingTsExtensions: true,
                         lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                     },
                     files: additionalExamples,
@@ -961,6 +990,9 @@ try {
                         exactOptionalPropertyTypes: true,
                         noUncheckedIndexedAccess: true,
                         noEmit: true,
+                        allowJs: true,
+                        checkJs: true,
+                        allowImportingTsExtensions: true,
                         lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                     },
                     files: authoredGuideFixtures.typescript,
@@ -982,6 +1014,7 @@ try {
                         allowJs: true,
                         checkJs: false,
                         noEmit: true,
+                        allowImportingTsExtensions: true,
                         lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
                     },
                     files: authoredGuideFixtures.javascript,
@@ -992,6 +1025,29 @@ try {
         console.log(
             `${kind} authored website guide examples passed: ${authoredGuideFixtures.javascript.length} JavaScript and ${authoredGuideFixtures.typescript.length} TypeScript`,
         )
+        if (kind === "default") {
+            copyFileSync(join(fixtureDirectory, "javascript-tooling.js"), join(consumer, "javascript-tooling.js"))
+            writeFileSync(
+                join(consumer, "javascript-tooling-tsconfig.json"),
+                JSON.stringify({
+                    compilerOptions: {
+                        target: "ES2024",
+                        module: "NodeNext",
+                        types: [],
+                        lib: ["ES2024"],
+                        strict: true,
+                        exactOptionalPropertyTypes: true,
+                        noUncheckedIndexedAccess: true,
+                        allowJs: true,
+                        checkJs: true,
+                        noEmit: true,
+                    },
+                    files: ["javascript-tooling.js"],
+                }),
+            )
+            run(process.execPath, [compiler, "-p", "javascript-tooling-tsconfig.json"], consumer)
+            console.log("Packed checked-JavaScript inference, Result narrowing and invalid-input diagnostics passed")
+        }
         const invocation =
             kind === "default"
                 ? "import { createAndReadState } from './out/consumer.js'; if (createAndReadState('fixture-only-not-a-credential') !== 'Disconnected') throw Error('Unexpected state')"

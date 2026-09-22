@@ -79,7 +79,18 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
 
     /** Retain an adapter-validated owned definition in a separate registry. Existing routers and subscriptions keep their previous definitions */
     register(stored: D, options?: PrefixCommandRegistrationOptions): PrefixCommandRegistry<D, M> {
+        return this.registerAtParent(stored, this.registrationParent(options))
+    }
+
+    /** Register an already snapshotted batch into one new registry, leaving this registry unchanged if any entry fails */
+    registerMany(stored: readonly D[], options?: PrefixCommandRegistrationOptions): PrefixCommandRegistry<D, M> {
         const parent = this.registrationParent(options)
+        let registry: PrefixCommandRegistry<D, M> = this
+        for (const definition of stored) registry = registry.registerAtParent(definition, parent)
+        return registry
+    }
+
+    private registerAtParent(stored: D, parent: readonly string[]): PrefixCommandRegistry<D, M> {
         const keys = this.registrationKeys(stored, parent)
         const definitions = new Map(this.#definitions)
         for (const key of keys) definitions.set(key, stored)
@@ -175,7 +186,8 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
     private registrationParent(options: PrefixCommandRegistrationOptions | undefined): readonly string[] {
         if (options === undefined) return Object.freeze([])
         validateObjectShape(options, ["group"], "command", "Registration options")
-        const path = options.group === undefined ? Object.freeze([]) : copyCommandGroupPath(options.group, "command")
+        const group = options.group
+        const path = group === undefined ? Object.freeze([]) : copyCommandGroupPath(group, "command")
         if (path.length > 0 && !this.#groups.some((group) => sameCommandPath(group.path, path)))
             throw new ConfigurationError("command", "Registration requires an existing canonical parent group path")
         return path

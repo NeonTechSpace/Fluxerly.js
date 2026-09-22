@@ -18,7 +18,7 @@ import type { CommandHelpOptions } from "#sdk/command-help"
 import { commandHelp } from "#sdk/internal/command-help"
 import { parseQuotedPrefixCommand } from "#sdk/commands"
 import type { OperationOptions } from "#sdk/client"
-import { ConfigurationError, SdkDefect } from "#sdk/errors"
+import { CancelledError, ConfigurationError, SdkDefect } from "#sdk/errors"
 import {
     configurationEffect,
     cooldownRequest,
@@ -32,9 +32,10 @@ import {
 } from "#sdk/internal/commands"
 import { convertCommandArguments } from "#sdk/internal/command-arguments"
 import type { RegistrationError } from "#sdk/message-errors"
-import type { Message, MessageCore } from "#sdk/messages"
+import type { SendError } from "#sdk/message-errors"
+import type { DefaultSendOptions, Message, MessageCore, ReplyInput, SendOptions } from "#sdk/messages"
 import { Effect } from "effect"
-import { err, ok, type Result } from "neverthrow"
+import { err, ok, type Result, type ResultAsync } from "neverthrow"
 import type { Client, EventHandlerOptions, Subscription } from "./index.js"
 
 /**
@@ -59,6 +60,16 @@ export interface DefaultPrefixCommandContext<M extends MessageCore = Message> {
     readonly rawArgs: string
     /** Subscription cancellation signal to pass to operations that support it. Cancellation prevents later router callbacks but cannot forcibly stop your pending promises */
     readonly signal: NonNullable<OperationOptions["signal"]>
+    /**
+     * Reply to the incoming message through the attached client, with this handler's cancellation signal already applied.
+     * Delegates to `client.messages.reply`, including its validation, deadline, nonce, retry, cache and defect behavior.
+     * Cancellation or a lost response can leave the reply posted. An Err does not always mean nothing was sent, and uncertain sends are not replayed.
+     * Check the returned Result explicitly. Returning an Err from `execute` does not report a handler failure unless the callback throws it
+     */
+    readonly reply: (
+        input: ReplyInput,
+        options?: SendOptions,
+    ) => ResultAsync<M, SendError | CancelledError | ConfigurationError>
 }
 
 /** Matched-command context plus fully converted argument values, supplied to execution and cooldown-key callbacks */
@@ -80,6 +91,16 @@ export interface DefaultPrefixCommandUnmatchedContext<M extends MessageCore = Me
     readonly prefix: string
     /** Cancellation signal for cooperative feedback work. A promise that ignores it may keep running after the subscription closes */
     readonly signal: NonNullable<OperationOptions["signal"]>
+    /**
+     * Reply to the unmatched incoming message through the attached client, with this callback's cancellation signal already applied.
+     * Delegates to `client.messages.reply`, including its validation, deadline, nonce, retry, cache and defect behavior.
+     * Cancellation or a lost response can leave the reply posted. An Err does not always mean nothing was sent, and uncertain sends are not replayed.
+     * Check the returned Result explicitly and throw its error to use attachment `onError` reporting
+     */
+    readonly reply: (
+        input: ReplyInput,
+        options?: SendOptions,
+    ) => ResultAsync<M, SendError | CancelledError | ConfigurationError>
 }
 
 /** Prefix and parsing options, plus optional feedback when a command-like message has no executable match */
@@ -175,6 +196,16 @@ export interface DefaultPrefixCommand<
     readonly execute: (context: DefaultPrefixCommandExecutionContext<S, M>) => void | Promise<void>
 }
 
+type DefaultPrefixCommandBatch<
+    M extends MessageCore,
+    S extends Readonly<Record<string, CommandArgumentSchema | undefined>>,
+> = {
+    readonly [K in keyof S]: Omit<
+        DefaultPrefixCommand<S[K] extends CommandArgumentSchema ? S[K] : {}, M>,
+        "name" | "arguments"
+    > & { readonly arguments: S[K] }
+}
+
 /**
  * In-memory cooldown reservations for one process, bounded by a key limit.
  * Share this instance across commands that should use the same store.
@@ -235,6 +266,18 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
      */
     register<const S extends CommandArgumentSchema = {}>(
         command: DefaultPrefixCommand<S, M>,
+        options?: PrefixCommandRegistrationOptions,
+    ): Result<DefaultPrefixCommandRouter<M>, ConfigurationError>
+    /**
+     * Validate and add a nonempty keyed command object to one new router, in JavaScript own enumerable string-key order and under the same optional parent group.
+     * Each object key supplies its command name. Set `arguments: {}` to reject positional arguments, or `arguments: undefined` to leave raw args unrestricted.
+     * Every definition is snapshotted before registration. Inherited keys are ignored. If any definition is invalid or any name collides, the whole call returns
+     * Err(ConfigurationError), without a partially registered router or changes to this router and its attachments.
+     * The optional parent is validated and snapshotted once for the whole batch. Unexpected getter defects throw a safe SdkDefect for `commands`.
+     * Each entry retains its own inferred argument-value type
+     */
+    registerMany<const S extends Readonly<Record<string, CommandArgumentSchema | undefined>>>(
+        commands: DefaultPrefixCommandBatch<M, S>,
         options?: PrefixCommandRegistrationOptions,
     ): Result<DefaultPrefixCommandRouter<M>, ConfigurationError>
     /**
@@ -357,6 +400,18 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
         )
     }
 
+    registerMany<const S extends Readonly<Record<string, CommandArgumentSchema | undefined>>>(
+        commands: DefaultPrefixCommandBatch<M, S>,
+        options?: PrefixCommandRegistrationOptions,
+    ): Result<DefaultPrefixCommandRouter<M>, ConfigurationError> {
+        return attempt(() => {
+            const stored = snapshotDefaultCommandBatch(commands)
+            return freezeRouter(
+                new DefaultPrefixCommandRouterOwner(this.#registry.registerMany(stored, options), this.#onUnmatched),
+            )
+        })
+    }
+
     registerGroup(
         group: PrefixCommandGroupDefinition,
         options?: PrefixCommandRegistrationOptions,
@@ -384,6 +439,7 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
                     args: Object.freeze([...match.parse.args]),
                     rawArgs: match.parse.rawArgs,
                     signal,
+                    reply: boundDefaultReply(client, message, signal),
                 }),
             convert: (definition, context) => convertCommandArguments(definition.arguments, context.args),
             executionContext: (context, values) =>
@@ -396,7 +452,13 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
                     ? Effect.void
                     : defaultCallback(() =>
                           this.#onUnmatched!(
-                              Object.freeze({ client, message, prefix: match.prefix, signal }),
+                              Object.freeze({
+                                  client,
+                                  message,
+                                  prefix: match.prefix,
+                                  signal,
+                                  reply: boundDefaultReply(client, message, signal),
+                              }),
                               match.unmatched,
                           ),
                       ),
@@ -475,6 +537,53 @@ function snapshotDefaultCommand<S extends CommandArgumentSchema, M extends Messa
                   }),
               }),
     }) as unknown as StoredDefaultCommand<M>
+}
+
+function snapshotDefaultCommandBatch<M extends MessageCore>(
+    commands: Readonly<Record<string, unknown>>,
+): readonly StoredDefaultCommand<M>[] {
+    if (typeof commands !== "object" || commands === null || Array.isArray(commands))
+        throw new ConfigurationError("command", "A command batch must be an object")
+    for (const key of Reflect.ownKeys(commands))
+        if (typeof key === "symbol" && Object.prototype.propertyIsEnumerable.call(commands, key))
+            throw new ConfigurationError("command", "Command batch keys must be strings")
+    const names = Object.keys(commands)
+    if (names.length === 0) throw new ConfigurationError("command", "A command batch must not be empty")
+    const stored: StoredDefaultCommand<M>[] = []
+    for (const name of names) {
+        const value = commands[name]
+        if (typeof value !== "object" || value === null || Array.isArray(value))
+            throw new ConfigurationError("command", "A command batch entry must be an object")
+        if (Object.prototype.hasOwnProperty.call(value, "name"))
+            throw new ConfigurationError("command", "A command batch entry must use its object key as the name")
+        stored.push(snapshotDefaultCommand({ ...(value as DefaultPrefixCommand<CommandArgumentSchema, M>), name }))
+    }
+    return Object.freeze(stored)
+}
+
+function boundDefaultReply<M extends MessageCore>(
+    client: Client<M>,
+    message: M,
+    signal: NonNullable<OperationOptions["signal"]>,
+): DefaultPrefixCommandContext<M>["reply"] {
+    return (input, options) => client.messages.reply(message, input, bindDefaultReplyOptions(options, signal))
+}
+
+function bindDefaultReplyOptions(
+    options: SendOptions | undefined,
+    signal: NonNullable<OperationOptions["signal"]>,
+): DefaultSendOptions {
+    if (options === undefined) return { signal }
+    if (typeof options !== "object" || options === null || Array.isArray(options)) return options as DefaultSendOptions
+    // Bind cancellation without reading getters before the operation's async validation and defect boundary
+    return new Proxy(Object.create(null) as DefaultSendOptions, {
+        get: (_target, property) => (property === "signal" ? signal : Reflect.get(options, property, options)),
+        ownKeys: () => Reflect.ownKeys(options),
+        getOwnPropertyDescriptor: (_target, property) => {
+            const descriptor = Reflect.getOwnPropertyDescriptor(options, property)
+            return descriptor === undefined ? undefined : { ...descriptor, configurable: true }
+        },
+    })
 }
 
 function defaultCooldown<M extends MessageCore>(

@@ -84,8 +84,9 @@ export type StructuredLogger = (record: SdkLogRecord) => void
 /**
  * Adapt a plain JavaScript callback for logging.logger on a default-API client.
  * The callback receives frozen records without credentials, private payloads, URLs, Effect causes or application annotations.
- * Delivery is synchronous and the callback's return value is ignored. Thrown callback errors are swallowed without retry,
- * while blocking work can delay SDK work. The application owns any asynchronous delivery, buffering, flushing and persistence.
+ * Delivery is synchronous and the callback's return value is ignored. Thrown callback errors are swallowed without retry.
+ * A promise or thenable returned by mistake is not awaited, and its rejection is discarded. Blocking work can delay SDK work.
+ * The application owns any intentional asynchronous delivery, buffering, flushing and persistence.
  * Settings and records remain local to the client that receives the returned adapter
  * @throws ConfigurationError with field logger when logger is not a function
  * @example
@@ -139,6 +140,7 @@ export interface DefaultLoggingOptions extends LoggingOptions {
      * Omission uses Effect's readable default logger without extra setup.
      * A supplied integration replaces only this client's logger and does not inherit an unrelated application's Effect runtime.
      * The SDK invokes the sink synchronously and isolates thrown sink errors from SDK outcomes.
+     * Returned promises or thenables are not awaited, and their rejections are discarded.
      * A blocking sink can still delay execution, and flushing or asynchronous delivery remains the application's responsibility
      */
     readonly logger?: DefaultLogger

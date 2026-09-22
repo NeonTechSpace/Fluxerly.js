@@ -1,6 +1,6 @@
 import { commands, type Client, type MessageCore, type SelectedMessage } from "../src/index.js"
 import { commands as nativeCommands, type Client as NativeClient } from "../src/effect.js"
-import { Effect } from "effect"
+import { Context, Effect } from "effect"
 
 type EmbedsOnly = SelectedMessage<readonly ["embeds"]>
 
@@ -21,16 +21,47 @@ export function defaultSelectedCommandTypes(client: Client<EmbedsOnly>, coreClie
                 input.message.attachments
                 return commands.parseQuoted(input)
             },
-            onUnmatched: ({ message, client: attached }) => {
+            onUnmatched: ({ message, client: attached, reply }) => {
                 const selected: Client<EmbedsOnly> = attached
                 void selected
                 void message.embeds
                 // @ts-expect-error Unmatched feedback does not receive a full Message
                 message.attachments
+                void reply({ content: "unknown" }).then((result) => {
+                    if (result.isOk()) void result.value.embeds
+                })
             },
         })
         ._unsafeUnwrap()
     const grouped = root.registerGroup({ name: "tools" })._unsafeUnwrap()
+    const batch = grouped
+        .registerMany(
+            {
+                sum: {
+                    arguments: { count: { type: "integer" } },
+                    execute: async ({ values, reply }) => {
+                        const count: number = values.count
+                        // @ts-expect-error Batch entries retain their own converted value types
+                        const invalid: string = values.count
+                        void invalid
+                        const result = await reply({ content: String(count) })
+                        if (result.isErr()) throw result.error
+                        void result.value.embeds
+                    },
+                },
+                echo: {
+                    arguments: { text: { type: "text" } },
+                    execute: ({ values }) => {
+                        const text: string = values.text
+                        // @ts-expect-error This entry does not inherit the preceding integer schema
+                        values.count
+                        void text
+                    },
+                },
+            },
+            { group: ["tools"] },
+        )
+        ._unsafeUnwrap()
     const registered = grouped
         .register(
             {
@@ -80,11 +111,16 @@ export function defaultSelectedCommandTypes(client: Client<EmbedsOnly>, coreClie
     // @ts-expect-error A router promising selected embeds cannot attach to a core-only client
     registered.attach(coreClient)
     const core = commands.create<MessageCore>({ prefix: "!" })._unsafeUnwrap()
-    return { attached, core: core.attach(coreClient) }
+    return { attached, batch: batch.attach(client), core: core.attach(coreClient) }
 }
 
 /** Native selected routers retain the same field contract without changing earlier E/R/schema generic positions */
 export function nativeSelectedCommandTypes(client: NativeClient<EmbedsOnly>, coreClient: NativeClient<MessageCore>) {
+    const First = Context.Service<{ readonly first: true }>("batch-first")
+    const Second = Context.Service<{ readonly second: true }>("batch-second")
+    const Guard = Context.Service<{ readonly guard: true }>("batch-guard")
+    const Rejection = Context.Service<{ readonly rejection: true }>("batch-rejection")
+    const Cooldown = Context.Service<{ readonly cooldown: true }>("batch-cooldown")
     return Effect.gen(function* () {
         const root = yield* nativeCommands.create<never, never, EmbedsOnly>({
             prefix: (message) => {
@@ -97,14 +133,58 @@ export function nativeSelectedCommandTypes(client: NativeClient<EmbedsOnly>, cor
                 input.message.attachments
                 return nativeCommands.parseQuoted(input)
             },
-            onUnmatched: ({ message }) =>
+            onUnmatched: ({ message, reply }) =>
                 Effect.sync(() => {
                     void message.embeds
                     // @ts-expect-error Native unmatched feedback is selected, not full
                     message.attachments
+                    void reply({ content: "unknown" })
                 }),
         })
         const grouped = yield* root.registerGroup({ name: "tools" })
+        const batch = yield* grouped.registerMany(
+            {
+                sum: {
+                    arguments: { count: { type: "integer" } },
+                    execute: ({ values, reply }) => {
+                        const count: number = values.count
+                        // @ts-expect-error Native batch entries retain their own converted value types
+                        const invalid: string = values.count
+                        void invalid
+                        return Effect.service(First).pipe(
+                            Effect.andThen(reply({ content: String(count) })),
+                            Effect.asVoid,
+                        )
+                    },
+                },
+                echo: {
+                    arguments: { text: { type: "text" } },
+                    execute: ({ values }) => {
+                        const text: string = values.text
+                        // @ts-expect-error This entry does not inherit the preceding integer schema
+                        values.count
+                        void text
+                        return Effect.service(Second).pipe(Effect.asVoid)
+                    },
+                },
+                policy: {
+                    arguments: {},
+                    guard: () => Effect.service(Guard).pipe(Effect.as(true)),
+                    onReject: () => Effect.service(Rejection).pipe(Effect.asVoid),
+                    cooldown: {
+                        durationMs: 1_000,
+                        store: {
+                            claim: () =>
+                                Effect.service(Cooldown).pipe(
+                                    Effect.as({ _tag: "CooldownAcquired" as const, retryAtMs: 1 }),
+                                ),
+                        },
+                    },
+                    execute: () => Effect.void,
+                },
+            },
+            { group: ["tools"] },
+        )
         const registered = yield* grouped.register(
             {
                 name: "inspect",
@@ -152,6 +232,22 @@ export function nativeSelectedCommandTypes(client: NativeClient<EmbedsOnly>, cor
         // @ts-expect-error A native router requiring embeds cannot attach to a core-only client
         registered.attach(coreClient)
         const core = yield* nativeCommands.create<never, never, MessageCore>({ prefix: "!" })
-        return { selected: registered.attach(client), core: core.attach(coreClient) }
+        const batchAttachment = batch.attach(client)
+        type InferredServices = typeof batchAttachment extends Effect.Effect<unknown, unknown, infer R> ? R : never
+        type ExpectedServices =
+            | Context.Service.Identifier<typeof First>
+            | Context.Service.Identifier<typeof Second>
+            | Context.Service.Identifier<typeof Guard>
+            | Context.Service.Identifier<typeof Rejection>
+            | Context.Service.Identifier<typeof Cooldown>
+            | import("effect").Scope.Scope
+        const exactServiceCoverage: [
+            Exclude<InferredServices, ExpectedServices>,
+            Exclude<ExpectedServices, InferredServices>,
+        ] extends [never, never]
+            ? true
+            : false = true
+        void exactServiceCoverage
+        return { selected: registered.attach(client), batch: batchAttachment, core: core.attach(coreClient) }
     })
 }

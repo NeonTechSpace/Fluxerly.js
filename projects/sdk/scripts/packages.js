@@ -48,6 +48,7 @@ export function commonFiles() {
     return [
         ...source,
         ...output,
+        ...globSync("examples/starter/*.{js,ts}", { cwd: sdk }).map((path) => path.replaceAll("\\", "/")),
         "README.md",
         "consumer/AGENTS.md",
         "LICENSE",

@@ -6,25 +6,35 @@ description: Register a command, convert arguments and generate help from the sa
 
 A prefix command is a message such as `!ping` or `!greet Maya`. Fluxerly's optional command router matches the prefix, finds a registered command and calls your handler. It uses your existing client and does not connect another bot
 
-These examples are helpers for [an existing bot](/docs/{{version}}/quick-start/). Call an installer once before `client.connect()`. Do not keep the starter's manual `!ping` handler if you register another `ping` command, or both handlers can reply
+These examples extend [the starter bot](/docs/{{version}}/quick-start/). Add commands to its existing batch or replace that batch with an installer. Call installers inside the `runBot` installation callback and return their subscriptions so the starter supervises each critical worker. Attaching a second router with another `ping` command can make both handlers reply
 
-## Register and attach one command
+## Register and attach commands
 
-Each registration returns a new router. Keep the returned value and attach that final router to your client
+Register related commands in one immutable batch. The object keys become command names, and a failed definition or name collision rejects the whole batch without changing the earlier router
 
 ```ts
 import { commands, type Client } from "@neontechspace/fluxerly"
 
-export function installPing(client: Client) {
+export function installCommands(client: Client) {
     const created = commands.create({ prefix: "!" })
     if (created.isErr()) return created
 
-    const registered = created.value.register({
-        name: "ping",
-        description: "Check that the bot can reply",
-        execute: async ({ client, message, signal }) => {
-            const reply = await client.messages.reply(message, { content: "Pong!" }, { signal })
-            if (reply.isErr()) throw reply.error
+    const registered = created.value.registerMany({
+        ping: {
+            description: "Check that the bot can reply",
+            arguments: {},
+            execute: async ({ reply }) => {
+                const sent = await reply({ content: "Pong!" })
+                if (sent.isErr()) throw sent.error
+            },
+        },
+        about: {
+            description: "Describe this bot",
+            arguments: {},
+            execute: async ({ reply }) => {
+                const sent = await reply({ content: "Built with Fluxerly" })
+                if (sent.isErr()) throw sent.error
+            },
         },
     })
     if (registered.isErr()) return registered
@@ -34,7 +44,9 @@ export function installPing(client: Client) {
 
 Check the installer's Result. Its successful value is a subscription, which lets your application stop this router and observe its closure. Attachment errors are different from a later command execution failure
 
-The handler awaits its reply and throws an expected failure into the router's handler-error boundary. Returning an Err by itself would not report a callback failure. Pass the provided `signal` so an unsubscribed router can cancel its pending requests
+The bound `reply` uses the incoming message as its reference and forwards the handler's cancellation signal. The handler still checks its Result and throws an expected failure into the router's handler-error boundary. Returning an Err by itself would not report a callback failure
+
+Batch entries follow JavaScript own enumerable string-key order and ignore inherited keys. Use `arguments: {}` when a command accepts no positional arguments. Use `arguments: undefined` when it should keep unrestricted raw `args`, matching an individually registered command with no argument schema. A group can be selected once with the batch's second argument
 
 ## Convert arguments before execution
 
@@ -51,17 +63,17 @@ export function installGreeting(client: Client) {
         name: "greet",
         description: "Greet a name",
         arguments: { name: { type: "text" } },
-        execute: async ({ client, message, values, signal }) => {
-            const reply = await client.messages.reply(message, {
+        execute: async ({ values, reply }) => {
+            const sent = await reply({
                 content: `Hello, ${values.name}!`,
-            }, { signal })
-            if (reply.isErr()) throw reply.error
+            })
+            if (sent.isErr()) throw sent.error
         },
-        onReject: async ({ client, message, signal }) => {
-            const reply = await client.messages.reply(message, {
+        onReject: async ({ reply }) => {
+            const sent = await reply({
                 content: 'Try !greet "Ada Lovelace"',
-            }, { signal })
-            if (reply.isErr()) throw reply.error
+            })
+            if (sent.isErr()) throw sent.error
         },
     })
     if (registered.isErr()) return registered
@@ -70,6 +82,31 @@ export function installGreeting(client: Client) {
 ```
 
 In TypeScript, `values.name` is inferred as a string. Missing or extra arguments take the rejection path before `execute`. Other descriptors cover integers, choices, IDs and ID-or-mention inputs. Selecting an ID does not authorize an operation on that resource
+
+## Use the Effect entry point
+
+The Effect API provides the same keyed batch and bound reply. Each reply inherits command-handler interruption and keeps `SendError` in the Effect error channel. Services required by any command in the batch remain requirements of the returned router
+
+```ts
+import { Effect } from "effect"
+import { commands, type Client } from "@neontechspace/fluxerly/effect"
+
+export const installCommands = (client: Client) =>
+    Effect.gen(function* () {
+        const root = yield* commands.create({ prefix: "!" })
+        const router = yield* root.registerMany({
+            ping: {
+                arguments: {},
+                execute: ({ reply }) => reply({ content: "Pong!" }).pipe(Effect.asVoid),
+            },
+            about: {
+                arguments: {},
+                execute: ({ reply }) => reply({ content: "Built with Fluxerly" }).pipe(Effect.asVoid),
+            },
+        })
+        return yield* router.attach(client)
+    })
+```
 
 ## Add help from the registered commands
 

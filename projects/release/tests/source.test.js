@@ -145,6 +145,68 @@ test("Changesets notes survive unchanged-code canary to rc to stable promotion",
     }
 })
 
+test("Source planning applies unconsumed compatibility changes before readiness promotion", async () => {
+    const root = await fixture("1000.0.0-canary.1")
+    try {
+        await note(root, "breaking-preview", "major", "Change the preview API")
+        await note(root, "preview-fix", "patch", "Fix the preview implementation")
+        const before = exactFiles(await readDirectory(root))
+        const { plan, releasePlan } = await readSourcePlan(root, { channel: "rc" })
+        assert.equal(plan.version, "1001.0.0-rc.0")
+        assert.equal(plan.bump, "major")
+        assert.equal(plan.promotion, false)
+        assert.equal(releasePlan.releases[0].newVersion, plan.version)
+        assert.deepEqual(exactFiles(await readDirectory(root)), before)
+    } finally {
+        await rm(root, { recursive: true })
+    }
+})
+
+test("Prerelease application advances only for unconsumed compatibility notes", async () => {
+    for (const { type, versions } of [
+        {
+            type: "patch",
+            versions: [
+                ["canary", "1000.0.0-canary.2"],
+                ["rc", "1000.0.0-rc.0"],
+                ["stable", "1000.0.0"],
+            ],
+        },
+        {
+            type: "minor",
+            versions: [
+                ["rc", "1000.1.0-rc.0"],
+                ["stable", "1000.1.0"],
+            ],
+        },
+        {
+            type: "major",
+            versions: [
+                ["rc", "1001.0.0-rc.0"],
+                ["stable", "1001.0.0"],
+            ],
+        },
+    ]) {
+        const root = await fixture("1000.0.0-canary.1")
+        try {
+            const id = `${type}-preview-change`
+            const copy = `Describe the ${type} preview change`
+            await note(root, id, type, copy)
+            const [[firstChannel, firstVersion], ...promotions] = versions
+            assert.equal((await applySourcePlan(root, { channel: firstChannel })).version, firstVersion)
+            await access(join(root, ".changeset", "pre", `${id}.md`))
+            for (const [channel, version] of promotions)
+                assert.equal((await applySourcePlan(root, { channel })).version, version)
+            const stableVersion = versions.at(-1)[1]
+            const notes = changelogSection(await readFile(join(root, "sdk/CHANGELOG.md"), "utf8"), stableVersion)
+            assert.equal(notes.split(copy).length - 1, 1)
+            await assert.rejects(access(join(root, ".changeset", "pre", `${id}.md`)), { code: "ENOENT" })
+        } finally {
+            await rm(root, { recursive: true })
+        }
+    }
+})
+
 test("Removed channels cannot consume source versions or Changesets notes", async () => {
     const root = await fixture()
     try {

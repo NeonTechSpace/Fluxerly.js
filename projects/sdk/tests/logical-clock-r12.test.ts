@@ -15,7 +15,10 @@ import { fetchPermissions } from "../src/internal/permissions.js"
 import { PresenceOwner } from "../src/internal/presence.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 const withTestClock = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.runPromise(effect.pipe(Effect.provide(TestClock.layer({ warningDelay: "10 seconds" }))))
@@ -352,6 +355,82 @@ test("TestClock advances queued REST deadlines and interruption removes queued w
             }),
         ),
     )
+})
+
+test("a REST admission timer defect retains bounded failure, closure and later progress", async () => {
+    let calls = 0
+    let injected = false
+    const originalSet = LogicalScheduler.prototype.set
+    vi.spyOn(LogicalScheduler.prototype, "set").mockImplementation(function (
+        this: LogicalScheduler,
+        callback,
+        delayMs,
+        owner,
+    ) {
+        if (owner !== "REST admission queue") return originalSet.call(this, callback, delayMs, owner)
+        return originalSet.call(
+            this,
+            () => {
+                if (!injected) {
+                    injected = true
+                    throw new Error("private REST timer defect")
+                }
+                callback()
+            },
+            delayMs,
+            owner,
+        )
+    })
+    stubFetchWithHostedDiscovery(async () =>
+        ++calls === 1
+            ? new Response(null, {
+                  status: 429,
+                  headers: { "retry-after": "2", "x-ratelimit-scope": "global" },
+              })
+            : new Response(null, { status: 204 }),
+    )
+    const logged: unknown[] = []
+    const logger = Logger.make((entry) => logged.push(entry.message))
+
+    await withTestClock(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createNative({ token: "fixture-only-not-a-credential" })
+                const rejected = yield* Effect.exit(client.messages.typing("20", { timeoutMs: 100 }))
+                expect(Exit.isFailure(rejected)).toBe(true)
+
+                const affected = yield* Effect.forkScoped(
+                    Effect.exit(client.messages.delete({ channelId: "21", id: "10" }, { timeoutMs: 2_500 })),
+                )
+                yield* Effect.yieldNow
+                yield* TestClock.adjust(2_000)
+                expect(injected).toBe(true)
+                yield* TestClock.adjust(500)
+
+                const affectedExit = yield* Fiber.join(affected)
+                expect(Exit.isFailure(affectedExit)).toBe(true)
+                if (Exit.isFailure(affectedExit))
+                    expect(affectedExit.cause.reasons).toContainEqual(
+                        expect.objectContaining({
+                            _tag: "Fail",
+                            error: expect.objectContaining({
+                                _tag: "MessageOperationError",
+                                reason: "timeout",
+                                outcome: "notDispatched",
+                            }),
+                        }),
+                    )
+                expect(calls).toBe(1)
+
+                yield* client.messages.typing("23")
+                expect(calls).toBe(2)
+                yield* client.shutdown()
+            }),
+        ).pipe(Effect.withLogger(logger)),
+    )
+
+    expect(logged).toContainEqual(["REST admission queue logical timer callback failed"])
+    expect(JSON.stringify(logged)).not.toContain("private REST timer defect")
 })
 
 test("REST admission and total deadline remain bound to the client creation Clock", async () => {

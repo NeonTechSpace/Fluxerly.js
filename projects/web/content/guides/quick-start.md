@@ -4,7 +4,7 @@ navTitle: Quick start
 description: Type !ping and let your bot reply Pong!
 ---
 
-You'll need Node.js 24.11 or newer and a Fluxer bot added to your server
+The starter requires Node.js 24.11 or newer and a Fluxer bot added to a server
 
 ## 1. Install the SDK
 
@@ -23,77 +23,13 @@ This lets Node use `import` in your bot
 
 ## 2. Create your bot
 
-Save this as <code data-example-filename>bot.js</code>.
-Set `FLUXER_BOT_TOKEN` in the process environment instead of putting the token in the file
+Copy `lifetime.js` from `node_modules/@neontechspace/fluxerly/examples/starter/` into the bot folder. The [starter lifetime guide](/docs/{{version}}/starter-lifetime/) also provides the complete file and explains its ownership
+
+Save this as <code data-example-filename>bot.js</code> beside `lifetime.js`.
+Set `FLUXER_BOT_TOKEN` in the process environment instead of putting the token in either file
 
 ```js
-import { createClient } from "@neontechspace/fluxerly";
-
-const token = process.env.FLUXER_BOT_TOKEN;
-if (!token) throw new Error("FLUXER_BOT_TOKEN is required");
-
-const created = createClient({
-    token,
-});
-if (created.isErr()) throw created.error;
-const client = created.value;
-
-const stop = new AbortController();
-const requestStop = () => stop.abort();
-process.once("SIGINT", requestStop);
-process.once("SIGTERM", requestStop);
-
-try {
-    const registered = client.on("messageCreate", async (message, signal) => {
-        if (message.author.isBot || message.content !== "!ping") return;
-
-        const replied = await client.messages.reply(
-            message,
-            { content: "Pong!" },
-            { signal },
-        );
-        if (replied.isErr())
-            console.warn("Reply failed", { kind: replied.error._tag });
-    });
-    if (registered.isErr()) throw registered.error;
-
-    const connection = client.run({ signal: stop.signal });
-    const worker = registered.value.waitForClose({ signal: stop.signal });
-    let firstSource = "pending";
-    let firstWorkerSucceeded = false;
-    await new Promise((resolve, reject) => {
-        connection.then((result) => {
-            if (firstSource !== "pending") return;
-            firstSource = "connection";
-            resolve(undefined);
-        }, reject);
-        worker.then((result) => {
-            if (firstSource !== "pending") return;
-            firstSource = "worker";
-            firstWorkerSucceeded = result.isOk();
-            resolve(undefined);
-        }, reject);
-    });
-    const unexpectedWorkerStop =
-        firstSource === "worker" &&
-        firstWorkerSucceeded &&
-        !stop.signal.aborted &&
-        client.state !== "Closing" &&
-        client.state !== "Closed";
-    stop.abort();
-    const [finished, closed] = await Promise.all([connection, worker]);
-    if (finished.isErr() && finished.error._tag !== "CancelledError")
-        throw finished.error;
-    if (closed.isErr() && closed.error._tag !== "CancelledError")
-        throw closed.error;
-    if (unexpectedWorkerStop)
-        throw new Error("Critical messageCreate worker stopped");
-} finally {
-    stop.abort();
-    process.off("SIGINT", requestStop);
-    process.off("SIGTERM", requestStop);
-    await client.shutdown();
-}
+{{starter:bot.js}}
 ```
 
 ## 3. Start it
@@ -105,7 +41,9 @@ try {
 Type **!ping** in a channel your bot can read and reply to.
 It should answer **Pong!**
 
-Press Ctrl+C in the terminal to request shutdown and wait for SDK-owned cleanup
+The `!about` command provides a second example. Bot-authored messages, unknown commands and extra arguments are ignored by this starter
+
+Press Ctrl+C in the terminal to request shutdown and wait for SDK-owned cleanup. The application-owned companion observes the command subscription as well as the connection, so a stopped critical worker cannot leave the bot silently connected
 
 ## Keep going
 
@@ -125,9 +63,9 @@ The [client's message methods](/docs/{{version}}/api/interfaces/js-ts.Client/#me
 
 Check that `FLUXER_BOT_TOKEN` is set and that the bot can view the channel and send messages.
 Keep the terminal running while you try `!ping`.
-To inspect a failed reply, save the result from `client.messages.reply` and check its `isErr()` method
+The starter checks the reply Result with `isErr()` and logs its safe failure kind. A lost response can leave a reply posted, so a failed Result is not a reason to send it again blindly
 
-Never share your bot token when asking for help
+The [troubleshooting guide](/docs/{{version}}/troubleshooting/) separates command, worker, connection and request failures using safe diagnostics. Never share a bot token or private message contents
 
 </details>
 
@@ -140,7 +78,7 @@ Otherwise, `value` holds the successful result, such as your client
 
 The startup and registration checks stop the script on a visible failure.
 The reply handler reports the typed failure kind without exposing message contents or credentials.
-The process-signal boundary asks the handler to stop, closes the connection and awaits cleanup
+The process-signal boundary asks handlers to stop, closes the connection and awaits SDK-owned cleanup. Ordinary handler Promises remain application-owned and are not automatically drained
 
 </details>
 
@@ -159,6 +97,8 @@ A preview marked Unreleased does not have an installable package version yet
 
 Choose TypeScript above to save this example as `bot.ts` and run it directly with Node.js, without a compilation step.
 For TypeScript projects that compile or typecheck their code, use TypeScript 7
+
+JavaScript can also use editor inference and optional `// @ts-check` without changing file extensions or adding a build step. A TypeScript 7 project check with `allowJs` and `checkJs` verifies JavaScript types when desired. Neither a compiler nor checked-JavaScript mode is required to run the bot
 
 The default API works with JavaScript and TypeScript.
 The optional [Effect learning path](/docs/{{version}}/effect-first-bot/) introduces the native API through progressively larger bot examples

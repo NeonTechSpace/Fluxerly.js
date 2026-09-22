@@ -79,6 +79,44 @@ test("plain structured logger receives frozen safe records and isolates sink fai
     expect(JSON.stringify(records)).not.toContain("private-sink-failure")
 })
 
+test("structured logger discards accidental promise rejections without changing the SDK outcome", async () => {
+    const records: SdkLogRecord[] = []
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on("unhandledRejection", onUnhandled)
+    try {
+        stubFetchWithHostedDiscovery(async () =>
+            Response.json({
+                id: "10",
+                channel_id: "20",
+                content: "retained outcome",
+                author: { id: "30", username: "fixture" },
+            }),
+        )
+        const created = createClient({
+            token: "fixture-only-not-a-credential",
+            logging: {
+                measurements: true,
+                logger: fromStructuredLogger(async (record) => {
+                    records.push(record)
+                    throw new Error("private-async-sink-failure")
+                }),
+            },
+        })
+        if (created.isErr()) throw created.error
+
+        const result = await created.value.messages.fetch({ id: "10", channelId: "20" })
+        expect(result.isOk() && result.value.content).toBe("retained outcome")
+        expect((await created.value.shutdown()).isOk()).toBe(true)
+        await new Promise<void>((resolve) => setImmediate(resolve))
+
+        expect(records.filter((record) => record.category === "measurement")).toHaveLength(3)
+        expect(unhandled).toEqual([])
+    } finally {
+        process.off("unhandledRejection", onUnhandled)
+    }
+})
+
 test("structured adapter omits Effect causes, annotations and arbitrary messages", () => {
     const records: SdkLogRecord[] = []
     const logging = configured({ logger: fromStructuredLogger((record) => records.push(record)) })

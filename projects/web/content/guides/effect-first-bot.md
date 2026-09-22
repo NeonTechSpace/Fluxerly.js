@@ -72,46 +72,15 @@ export function installPing(client: Client) {
 
 ## Run the complete bot
 
-Save this as `bot.ts`, set `FLUXER_BOT_TOKEN` in the process environment and run `node bot.ts`. The subscription is registered before `client.run()` starts the gateway
+Copy `lifetime-effect.ts` from the installed package's `examples/starter/` folder, or from the [starter lifetime guide](/docs/{{version}}/starter-lifetime/). Save this as `bot.ts` beside that file, set `FLUXER_BOT_TOKEN` in the process environment and run `node bot.ts`
 
 ```ts
-import { Cause, Effect, Exit } from "effect"
-import { createClient } from "@neontechspace/fluxerly/effect"
-
-const token = process.env.FLUXER_BOT_TOKEN
-if (!token) throw new Error("FLUXER_BOT_TOKEN is required")
-
-const program = Effect.scoped(
-    Effect.gen(function* () {
-        const client = yield* createClient({ token })
-        const subscription = yield* client.on("messageCreate", message => {
-            if (message.author.isBot || message.content !== "!ping") return Effect.void
-            return client.messages.reply(message, { content: "Pong!" })
-        })
-
-        yield* Effect.all([client.run(), subscription.waitForClose()], { concurrency: 2 })
-    }),
-)
-
-const controller = new AbortController()
-const stop = () => controller.abort()
-process.once("SIGINT", stop)
-process.once("SIGTERM", stop)
-try {
-    const exit = await Effect.runPromiseExit(program, { signal: controller.signal })
-    if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
-        console.error("Bot stopped because an operation or cleanup failed")
-        process.exitCode = 1
-    }
-} finally {
-    process.off("SIGINT", stop)
-    process.off("SIGTERM", stop)
-}
+{{starter:bot-effect.ts}}
 ```
 
 Send `!ping` and expect `Pong!`. Press Ctrl+C to request interruption and wait for SDK-owned cleanup. Keep the environment and any process-manager configuration containing the token private
 
-`Effect.all` observes both the client lifetime and the subscription. If either fails, it interrupts the sibling work. This prevents a stopped subscription from leaving an apparently connected but silent bot. Individual handler failures are isolated by the subscription and are not automatically retried
+The application-owned companion registers commands before gateway startup and observes both the client lifetime and critical subscriptions. Failure or unexpected worker closure stops the application and awaits cleanup. Individual command failures remain isolated and are not automatically retried. The `!about` command and rejection policy match the JavaScript and TypeScript starter
 
 The outer boundary treats interruption alone as a normal stop. Any other failure, including a cleanup defect during interruption, sets a failing process exit code without printing a raw Cause, token or event data. Setting `process.exitCode` lets Node finish cleanup naturally
 

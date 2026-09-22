@@ -84,6 +84,7 @@ Registry release commands enforce the [registry publication contract](/docs/RELE
 
 Keep public API signatures and caller documentation in source, and user guides/reference in the website.
 Use [SDK tests](/projects/sdk/tests/) for behavior checks and [packed consumers](/projects/sdk/tests/consumers/) for package-boundary checks.
+The application-owned [starter files](/projects/sdk/examples/starter/) ship with the package and supply the website's runnable first-bot examples. Their lifetime helpers are editable application code, not public SDK exports.
 The build emits ignored files under `projects/sdk/dist/`, which must not be edited by hand
 
 For shared error changes, start at [REST translation](/projects/sdk/src/internal/rest.ts) and [cause preservation](/projects/sdk/src/internal/effect-failures.ts).

@@ -81,6 +81,19 @@ for (const width of [390, 1440, 1920]) {
     })
 }
 
+for (const width of [390, 1440]) {
+    test(`Starter lifetime code remains readable at ${width}px`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 })
+        await page.goto("/docs/dev/starter-lifetime/")
+        await expect(page.locator(".docs-content pre:visible")).toHaveCount(2)
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+        const accessibility = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+            .analyze()
+        expect(accessibility.violations).toEqual([])
+    })
+}
+
 test("Search opens by keyboard, finds the current API and returns focus", async ({ page }, info) => {
     await page.goto("/docs/dev/")
     const trigger = page.getByRole("button", { name: "Search Ctrl K", exact: true })

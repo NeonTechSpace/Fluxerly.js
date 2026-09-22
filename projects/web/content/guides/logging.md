@@ -55,7 +55,7 @@ export function createLoggedClient(token: string) {
 
 Every record includes `source`, `timestamp`, `level`, `category` and `event`. Category-specific fields use stable SDK names and bounded values. Records exclude tokens, payloads, URLs, Effect causes and application annotations
 
-The SDK calls the callback synchronously and ignores its return value. A thrown callback error cannot change an SDK outcome, but blocking work can delay the bot. The application owns asynchronous delivery, buffering, flushing and persistence
+The SDK calls the callback synchronously and does not await its return value. A thrown callback error or rejected Promise accidentally returned by the callback cannot change an SDK outcome. Blocking work can still delay the bot. The application owns asynchronous delivery, buffering, flushing and persistence
 
 ## Measure SDK work
 

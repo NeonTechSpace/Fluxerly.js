@@ -21,65 +21,45 @@ Save the following as `bot.js`, or `bot.ts` for TypeScript, and set `FLUXER_BOT_
 
 Keep that environment and any process-manager configuration containing the token private
 
+Copy `lifetime.js` from `node_modules/@neontechspace/fluxerly/examples/starter/` into the bot folder. This editable application companion supervises the connection and critical command workers, then awaits SDK-owned cleanup
+
 ```js
-import { createClient } from "@neontechspace/fluxerly"
+import { commands } from "@neontechspace/fluxerly"
+import { runBot } from "./lifetime.js"
 
 const token = process.env.FLUXER_BOT_TOKEN
 if (!token) throw new Error("FLUXER_BOT_TOKEN is required")
 
-const created = createClient({
-    token,
-})
-if (created.isErr()) throw created.error
-const client = created.value
-
-const stop = new AbortController()
-const requestStop = () => stop.abort()
-process.once("SIGINT", requestStop)
-process.once("SIGTERM", requestStop)
-
 try {
-    const registered = client.on("messageCreate", async (message, signal) => {
-        if (message.author.isBot || message.content !== "!ping") return
+    await runBot({ token }, (client) => {
+        const router = commands.create({ prefix: "!" })
+        if (router.isErr()) throw router.error
 
-        const replied = await client.messages.reply(message, { content: "Pong!" }, { signal })
-        if (replied.isErr()) console.warn("Reply failed", { kind: replied.error._tag })
-    })
-    if (registered.isErr()) throw registered.error
+        const registered = router.value.registerMany({
+            ping: {
+                arguments: {},
+                execute: async ({ reply }) => {
+                    const sent = await reply({ content: "Pong!" })
+                    if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
+                },
+            },
+            about: {
+                arguments: {},
+                execute: async ({ reply }) => {
+                    const sent = await reply({ content: "A Fluxer bot built with Fluxerly" })
+                    if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
+                },
+            },
+        })
+        if (registered.isErr()) throw registered.error
 
-    const connection = client.run({ signal: stop.signal })
-    const worker = registered.value.waitForClose({ signal: stop.signal })
-    let firstSource = "pending"
-    let firstWorkerSucceeded = false
-    await new Promise((resolve, reject) => {
-        connection.then((result) => {
-            if (firstSource !== "pending") return
-            firstSource = "connection"
-            resolve(undefined)
-        }, reject)
-        worker.then((result) => {
-            if (firstSource !== "pending") return
-            firstSource = "worker"
-            firstWorkerSucceeded = result.isOk()
-            resolve(undefined)
-        }, reject)
+        const attached = registered.value.attach(client)
+        if (attached.isErr()) throw attached.error
+        return [attached.value]
     })
-    const unexpectedWorkerStop =
-        firstSource === "worker" &&
-        firstWorkerSucceeded &&
-        !stop.signal.aborted &&
-        client.state !== "Closing" &&
-        client.state !== "Closed"
-    stop.abort()
-    const [finished, closed] = await Promise.all([connection, worker])
-    if (finished.isErr() && finished.error._tag !== "CancelledError") throw finished.error
-    if (closed.isErr() && closed.error._tag !== "CancelledError") throw closed.error
-    if (unexpectedWorkerStop) throw new Error("Critical messageCreate worker stopped")
-} finally {
-    stop.abort()
-    process.off("SIGINT", requestStop)
-    process.off("SIGTERM", requestStop)
-    await client.shutdown()
+} catch {
+    console.error("Bot stopped because an operation or cleanup failed")
+    process.exitCode = 1
 }
 ```
 

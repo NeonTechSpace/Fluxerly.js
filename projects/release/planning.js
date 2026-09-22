@@ -36,7 +36,6 @@ export function planVersion({
     currentVersion,
     channel,
     pendingTypes = [],
-    proposedVersion,
     epoch,
     allowNoChanges = false,
 }) {
@@ -56,8 +55,6 @@ export function planVersion({
         core = `${epoch}.0.0`
     } else if (current.major === 0) {
         core = "1000.0.0"
-    } else if (proposedVersion) {
-        core = parseVersion(proposedVersion).core
     } else if (current.channel !== "stable") {
         core = current.core
         if (bump === "major") core = `${current.major + 1}.0.0`

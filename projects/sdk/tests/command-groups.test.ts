@@ -109,3 +109,166 @@ test("native group registration remains lazy and preserves earlier snapshots", a
     expect(grouped.groups).toHaveLength(1)
     expect(nested.groups).toHaveLength(2)
 })
+
+test("default batch registration uses own-key order and fails atomically on invalid entries or collisions", () => {
+    const root = commands.create({ prefix: "!" })._unsafeUnwrap()
+    const inherited = {
+        inherited: { arguments: {}, execute() {} },
+    }
+    const definitions = Object.assign(Object.create(inherited), {
+        10: { arguments: {}, execute() {} },
+        2: { arguments: {}, execute() {} },
+        alpha: { arguments: undefined, execute() {} },
+    })
+    const ordered = root.registerMany(definitions)._unsafeUnwrap()
+    expect(ordered.commands.map((entry) => entry.name)).toEqual(["2", "10", "alpha"])
+    expect(root.commands).toEqual([])
+
+    const duplicate = ordered.registerMany({
+        first: { arguments: {}, aliases: ["shared"], execute() {} },
+        second: { arguments: {}, aliases: ["shared"], execute() {} },
+    })
+    expect(duplicate.isErr()).toBe(true)
+    expect(ordered.commands.map((entry) => entry.name)).toEqual(["2", "10", "alpha"])
+
+    const unknown = ordered.registerMany({
+        valid: { arguments: {}, execute() {} },
+        invalid: { arguments: {}, execute() {}, privateOption: true },
+    } as never)
+    expect(unknown.isErr()).toBe(true)
+    expect(ordered.commands.map((entry) => entry.name)).toEqual(["2", "10", "alpha"])
+    expect(ordered.registerMany({ alpha: { arguments: {}, execute() {} } }).isErr()).toBe(true)
+    expect(ordered.registerMany({ embedded: { name: "other", arguments: {}, execute() {} } } as never).isErr()).toBe(
+        true,
+    )
+    expect(ordered.registerMany({} as never).isErr()).toBe(true)
+    expect(
+        ordered
+            .registerMany({
+                [Symbol("private")]: { arguments: {}, execute() {} },
+                valid: { arguments: {}, execute() {} },
+            } as never)
+            .isErr(),
+    ).toBe(true)
+
+    const accessed: string[] = []
+    const accessorBatch = Object.defineProperty({}, "private", {
+        enumerable: true,
+        get() {
+            accessed.push("read")
+            throw new Error("private accessor value")
+        },
+    })
+    expect(() => ordered.registerMany(accessorBatch as never)).toThrow(SdkDefect)
+    expect(accessed).toEqual(["read"])
+})
+
+test("native batch registration is lazy and fails atomically without admitting inherited entries", async () => {
+    const root = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+    const inherited = {
+        inherited: { arguments: {}, execute: () => Effect.void },
+    }
+    const definitions = Object.assign(Object.create(inherited), {
+        first: { arguments: {}, aliases: ["one"], execute: () => Effect.void },
+        second: { arguments: undefined, execute: () => Effect.void },
+    })
+    const operation = root.registerMany(definitions)
+    expect(root.commands).toEqual([])
+    const registered = await Effect.runPromise(operation)
+    expect(registered.commands.map((entry) => entry.name)).toEqual(["first", "second"])
+
+    const duplicate = registered.registerMany({
+        third: { arguments: {}, aliases: ["shared"], execute: () => Effect.void },
+        fourth: { arguments: {}, aliases: ["shared"], execute: () => Effect.void },
+    })
+    const duplicateExit = await Effect.runPromiseExit(duplicate)
+    expect(Exit.isFailure(duplicateExit) && Cause.hasFails(duplicateExit.cause)).toBe(true)
+    expect(registered.commands.map((entry) => entry.name)).toEqual(["first", "second"])
+    const symbolExit = await Effect.runPromiseExit(
+        registered.registerMany({
+            [Symbol("private")]: { arguments: {}, execute: () => Effect.void },
+            valid: { arguments: {}, execute: () => Effect.void },
+        } as never),
+    )
+    expect(Exit.isFailure(symbolExit) && Cause.hasFails(symbolExit.cause)).toBe(true)
+    expect(registered.commands.map((entry) => entry.name)).toEqual(["first", "second"])
+
+    let reads = 0
+    const accessor = Object.defineProperty({}, "private", {
+        enumerable: true,
+        get() {
+            reads += 1
+            throw new Error("native private accessor")
+        },
+    })
+    const accessorOperation = registered.registerMany(accessor as never)
+    expect(reads).toBe(0)
+    const accessorExit = await Effect.runPromiseExit(accessorOperation)
+    expect(reads).toBe(1)
+    expect(Exit.isFailure(accessorExit) && Cause.hasDies(accessorExit.cause)).toBe(true)
+    expect(registered.commands.map((entry) => entry.name)).toEqual(["first", "second"])
+})
+
+test("default batch registration snapshots one parent before adding any command", () => {
+    const root = commands
+        .create({ prefix: "!" })
+        ._unsafeUnwrap()
+        .registerGroup({ name: "a" })
+        ._unsafeUnwrap()
+        .registerGroup({ name: "b" })
+        ._unsafeUnwrap()
+    let reads = 0
+    const options = Object.defineProperty({}, "group", {
+        enumerable: true,
+        get() {
+            reads += 1
+            return reads <= 2 ? ["a"] : ["b"]
+        },
+    })
+    const registered = root
+        .registerMany(
+            {
+                first: { arguments: {}, execute() {} },
+                second: { arguments: {}, execute() {} },
+            },
+            options,
+        )
+        ._unsafeUnwrap()
+
+    expect(reads).toBe(1)
+    expect(registered.commands.map((entry) => entry.path)).toEqual([
+        ["a", "first"],
+        ["a", "second"],
+    ])
+    expect(root.commands).toEqual([])
+})
+
+test("native batch registration lazily snapshots one parent before adding any command", async () => {
+    const created = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+    const a = await Effect.runPromise(created.registerGroup({ name: "a" }))
+    const root = await Effect.runPromise(a.registerGroup({ name: "b" }))
+    let reads = 0
+    const options = Object.defineProperty({}, "group", {
+        enumerable: true,
+        get() {
+            reads += 1
+            return reads <= 2 ? ["a"] : ["b"]
+        },
+    })
+    const operation = root.registerMany(
+        {
+            first: { arguments: {}, execute: () => Effect.void },
+            second: { arguments: {}, execute: () => Effect.void },
+        },
+        options,
+    )
+    expect(reads).toBe(0)
+    const registered = await Effect.runPromise(operation)
+
+    expect(reads).toBe(1)
+    expect(registered.commands.map((entry) => entry.path)).toEqual([
+        ["a", "first"],
+        ["a", "second"],
+    ])
+    expect(root.commands).toEqual([])
+})

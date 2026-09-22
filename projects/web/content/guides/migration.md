@@ -26,7 +26,9 @@ Keep the database, job queue and other application services outside either SDK. 
 
 ## Move commands without moving the database into the SDK
 
-Keep command inputs and database access in application code. Pass the handler's signal into SDK work, check every registration and operation result, and return the handler promise so shutdown can await it
+Keep command inputs and database access in application code. Pass the handler's signal into SDK work and check every registration and operation result. Return and await handler work for sequencing and failure reporting, not as a shutdown-draining guarantee
+
+Ordinary handler Promises remain application-owned. Shutdown requests cancellation but does not wait for arbitrary database or other external work to settle. Track and drain work that must finish explicitly, using the [application supervision boundary](/docs/{{version}}/application-supervision/#drain-application-owned-work)
 
 ```ts
 import type { Client, Message } from "@neontechspace/fluxerly";

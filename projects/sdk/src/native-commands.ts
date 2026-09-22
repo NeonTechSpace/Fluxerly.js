@@ -30,8 +30,8 @@ import {
     validateCommandShape,
 } from "#sdk/internal/commands"
 import { convertCommandArguments } from "#sdk/internal/command-arguments"
-import type { RegistrationError } from "#sdk/message-errors"
-import type { Message, MessageCore } from "#sdk/messages"
+import type { RegistrationError, SendError } from "#sdk/message-errors"
+import type { Message, MessageCore, ReplyInput, SendOptions } from "#sdk/messages"
 import { Clock, Effect, type Scope } from "effect"
 import type { Client, EventHandlerOptions, Subscription } from "./effect.js"
 
@@ -55,6 +55,13 @@ export interface NativePrefixCommandContext<M extends MessageCore = Message> {
     readonly args: readonly string[]
     /** Argument text retained by the parser. The default removes command-name separator whitespace but preserves the remainder */
     readonly rawArgs: string
+    /**
+     * Reply to the incoming message through the attached client. The returned Effect inherits handler interruption and fails with SendError.
+     * Delegates to `client.messages.reply`, including its validation, deadline, nonce, retry, cache and defect behavior.
+     * Interruption or a lost response can leave the reply posted. Failure does not always mean nothing was sent, and uncertain sends are not replayed.
+     * No automatic reply or error response is added by the router
+     */
+    readonly reply: (input: ReplyInput, options?: SendOptions) => Effect.Effect<M, SendError>
 }
 
 /** Command context supplied to execution and cooldown-key callbacks only after the complete argument schema succeeds */
@@ -74,6 +81,12 @@ export interface NativePrefixCommandUnmatchedContext<M extends MessageCore = Mes
     readonly message: M
     /** Exact prefix selected before parsing declined, name lookup missed or a group needed a subcommand */
     readonly prefix: string
+    /**
+     * Reply to the unmatched incoming message through the attached client, inheriting this callback's interruption.
+     * Delegates to `client.messages.reply`, including its validation, deadline, nonce, retry, cache and defect behavior.
+     * Interruption or a lost response can leave the reply posted. Failure does not always mean nothing was sent, and uncertain sends are not replayed
+     */
+    readonly reply: (input: ReplyInput, options?: SendOptions) => Effect.Effect<M, SendError>
 }
 
 /** Prefix and parser configuration with optional Effect feedback when no executable command is selected */
@@ -178,6 +191,35 @@ export interface NativePrefixCommand<
     readonly execute: (context: NativePrefixCommandExecutionContext<S, M>) => Effect.Effect<unknown, E, R>
 }
 
+type NativePrefixCommandBatch<
+    M extends MessageCore,
+    S extends Readonly<Record<string, CommandArgumentSchema | undefined>>,
+> = {
+    readonly [K in keyof S]: Omit<
+        NativePrefixCommand<unknown, any, S[K] extends CommandArgumentSchema ? S[K] : {}, M>,
+        "name" | "arguments"
+    > & { readonly arguments: S[K] }
+}
+
+type NativeEffectRequirements<F> = F extends (...arguments_: any[]) => Effect.Effect<unknown, unknown, infer R>
+    ? R
+    : never
+
+type NativeCommandRequirements<C> =
+    | (C extends { readonly execute: infer F } ? NativeEffectRequirements<F> : never)
+    | (C extends { readonly guard: infer F } ? NativeEffectRequirements<F> : never)
+    | (C extends { readonly onReject: infer F } ? NativeEffectRequirements<F> : never)
+    | (C extends { readonly cooldown: { readonly store: { readonly claim: infer F } } }
+          ? F extends (...arguments_: any[]) => infer A
+              ? A extends Effect.Effect<unknown, unknown, infer R>
+                  ? R
+                  : never
+              : never
+          : never)
+
+type NativeBatchRequirements<C> =
+    C extends Readonly<Record<string, unknown>> ? NativeCommandRequirements<C[keyof C]> : never
+
 /**
  * Bounded in-memory cooldown reservations for one process, using the caller's Effect Clock wall time.
  * Claim, sweep and clear return lazy Effects, so storage changes occur only when those Effects run.
@@ -243,6 +285,29 @@ export interface NativePrefixCommandRouter<R = never, M extends MessageCore = Me
         command: NativePrefixCommand<E, R2, S, M>,
         options?: PrefixCommandRegistrationOptions,
     ): Effect.Effect<NativePrefixCommandRouter<R | R2, M>, ConfigurationError>
+    /**
+     * Return an Effect that validates and adds a nonempty keyed command object to one new router, in JavaScript own enumerable string-key order and under one optional parent.
+     * Each object key supplies its command name. Set `arguments: {}` to reject positional arguments, or `arguments: undefined` to leave raw args unrestricted.
+     * Every definition is snapshotted before registration. Inherited keys are ignored. If any definition is invalid or any name collides, the Effect fails with
+     * ConfigurationError and produces no partially registered router. Earlier routers and attachments remain unchanged.
+     * The optional parent is validated and snapshotted once when the Effect runs. Unexpected getter defects remain in the Effect cause.
+     * Each entry retains its inferred argument values, and the returned router records every callback service requirement
+     */
+    registerMany<
+        const S extends Readonly<Record<string, CommandArgumentSchema | undefined>>,
+        const C extends Readonly<
+            Record<
+                keyof S,
+                {
+                    readonly arguments: CommandArgumentSchema | undefined
+                    readonly execute: unknown
+                }
+            >
+        >,
+    >(
+        commands: C & NativePrefixCommandBatch<M, S>,
+        options?: PrefixCommandRegistrationOptions,
+    ): Effect.Effect<NativePrefixCommandRouter<R | NativeBatchRequirements<C>, M>, ConfigurationError>
     /**
      * Return an Effect that adds a group to a new router, at root or beneath an existing canonical `options.group` path.
      * Register parent groups before children. Groups accept identity and description only, without callbacks or argument schemas.
@@ -373,6 +438,32 @@ class NativePrefixCommandRouterOwner<R = never, M extends MessageCore = Message>
         )
     }
 
+    registerMany<
+        const S extends Readonly<Record<string, CommandArgumentSchema | undefined>>,
+        const C extends Readonly<
+            Record<
+                keyof S,
+                {
+                    readonly arguments: CommandArgumentSchema | undefined
+                    readonly execute: unknown
+                }
+            >
+        >,
+    >(
+        commands: C & NativePrefixCommandBatch<M, S>,
+        options?: PrefixCommandRegistrationOptions,
+    ): Effect.Effect<NativePrefixCommandRouter<R | NativeBatchRequirements<C>, M>, ConfigurationError> {
+        return configurationEffect(() => {
+            const stored = snapshotNativeCommandBatch(commands)
+            return freezeRouter(
+                new NativePrefixCommandRouterOwner<R | NativeBatchRequirements<C>, M>(
+                    this.#registry.registerMany(stored, options),
+                    this.#onUnmatched,
+                ),
+            )
+        })
+    }
+
     registerGroup(
         group: PrefixCommandGroupDefinition,
         options?: PrefixCommandRegistrationOptions,
@@ -409,6 +500,7 @@ class NativePrefixCommandRouterOwner<R = never, M extends MessageCore = Message>
                     ...(match.path === undefined ? {} : { path: match.path }),
                     args: Object.freeze([...match.parse.args]),
                     rawArgs: match.parse.rawArgs,
+                    reply: boundNativeReply(client, message),
                 }),
             convert: (definition, context) => convertCommandArguments(definition.arguments, context.args),
             executionContext: (context, values) =>
@@ -422,7 +514,12 @@ class NativePrefixCommandRouterOwner<R = never, M extends MessageCore = Message>
                     : nativeCallback(
                           () =>
                               this.#onUnmatched!(
-                                  Object.freeze({ client, message, prefix: match.prefix }),
+                                  Object.freeze({
+                                      client,
+                                      message,
+                                      prefix: match.prefix,
+                                      reply: boundNativeReply(client, message),
+                                  }),
                                   match.unmatched,
                               ),
                           "A native command onUnmatched callback must return an Effect",
@@ -503,6 +600,40 @@ function snapshotNativeCommand<E, R, S extends CommandArgumentSchema, M extends 
                   }),
               }),
     }) as StoredNativeCommand<M>
+}
+
+function snapshotNativeCommandBatch<M extends MessageCore>(
+    commands: Readonly<Record<string, unknown>>,
+): readonly StoredNativeCommand<M>[] {
+    if (typeof commands !== "object" || commands === null || Array.isArray(commands))
+        throw new ConfigurationError("command", "A command batch must be an object")
+    for (const key of Reflect.ownKeys(commands))
+        if (typeof key === "symbol" && Object.prototype.propertyIsEnumerable.call(commands, key))
+            throw new ConfigurationError("command", "Command batch keys must be strings")
+    const names = Object.keys(commands)
+    if (names.length === 0) throw new ConfigurationError("command", "A command batch must not be empty")
+    const stored: StoredNativeCommand<M>[] = []
+    for (const name of names) {
+        const value = commands[name]
+        if (typeof value !== "object" || value === null || Array.isArray(value))
+            throw new ConfigurationError("command", "A command batch entry must be an object")
+        if (Object.prototype.hasOwnProperty.call(value, "name"))
+            throw new ConfigurationError("command", "A command batch entry must use its object key as the name")
+        stored.push(
+            snapshotNativeCommand({
+                ...(value as NativePrefixCommand<unknown, unknown, CommandArgumentSchema, M>),
+                name,
+            }),
+        )
+    }
+    return Object.freeze(stored)
+}
+
+function boundNativeReply<M extends MessageCore>(
+    client: Client<M>,
+    message: M,
+): NativePrefixCommandContext<M>["reply"] {
+    return (input, options) => client.messages.reply(message, input, options)
 }
 
 function nativeCooldown<M extends MessageCore>(

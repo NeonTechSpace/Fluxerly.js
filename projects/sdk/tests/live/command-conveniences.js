@@ -290,27 +290,62 @@ async function verifyArguments(ops, channelId) {
     const claims = []
     const cooldown = await ops.cooldowns(claims)
     let router = await ops.create({ prefix: "!", ignoreBots: false })
-    router = await ops.register(router, {
-        name: commandName,
-        description: "Live typed command arguments",
-        arguments: {
-            count: { type: "integer" },
-            mode: { type: "choice", choices: ["fast", "slow"] },
-            note: { type: "text", optional: true },
-        },
-        guard: ops.guard((message) => message.channelId === channelId && message.author.id === botId),
-        cooldown: { store: cooldown.store, durationMs: 60_000 },
-        onReject: ops.reject(async (context, rejection) => {
-            const message = context.message
-            if (message.channelId !== channelId || message.author.id !== botId) return
-            rejections.push({ id: message.id, hasValues: "values" in context, rejection })
-            replies.push(await ops.reply(message, { content: `${marker} rejected`, allowedMentions: {} }))
+    router = await value(
+        router.registerMany({
+            [commandName]: {
+                description: "Live typed command arguments",
+                arguments: {
+                    count: { type: "integer" },
+                    mode: { type: "choice", choices: ["fast", "slow"] },
+                    note: { type: "text", optional: true },
+                },
+                guard: ops.guard((message) => message.channelId === channelId && message.author.id === botId),
+                cooldown: { store: cooldown.store, durationMs: 60_000 },
+                onReject:
+                    mode === "default"
+                        ? async (context, rejection) => {
+                              const message = context.message
+                              if (message.channelId !== channelId || message.author.id !== botId) return
+                              rejections.push({ id: message.id, hasValues: "values" in context, rejection })
+                              replies.push(
+                                  await value(context.reply({ content: `${marker} rejected`, allowedMentions: {} })),
+                              )
+                          }
+                        : (context, rejection) =>
+                              Effect.gen(function* () {
+                                  const message = context.message
+                                  if (message.channelId !== channelId || message.author.id !== botId) return
+                                  rejections.push({ id: message.id, hasValues: "values" in context, rejection })
+                                  replies.push(
+                                      yield* context.reply({ content: `${marker} rejected`, allowedMentions: {} }),
+                                  )
+                              }),
+                execute:
+                    mode === "default"
+                        ? async ({ message, args, rawArgs, values, reply }) => {
+                              executions.push({
+                                  id: message.id,
+                                  args,
+                                  rawArgs,
+                                  values,
+                                  frozen: Object.isFrozen(values),
+                              })
+                              replies.push(await value(reply({ content: `${marker} accepted`, allowedMentions: {} })))
+                          }
+                        : ({ message, args, rawArgs, values, reply }) =>
+                              Effect.gen(function* () {
+                                  executions.push({
+                                      id: message.id,
+                                      args,
+                                      rawArgs,
+                                      values,
+                                      frozen: Object.isFrozen(values),
+                                  })
+                                  replies.push(yield* reply({ content: `${marker} accepted`, allowedMentions: {} }))
+                              }),
+            },
         }),
-        execute: ops.execute(async ({ message, args, rawArgs, values }) => {
-            executions.push({ id: message.id, args, rawArgs, values, frozen: Object.isFrozen(values) })
-            replies.push(await ops.reply(message, { content: `${marker} accepted`, allowedMentions: {} }))
-        }),
-    })
+    )
     assert.deepEqual(router.commands[0]?.arguments, [
         { name: "count", type: "integer", optional: false, rest: false },
         { name: "mode", type: "choice", optional: false, rest: false, choices: ["fast", "slow"] },

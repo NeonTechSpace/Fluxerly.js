@@ -209,4 +209,51 @@ Keep fixed startup workers in one reviewed inventory. If the application creates
 
 The `diagnostics.events` snapshot reports this client's open event sources, message collectors, reaction collectors and currently executing subscription callbacks. Use those payload-free counters to observe the policy and alert near its limits. They are not enforced caps, process-memory measurements or counts of collector filters and arbitrary application tasks. The application-owned reservation remains the admission authority
 
-Default handlers receive an `AbortSignal`, but JavaScript promises that ignore it cannot be forcibly cancelled. Return and await handler work so shutdown can wait for cooperative cleanup. Native Effect handlers use interruption and scoped finalizers, as shown in the [Effect application testing recipe](/docs/{{version}}/effect-application-testing/)
+Default handlers receive an `AbortSignal`, but ordinary callback Promises remain application-owned even when they cooperate with cancellation. Subscription closure and client shutdown do not wait for their eventual settlement. Returning and awaiting work preserves handler sequencing and failure reporting, not a drain guarantee
+
+Collector progress callbacks have a different ownership contract: Their completion waits for the returned callback work. Native Effect handlers use interruption and awaited scoped finalizers, as shown in the [Effect application testing recipe](/docs/{{version}}/effect-application-testing/)
+
+## Drain application-owned work
+
+When an external operation must finish before process exit, retain its Promise in an application-owned set. Remove it on either settlement path without creating an unobserved rejected Promise. Stop intake first, then inspect the outcomes of the retained work
+
+```ts
+import type { Client, Message, OperationSignal } from "@neontechspace/fluxerly";
+
+export function installTrackedHandler(
+    client: Client,
+    handle: (message: Message, signal: OperationSignal) => Promise<void>,
+) {
+    const active = new Set<Promise<void>>();
+    const registered = client.on("messageCreate", (message, signal) => {
+        const work = Promise.resolve().then(() => handle(message, signal));
+        active.add(work);
+        void work.then(() => active.delete(work), () => active.delete(work));
+        return work;
+    });
+    if (registered.isErr()) throw registered.error;
+
+    return {
+        subscription: registered.value,
+        async stopAndDrain() {
+            registered.value.unsubscribe();
+            const failures: unknown[] = [];
+            try {
+                const closed = await registered.value.waitForClose();
+                if (closed.isErr()) failures.push(closed.error);
+            } catch (failure) {
+                failures.push(failure);
+            }
+            const pending = await Promise.allSettled([...active]);
+            for (const result of pending) {
+                if (result.status === "rejected") failures.push(result.reason);
+            }
+            if (failures.length) throw new AggregateError(failures, "Application work failed during drain");
+        },
+    };
+}
+```
+
+The application calls `stopAndDrain()` outside the tracked handler to avoid joining itself. The returned function drains work still active after intake stops, not a history of earlier failures. The ordinary handler-error hook remains responsible for earlier failures
+
+An operation that ignores cancellation can keep this drain pending. A chosen application deadline bounds waiting only if the underlying service also has a supported cancellation or recovery policy. A timeout alone cannot prove that an external write stopped or was rolled back

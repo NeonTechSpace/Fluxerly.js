@@ -35,13 +35,13 @@ export async function readSourcePlan(workspace, options) {
     const releasePlan = assembleReleasePlan(fragments, packages, configResult.config, preState)
     if (releasePlan.releases.some((release) => release.name !== sdk.packageJson.name))
         throw new Error("Changesets attempted to release a non-SDK package")
-    const proposal = releasePlan.releases.find((release) => release.name === sdk.packageJson.name)
+    // Changesets owns note and changelog application. Epoch SemVer planning uses only unconsumed notes
+    // because a Changesets prerelease proposal can preserve the old core while changing readiness
     const plan = planVersion({
         currentVersion: sdk.packageJson.version,
         channel: options.channel,
         epoch: options.epoch,
         pendingTypes: pending.map((fragment) => fragment.releases[0].type),
-        proposedVersion: proposal?.newVersion,
         allowNoChanges: options.allowNoChanges ?? false,
     })
     if (options.line && options.line !== plan.line)

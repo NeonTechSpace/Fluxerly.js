@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { dirname, join, resolve } from "node:path"
 import { channelTargets, defaultVersion, parseVersion, validateSnapshot } from "./versions.js"
 import { latestAliasFiles } from "./latest-alias.js"
+import { expandStarterExamples } from "./starter-examples.js"
 
 export const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdkRoot = resolve(webRoot, "../sdk")
@@ -61,7 +62,10 @@ async function readGuideInventory(directory = guidesRoot) {
     const guides = await Promise.all(
         navigation
             .filter((slug) => guideFiles.has(slug))
-            .map(async (slug) => ({ slug, content: await readFile(join(directory, `${slug}.md`), "utf8") })),
+            .map(async (slug) => ({
+                slug,
+                content: await expandStarterExamples(await readFile(join(directory, `${slug}.md`), "utf8")),
+            })),
     )
     return { guides, navigation }
 }

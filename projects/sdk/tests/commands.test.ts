@@ -1,6 +1,7 @@
 import { once } from "node:events"
 import { createServer } from "node:http"
 import { Context, Effect, Exit, Scope } from "effect"
+import { ResultAsync } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
     commands,
@@ -40,7 +41,11 @@ function value<A, E>(result: { isErr(): boolean; value?: A; error?: E }): A {
     return result.value!
 }
 
-async function fixture() {
+async function fixture(
+    request: (url: string, init: RequestInit) => Response | Promise<Response> = (url) => {
+        throw new Error(`Unexpected command fixture HTTP request ${url}`)
+    },
+) {
     let sequence = 0
     const sockets: import("ws").WebSocket[] = []
     const server = createServer()
@@ -60,9 +65,7 @@ async function fixture() {
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Fixture port missing")
     transport.url = `ws://127.0.0.1:${address.port}`
-    stubFetchWithHostedDiscovery((url) => {
-        throw new Error(`Unexpected command fixture HTTP request ${url}`)
-    })
+    stubFetchWithHostedDiscovery(request)
     onTestFinished(async () => {
         for (const socket of sockets) socket.terminate()
         await new Promise<void>((resolve) => gateway.close(() => resolve()))
@@ -109,6 +112,221 @@ async function nativeClient() {
     await Effect.runPromise(client.connect())
     return { client, scope, registration }
 }
+
+test("default batch commands bind reply targets, Results and handler cancellation", async () => {
+    const requests: Record<string, unknown>[] = []
+    let requestSignal: AbortSignal | undefined
+    let hold = false
+    const remote = await fixture(async (_url, init) => {
+        requests.push(JSON.parse(String(init.body)))
+        requestSignal = init.signal as AbortSignal
+        if (!hold)
+            return Response.json(
+                {
+                    id: "901",
+                    channel_id: "20",
+                    content: "failed",
+                    author: { id: "30", username: "fixture", bot: false },
+                },
+                { status: 400 },
+            )
+        return await new Promise<Response>((_resolve, reject) => {
+            requestSignal!.addEventListener("abort", () => reject(requestSignal!.reason), { once: true })
+        })
+    })
+    const client = await defaultClient()
+    const reports: unknown[] = []
+    const root = value(commands.create({ prefix: "!" }))
+    const router = value(
+        root.registerMany({
+            ping: {
+                arguments: {},
+                execute: async ({ reply }) => {
+                    const sent = await reply({ content: "Pong" })
+                    if (sent.isErr()) throw sent.error
+                },
+            },
+            raw: {
+                arguments: undefined,
+                execute: async ({ rawArgs, reply }) => {
+                    const sent = await reply({ content: rawArgs })
+                    if (sent.isErr()) throw sent.error
+                },
+            },
+        }),
+    )
+    expect(root.commands).toEqual([])
+    expect(router.commands.map((entry) => entry.name)).toEqual(["ping", "raw"])
+    const subscription = value(
+        router.attach(client, {
+            onError: (report) => {
+                reports.push(report)
+            },
+        }),
+    )
+
+    remote.deliver("!ping")
+    await vi.waitFor(() => expect(reports).toEqual([{ event: "messageCreate", kind: "handler" }]))
+    expect(requests[0]).toMatchObject({
+        content: "Pong",
+        message_reference: { message_id: "101", channel_id: "20", type: 0 },
+    })
+
+    hold = true
+    remote.deliver("!raw waiting")
+    await vi.waitFor(() => expect(requests).toHaveLength(2))
+    expect(requests[1]).toMatchObject({
+        content: "waiting",
+        message_reference: { message_id: "102", channel_id: "20", type: 0 },
+    })
+    subscription.unsubscribe()
+    await vi.waitFor(() => expect(requestSignal?.aborted).toBe(true))
+})
+
+test("default bound replies preserve lazy and inherited send options without dispatching invalid requests", async () => {
+    let dispatches = 0
+    const remote = await fixture(async () => {
+        dispatches += 1
+        return Response.json({})
+    })
+    const client = await defaultClient()
+    const outcomes: { readonly kind: string; readonly error: unknown }[] = []
+    let throwingReads = 0
+    let returnedResultAsync = false
+    let inheritedReads = 0
+    const nonenumerable = Object.defineProperty({}, "timeoutMs", { value: 0, enumerable: false })
+    const inherited = Object.create({
+        get timeoutMs() {
+            inheritedReads += 1
+            return 0
+        },
+    })
+    const router = value(
+        value(commands.create({ prefix: "!" })).registerMany({
+            throwing: {
+                arguments: {},
+                execute: async ({ reply }) => {
+                    const options = Object.defineProperty({}, "timeoutMs", {
+                        get(): number {
+                            throwingReads += 1
+                            throw new Error("private timeout getter")
+                        },
+                    })
+                    try {
+                        const operation = reply({ content: "not sent" }, options)
+                        returnedResultAsync = operation instanceof ResultAsync
+                        await operation
+                    } catch (error) {
+                        outcomes.push({ kind: "throwing", error })
+                    }
+                },
+            },
+            nonenumerable: {
+                arguments: {},
+                execute: async ({ reply }) => {
+                    const result = await reply({ content: "not sent" }, nonenumerable)
+                    outcomes.push({ kind: "nonenumerable", error: result.isErr() ? result.error : result.value })
+                },
+            },
+            inherited: {
+                arguments: {},
+                execute: async ({ reply }) => {
+                    const result = await reply({ content: "not sent" }, inherited)
+                    outcomes.push({ kind: "inherited", error: result.isErr() ? result.error : result.value })
+                },
+            },
+            array: {
+                arguments: {},
+                execute: async ({ reply }) => {
+                    const result = await reply({ content: "not sent" }, [] as never)
+                    outcomes.push({ kind: "array", error: result.isErr() ? result.error : result.value })
+                },
+            },
+        }),
+    )
+    value(router.attach(client))
+
+    remote.deliver("!throwing")
+    remote.deliver("!nonenumerable")
+    remote.deliver("!inherited")
+    remote.deliver("!array")
+    await vi.waitFor(() => expect(outcomes).toHaveLength(4))
+
+    expect(returnedResultAsync).toBe(true)
+    expect(throwingReads).toBe(1)
+    expect(outcomes.find((outcome) => outcome.kind === "throwing")?.error).toBeInstanceOf(SdkDefect)
+    for (const kind of ["nonenumerable", "inherited"])
+        expect(outcomes.find((outcome) => outcome.kind === kind)?.error).toMatchObject({
+            inputValidation: { path: "options.timeoutMs" },
+        })
+    expect(inheritedReads).toBeGreaterThan(0)
+    expect(outcomes.find((outcome) => outcome.kind === "array")?.error).toMatchObject({
+        inputValidation: { path: "options" },
+    })
+    expect(dispatches).toBe(0)
+})
+
+test("native batch commands bind reply failures and interruption", async () => {
+    const requests: Record<string, unknown>[] = []
+    let requestSignal: AbortSignal | undefined
+    let hold = false
+    const remote = await fixture(async (_url, init) => {
+        requests.push(JSON.parse(String(init.body)))
+        requestSignal = init.signal as AbortSignal
+        if (!hold)
+            return Response.json(
+                {
+                    id: "902",
+                    channel_id: "20",
+                    content: "failed",
+                    author: { id: "30", username: "fixture", bot: false },
+                },
+                { status: 400 },
+            )
+        return await new Promise<Response>((_resolve, reject) => {
+            requestSignal!.addEventListener("abort", () => reject(requestSignal!.reason), { once: true })
+        })
+    })
+    const { client, registration } = await nativeClient()
+    const reports: unknown[] = []
+    const root = await Effect.runPromise(nativeCommands.create({ prefix: "!" }))
+    const router = await Effect.runPromise(
+        root.registerMany({
+            ping: {
+                arguments: {},
+                execute: ({ reply }) => reply({ content: "Pong" }).pipe(Effect.asVoid),
+            },
+            raw: {
+                arguments: undefined,
+                execute: ({ rawArgs, reply }) => reply({ content: rawArgs }).pipe(Effect.asVoid),
+            },
+        }),
+    )
+    expect(root.commands).toEqual([])
+    expect(router.commands.map((entry) => entry.name)).toEqual(["ping", "raw"])
+    await Effect.runPromise(
+        router
+            .attach(client, { onError: (report) => Effect.sync(() => reports.push(report)) })
+            .pipe(Scope.provide(registration)),
+    )
+
+    remote.deliver("!ping")
+    await vi.waitFor(() => expect(reports).toEqual([{ event: "messageCreate", kind: "handler" }]))
+    expect(requests[0]).toMatchObject({
+        content: "Pong",
+        message_reference: { message_id: "101", channel_id: "20", type: 0 },
+    })
+
+    hold = true
+    remote.deliver("!raw waiting")
+    await vi.waitFor(() => expect(requests).toHaveLength(2))
+    expect(requests[1]).toMatchObject({
+        content: "waiting",
+        message_reference: { message_id: "102", channel_id: "20", type: 0 },
+    })
+    await Effect.runPromise(Scope.close(registration, Exit.void))
+    await vi.waitFor(() => expect(requestSignal?.aborted).toBe(true))
+})
 
 test("default command router uses the existing subscription for longest prefix, aliases, guards and cooldowns", async () => {
     const remote = await fixture()

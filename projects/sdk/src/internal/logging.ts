@@ -12,6 +12,7 @@ import type {
     StructuredLogger,
 } from "#sdk/logging"
 import { ConfigurationError } from "#sdk/errors"
+import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
 import { record } from "./message.js"
 
 const integrations = new WeakMap<DefaultLogger, Logger.Logger<unknown, unknown>>()
@@ -105,7 +106,7 @@ export function adaptStructuredLogger(logger: StructuredLogger): DefaultLogger {
         Logger.make((entry) => {
             const safe = structuredRecord(entry)
             try {
-                logger(safe)
+                discardInvalidCallbackReturn(logger(safe))
             } catch {
                 /* Logging failure must not change SDK outcomes or recurse */
             }

@@ -9,6 +9,8 @@ test("Epoch versions separate compatibility changes from readiness", () => {
         planVersion({ currentVersion, channel, pendingTypes, ...extra }).version
     assert.equal(plan("0.0.0", "canary"), "1000.0.0-canary.0")
     assert.equal(plan("1000.0.0-canary.4", "canary", ["patch"]), "1000.0.0-canary.5")
+    assert.equal(plan("1000.0.0-canary.4", "rc", ["minor"]), "1000.1.0-rc.0")
+    assert.equal(plan("1000.0.0-canary.4", "rc", ["major", "patch"]), "1001.0.0-rc.0")
     assert.equal(plan("1000.0.0-canary.4", "rc"), "1000.0.0-rc.0")
     assert.equal(plan("1000.0.0-rc.2", "stable"), "1000.0.0")
     assert.equal(plan("1000.0.0", "stable", ["patch"]), "1000.0.1")

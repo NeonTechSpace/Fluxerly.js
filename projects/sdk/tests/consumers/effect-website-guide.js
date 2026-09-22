@@ -73,17 +73,23 @@ function deliver(id, content, bot = false) {
 const originalFetch = globalThis.fetch
 const originalToken = process.env.FLUXER_BOT_TOKEN
 const originalConsoleError = console.error
+const originalConsoleWarn = console.warn
 const initialSigintListeners = process.listeners("SIGINT")
 const initialSigtermListeners = process.listeners("SIGTERM")
 const initialExitCode = process.exitCode
 const requests = []
 const stopLogs = []
+const replyWarnings = []
+let rejectReply = false
 globalThis.fetch = withHostedDiscovery(async (url, options) => {
     assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages")
     assert.equal(options.method, "POST")
     assert.equal(new Headers(options.headers).get("authorization"), "Bot fixture-only")
     const body = JSON.parse(options.body)
     requests.push(body)
+    if (rejectReply) {
+        return Response.json({ code: "MISSING_PERMISSIONS", message: "private fixture detail" }, { status: 403 })
+    }
     return Response.json({
         id: "40",
         channel_id: "20",
@@ -95,6 +101,7 @@ globalThis.fetch = withHostedDiscovery(async (url, options) => {
 })
 process.env.FLUXER_BOT_TOKEN = "fixture-only"
 console.error = (...values) => stopLogs.push(values)
+console.warn = (...values) => replyWarnings.push(values)
 
 function assertSignalHandlersRestored() {
     assert.deepEqual(process.listeners("SIGINT"), initialSigintListeners)
@@ -106,6 +113,7 @@ try {
     await waitFor(() => identifies === 1 && sockets.size === 1, "The authored Effect starter did not become ready")
     deliver("10", "!ping", true)
     deliver("11", "Hello")
+    deliver("15", "!ping extra")
     // `on` starts one callback at a time in receive order by default, so this
     // reply establishes that both ignored events completed before the human ping
     const humanPing = deliver("12", "!ping")
@@ -113,6 +121,16 @@ try {
         () => requests.length === 1,
         "The authored Effect starter did not reply after processing the ignored messages and human ping",
     )
+    const about = deliver("16", "!about")
+    await waitFor(() => requests.length === 2, "The second native registered command did not run")
+    assert.equal(requests[1].content, "A Fluxer bot built with Fluxerly")
+    assert.equal(requests[1].message_reference.message_id, about.id)
+
+    rejectReply = true
+    deliver("17", "!ping")
+    await waitFor(() => replyWarnings.length === 1, "The native starter hid a forbidden reply")
+    assert.deepEqual(replyWarnings, [["Reply failed", { kind: "MessageError" }]])
+    assert.equal(sockets.size, 1, "An expected reply failure must not stop the native bot")
     assert.equal(process.emit("SIGINT"), true, "The authored Effect starter did not install its signal handler")
     await running
     await waitFor(() => sockets.size === 0, "Interrupting the authored Effect starter did not close its gateway socket")
@@ -123,7 +141,7 @@ try {
         "Interrupting the authored Effect starter must not set an exit code",
     )
     assert.deepEqual(stopLogs, [], "Interrupting the authored Effect starter must not log an error")
-    assert.equal(requests.length, 1, "Bot and unrelated messages must not produce replies")
+    assert.equal(requests.length, 3, "Only two commands and the rejected reply may produce requests")
     const { nonce, ...body } = requests[0]
     assert.match(nonce, /^[a-f\d]{32}$/)
     assert.deepEqual(body, {
@@ -139,7 +157,7 @@ try {
     await waitFor(() => sockets.size === 0, "Rejected authored startup did not close its gateway socket")
     assertSignalHandlersRestored()
     assert.equal(identifies, 2, "Permanent authentication rejection must not reconnect")
-    assert.equal(requests.length, 1, "Rejected startup must not send a reply")
+    assert.equal(requests.length, 3, "Rejected startup must not send a reply")
     assert.equal(
         process.exitCode,
         1,
@@ -152,6 +170,7 @@ try {
     else process.env.FLUXER_BOT_TOKEN = originalToken
     globalThis.fetch = originalFetch
     console.error = originalConsoleError
+    console.warn = originalConsoleWarn
     hooks.deregister()
     for (const socket of sockets) socket.terminate()
     await new Promise((resolve, reject) => gateway.close((error) => (error ? reject(error) : resolve())))

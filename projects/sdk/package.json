@@ -52,6 +52,7 @@
     "files": [
         "dist",
         "src",
+        "examples/starter",
         "consumer/AGENTS.md",
         "LICENSE",
         "CHANGELOG.md"
