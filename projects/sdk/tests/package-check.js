@@ -590,18 +590,17 @@ try {
                     `The installed ${file} must match the rendered runnable starter`,
                 )
             }
-            for (const readme of [join(sdk, "../../docs/README.md"), join(installed, "README.md")]) {
-                const markdown = readFileSync(readme, "utf8")
-                const examples = [...markdown.matchAll(/```js\r?\n([\s\S]*?)```/g)]
-                assert.equal(examples.length, 1, `Expected one first-bot example in ${readme}`)
-                assert.equal(
-                    await normalizeJavaScriptExample(examples[0][1]),
-                    await normalizeJavaScriptExample(websiteExamples[0][1]),
-                    `README bot must match the executable first-bot guide: ${readme}`,
-                )
-                for (const instruction of ['"type": "module"', "node bot.js", "node bot.ts"]) {
-                    assert.ok(markdown.includes(instruction), `Missing ${instruction} in ${readme}`)
-                }
+            const readme = join(installed, "README.md")
+            const readmeMarkdown = readFileSync(readme, "utf8")
+            const readmeExamples = [...readmeMarkdown.matchAll(/```js\r?\n([\s\S]*?)```/g)]
+            assert.equal(readmeExamples.length, 1, `Expected one first-bot example in ${readme}`)
+            assert.equal(
+                await normalizeJavaScriptExample(readmeExamples[0][1]),
+                await normalizeJavaScriptExample(websiteExamples[0][1]),
+                `Package README bot must match the executable first-bot guide: ${readme}`,
+            )
+            for (const instruction of ['"type": "module"', "node bot.js", "node bot.ts"]) {
+                assert.ok(readmeMarkdown.includes(instruction), `Missing ${instruction} in ${readme}`)
             }
             copyFileSync(join(fixtureDirectory, "website-guide.js"), join(consumer, "website-guide.js"))
             for (const filename of ["bot.js", "bot.ts"]) {

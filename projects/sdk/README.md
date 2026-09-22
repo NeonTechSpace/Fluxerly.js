@@ -1,27 +1,39 @@
 # Fluxerly.js
 
-Fluxerly.js is a JavaScript and TypeScript SDK for building Fluxer bots on Node.js.
-It handles HTTP requests and gateway connections for messages, events, server resources and commands
+A Fluxer-native bot SDK spanning from JavaScript to TypeScript all the way to Effect
 
-Use `@neontechspace/fluxerly` for the JavaScript and TypeScript API, whose results let you check success and failure explicitly.
-Use `@neontechspace/fluxerly/effect` when your application already uses Effect.
-Both entry points share the same implementation
+Fluxerly.js handles HTTP requests and gateway connections for messages, events, server resources and commands.
+Both public entry points share the same SDK implementation
+
+| API                       | Import                           | Application style                                            |
+| ------------------------- | -------------------------------- | ------------------------------------------------------------ |
+| JavaScript and TypeScript | `@neontechspace/fluxerly`        | Async/await with explicit success and failure Results        |
+| Effect-native             | `@neontechspace/fluxerly/effect` | Effect programs with typed failures, scopes and interruption |
+
+The default API needs no Effect-specific application setup.
+Native applications import Effect directly and must use the matching version described below
+
+## Requirements
 
 This package is under development and has not reached its first stable release.
-It targets Node.js 24.11.0 or newer and JavaScript or TypeScript 7.
-JavaScript users do not need to install TypeScript
+Use Node.js 24.11.0 or newer.
+JavaScript needs no compiler. TypeScript 7 is required when typechecking or compiling TypeScript
 
-## Your first bot
+Keep the package manager's lockfile for reproducible installs and review prerelease changes before upgrading
 
-This bot replies **Pong!** when you send **!ping**
+## Start a bot
 
-After installing the SDK, add `"type": "module"` to your bot project's `package.json`
+The included starter replies **Pong!** to **!ping** and provides a second **!about** command
 
-Save the following as `bot.js`, or `bot.ts` for TypeScript, and set `FLUXER_BOT_TOKEN` in the process environment
+After installing the SDK:
 
-Keep that environment and any process-manager configuration containing the token private
+1. Add `"type": "module"` to the bot project's `package.json`
+2. Copy `lifetime.js` from `node_modules/@neontechspace/fluxerly/examples/starter/` into the bot folder
+3. Save the following as `bot.js`, or `bot.ts` for TypeScript
+4. Set `FLUXER_BOT_TOKEN` in the process environment. Keep the token and any configuration containing it private
 
-Copy `lifetime.js` from `node_modules/@neontechspace/fluxerly/examples/starter/` into the bot folder. This editable application companion supervises the connection and critical command workers, then awaits SDK-owned cleanup
+The lifetime companion is editable application code, not a public SDK export.
+It supervises the connection and returned critical command workers, then awaits SDK-owned cleanup
 
 ```js
 import { commands } from "@neontechspace/fluxerly"
@@ -64,25 +76,31 @@ try {
 ```
 
 The same code works in JavaScript and TypeScript.
-Run `node bot.js` or `node bot.ts`, then send **!ping** in a channel your bot can read and reply to
+Run `node bot.js` or `node bot.ts`, then send **!ping** in a channel where the bot can read and reply
 
-## Choose the Effect version
+Press Ctrl+C to stop the bot and await SDK cleanup.
+An unexpected connection or critical-worker failure stops the starter with a failing exit status instead of leaving a partially working bot.
+Application-owned work, such as database writes started by event handlers, still needs its own cancellation and cleanup
 
-The recommended Effect version is the one selected by your installed SDK, not Effect's latest release.
-Open `node_modules/@neontechspace/fluxerly/package.json` in your bot project.
-Read `peerDependencies.effect`
+## Start an Effect-native bot
 
-Modern npm and pnpm install the required Effect peer automatically.
-If automatic peer installation is disabled, install the declared version yourself.
-An Effect-native application must use that same version.
-For example, run `pnpm add effect@VERSION`, replacing `VERSION` with the exact value from the manifest
+The same installed `examples/starter/` folder includes `bot-effect.ts` and `lifetime-effect.ts`.
+Copy both into the bot folder, retain `"type": "module"`, set `FLUXER_BOT_TOKEN` and run `node bot-effect.ts`.
+The native lifetime companion composes with application-provided Effect services and scoped cleanup, without creating a separate hidden runtime
 
-Run `pnpm list effect` or `npm ls effect` in your bot project to inspect the installed version.
+Before running the native starter, declare Effect as a direct dependency using the exact `peerDependencies.effect` value in `node_modules/@neontechspace/fluxerly/package.json`.
+For example, run `pnpm add effect@VERSION` or `npm install effect@VERSION`, replacing `VERSION` with that value
+
+Modern npm and pnpm normally install the required Effect peer automatically, including for default-API applications.
+If automatic peer installation is disabled, install the declared version explicitly.
+Do not substitute Effect's latest release for the SDK's declared version
+
+Run `pnpm list effect` or `npm ls effect` in the bot project to inspect the installed version.
 Recheck the SDK manifest when upgrading the SDK
 
 ## For coding agents
 
-Open `consumer/AGENTS.md` inside this installed package before implementing SDK usage.
+Open `consumer/AGENTS.md` inside the installed package before implementing SDK usage.
 It covers API selection, checked examples, lifecycle ownership and verification.
 Agent tools do not necessarily discover instructions inside dependencies automatically
 

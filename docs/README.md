@@ -8,7 +8,7 @@
 <h3 align="center">From your first reply to the bot of your dreams</h3>
 
 <p align="center">
-  A Fluxer-native bot SDK for JavaScript and TypeScript
+  A Fluxer-native bot SDK spanning from JavaScript to TypeScript all the way to Effect
 </p>
 
 <p align="center">
@@ -23,8 +23,6 @@
   <a href="https://ossinsight.io/analyze/NeonTechSpace/Fluxerly.js#overview"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/OSS%20Insight-Analytics-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=OSS%20Insight&amp;labelColor=111827&amp;color=0891b2&amp;logo=github&amp;mode=dark"><img src="https://shieldcn.dev/badge/OSS%20Insight-Analytics-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=OSS%20Insight&amp;labelColor=111827&amp;color=0891b2&amp;logo=github&amp;mode=light" alt="OSS Insight: Repository analytics"></picture></a>
   <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Fluxer-Coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Fluxer&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=dark"><img src="https://shieldcn.dev/badge/Fluxer-Coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Fluxer&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=light" alt="Fluxer: Public community invite coming soon"></picture>
 </p>
-
-Build with `async` / `await`, or use the Effect-native API for typed errors and scoped concurrency. Both entry points share the same SDK features. Effect is optional
 
 > [!NOTE]
 > Fluxerly is a prerelease SDK. Start with the [temporary Canary documentation](https://preview.fluxerly.neontechspace.com/docs/1000.0.0-canary.1/). Install the explicit `@canary` channel and review changes when upgrading
@@ -51,56 +49,6 @@ pnpm add @neontechspace/fluxerly@canary
 ```
 
 Keep your package manager's lockfile for reproducible installs. The SDK does not require the `--save-exact` option. Modern npm and pnpm normally install the required Effect peer automatically, even when you only use the default API
-
-## From !ping to Pong!
-
-Add `"type": "module"` to your bot project's `package.json`. Save this as `bot.js`, or `bot.ts` for TypeScript, and set `FLUXER_BOT_TOKEN` in the process environment. Keep that environment and any process-manager configuration containing the token private
-
-Copy `lifetime.js` from `node_modules/@neontechspace/fluxerly/examples/starter/` into the bot folder. This editable application companion supervises the connection and critical command workers, then awaits SDK-owned cleanup
-
-```js
-import { commands } from "@neontechspace/fluxerly"
-import { runBot } from "./lifetime.js"
-
-const token = process.env.FLUXER_BOT_TOKEN
-if (!token) throw new Error("FLUXER_BOT_TOKEN is required")
-
-try {
-    await runBot({ token }, (client) => {
-        const router = commands.create({ prefix: "!" })
-        if (router.isErr()) throw router.error
-
-        const registered = router.value.registerMany({
-            ping: {
-                arguments: {},
-                execute: async ({ reply }) => {
-                    const sent = await reply({ content: "Pong!" })
-                    if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
-                },
-            },
-            about: {
-                arguments: {},
-                execute: async ({ reply }) => {
-                    const sent = await reply({ content: "A Fluxer bot built with Fluxerly" })
-                    if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
-                },
-            },
-        })
-        if (registered.isErr()) throw registered.error
-
-        const attached = registered.value.attach(client)
-        if (attached.isErr()) throw attached.error
-        return [attached.value]
-    })
-} catch {
-    console.error("Bot stopped because an operation or cleanup failed")
-    process.exitCode = 1
-}
-```
-
-Run `node bot.js` or `node bot.ts`. Send **!ping** in a channel your bot can read and reply to. It should answer **Pong!**
-
-The [temporary Canary documentation](https://preview.fluxerly.neontechspace.com/docs/1000.0.0-canary.1/) starts with this bot. As you add commands, check reply Results too and give your application an explicit shutdown path
 
 ## Choose your API
 

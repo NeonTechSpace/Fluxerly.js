@@ -161,8 +161,12 @@ for (const width of [390, 1440]) {
         await page.goto("/docs/dev/quick-start/")
         const sidebar = page.locator(width < 768 ? "#nd-sidebar-mobile" : "#nd-sidebar")
         if (width < 768) {
+            // The server-rendered trigger is focusable before React installs its keyboard action
+            await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+            await expect(sidebar).toHaveAttribute("data-state", "closed")
             const trigger = page.getByRole("button", { name: "Open Sidebar", exact: true })
             await trigger.focus()
+            await expect(trigger).toBeFocused()
             await page.keyboard.press("Enter")
             await expect(sidebar).toHaveAttribute("data-state", "open")
             await expect(sidebar.getByRole("button", { name: "Close Sidebar", exact: true }))
