@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { Effect, Exit, Scope } from "effect"
 import { API } from "typescript/unstable/sync"
-import { describe, expect, onTestFinished, test, vi } from "vitest"
+import { beforeAll, describe, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type ClientOptions, type MemberReference } from "../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../src/effect.js"
 import { InputValidationFailure } from "../src/input-validation.js"
@@ -11,6 +11,7 @@ import { identifier } from "../src/internal/message.js"
 import { stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 import {
     conformanceReferenceCases,
+    clientNamespaceMembers,
     fieldValidationCases,
     namespaceConformance,
     operationConformance,
@@ -18,6 +19,13 @@ import {
     registryScope,
     requestReferenceViolations,
 } from "./conformance-registry.js"
+import {
+    clientFactoryConformance,
+    clientTopLevelConformance,
+    clientTopLevelOperationConformance,
+    standaloneConformance,
+    standaloneOperationConformance,
+} from "./standalone-conformance-registry.js"
 
 const symbolIsAlias = 1 << 21
 
@@ -38,26 +46,30 @@ function publicInterfaces(path: "src/index.ts" | "src/effect.ts") {
             const symbol = exported!.flags & symbolIsAlias ? project!.checker.getAliasedSymbol(exported!) : exported!
             return project!.checker.getPropertiesOfType(project!.checker.getDeclaredTypeOfSymbol(symbol))
         }
-        const clientNamespaces = members("Client")
-            .filter(
-                (member) =>
-                    !["state", "shards", "gatewayLatencyMs", "shutdown", "run", "connect", "outcome"].includes(
-                        member.name,
-                    ),
+        const memberTypes = (name: string) =>
+            Object.fromEntries(
+                members(name).map((member) => {
+                    const type = project!.checker.getTypeOfSymbol(member)
+                    expect(type, `${path} ${name}.${member.name} has no type`).toBeDefined()
+                    return [member.name, project!.checker.typeToString(type!)]
+                }),
             )
-            .filter((member) => {
-                const type = project!.checker.getTypeOfSymbol(member)
-                return type !== undefined && !project!.checker.typeToString(type).includes("=>")
-            })
-            .map((member) => {
-                const type = project!.checker.getTypeOfSymbol(member)
-                return type === undefined ? undefined : project!.checker.typeToString(type).match(/^\w+/)?.[0]
-            })
-            .filter((name): name is string => name !== undefined)
+        const valueMembers = (name: string) => {
+            const symbol = exports.get(name)
+            expect(symbol, `${path} does not export ${name}`).toBeDefined()
+            const type = project!.checker.getTypeOfSymbol(symbol!)
+            expect(type).toBeDefined()
+            return project!.checker.getPropertiesOfType(type!).map((member) => member.name)
+        }
         return {
-            clientNamespaces: clientNamespaces.sort(),
+            clientMembers: memberTypes("Client"),
+            webhookMembers: memberTypes("WebhookClient"),
+            factories: [
+                ...["createClient", "createWebhookClient"].filter((name) => exports.has(name)),
+                ...valueMembers("oauth").map((name) => `oauth.${name}`),
+            ].sort(),
             operations: new Map(
-                Object.keys(namespaceConformance).map((name) => [
+                [...Object.keys(namespaceConformance), ...Object.keys(standaloneConformance)].map((name) => [
                     name,
                     members(name)
                         .map((member) => member.name)
@@ -70,19 +82,64 @@ function publicInterfaces(path: "src/index.ts" | "src/effect.ts") {
     }
 }
 
-describe("Client namespace-object conformance registry", () => {
-    test("maps every Client namespace object and its operations in both public entry points", () => {
-        const expectedNamespaces = Object.keys(namespaceConformance).sort()
-        for (const path of ["src/index.ts", "src/effect.ts"] as const) {
-            const inventory = publicInterfaces(path)
-            expect(inventory.clientNamespaces).toEqual(expectedNamespaces)
-            for (const [namespace, contract] of Object.entries(namespaceConformance)) {
-                const registered = [
-                    ...contract.providerOperations,
-                    ...Object.keys("localOperations" in contract ? contract.localOperations : {}),
-                ].sort()
-                expect(inventory.operations.get(namespace), `${path} ${namespace}`).toEqual(registered)
-            }
+function expectPublicInventory(inventory: ReturnType<typeof publicInterfaces>) {
+    expect(Object.keys(inventory.clientMembers).sort()).toEqual(
+        [...Object.keys(clientNamespaceMembers), ...Object.keys(clientTopLevelConformance)].sort(),
+    )
+    expect(Object.values(clientNamespaceMembers).sort()).toEqual(Object.keys(namespaceConformance).sort())
+    for (const [member, namespace] of Object.entries(clientNamespaceMembers))
+        expect(inventory.clientMembers[member]?.replace(/<.*>$/, ""), `Client.${member}`).toBe(namespace)
+    expect(inventory.factories).toEqual(Object.keys(clientFactoryConformance).sort())
+    for (const [namespace, contract] of Object.entries({ ...namespaceConformance, ...standaloneConformance })) {
+        const delegated = "delegatedNamespaces" in contract ? contract.delegatedNamespaces : {}
+        const registered = [
+            ...contract.providerOperations,
+            ...Object.keys("localOperations" in contract ? contract.localOperations : {}),
+            ...Object.keys(delegated),
+        ].sort()
+        expect(inventory.operations.get(namespace), namespace).toEqual(registered)
+        for (const [member, owner] of Object.entries(delegated)) {
+            expect(namespace).toBe("WebhookClient")
+            expect(inventory.webhookMembers[member], `${namespace}.${member}`).toBe(owner)
+            expect(Object.keys(namespaceConformance)).toContain(owner)
+        }
+    }
+}
+
+describe("public client conformance registry", () => {
+    let inventories: readonly ReturnType<typeof publicInterfaces>[]
+    beforeAll(() => {
+        inventories = [publicInterfaces("src/index.ts"), publicInterfaces("src/effect.ts")]
+    })
+
+    test("maps Client namespaces, top-level members, standalone clients and named factories in both entry points", () => {
+        for (const inventory of inventories) expectPublicInventory(inventory)
+    })
+
+    test("rejects omitted standalone operations, unregistered Client members and namespace changes", () => {
+        for (const inventory of inventories) {
+            const missingOAuth = new Map(inventory.operations)
+            missingOAuth.set(
+                "OAuthClient",
+                missingOAuth.get("OAuthClient")!.filter((name) => name !== "refresh"),
+            )
+            expect(() => expectPublicInventory({ ...inventory, operations: missingOAuth })).toThrow()
+            const extraWebhook = new Map(inventory.operations)
+            extraWebhook.set("WebhookClient", [...extraWebhook.get("WebhookClient")!, "unregistered"])
+            expect(() => expectPublicInventory({ ...inventory, operations: extraWebhook })).toThrow()
+            expect(() =>
+                expectPublicInventory({
+                    ...inventory,
+                    clientMembers: { ...inventory.clientMembers, unregistered: "() => void" },
+                }),
+            ).toThrow()
+            expect(() =>
+                expectPublicInventory({
+                    ...inventory,
+                    clientMembers: { ...inventory.clientMembers, instance: "Users" },
+                }),
+            ).toThrow()
+            expect(() => expectPublicInventory({ ...inventory, factories: inventory.factories.slice(1) })).toThrow()
         }
     })
 
@@ -91,7 +148,7 @@ describe("Client namespace-object conformance registry", () => {
         expect(registryScope.coverage).toBe("partial")
         expect(registryScope.established).not.toHaveLength(0)
         expect(registryScope.remaining).not.toHaveLength(0)
-        for (const [namespace, contract] of Object.entries(namespaceConformance)) {
+        for (const [namespace, contract] of Object.entries({ ...namespaceConformance, ...standaloneConformance })) {
             expect(contract.positiveEvidence.length, `${namespace} positive evidence`).toBeGreaterThan(0)
             expect(contract.negativeEvidence.length, `${namespace} negative evidence`).toBeGreaterThan(0)
             for (const path of [...contract.positiveEvidence, ...contract.negativeEvidence]) {
@@ -106,14 +163,54 @@ describe("Client namespace-object conformance registry", () => {
         }
     })
 
+    test("explains lifecycle ownership and local exclusions with executable evidence", () => {
+        for (const [member, contract] of Object.entries({
+            ...clientTopLevelConformance,
+            ...clientFactoryConformance,
+        })) {
+            expect(["provider-facing", "local-only", "local-factory"]).toContain(contract.classification)
+            for (const field of ["rationale", "defaultMode", "effectMode"] as const)
+                expect(contract[field].length, `${member}.${field}`).toBeGreaterThan(0)
+            expect(contract.positiveEvidence.length, `${member} positive evidence`).toBeGreaterThan(0)
+            if (contract.negativeEvidence.length === 0) {
+                expect("negativeEvidenceExclusion" in contract, `${member} missing negative evidence`).toBe(true)
+                if ("negativeEvidenceExclusion" in contract)
+                    expect(contract.negativeEvidenceExclusion.length, `${member} exclusion rationale`).toBeGreaterThan(
+                        0,
+                    )
+            }
+            for (const path of [...contract.positiveEvidence, ...contract.negativeEvidence])
+                expect(existsSync(path), `${member} evidence ${path}`).toBe(true)
+            if (contract.classification === "provider-facing") {
+                expect("providerSources" in contract).toBe(true)
+                if ("providerSources" in contract) expect(contract.providerSources.length).toBeGreaterThan(0)
+            }
+        }
+        // These APIs share a lifecycle, not execution syntax or ownership of an arbitrary caller Scope
+        expect(clientTopLevelConformance.connect.defaultMode).not.toBe(clientTopLevelConformance.connect.effectMode)
+        expect(clientTopLevelConformance.run.defaultMode).not.toBe(clientTopLevelConformance.run.effectMode)
+        expect(clientTopLevelConformance.on.defaultMode).not.toBe(clientTopLevelConformance.on.effectMode)
+        expect(clientTopLevelConformance.observeState.defaultMode).not.toBe(
+            clientTopLevelConformance.observeState.effectMode,
+        )
+    })
+
     test("assigns every registered Client provider operation complete metadata without placeholders", () => {
-        const providerOperations = Object.entries(namespaceConformance)
-            .flatMap(([namespace, contract]) =>
+        const providerOperations = [
+            ...Object.entries({ ...namespaceConformance, ...standaloneConformance }).flatMap(([namespace, contract]) =>
                 contract.providerOperations.map((operation) => `${namespace}.${operation}`),
-            )
-            .sort()
-        expect(Object.keys(operationConformance).sort()).toEqual(providerOperations)
-        for (const [operation, metadata] of Object.entries(operationConformance)) {
+            ),
+            ...Object.entries(clientTopLevelConformance)
+                .filter(([, contract]) => contract.classification === "provider-facing")
+                .map(([member]) => `Client.${member}`),
+        ].sort()
+        const metadataInventory = {
+            ...operationConformance,
+            ...standaloneOperationConformance,
+            ...clientTopLevelOperationConformance,
+        }
+        expect(Object.keys(metadataInventory).sort()).toEqual(providerOperations)
+        for (const [operation, metadata] of Object.entries(metadataInventory)) {
             expect(Object.keys(metadata).sort(), operation).toEqual(
                 [
                     "audit",
@@ -133,7 +230,7 @@ describe("Client namespace-object conformance registry", () => {
                     expect(existsSync(path), `${operation} owner ${path}`).toBe(true)
             }
         }
-        expect(Object.values(operationConformance).flatMap(Object.values)).not.toContain("unknown-not-yet-verified")
+        expect(Object.values(metadataInventory).flatMap(Object.values)).not.toContain("unknown-not-yet-verified")
     })
 
     test("detects deliberate method, path, and authorization mutations in the shared request case", () => {

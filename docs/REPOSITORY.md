@@ -175,6 +175,11 @@ The public-client contract covers its inventoried default/native client namespac
 Mutation fixtures verify that dropped options and projected fields fail the comparison.
 It does not establish behavioral parity, assess comment accuracy, or cover every standalone client or type-only export
 
+The [conformance registry](/projects/sdk/tests/conformance-registry.ts) and [standalone/lifecycle inventory](/projects/sdk/tests/standalone-conformance-registry.ts) record provider contracts, local exclusions and existing test owners.
+The [inventory gate](/projects/sdk/tests/conformance-registry.test.ts) checks both public entry points, including standalone OAuth/Webhook clients and Client top-level members, and rejects missing or unregistered members.
+Shared reference cases run against source and packed exports for selected member-role, OAuth, webhook and local shutdown behavior.
+This is bounded behavioral evidence, not exhaustive field-schema parity, gateway lifecycle replay or live OAuth consent qualification
+
 The upstream guild-feature check pins one current Fluxer commit per run and fails on changed values or unrecognized source structure.
 It is a manual source-drift signal, not hosted behavior proof; the live feature-toggle check owns semantic round trips and restoration
 

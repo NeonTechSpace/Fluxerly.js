@@ -1,0 +1,105 @@
+{
+    "discovery": {
+        "url": "https://fluxer.app/.well-known/fluxer",
+        "api": "https://api.fluxer.app",
+        "gateway": "wss://gateway.fluxer.app",
+        "media": "https://fluxerusercontent.com",
+        "staticCdn": "https://fluxerstatic.com",
+        "webapp": "https://fluxer.app",
+        "invite": "https://fluxer.gg"
+    },
+    "oauth": {
+        "clientId": "123",
+        "clientSecret": "fixture_oauth_secret",
+        "invalidOpaqueToken": " opaque-token ",
+        "accessToken": "fixture-access-token",
+        "exchange": {
+            "code": "fixture-code",
+            "redirectUri": "https://example.test/oauth/callback",
+            "codeVerifier": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "tokenResponse": {
+            "access_token": "fixture-access-token",
+            "refresh_token": "fixture-refresh-token",
+            "token_type": "Bearer",
+            "expires_in": 60,
+            "scope": "identify"
+        },
+        "identityResponse": {
+            "sub": "900",
+            "id": "900",
+            "username": "reference-user",
+            "discriminator": "0",
+            "global_name": null,
+            "avatar": null
+        },
+        "tokenRequest": {
+            "method": "POST",
+            "path": "/oauth2/token",
+            "contentType": "application/x-www-form-urlencoded",
+            "authorizationScheme": "Basic",
+            "body": {
+                "grant_type": "authorization_code",
+                "code": "fixture-code",
+                "redirect_uri": "https://example.test/oauth/callback",
+                "code_verifier": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+        },
+        "identityRequest": {
+            "method": "GET",
+            "path": "/oauth2/userinfo",
+            "authorization": "Bearer fixture-access-token"
+        }
+    },
+    "webhook": {
+        "id": "100",
+        "token": "fixture_webhook_token",
+        "sendInput": {
+            "content": "Reference delivery",
+            "embeds": []
+        },
+        "messageResponse": {
+            "id": "400",
+            "channel_id": "300",
+            "webhook_id": "100",
+            "content": "",
+            "author": {
+                "id": "100",
+                "username": "Reference webhook",
+                "bot": true
+            },
+            "embeds": null,
+            "attachments": [],
+            "stickers": null
+        },
+        "request": {
+            "method": "POST",
+            "path": "/v1/webhooks/100/fixture_webhook_token",
+            "query": "?wait=true",
+            "authorization": null,
+            "body": {
+                "content": "Reference delivery",
+                "embeds": [],
+                "allowed_mentions": {
+                    "parse": [],
+                    "users": [],
+                    "roles": [],
+                    "replied_user": false
+                }
+            }
+        },
+        "rejection": {
+            "status": 403,
+            "providerCode": "MISSING_PERMISSIONS",
+            "privateMessage": "fixture private provider detail",
+            "reason": "rejected",
+            "outcome": "rejected",
+            "apiCode": "missingPermissions"
+        }
+    },
+    "clientLifecycle": {
+        "token": "fixture_bot_token",
+        "activeUserId": "700",
+        "closedUserId": "701"
+    }
+}

@@ -619,6 +619,15 @@ try {
             join(consumer, "conformance-reference-cases.json"),
         )
         process.stdout.write(run(process.execPath, ["conformance-reference.js", kind], consumer, 15_000))
+        copyFileSync(
+            join(fixtureDirectory, "standalone-conformance-reference.js"),
+            join(consumer, "standalone-conformance-reference.js"),
+        )
+        copyFileSync(
+            join(sdk, "tests/standalone-conformance-reference-cases.json"),
+            join(consumer, "standalone-conformance-reference-cases.json"),
+        )
+        process.stdout.write(run(process.execPath, ["standalone-conformance-reference.js", kind], consumer, 15_000))
 
         if (kind === "default") {
             copyFileSync(join(fixtureDirectory, "migration-fluxerly.js"), join(consumer, "migration-fluxerly.js"))

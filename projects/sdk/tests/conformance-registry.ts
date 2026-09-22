@@ -18,6 +18,28 @@ export const conformanceReferenceCases = require("./conformance-reference-cases.
 
 export const providerRevision = "70e1ce682ac1da6502ea08253296aa4727330ce8"
 
+export const clientNamespaceMembers = {
+    instance: "Instance",
+    discovery: "Discovery",
+    presence: "Presence",
+    application: "CurrentBotApplication",
+    users: "Users",
+    directMessages: "DirectMessages",
+    webhooks: "Webhooks",
+    roles: "Roles",
+    permissions: "PermissionHelpers",
+    guilds: "Guilds",
+    invites: "Invites",
+    auditLogs: "AuditLogs",
+    emojis: "Emojis",
+    stickers: "Stickers",
+    channels: "Channels",
+    members: "Members",
+    attachments: "Attachments",
+    messages: "Messages",
+    cache: "ClientCache",
+} as const
+
 export const registryScope = {
     coverage: "partial",
     established: [
@@ -28,14 +50,16 @@ export const registryScope = {
         "selected field-specific validation contracts",
         "one shared source and packed Members.setRoles field, method, path, authorization, and handler-over-schema case",
         "method, path, credential, request owner, response owner, rate scope, pagination, and audit metadata for every current provider-facing operation",
+        "standalone OAuthClient and WebhookClient inventory, including delegated Instance coverage",
+        "Client lifecycle, observation and other top-level members, with explicit default/native execution differences",
+        "client construction and PKCE factory inventory without claiming all module exports",
+        "shared source and packed OAuth, webhook and local shutdown reference cases",
     ],
     remaining: [
         "complete request and response schemas including nullability and defaults",
         "complete length-unit and normalization rules",
-        "shared packed-package reference cases beyond Members.setRoles",
-        "standalone OAuthClient operations",
-        "standalone WebhookClient operations",
-        "Client lifecycle methods and top-level callable surfaces",
+        "shared packed-package reference cases for every registered operation and gateway lifecycle transition",
+        "module exports beyond the Client surfaces and named construction/PKCE factories",
     ],
 } as const
 
@@ -52,9 +76,9 @@ const localLookup = "Local cache lookup, not a provider operation"
 /**
  * Authored inventory of the namespace objects exposed by both Client entry points.
  *
- * This intentionally excludes standalone OAuthClient and WebhookClient operations, Client lifecycle methods and other
- * top-level callables. It is a coverage index rather than a generated provider client. Provider-facing members point
- * to pinned source owners and executable SDK tests. Local-only members are explicit exclusions from provider parity.
+ * Standalone clients and Client top-level members are indexed in standalone-conformance-registry.ts.
+ * This is a coverage index rather than a generated provider client. Provider-facing members point to pinned source
+ * owners and executable SDK tests. Local-only members are explicit exclusions from provider parity.
  */
 export const namespaceConformance = {
     Instance: {
