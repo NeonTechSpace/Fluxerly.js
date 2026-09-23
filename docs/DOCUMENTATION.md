@@ -1,48 +1,25 @@
 # Documentation maintenance
 
-This guide is for maintainers editing, checking and delivering SDK documentation.
-The website builds locally with Astro, React and Fumadocs.
-It contains handwritten guides and a generated public API reference
+This guide covers SDK documentation authoring, local checks, exact-version archives and Preview delivery. The Astro website combines handwritten guides with a generated public API reference. Public delivery is Preview only. The permanent cinematic site remains deferred until the first stable SDK release
 
-Temporary public delivery is Preview only.
-The permanent cinematic site remains deferred until the first stable SDK release
-
-## Edit the owner
+## Where to edit
 
 Apply [documentation placement](/docs/TECHNOLOGY.md#documentation-placement) before adding prose
 
 - Edit caller-visible member behavior in public SDK source comments
-- Edit handwritten website guides in the ordered source inventory at `projects/web/content/guides/meta.json`. Every listed Markdown guide is generated for the unreleased documentation version
-- Use short `navTitle` frontmatter for sidebar labels and `title` for article headings and search. Group related pages with Fumadocs separators in the navigation inventory
-- Edit website components (`projects/web/src/components/`) and styles (`projects/web/src/styles/global.css`) for rendering
+- Edit handwritten website guides listed in `projects/web/content/guides/meta.json`, the ordered inventory for unreleased guides. Use short `navTitle` sidebar labels, `title` for headings and search, and separators for related pages
+- Edit website components under `projects/web/src/components/` and styles in `projects/web/src/styles/global.css` for rendering
 - Author release fragments through Changesets, which owns the SDK changelog rendered by the website
 - Keep setup, verification and release operations in repository Markdown
 
-Introduce the SDK with a running bot that responds to a message.
-Keep the first example to client creation, one message handler and connection.
-Put configuration patterns, error-handling detail and graceful shutdown after the reader's first working result.
-Put advanced overview notes in JSDoc `@remarks`, rendered as expandable usage details, while preserving precise behavior on individual API members
+Introduce the SDK with a bot that responds to a message. Show client creation, one handler and connection before configuration, error handling and shutdown. Put advanced overview notes in JSDoc `@remarks`, not in place of precise member behavior
 
 Use JavaScript & TypeScript for the default API section, `js-ts` in its generated URLs and `Default` in SDK identifiers.
 Published snapshot URLs remain tied to their original release
 
-Group related sentences into paragraphs that develop one idea, explanation or instruction. Start a new paragraph when its purpose changes, not whenever a sentence ends. Keep genuine steps, warnings and deliberate emphasis distinct, without imposing a sentence-count rule
+Lead with the reader's next task and explain unfamiliar concepts before use. Keep conditions beside consequences, and place necessary warnings before optional detail. Group sentences by purpose, with blank lines between Markdown paragraphs and empty comment lines between JSDoc paragraphs. Source wrapping does not end a paragraph. Omit the final period only at the end of a rendered paragraph, while retaining periods between its sentences
 
-Reduce avoidable cognitive load by leading with the reader's next task, explaining unfamiliar concepts before using them, and keeping conditions beside their consequences. Put optional detail after the main path without hiding necessary warnings. Check for both fragmented explanations and dense paragraphs that switch topics
-
-Choose that reading flow before applying punctuation. Omit the final period only at the end of a rendered paragraph, including a visually standalone sentence. Keep periods between sentences sharing that paragraph, even when their source lines differ
-
-Use a blank line between Markdown paragraphs and an empty comment line between JSDoc paragraphs. Source wrapping and hard line breaks do not end a paragraph. The prose renderer (`projects/web/scripts/prose.js`) preserves standard Markdown boundaries, including those inside lists, quotes and generated API descriptions, rather than repairing missing source boundaries
-
-Technical vocabulary, numeric values and uppercase code constants receive consistent emphasis in prose, while code and existing links keep their own styling
-
-The signature highlighter (`projects/web/scripts/signature-colors.js`) uses TypeScript syntax colours for linked signatures, return types and inline code without replacing their links or changing copied text
-
-Reference generation (`projects/web/scripts/generate.js`) reads TypeScript 7-emitted `dist/index.d.ts` and `dist/effect.d.ts`.
-TypeDoc and its Markdown plugins run with TypeScript 6 as a documentation-tooling exception, not SDK consumer support.
-Internal, private, protected and external declarations are excluded.
-The reference theme and route integration own generated links and fragment targets.
-Do not hand-edit generated Markdown, declarations or output under `content/docs/` or `dist/`
+Reference generation (`projects/web/scripts/generate.js`) uses TypeDoc with TypeScript 6 to read the declarations emitted by TypeScript 7 in `dist/index.d.ts` and `dist/effect.d.ts`. This is a tooling exception, not SDK consumer support. Internal, private, protected and external declarations are excluded. The generator creates links and fragment targets. Do not hand-edit generated Markdown, declarations or output under `content/docs/` or `dist/`
 
 ### Command blocks and navigation
 
@@ -50,33 +27,21 @@ Use a fenced `command` block with JSON metadata for package installation and exe
 The command renderer (`projects/web/scripts/command-blocks.js`) owns the supported `install`, `add`, `list` and `run` variants
 
 The generator reads the guide inventory and fills SDK and Effect versions from the selected release and SDK manifest before taking a snapshot.
-Unpublished Canary installation uses an explicit `VERSION` placeholder, never a claimed registry release
+Local source previews show an unreleased-version notice instead of an installation command for an unavailable package
 
-Each block offers registry and package-manager selectors.
-The browser enhancement (`projects/web/src/components/command-preferences.ts`) synchronizes them across blocks and Astro navigation.
-It stores only those two choices in browser-local storage, until changed or site data is cleared.
-If storage is unavailable, choices last for the current page session.
-Without JavaScript, the default npm commands remain readable
+Each block offers a package-manager selector. The choice is saved in the browser when storage is available and otherwise lasts for the current page session. Default npm commands remain readable without JavaScript
 
 After changing Markdown transforms, run `pnpm --filter fluxerly-docs exec astro build --force` to refresh Astro's content cache before inspecting the result
 
-The docs layout (`projects/web/src/components/Docs.tsx`) renders a compact API sidebar while retaining the complete reference tree for search, breadcrumbs and exact-version navigation.
-Do not remove generated symbol pages to reduce sidebar size
+Keep the complete generated reference tree for search, breadcrumbs and exact-version navigation even when the sidebar is compact
 
-Default API examples offer remembered JavaScript and TypeScript choices.
-The example renderer (`projects/web/scripts/example-blocks.js`) keeps authored TypeScript and derives JavaScript at build time.
-Effect-native examples remain TypeScript-only, regardless of the saved preference.
-The starter's filename and run command follow its selected language, using `bot.js` or `bot.ts` with `"type": "module"` in `package.json`
+Author default API examples in TypeScript. The build derives JavaScript, and the reader's language choice is remembered. Effect-native examples remain TypeScript-only. The starter uses the selected `bot.js` or `bot.ts` filename and run command, with `"type": "module"` in `package.json`
 
 Keep the IMPORTANT preview notice between each page title and its introduction until the temporary website is replaced
 
 API parameter and property tables are generated by TypeDoc
 
-The type-preview enhancement (`projects/web/src/components/reference-previews.ts`) reads only the linked public page from the same documentation version.
-Hover or focus previews its summary and members, while the link still opens the full reference.
-Touch readers have a separate preview button
-
-Do not expose internal declarations or combine versions in a preview
+Reference previews read only linked public pages from the same documentation version. Keep the link to the full page and the separate preview button for touch devices. Do not expose internal declarations or combine versions
 
 ## Local checks
 
@@ -91,20 +56,17 @@ pnpm docs:dev
 ```
 
 `docs:dev` builds the SDK before reference generation and local Astro development.
+The local preview follows the source manifest's channel. To inspect another planned channel after building the SDK, run `node scripts/generate.js --preview-channel rc` from `projects/web/`. This changes only the local docs label, not the SDK version or release selection.
 For non-interactive validation, run `pnpm check`.
 The aggregate check includes the SDK, release tooling tests and website build, typecheck and local tests
 
-The packed-consumer check compiles every fenced JavaScript or TypeScript guide example in a separate module.
-It selects the packed default or Effect entry point from the authored import.
-JavaScript examples use `checkJs: false`, while TypeScript examples compile strictly
+The packed-consumer check compiles guide examples against their authored packed entry points, with strict TypeScript checking and `checkJs: false` for JavaScript
 
 For rendered checks, install Chromium with `pnpm --filter fluxerly-docs exec playwright install chromium`.
 Run `pnpm --filter fluxerly-docs test:browser` for the development documentation.
 Run `pnpm --filter fluxerly-docs test:versions` for isolated exact-version fixtures
 
-The browser harness runs Wrangler Pages locally, owns loopback port 4322 and refuses to reuse an existing server.
-This checks the emitted hosting worker as well as the static pages. Astro development and preview alone do not establish HTTP redirect behavior
-Fixture versions are test data, not published releases
+The browser checks run Wrangler Pages on loopback port 4322 and refuse an occupied port. They check the emitted worker and static pages. Astro development or preview alone does not check HTTP redirects. Fixture versions are test data, not releases
 
 Inspect desktop and mobile reading, keyboard navigation, search, version switching, public reference links and fragments.
 The selected reading UI is dark and cozy with 20px body text.
@@ -113,7 +75,7 @@ See [the public API documentation gate](/docs/TECHNOLOGY.md#public-api-documenta
 
 ## Exact-version archives
 
-The local Canary preview is regenerated from the current SDK build and marked Unreleased.
+The local `/docs/preview/` preview is regenerated from the current SDK build and labeled with its planned version and Unreleased status.
 Released docs come from retained snapshots, not the latest declarations relabeled with an old version
 
 Snapshot creation (`projects/web/scripts/snapshot.js`) requires a prepared release version and clean reviewed source checkout.
@@ -132,7 +94,7 @@ Archive imports are not multi-file atomic writes
 Each exact version has its own guide, reference, changelog and search index.
 The selector has one entry per available channel, ordered Stable, RC and Canary.
 The default uses that same order.
-Until a published Canary exists, the local unpublished preview occupies the Canary entry rather than adding a Development group
+The local source preview remains separate from published channels and is excluded from public builds
 
 Release and documentation version parsing share the [release planner](/projects/release/planning.js)
 
@@ -144,8 +106,8 @@ No channel or version should imply that a prepared version was actually publishe
 
 ### Latest alias and missing pages
 
-The stable address `/docs/latest/` contains a build-time copy of the newest imported Stable snapshot, otherwise the newest RC, otherwise the newest Canary.
-Only when no published snapshot is available does it use the unreleased development content.
+The `/docs/latest/` address contains a build-time copy of the newest imported Stable snapshot, otherwise the newest RC, otherwise the newest Canary.
+It never falls back to unpublished source. Public builds require at least one imported published snapshot.
 The visible SDK label identifies the selected source version. Navigation, reference previews and search remain under `latest`, while changing to another channel opens its exact version
 
 The generator rebases documentation link destinations in the alias without rewriting code examples or changing retained exact-version pages.
@@ -177,7 +139,7 @@ See [Pages quota behavior](https://developers.cloudflare.com/pages/functions/rou
 
 [Docs preview](/.github/workflows/docs-preview.yml) is manually dispatched or called after the gated package publisher.
 It always checks out `main`, imports verified released snapshots, builds the SDK declarations and checks the full Preview documentation inventory.
-Before upload, it requires a successful main-push [Check workflow](/.github/workflows/ci.yml) for that exact checkout through the [source gate](/projects/web/scripts/checked-source.js), rather than repeating SDK and release-tooling checks.
+The public build uses `pnpm --filter fluxerly-docs check:public` to exclude local preview pages and validate published documentation. Before upload, it requires a successful main-push [Check workflow](/.github/workflows/ci.yml) for that exact checkout through the [source gate](/projects/web/scripts/checked-source.js), rather than repeating SDK and release-tooling checks.
 Documentation work runs while Check can still be in progress. The gate waits up to ten minutes and rejects failed, cancelled, missing or mismatched evidence instead of silently skipping validation.
 The newest matching run must pass, including its current attempt. No build artifact or test result from another source commit is reused
 Set these values in the `website` environment before separately authorized delivery:
@@ -219,7 +181,7 @@ It uses Wrangler to deploy only the `preview` branch, independently of the GitHu
 It then verifies the provider deployment identity and Preview environment, source commit, documentation route, noindex response header and served source marker at that deployment's unique Pages URL.
 The URL must be HTTPS and belong to the subdomain returned for the verified Pages project. Cloudflare credentials are sent only to the provider API, never to either website
 
-The configured custom domain is checked separately for the same content.
+The configured custom domain is checked separately for the content served at the exact deployment URL.
 Only a positively identified Cloudflare challenge response, `cf-mitigated: challenge`, changes that check to a warning after exact-deployment verification succeeds.
 That outcome does not prove custom-domain content or public access. Other access denials, stale source, missing noindex and redirects remain failures, not accepted deployment evidence.
 The workflow summary distinguishes exact-deployment verification from the custom-domain result

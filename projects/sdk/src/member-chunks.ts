@@ -7,7 +7,7 @@ import { freezeInputValidationDetail, type InputValidationDetail } from "./input
 
 /** Choose the members to request through one guild's gateway shard.
  * Supply exactly one of all, userIds or query, with an optional presences flag.
- * This is an on-demand response, not a live subscription, REST page or retained roster
+ * The SDK requests a response when the stream is consumed. It does not subscribe to future changes, fetch REST pages or keep a guild member list
  */
 export type MemberChunkQuery = (
     | {
@@ -43,7 +43,7 @@ export type MemberChunkQuery = (
 }
 
 /** One batch yielded by members.iterateChunks, with frozen member observations and optional visible presences.
- * Batches are delivered in provider order, not merged into an atomic guild snapshot or stored in the member cache.
+ * Batches arrive in Fluxer's order. The SDK does not combine them into a single snapshot or store them in the member cache.
  * Already yielded batches remain available to your application if a later batch fails
  */
 export interface MemberChunk {
@@ -68,7 +68,7 @@ export interface MemberChunk {
 /** Set how long a member stream can run and how many unread bytes it can hold.
  * The SDK checks and copies these settings when consumption starts, not when the iterator or native Stream is created.
  * One client admits one member stream across its local shards, sharing four request slots with count calls.
- * Early termination releases local intake but cannot stop provider work already requested
+ * Ending the stream early releases the SDK's local request slot but cannot stop work Fluxer has already started
  */
 export interface MemberChunkOptions {
     /** Total milliseconds from dispatch until the final batch arrives, integer 1–2,147,483,647, default 30,000.
@@ -85,7 +85,7 @@ export interface MemberChunkOptions {
 /** Stream options for the default API. Abort releases local intake even while consumption is paused, not remote provider work */
 export interface DefaultMemberChunkOptions extends MemberChunkOptions, OperationOptions {}
 
-/** An on-demand member stream stopped before it could yield its complete response.
+/** A member stream stopped before it could return every batch.
  * The SDK releases local intake and does not automatically resend the request.
  * Already yielded batches are not undone, but unread batches are discarded when intake fails.
  * Metadata contains no requested IDs, member data, correlation nonce or provider payload

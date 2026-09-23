@@ -15,7 +15,7 @@ import type { EmbedInput } from "./embeds.js"
 /**
  * A webhook's name, avatar and destination when Fluxer last returned it.
  * Webhooks let another application post messages to a channel without signing in as a bot.
- * This read-only snapshot contains no token and does not update when someone edits the webhook
+ * These read-only details contain no token and do not update when someone edits the webhook
  */
 export interface Webhook {
     /** Webhook identifier, kept as a decimal string to avoid JavaScript number rounding */
@@ -33,7 +33,7 @@ export interface Webhook {
 /**
  * The secret returned when you create a webhook, kept separate from its public details.
  * Pass this object to createWebhookClient, or call revealToken to save the secret in your own secure storage.
- * The SDK does not save it to disk. Anyone with the ID and token can use this webhook's token-authenticated operations
+ * The SDK does not save the token to disk. Anyone with the ID and token can use this webhook's token-authenticated operations
  */
 export interface WebhookCredentials {
     /** ID of the webhook this secret belongs to */
@@ -218,7 +218,7 @@ export type WebhookOperation =
 /**
  * An expected failure while managing a webhook or one of its messages.
  * Use reason to distinguish invalid input, an unavailable service or a rejected request, and outcome before deciding whether to retry a write.
- * An unknown outcome means Fluxer may already have applied the change. Fetch the current state when possible instead of blindly repeating it.
+ * If the outcome is unknown, Fluxer may already have made the change. When possible, fetch the current state before trying again.
  * Error details exclude secret-bearing URLs, raw response bodies and the values you submitted
  */
 export class WebhookOperationError extends Error {

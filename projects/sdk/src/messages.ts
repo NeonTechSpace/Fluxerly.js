@@ -2,7 +2,7 @@ import type { OperationOptions } from "./client.js"
 import type { Embed, EmbedInput } from "./embeds.js"
 import type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
 
-/** Address a message using its channel ID and message ID.
+/** Identify a message by its channel ID and message ID.
  * Pass this plain object to message operations without fetching the message first.
  * The SDK captures and validates both IDs once when an operation starts.
  * It holds no client and makes no request by itself
@@ -15,9 +15,9 @@ export interface MessageReference {
 }
 
 /** Message data returned by a request or delivered through messageCreate and messageUpdate.
- * This object and its nested data are frozen snapshots, not a message with methods or a live view.
- * Later edits, deletions and reaction changes do not update an existing object.
- * An omitted optional field means Fluxer did not supply it, not that its value is false or empty.
+ * This object and its nested data cannot be changed. They record what Fluxer returned at that time, not a live message with methods.
+ * Later edits, deletions and reaction changes do not update it.
+ * If an optional field is missing, Fluxer did not supply it. Do not read that as false or empty.
  * A null value preserves the explicit value Fluxer returned.
  * References and mentioned accounts are included only as supplied, without extra fetches.
  * Clients configured with messageFields return SelectedMessage instead of the complete Message shape
@@ -95,7 +95,7 @@ export interface Message extends MessageReference {
 export type MessageCore = Pick<Message, "id" | "channelId" | "content" | "author" | "guildId">
 
 /** Name of a Message property accepted by the client's messageFields option.
- * Selecting an already-retained MessageCore property does not add or remove data
+ * Selecting a MessageCore property, which is always kept, does not change the result
  */
 export type MessageField = keyof Message
 
@@ -110,7 +110,7 @@ export type MessageFields = readonly MessageField[]
 /** Type of message returned for a client's messageFields selection.
  * With no selection, this is Message. With a fixed list, it includes MessageCore and the named properties.
  * Properties optional in Message remain optional, even when selected.
- * Advanced typing: A dynamic array makes selectable properties optional because its contents are not known at compile time.
+ * If the list is built dynamically, TypeScript cannot know which fields it contains, so selectable fields remain optional.
  * Alternative fixed lists produce alternative message shapes, not a shape promising properties from both lists
  */
 export type SelectedMessage<F extends MessageFields | undefined = undefined> = F extends undefined
@@ -277,7 +277,7 @@ export interface MessageBulkDeletion {
 
 /** Choose which existing mentions may notify users when sending, replying or editing.
  * All notification categories are disabled unless explicitly enabled. ID arrays are copied by index when the operation starts.
- * These settings permit notifications but do not insert mention text or bypass Fluxer's permissions
+ * These settings allow notifications but do not add mention text or bypass Fluxer's permissions
  */
 export interface AllowedMentions {
     /** Permit notifications for textual mentions of these account IDs, at most 100. Omit to permit none */
@@ -378,7 +378,7 @@ type Body<A> =
  */
 export type MessageInput = MessageBody & {
     /** Correlation nonce chosen by your application, or omit for one SDK-generated nonce per send execution.
-     * Fluxer makes a best-effort attempt to suppress a matching nonce for five minutes after persistence, not a durable exactly-once guarantee
+     * For five minutes after saving a message, Fluxer tries to suppress another send with the same nonce. This does not guarantee exactly-once delivery
      */
     readonly nonce?: MessageNonce
     /** Existing mentions permitted to notify. Defaults to no mention notifications, including the reply author's */

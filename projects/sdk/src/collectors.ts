@@ -4,11 +4,11 @@ import type { ClientClosedError, ConfigurationError } from "./errors.js"
 import type { Message, MessageCore } from "./messages.js"
 import type { MessageReaction, ReactionEmojiInput } from "./reactions.js"
 
-/** Choose which future messages to collect in one channel and when to stop.
+/** Choose which new messages to collect in one channel and when to stop.
  * Connect the client before registering. Collection does not read history or connect automatically.
  * Only messageCreate observations are collected, using this client's selected message fields.
  * Each accepted message ID is counted once. Later edits and deletions do not revise the result.
- * Count and listening deadlines can finish successfully. Filter, handler, budget and connection failures return no partial result.
+ * Reaching the count or a listening deadline can finish successfully. Filter, handler, budget and connection failures return no partial result.
  * For sharded clients, a shard is one gateway connection assigned to a group of servers
  */
 export interface CollectorOptions<M extends MessageCore = Message> extends EventBufferOptions {
@@ -31,14 +31,14 @@ export interface CollectorOptions<M extends MessageCore = Message> extends Event
      * The earlier idle or total deadline wins. Equal deadlines produce reason timeout
      */
     readonly idleMs?: number
-    /** Maximum UTF-8 bytes of JSON for accepted message snapshots. Positive safe integer, default 4,194,304, not a total memory cap */
+    /** Maximum UTF-8 JSON bytes kept for accepted messages. Positive safe integer, default 4,194,304, not a total memory limit */
     readonly maxBytes?: number
     /**
      * Return true to accept a message, or false to skip it. Omit to accept all messages in the channel, including bots.
      * Runs synchronously in receive order, after channel selection. Do not return a Promise or perform blocking work.
      * Throwing or returning anything except a boolean fails this collector with reason filter, without exposing your error.
      * Asynchronous work returned by mistake is neither awaited nor cancelled, and its rejection is discarded.
-     * A slow filter blocks JavaScript. The collector checks its deadlines again after the filter returns
+     * A slow filter blocks other JavaScript work. The collector checks its deadlines again after the filter returns
      */
     readonly filter?: (message: M) => boolean
 }
@@ -59,7 +59,7 @@ export interface DefaultCollectorOptions<M extends MessageCore = Message> extend
     readonly signal?: OperationOptions["signal"]
 }
 
-/** Successful collection result, including early timeout, idle expiry or explicit stop.
+/** Messages collected before the count, total deadline, idle deadline or explicit stop ended collection.
  * The frozen messages are past observations, not current server state or the complete conversation
  */
 export interface CollectorResult<M extends MessageCore = Message> {
@@ -71,7 +71,7 @@ export interface CollectorResult<M extends MessageCore = Message> {
     readonly reason: "limit" | "timeout" | "idle" | "stopped"
 }
 
-/** Choose which future reaction additions to collect on one message and when to stop.
+/** Choose which new reaction additions to collect on one message and when to stop.
  * This listens to single additions and server batches, not existing reactions, removals or current vote totals.
  * Repeated user and emoji pairs count as separate additions. No unique-user count is maintained.
  * Connect before registering. Registration does not fetch the message, check existing reactors or connect automatically.
@@ -104,7 +104,7 @@ export interface ReactionCollectorOptions extends EventBufferOptions {
      * Repeated pairs reset the interval when accepted. The earlier idle or total deadline wins, with timeout winning ties
      */
     readonly idleMs?: number
-    /** Maximum UTF-8 JSON bytes of accepted MessageReaction observations. Positive safe integer, default 4,194,304, not a total memory cap */
+    /** Maximum UTF-8 JSON bytes kept for accepted MessageReaction values. Positive safe integer, default 4,194,304, not a total memory limit */
     readonly maxBytes?: number
     /**
      * Return true to accept an addition, or false to skip it. Runs after target and optional emoji matching.
@@ -147,7 +147,7 @@ export interface ReactionCollectorResult {
     readonly reason: "limit" | "timeout" | "idle" | "stopped"
 }
 
-/** Expected collector failure, separate from successful count, timeout, idle and stopped results.
+/** Expected collector failure, separate from results that stop at the count, deadline, idle deadline or explicit stop.
  * Contains no message bodies, partial observations or original filter and callback errors.
  * Unexpected defects, including cleanup defects, are not made into this expected failure
  */

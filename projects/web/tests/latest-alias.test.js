@@ -5,7 +5,7 @@ import { defaultVersion } from "../scripts/versions.js"
 
 test("Latest source selection respects readiness before numerical version order", () => {
     for (const [versions, expected] of [
-        [[], "dev"],
+        [[], null],
         [["1000.2.0-canary.9", "1000.2.0-canary.10"], "1000.2.0-canary.10"],
         [["1000.1.0-rc.9", "1000.2.0-canary.10", "1000.1.0-rc.10"], "1000.1.0-rc.10"],
         [["1000.0.9", "1000.1.0-rc.10", "1000.2.0-canary.10", "1000.0.10"], "1000.0.10"],

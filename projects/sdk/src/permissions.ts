@@ -2,7 +2,7 @@ import type { GuildChannel } from "./channels.js"
 import type { Guild, GuildMember, GuildRole, MemberReference } from "./guilds.js"
 
 /**
- * Calculate a member's guild or channel permission bits from resource snapshots you already have
+ * Calculate a member's server or channel permission bits from supplied guild, member, role and channel data
  *
  * `roles` must include the implicit everyone role whose ID equals `guild.id` and every role in `member.roleIds`.
  * Supply `channel` with permissionOverwrites to include that channel's explicit permission overrides.
@@ -15,7 +15,7 @@ import type { Guild, GuildMember, GuildRole, MemberReference } from "./guilds.js
  *
  * Duplicate, incomplete or cross-guild resources fail with GuildOperationError reason input
  *
- * These bits do not establish whether an action is allowed.
+ * The calculated bits do not prove that Fluxer will allow an action.
  * The calculation does not check visibility, timeouts, role hierarchy, multi-factor authentication (MFA) or age gates.
  * The result can become stale immediately after the input was observed
  *
@@ -47,7 +47,7 @@ export interface PermissionInput {
  *
  * Supply `channelId` to include a separate target-channel read, or omit it for guild-level bits.
  * The client reads guild, member, roles and optional channel in that order under one total deadline, without consulting caches.
- * Resources can change between these reads, so they are not a transaction or a guarantee that an action will be allowed
+ * Resources can change between reads. The result is not one simultaneous snapshot and does not guarantee that Fluxer will allow an action
  */
 export interface PermissionTarget extends MemberReference {
     /** Decimal guild-channel ID for a channel-scoped calculation */

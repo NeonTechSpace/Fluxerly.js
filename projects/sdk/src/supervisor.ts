@@ -35,7 +35,7 @@ export interface SupervisorFileUrl {
  * Restart a child process after it exits, unless the supervisor has begun shutdown or failed.
  * Each child has its own lifetime attempt budget, which does not reset after successful startup.
  * Delays double after each replacement, up to maxDelayMs. Replacement starts only after the previous process exits.
- * This replaces a process, not a client's gateway reconnection or session recovery
+ * This starts a new process. It does not reconnect the client's gateway or recover its session
  */
 export interface SupervisorRestartOptions {
     /** Maximum replacement attempts per child, an integer from 0 through 100. Zero permits no replacement
@@ -54,7 +54,7 @@ export interface SupervisorRestartOptions {
 
 /**
  * Space out new gateway session starts across the children owned by one supervisor.
- * A fresh Identify command starts a session. Resuming an existing session does not use this spacing.
+ * A new gateway Identify command starts a session. Resuming an existing session does not use this spacing.
  * The parent waits for a child to confirm its send before granting the next permit.
  * This does not coordinate another supervisor or an application-owned client
  */
@@ -67,7 +67,7 @@ export interface SupervisorIdentifyOptions {
 
 /**
  * Plan for running bot gateway connections in separate local Node processes.
- * A supervisor is the parent that starts, monitors and stops its own child processes.
+ * The supervisor is a parent process that starts, monitors and stops its child processes.
  * Use it when you need separate processes. A client can own multiple shards without a supervisor.
  * Each child module must call supervisor.child.run from its chosen public entry point.
  * Creation validates and copies the launch settings without starting a process.
@@ -102,7 +102,7 @@ export interface SupervisorOptions {
     /** Up to 64 explicit string environment overrides copied over the inherited environment at creation.
      * Keys use ASCII letters, digits and underscores, starting with a letter or underscore.
      * Values have at most 4,096 characters.
-     * The parent retains this launch snapshot, including any credentials supplied there, until owned children exit. Status and failures exclude it
+     * The parent retains this launch snapshot, including any credentials supplied there, until owned children exit. Status and errors do not contain these settings
      */
     readonly childEnvironment?: Readonly<Record<string, string>>
     /** Program arguments for every owned child, at most 64 strings of at most 4,096 characters each

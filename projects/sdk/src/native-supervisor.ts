@@ -22,7 +22,7 @@ export interface NativeSupervisorChildContext {
 /**
  * Bot credentials, native client settings and setup Effect for a module launched by a supervisor.
  * E represents application failures and R represents required services.
- * The helper provides Scope, Effect's lifetime boundary for resource cleanup. Other services remain caller-provided
+ * The helper provides Scope, which closes resources when this child run ends. Other services remain caller-provided
  */
 export interface NativeSupervisorChildOptions<E = never, R = never> {
     /** Bot token for the client created by child.run. The parent assignment does not supply this credential */
@@ -32,7 +32,7 @@ export interface NativeSupervisorChildOptions<E = never, R = never> {
      */
     readonly clientOptions?: Omit<ClientOptions<E, R>, "token" | "sharding">
     /** Register subscriptions and local application behavior before the helper executes client.run.
-     * Finish this Effect when setup is complete, not when the bot stops. Do not execute client.run, connect or shutdown here.
+     * Complete this Effect after setup, rather than keeping it running until the bot stops. Do not execute client.run, connect or shutdown here.
      * Scope-bound tasks and resources belong to the helper's nested Scope, which closes before child.run settles.
      * Parent stop interrupts unfinished configuration and awaits its cleanup without starting the client afterward.
      * Application failures remain typed as E. Defects and cleanup failures remain in the Effect cause
@@ -43,12 +43,12 @@ export interface NativeSupervisorChildOptions<E = never, R = never> {
 /**
  * Parent that starts and stops the child processes in one fixed local shard plan.
  * Asynchronous methods return lazy Effects. Calling a method does not execute it, while status reads immediately.
- * Creation neither starts children nor adds a Scope finalizer for the parent. Execute shutdown to release its processes.
+ * Creating the parent does not start children or arrange automatic cleanup when a Scope closes. Execute shutdown to release its processes.
  * Expected failures use SupervisorError. Unexpected defects remain in the Effect cause
  */
 export interface NativeSupervisor {
     /** Start the configured children and succeed when each child acknowledges its assignment and finishes configure.
-     * This is setup completion, not gateway readiness. Execute waitForReady to observe connected gateway sessions.
+     * This means setup finished. It does not mean any gateway connection is ready. Execute waitForReady to observe connected gateway sessions.
      * Concurrent executions share startup. Executing again does not launch extra children or await replacement startup.
      * Interruption stops the whole supervisor, including when another caller is waiting for the same startup, and awaits owned process exits.
      * Expected failure also awaits those exits. Start during or after shutdown fails with reason closed.
@@ -62,7 +62,7 @@ export interface NativeSupervisor {
      */
     waitForClose(): Effect.Effect<void, SupervisorError>
     /** Succeed when every current child has reported its aggregate gateway state as Connected.
-     * Execute start first. This observes reports, not simultaneous cross-process health or lasting readiness.
+     * Execute start first. This checks the latest child reports. It does not prove that every process is healthy at the same instant or will stay ready.
      * Losing a child's message channel clears its readiness immediately. A later execution waits for current readiness again.
      * Interrupting this wait cancels only this observer without stopping or restarting a child.
      * An idle, stopping or closed supervisor fails with reason closed. A failed supervisor returns its retained failure
@@ -72,7 +72,7 @@ export interface NativeSupervisor {
     status(): SupervisorStatus
     /** Ask owned children to stop and succeed only after their processes exit.
      * After shutdownTimeoutMs, force-terminate an owned child that has not exited, then keep waiting for its exit.
-     * Concurrent and repeated executions share cleanup, which cannot be interrupted once executed.
+     * Calls made together or repeated later share the same cleanup. Once cleanup starts, interrupting a caller does not stop it.
      * Shutdown before startup closes the parent without launching children.
      * Succeeds even after a supervisor failure or a child's message-channel loss. It does not erase waitForClose's retained failure
      */

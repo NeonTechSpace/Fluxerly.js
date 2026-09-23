@@ -8,7 +8,7 @@ import { createDocsHandler } from "../scripts/docs-routing.js"
 import { writeHostingArtifacts } from "../scripts/hosting.js"
 
 const pages = ["/docs/latest", "/docs/latest/quick-start", "/docs/latest/api/interfaces/Client",
-    "/docs/1000.0.0", "/docs/1000.0.0/old-guide", "/docs/latest/space guide", "/docs/dev"]
+    "/docs/1000.0.0", "/docs/1000.0.0/old-guide", "/docs/latest/space guide"]
 const handler = createDocsHandler(pages)
 const calls = []
 const assets = { ASSETS: { fetch(request) { calls.push(request); return new Response("Asset", { status: 404 }) } } }
@@ -31,6 +31,14 @@ test("Existing latest and historical pages delegate without rewriting", async ()
         assert.equal(response.status, 404)
         assert.equal(calls.at(-1), incoming)
     }
+})
+
+test("Local-only preview is the root only when no published snapshot exists", async () => {
+    const local = createDocsHandler(["/docs/preview", "/docs/preview/quick-start"])
+    assert.equal((await local.fetch(request("/"), assets)).headers.get("location"), "/docs/preview/")
+    assert.equal((await local.fetch(request("/docs/latest/quick-start"), assets)).headers.get("location"), "/docs/preview/quick-start/")
+    assert.equal((await handler.fetch(request("/docs/preview/quick-start"), assets)).headers.get("location"), "/docs/latest/quick-start/")
+    assert.throws(() => createDocsHandler([]), /Documentation root is missing/)
 })
 
 test("Broken pages select equivalent latest pages or its root without loops", async () => {

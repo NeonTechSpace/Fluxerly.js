@@ -4,11 +4,11 @@ import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type { Message, MessageCore, MessageOperationOptions } from "./messages.js"
 
-/** Choose messages for previewCleanup without deleting anything.
+/** Choose messages for previewCleanup without deleting them.
  * Set explicit scan and selection limits, and supply authorId, filter, or both.
  * With both supplied, a message must match the author before the filter runs.
  * Messages are inspected newest first, using this client's messageFields selection.
- * The preview and its resulting plan are held in memory only, never persisted by the SDK
+ * The SDK keeps the preview and deletion plan only in memory, not on disk
  */
 export interface MessageCleanupSelection<M extends MessageCore = Message> {
     /** Select only messages authored by this account ID, as a decimal string */
@@ -31,9 +31,9 @@ export type MessageCleanupStopReason = "historyExhausted" | "scanLimit" | "selec
 
 /** Frozen preview that lets you inspect the exact messages before requesting deletion.
  * Pass the original object to cleanup on the client that produced it. Reconstructed JSON and plans from another client are rejected.
- * A cleanup execution consumes a valid plan before submitting batches, even if it then fails before dispatch.
+ * Cleanup marks a valid plan as used before it sends any deletion request, even if it then fails before sending one.
  * A consumed plan cannot be retried. Use a fresh preview or explicit deleteMany requests after application-owned reconciliation.
- * The plan does not retain its client, persist to disk, journal requests or recover automatically after a crash
+ * The plan does not store a reference to its client or save requests to disk. The SDK cannot recover it after a crash
  */
 export interface MessageCleanupPlan<M extends MessageCore = Message> {
     /** Channel inspected by preview and the only channel this plan can delete from */
@@ -47,7 +47,7 @@ export interface MessageCleanupPlan<M extends MessageCore = Message> {
 }
 
 /** Exact IDs in one cleanup bulk-delete request, containing at most 100 IDs.
- * Batches run sequentially. A successful HTTP response means Fluxer accepted the request, not that each ID existed or was deleted
+ * Batches run sequentially. A successful HTTP response means Fluxer accepted the request. It does not prove that every ID existed or was deleted
  */
 export interface MessageCleanupBatch {
     /** Submission position, with 0 identifying the first batch */
@@ -91,7 +91,7 @@ export type MessageCleanupProgress =
           readonly batch: MessageCleanupBatch
       }
     | {
-          /** A batch request ended in an expected failure, rather than interruption */
+          /** A batch request failed with one of the documented errors, rather than being interrupted */
           readonly state: "failed"
           /** Failed or uncertain batch */
           readonly batch: MessageCleanupBatch
@@ -140,7 +140,7 @@ export type MessageCleanupErrorReason = "filter" | "closed" | "input" | MessageO
 
 /** What is known about the failed stage's request.
  * notDispatched means no request was sent, rejected means confirmed rejection, and unknown means Fluxer may have acted.
- * unknown does not establish that repeating a request is safe
+ * An unknown outcome does not mean it is safe to repeat the request
  */
 export type MessageCleanupOutcome = "notDispatched" | "rejected" | "unknown"
 

@@ -155,8 +155,8 @@ const validationErrorMappings = {
     VANITY_URL_INVALID_CHARACTERS: "The vanity URL code has invalid characters",
 } as const
 
-/** A recognized validation error Fluxer reported, with the SDK's fixed explanation.
- * This identifies a server rejection, not a local input failure, and contains no provider field path or localized message
+/** A validation error reported by Fluxer, with a fixed SDK explanation.
+ * This is a server rejection, not a problem found by local input checks. It includes no field path or localized server message
  */
 export type ApiValidationErrorDetail = {
     readonly [ProviderCode in keyof typeof validationErrorMappings]: {
@@ -168,13 +168,13 @@ export type ApiValidationErrorDetail = {
 }[keyof typeof validationErrorMappings]
 
 /**
- * Details of a Fluxer rejection, available in an operation error's apiError field.
- * Use code for the SDK category and providerCode for the exact reviewed server code.
- * Explanation is fixed SDK text, not the server's message or an application's user-facing copy.
- * Unknown provider codes leave apiError null rather than copying unreviewed text.
- * For form-validation errors, validationErrors contains at most eight reviewed codes without field paths or messages.
- * No detail retains the provider body, localized message, rejected value or private caller data.
- * This classification applies to Fluxer API responses, not responses from presigned upload destinations
+ * Safe details about a Fluxer API rejection, available in an operation error's apiError field.
+ * The code is the SDK's category. The providerCode is the exact server code that the SDK recognizes.
+ * The explanation is fixed SDK text, not the server's message or text to show directly to users.
+ * If the SDK does not recognize the server code, apiError is null rather than containing unreviewed text.
+ * For form errors, validationErrors contains at most eight recognized codes, without field paths or messages.
+ * These details never contain the response body, localized message, rejected value or private caller data.
+ * Responses from presigned upload destinations do not receive this classification
  *
  * @example
  * ```ts
@@ -217,7 +217,7 @@ function validationDetails(value: unknown): readonly ApiValidationErrorDetail[] 
     return Object.freeze(details)
 }
 
-/** Maps only reviewed provider response shapes to immutable safe SDK-owned details. Unknown codes deliberately have no classification */
+/** Return frozen, SDK-written details only for recognized Fluxer response codes. Return null for unknown codes */
 export function apiErrorDetail(body: unknown): ApiErrorDetail | null {
     if (!record(body) || typeof body.code !== "string") return null
     if (!Object.hasOwn(apiErrorMappings, body.code)) return null
@@ -233,7 +233,7 @@ export function apiErrorDetail(body: unknown): ApiErrorDetail | null {
     return Object.freeze(detail) as ApiErrorDetail
 }
 
-/** Creates a safe operation-error message from SDK-owned facts without forwarding provider text or unreviewed response data */
+/** Build an operation-error message from SDK-written facts, without copying server text or unreviewed response data */
 export function operationErrorMessage(
     subject: string,
     operation: string,

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 
 const starterRoot = new URL("../../sdk/examples/starter/", import.meta.url)
-const files = new Set(["bot.js", "bot.ts", "bot-effect.ts", "lifetime.js", "lifetime-effect.ts"])
+const files = new Set(["bot.js", "bot.ts", "bot-effect.ts"])
 
 /** Keep the rendered starter and the exercised application files identical */
 export async function expandStarterExamples(content) {

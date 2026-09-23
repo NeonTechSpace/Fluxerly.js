@@ -49,6 +49,11 @@ test("Latest aliases the newest stable release across navigation and search", as
     await expect(page).toHaveURL(/\/docs\/latest\/$/)
     await expect(page.locator(".version-label")).toHaveText("SDK 1000.0.1")
     await expect(page.locator(".docs-content")).toContainText("Immutable 1000.0.1 fixture")
+    for (const oldLocalPath of ["/docs/dev/quick-start/", "/docs/preview/quick-start/"]) {
+        const response = await request.get(oldLocalPath, { maxRedirects: 0 })
+        expect(response.status()).toBe(302)
+        expect(response.headers().location).toBe("/docs/latest/quick-start/")
+    }
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
 
     await page.getByRole("link", { name: "API reference", exact: true }).first().click()
@@ -99,11 +104,11 @@ test("Version search never returns another release or unpublished index", async 
     expect(new Set(indexes)).toEqual(new Set(["/api/search/1000.1.0-rc.0.json"]))
 })
 
-test("Only three channel choices appear, including when viewing an older Canary or local preview", async ({ page }) => {
-    for (const path of ["/docs/1000.2.0-canary.0/api/signature/", "/docs/dev/quick-start/"]) {
+test("Only published channel choices appear, including when viewing an older Canary", async ({ page }) => {
+    for (const path of ["/docs/1000.2.0-canary.0/api/signature/", "/docs/1000.0.0/quick-start/"]) {
         await page.goto(path)
         await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
-        await page.getByRole("button", { name: "Canary", exact: true }).click()
+        await page.getByRole("button", { name: path.includes("signature") ? "Canary" : "Stable", exact: true }).click()
         await expect(page.getByRole("dialog").getByRole("link")).toHaveText(["Stable", "RC", "Canary"])
         await page.getByRole("dialog").getByRole("link", { name: "Canary", exact: true }).click()
         await expect(page).toHaveURL(path.includes("signature")
@@ -117,13 +122,13 @@ test("Command preferences persist across exact releases without retaining the pr
     const block = page.locator("[data-command-block]")
     await expect(block.getByLabel("Package manager", { exact: true })).toBeEnabled()
     await block.getByLabel("Package manager", { exact: true }).selectOption("pnpm")
-    await expect(block.locator("[data-command-code]")).toHaveText("pnpm add --save-exact @neontechspace/fluxerly@1000.0.0")
+    await expect(block.locator("[data-command-code]")).toHaveText("pnpm add @neontechspace/fluxerly@1000.0.0")
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
     await page.getByRole("button", { name: "Stable", exact: true }).click()
     await page.getByRole("dialog").getByRole("link", { name: "RC", exact: true }).click()
     await expect(page).toHaveURL(/\/docs\/1000\.1\.0-rc\.0\/quick-start\/?$/)
     await expect(block.getByLabel("Package manager", { exact: true })).toHaveValue("pnpm")
-    await expect(block.locator("[data-command-code]")).toHaveText("pnpm add --save-exact @neontechspace/fluxerly@1000.1.0-rc.0")
+    await expect(block.locator("[data-command-code]")).toHaveText("pnpm add @neontechspace/fluxerly@1000.1.0-rc.0")
     await block.getByLabel("Package manager", { exact: true }).selectOption("npm")
-    await expect(block.locator("[data-command-code]")).toHaveText("npm install --save-exact @neontechspace/fluxerly@1000.1.0-rc.0")
+    await expect(block.locator("[data-command-code]")).toHaveText("npm install @neontechspace/fluxerly@1000.1.0-rc.0")
 })

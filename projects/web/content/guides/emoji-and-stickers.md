@@ -13,11 +13,11 @@ Unicode emoji such as 🎉 work directly in message content and reactions. Custo
 | Send a sticker | Its ID in `stickerIds` |
 | Manage guild emoji or stickers | The `client.emojis` or `client.stickers` namespace |
 
-Shortcodes such as `:party:` need application-side name resolution. Use a configured ID when several guilds can contain an emoji with the same name
+The SDK does not resolve shortcodes such as `:party:` to emoji IDs. Look up the name in application code, or use a configured ID when several guilds have an emoji with the same name
 
 ## Find an emoji and use it twice
 
-Fetch a guild's emoji, select a configured ID, then use that same snapshot for message content and a reaction. Add this helper to a bot that already has a [client](/docs/{{version}}/quick-start/)
+Fetch a guild's emoji and find the configured ID. The helper uses the fetched emoji in both a message and a reaction. Add it to a bot that already has a [client](/docs/{{version}}/quick-start/)
 
 ```ts
 import { format, type Client } from "@neontechspace/fluxerly"
@@ -66,9 +66,9 @@ export function mirrorReactions(client: Client, botId: string) {
 }
 ```
 
-Keep the returned subscription and unsubscribe when mirroring should end. This example handles individual additions. Fluxer can also deliver grouped additions through `messageReactionAddMany`; use a [reaction collector](/docs/{{version}}/events-and-collectors/#accept-a-confirmation-reaction) for a bounded interaction that handles both forms
+Keep the returned subscription and unsubscribe when mirroring should end. This example handles one added reaction at a time. Fluxer can also group additions in `messageReactionAddMany`. For an interaction with a time or item limit that handles both forms, use a [reaction collector](/docs/{{version}}/events-and-collectors/#accept-a-confirmation-reaction)
 
-The same inputs work for removing reactions, reading or iterating reactor lists, and selecting a collector's emoji. A successful `format.parseCustomEmoji()` result can be reused directly. Collectors match custom emoji by ID even after a rename. Unicode selection matches the exact text, including skin tone and variation selectors
+The same emoji inputs work when removing reactions, listing people who reacted or selecting a collector's emoji. A successful `format.parseCustomEmoji()` result can be reused directly. Collectors match custom emoji by ID even after a rename. Unicode selection matches the exact text, including skin tone and variation selectors
 
 ## Send a guild sticker
 
@@ -114,7 +114,7 @@ export function createBuildEmoji(client: Client, guildId: string, image: Uint8Ar
 
 The returned `GuildEmoji` can be formatted or used in a reaction. Sticker creation uses `client.stickers.create` with a name, image and optional description and tags. Both namespaces support fetching, renaming, cloning and deleting. Batch creation returns separate `success` and `failed` lists, so inspect both and retry only after reconciling any uncertain outcome
 
-## Compose the same steps with Effect
+## Send and react with Effect
 
 The Effect API accepts the same reaction inputs. This reusable function sends a reply, parses a custom emoji, then reacts to the returned message. Run it inside the [Effect bot](/docs/{{version}}/effect-first-bot/)'s existing runtime
 

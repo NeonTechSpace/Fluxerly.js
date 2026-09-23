@@ -2,8 +2,8 @@ import type { ClientClosedError, ConfigurationError } from "./errors.js"
 import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** An event subscription stopped because its unread queue exceeded its count or byte budget.
- * The subscription does not restart or recover the missed events
+/** An event subscription stopped because unread events exceeded its count or byte limit.
+ * The subscription does not restart or replay missed events
  */
 export class EventOverflowError extends Error {
     /** Discriminator for identifying queue overflow in an expected failure result */
@@ -54,7 +54,7 @@ export class EventWaitError extends Error {
     }
 }
 
-/** A send, reply or forward did not return a confirmed message.
+/** A send, reply or forward ended without confirming that Fluxer created the message.
  * Inspect delivery before retrying, since unknown means message creation may already have occurred.
  * Even notSent can follow preparatory file uploads and does not prove rollback.
  * Metadata contains no provider response body or message content
@@ -101,11 +101,11 @@ export class MessageError extends Error {
 }
 
 /**
- * A message lookup, read or management call failed.
+ * A message lookup, read or change failed.
  * Read operation to identify the call and reason to distinguish invalid input, full local capacity and provider failures.
  * A local get cache miss is successful undefined, not this error.
  * Reads do not change messages, but a mutation with outcome unknown may already have taken effect.
- * Metadata contains no response body, credential or message content.
+ * Error details contain no response body, credential or message content.
  * Cancellation in the default API and client closure have separate error tags and can also occur after mutation dispatch
  */
 export class MessageOperationError extends Error {

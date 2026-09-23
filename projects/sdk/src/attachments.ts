@@ -4,27 +4,27 @@ import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type { MessageOperationOptions } from "./messages.js"
 
-/** What an attachment reader returns from read: A byte chunk while reading, or done true at the end.
- * This shape accepts Node's native ReadableStream without requiring browser type declarations.
- * With done false or omitted, value must be a Uint8Array. With done true, no more reads occur and value may be omitted
+/** The result of reading an attachment stream: A byte chunk, or done true when the stream ends.
+ * This type accepts Node's native ReadableStream without requiring browser types.
+ * When done is false or omitted, value must be a Uint8Array. When done is true, the SDK stops reading and value may be omitted
  */
 export type AttachmentStreamReadResult =
     | {
           /** False or omitted while this result supplies a byte chunk */
           readonly done?: false
-          /** Next bytes to upload. Must be a Uint8Array backed by ordinary, not shared, memory */
+          /** Next bytes to upload as a Uint8Array backed by ordinary, not shared, memory */
           readonly value: Uint8Array
       }
     | {
           /** True when the source has ended. The SDK stops reading and checks the declared byte count */
           readonly done: true
-          /** Included for native stream compatibility. The SDK ignores value when done is true, supply final bytes in an earlier chunk */
+          /** Included for native stream compatibility. When done is true, the SDK ignores value, so supply final bytes in an earlier chunk */
           readonly value: Uint8Array | undefined
       }
     | {
           /** True when the source has ended. The SDK stops reading and checks the declared byte count */
           readonly done: true
-          /** May be omitted at the end. Any supplied value is ignored, supply final bytes in an earlier chunk */
+          /** May be omitted when done is true. The SDK ignores any value supplied then, so send final bytes in an earlier chunk */
           readonly value?: Uint8Array
       }
 
@@ -53,7 +53,7 @@ export interface AttachmentStreamReaderOptions {
  * Its exact byte count must be supplied by AttachmentStreamInput. The SDK reads it once and cannot replay it
  */
 export interface AttachmentStreamSource {
-    /** Native BYOB reader overload, included for compatibility. The SDK does not use it */
+    /** Native bring-your-own-buffer reader form, included for compatibility. The SDK does not use it */
     getReader(options: {
         /** Select the native bring-your-own-buffer reader, which SDK uploads do not request */
         readonly mode: "byob"
@@ -65,8 +65,8 @@ export interface AttachmentStreamSource {
 }
 
 /** A file-like source the SDK can read in byte ranges for an attachment upload.
- * Node Blob and File values, including fs.openAsBlob results, match this structural contract without requiring Node or DOM types.
- * The SDK opens per-part streams only after upload planning, does not close a caller path or FileHandle, and cannot protect a file changed during reading
+ * Node Blob and File values, including fs.openAsBlob results, fit this type without requiring Node or browser type declarations.
+ * The SDK opens streams for individual upload parts only after planning. It does not close a caller's path or FileHandle and cannot protect against file changes during reading
  */
 export interface AttachmentFileSource {
     /** Exact file length in bytes, a nonnegative safe integer no larger than 52,428,800 for an upload */
@@ -82,8 +82,8 @@ interface AttachmentMetadata {
      * Fluxer may normalize the filename when preparing the upload
      */
     readonly filename: string
-    /** Optional MIME hint, at most 255 printable ASCII characters. Defaults to application/octet-stream in the upload request.
-     * Fluxer's upload plan determines the transport MIME type and may override this hint using the filename
+    /** Optional MIME type hint, at most 255 printable ASCII characters. The upload request defaults to application/octet-stream.
+     * Fluxer's upload plan chooses the MIME type used for transfer and may override this hint based on the filename
      */
     readonly contentType?: string
     /** Optional display title, 1–1,024 normalized UTF-16 code units */
@@ -112,8 +112,8 @@ export interface AttachmentBytesInput extends AttachmentMetadata {
     readonly size?: never
 }
 
-/** New caller-owned sized file supplied as an attachment.
- * File bytes are streamed without an SDK copy or spool. Empty files are accepted and the reported size must be a nonnegative safe integer no greater than 50 MiB.
+/** Attach a caller-owned file whose size is known.
+ * The SDK streams the file without copying or storing its bytes first. Empty files are accepted. The reported size must be a nonnegative safe integer no greater than 50 MiB.
  * Node openAsBlob files can fail during reading if the file changes. A caller may retry only with a stable source and a new message operation.
  * An inline multipart 429 reports rateLimit rather than reopening a mutable file source
  */
@@ -128,9 +128,9 @@ export interface AttachmentFileInput extends AttachmentMetadata {
     readonly size?: never
 }
 
-/** New caller-owned finite stream supplied as an attachment.
- * Size is the exact nonnegative byte count, not a maximum. The SDK streams without copying or spooling and consumes it at most once after planning succeeds.
- * It does not constrain chunks already allocated by the source. Early EOF, extra bytes, source failure, cancellation or an inline multipart 429 stop the operation without replay
+/** Attach a caller-owned stream that ends after a known number of bytes.
+ * Size is the exact nonnegative byte count, not a maximum. The SDK streams without copying or storing bytes first and reads it at most once after planning succeeds.
+ * It cannot limit chunks the source already allocated. An early end, extra bytes, source failure, cancellation or inline multipart 429 stops the operation without reading it again
  */
 export interface AttachmentStreamInput extends AttachmentMetadata {
     /** A finite byte stream that can be consumed once, not a stream factory or an unbounded live feed */
@@ -149,15 +149,15 @@ export interface AttachmentStreamInput extends AttachmentMetadata {
  * Title and description limits are measured after U+000C and U+202E removal and surrounding-whitespace trimming.
  * This normalization is validation-only, and the original metadata strings are sent unchanged
  *
- * Bytes are copied when the operation starts, while file and stream sources are read after upload planning. Default API calls start immediately, while native Effects prepare separately on each execution
+ * The SDK copies data bytes when the operation starts. It reads file and stream sources after upload planning. Default API calls start immediately. Effect API calls prepare separately each time they run
  *
- * Files upload before message creation/editing, using Fluxer's presigned upload plan or a direct multipart fallback when the instance disables preuploads.
- * Presigned byte PUTs carry no bot credential. Planning, completion and message requests use the client's API authentication
+ * Files upload before the SDK creates or edits the message. Fluxer may provide presigned upload URLs, or require a direct multipart upload when preuploads are disabled.
+ * Byte PUTs to presigned URLs carry no bot credential. Planning, completion and message requests use the client's API authentication
  *
  * Failed operations may leave temporary remote files, with no rollback or crash recovery
  *
  * One deadline covers endpoint discovery, planning, PUTs, completion and the message request. Failed PUTs are not retried automatically.
- * A confirmed inline-message 429 recreates only copied byte inputs. File and stream sources report rateLimit instead of being read again
+ * After a confirmed inline-message HTTP 429, the SDK retries only copied byte inputs. File and stream sources report rateLimit instead of being read again
  *
  * @example
  * ```ts
@@ -186,11 +186,11 @@ export interface AttachmentStreamInput extends AttachmentMetadata {
  */
 export type AttachmentInput = AttachmentBytesInput | AttachmentFileInput | AttachmentStreamInput
 
-/** Keep an existing attachment during an edit, optionally changing its display metadata. Unknown IDs may be ignored by Fluxer.
+/** Keep an existing attachment while editing a message, optionally changing its display title or description. Fluxer may ignore unknown IDs.
  * Omit title and description to preserve their current values. Pass null to clear either value.
  * Non-null title and description limits are measured after U+000C and U+202E removal and surrounding-whitespace
  * trimming. This normalization is validation-only, and the original metadata strings are sent unchanged.
- * No hidden fetch, positional lookup or filename or flag update is performed by the SDK
+ * The SDK does not fetch the attachment, find it by position, rename it or change its flags
  */
 export interface AttachmentReference {
     /** Decimal attachment ID from the message being edited, not its message ID */
@@ -215,7 +215,7 @@ export interface AttachmentReference {
     readonly spoiler?: never
 }
 
-/** Metadata for a file attached to a received message. Use client.attachments to refresh its URL explicitly, then download or stream its bytes.
+/** Information about a file attached to a received message. Use client.attachments to refresh its URL explicitly, then download or stream its bytes.
  * This object is frozen. Its URLs may expire, and the SDK never refreshes or downloads them automatically
  */
 export interface Attachment {
@@ -325,9 +325,9 @@ export class AttachmentRefreshError extends Error {
  */
 export type AttachmentRefreshFailure = AttachmentRefreshError | ClientClosedError
 
-/** Set the maximum bytes to accept and how long to wait for an attachment download.
+/** Limit the bytes and time used by an attachment download.
  * maxBytes is required, a positive safe integer no greater than 52,428,800.
- * It bounds returned bytes, not Fluxer's media size, total JavaScript heap or source-side buffering while the SDK packs the result.
+ * This limits returned bytes, not the file size on Fluxer, total JavaScript memory or buffering while the SDK assembles the result.
  * timeoutMs covers endpoint discovery, URL validation and the full GET, and defaults to 30,000.
  * The SDK still waits for cleanup after the deadline.
  * Media discovery and GETs use four client-local slots, separate from the four REST/upload slots, for at most eight active HTTP requests.

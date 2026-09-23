@@ -370,10 +370,8 @@ try {
     assert.ok(!files.includes("AGENTS.md"), "Contributor instructions must not ship as consumer guidance")
     assert.deepEqual(
         files.filter((file) => file.startsWith("examples/starter/")).toSorted(),
-        ["bot-effect.ts", "bot.js", "bot.ts", "lifetime-effect.ts", "lifetime.js"].map(
-            (file) => `examples/starter/${file}`,
-        ),
-        "The package must ship the complete copyable starter inventory",
+        ["bot-effect.ts", "bot.js", "bot.ts"].map((file) => `examples/starter/${file}`),
+        "The package must ship only the standalone bot examples",
     )
 
     copyFileSync(join(sdk, "tests/hosted-discovery.mjs"), join(temporary, "hosted-discovery.mjs"))
@@ -571,9 +569,6 @@ try {
         }
 
         if (kind === "default") assert.equal(existsSync(join(consumer, "node_modules/effect")), false)
-        for (const file of kind === "default" ? ["lifetime.js"] : ["lifetime-effect.ts"]) {
-            copyFileSync(join(installed, "examples/starter", file), join(consumer, file))
-        }
         if (kind === "default") {
             const websiteGuide = websiteGuides.find((guide) => guide.slug === "quick-start").content
             const websiteExamples = [...websiteGuide.matchAll(/```js\r?\n([\s\S]*?)```/g)]
@@ -920,7 +915,6 @@ try {
                     "logging-example.ts",
                     "run-bot-example.ts",
                     "effect-website-guide.ts",
-                    "lifetime-effect.ts",
                     ...additionalExamples,
                     ...authoredGuideFixtures.typescript,
                 ],

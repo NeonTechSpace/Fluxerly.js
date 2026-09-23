@@ -8,7 +8,7 @@ Use a bot token for guild resources and gateway events. Use a webhook's token to
 
 ## Send through a configured webhook
 
-Store the webhook ID and token in application configuration. Pass them to a helper as explicit credentials, then keep the client only for the work it owns
+Store the webhook ID and token in application configuration. Pass both to the helper, and keep the client open only while it sends through that webhook
 
 ```ts
 import { createWebhookClient, type WebhookClientOptions } from "@neontechspace/fluxerly"
@@ -29,9 +29,9 @@ export async function sendWebhookMessage(
 }
 ```
 
-Client creation validates and copies the credentials locally. A successful `send` returns the created message after Fluxer's HTTP response. An `Err` with a `WebhookOperationError` whose `outcome` is `unknown` can follow dispatch, so the application must reconcile the intended message before making another send attempt
+Creating the client checks and copies the credentials locally. A successful `send` returns the message Fluxer created. If a `WebhookOperationError` has `outcome: "unknown"`, Fluxer may already have posted the message. Check for it before sending again
 
-The helper closes a short-lived client in `finally`. For recurring delivery, create one client per credential in the component that owns that work, reuse it for its sends, and await `shutdown()` when the component stops. Shutdown releases the SDK's credential reference and active request resources. The configured credential and remote webhook remain under application and Fluxer ownership
+The helper closes its client in `finally`. For repeated sends, create one client for each webhook credential, reuse it and await `shutdown()` when sending stops. Shutdown releases the SDK's copy of the credentials and its active requests. The application must still protect its stored credentials. Shutdown does not delete the remote webhook
 
 Use a scope for the same lifecycle in an Effect application. `Effect.scoped` runs the client's finalizer after success, failure, or interruption
 
@@ -53,7 +53,7 @@ Keep this helper inside the application runtime shown in [the Effect bot guide](
 
 ## Create a user-consent URL
 
-OAuth uses a server-held application secret, an exact registered redirect URI, an unpredictable application-generated state value, and a fresh PKCE pair. Before sending the user to the returned URL, retain the state and the PKCE verifier in a server-owned, one-use callback record. Keep the verifier and application secret out of the URL, browser code, and logs
+OAuth needs an application secret stored on the server, the exact registered redirect URI, an unpredictable state value and a fresh PKCE verifier and challenge. Store the state and verifier together in a one-use server record before sending the user to the consent URL. Do not put the verifier or application secret in the URL, browser code or logs
 
 ```ts
 import { oauth, OAuthScopes, type OAuthConfig } from "@neontechspace/fluxerly"
@@ -118,4 +118,4 @@ Store a successful token pair in the application's protected token store. The gr
 
 An exchange code is one use. A timeout, cancellation, or lost response after dispatch can leave an unknown outcome because Fluxer may have consumed the code. Begin a new consent flow instead of replaying that exchange
 
-The default API returns expected webhook and OAuth failures in `Result` values. Keep the `Err` result at the caller's error boundary, record only safe error metadata, and use the [reliability guide](/docs/{{version}}/reliability/) for cancellation and uncertain-write handling. Operation details are available in the [webhook client reference](/docs/{{version}}/api/interfaces/js-ts.WebhookClient/) and [OAuth client reference](/docs/{{version}}/api/interfaces/js-ts.OAuthClient/)
+The default API returns expected webhook and OAuth failures in `Result` values. Handle an `Err` where the helper is called, record only safe error metadata, and use the [reliability guide](/docs/{{version}}/reliability/) for cancellation and uncertain-write handling. Operation details are available in the [webhook client reference](/docs/{{version}}/api/interfaces/js-ts.WebhookClient/) and [OAuth client reference](/docs/{{version}}/api/interfaces/js-ts.OAuthClient/)

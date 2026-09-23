@@ -4,8 +4,8 @@ import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** Identity and settings of a Fluxer guild, the server that owns channels, members and roles.
- * Reads and gateway events return frozen snapshots, not objects that update as the server changes.
- * Optional settings can be unavailable in this observation. Do not substitute creation defaults for missing fields
+ * Reads and gateway events return frozen copies that do not update as the server changes.
+ * Optional settings may be missing. A missing value is not necessarily the default used when creating a guild
  */
 export interface Guild {
     /** Decimal guild ID */
@@ -638,7 +638,7 @@ export const Permissions: Readonly<{
     AddReactions: bigint
     /** Read the guild's recorded administrative and moderation activity */
     ViewAuditLog: bigint
-    /** Use the priority push-to-talk key binding to make your voice stand out over other speakers */
+    /** Use the priority push-to-talk key binding to make speech stand out over other speakers */
     PrioritySpeaker: bigint
     /** Share a camera or screen in a voice channel */
     Stream: bigint
@@ -672,11 +672,11 @@ export const Permissions: Readonly<{
     MoveMembers: bigint
     /** Use voice activity detection to transmit speech without holding a push-to-talk key */
     UseVad: bigint
-    /** Change your own nickname in the guild */
+    /** Change the member's own nickname in the guild */
     ChangeNickname: bigint
     /** Change other members' guild nicknames */
     ManageNicknames: bigint
-    /** Manage roles below your highest role and edit channel permission overwrites */
+    /** Manage roles below the member's highest role and edit channel permission overwrites */
     ManageRoles: bigint
     /** Create, edit or delete webhooks in the applicable guild or channel */
     ManageWebhooks: bigint
@@ -686,7 +686,7 @@ export const Permissions: Readonly<{
     UseExternalStickers: bigint
     /** Apply member timeouts that temporarily restrict messaging, reactions and voice participation */
     ModerateMembers: bigint
-    /** Upload custom emoji and stickers and manage your own creations */
+    /** Upload custom emoji and stickers and manage the member's own creations */
     CreateExpressions: bigint
     /** Pin or unpin messages, including messages written by other members */
     PinMessages: bigint
@@ -800,7 +800,7 @@ export type GuildOperation =
     | "roles.resetHoistPositions"
 
 /** Expected failure from guild, member, role and related resource operations.
- * Inspect operation for the failed step, reason for the failure category and outcome before deciding whether to retry.
+ * Before retrying, check `operation` for the failed step, `reason` for the failure type and `outcome` for whether the request may have reached Fluxer.
  * Safe metadata excludes tokens, private input values and upstream response bodies. Default API methods return this
  * error in an Err, while Effect-native methods fail in the typed error channel. Cancellation and client closure use
  * separate error types. An HTTP response does not establish that a corresponding gateway event was delivered

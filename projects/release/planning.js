@@ -32,42 +32,57 @@ export function highestBump(types) {
     return ["major", "minor", "patch"].find((type) => types.includes(type))
 }
 
+export function releaseBaseFor(current, releaseBase) {
+    if (current.channel === "stable") return current.major === 0 ? null : current.core
+    if (releaseBase === null && current.core === "1000.0.0") return null
+    if (typeof releaseBase !== "string")
+        throw new Error("Prerelease cycle requires its stable releaseBase, or null for the initial 1000.0.0 cycle")
+    const base = parseVersion(releaseBase)
+    if (base.channel !== "stable" || base.major < 1000 || compareVersions(releaseBase, current.core) >= 0)
+        throw new Error("Prerelease releaseBase must be a stable version below the target")
+    return releaseBase
+}
+
 export function planVersion({
     currentVersion,
     channel,
     pendingTypes = [],
+    releaseTypes = pendingTypes,
+    releaseBase,
     epoch,
     allowNoChanges = false,
 }) {
     if (!channels.includes(channel)) throw new Error("Channel must be canary, rc or stable")
     const current = parseVersion(currentVersion)
     const bump = highestBump(pendingTypes)
+    const cycleBump = highestBump(releaseTypes)
     if (current.major < 1000 && currentVersion !== "0.0.0")
         throw new Error("Public releases must use Epoch Semantic Versioning")
     if (currentVersion === "0.0.0" && channel !== "canary")
         throw new Error("The local placeholder must enter the first public canary")
+    const baseVersion = releaseBaseFor(current, releaseBase)
+    const base = baseVersion === null ? null : parseVersion(baseVersion)
     let core
     if (epoch !== undefined) {
+        if (base === null) throw new Error("The initial release cycle targets Epoch 1 at 1000.0.0")
         if (!Number.isSafeInteger(epoch) || epoch < 1000 || epoch % 1000 !== 0 || epoch <= current.major)
             throw new Error("An explicit epoch must be a higher multiple of 1000")
         if (bump !== "major")
             throw new Error("An epoch transition requires a major Changesets fragment")
         core = `${epoch}.0.0`
-    } else if (current.major === 0) {
+    } else if (base === null) {
         core = "1000.0.0"
-    } else if (current.channel !== "stable") {
-        core = current.core
-        if (bump === "major") core = `${current.major + 1}.0.0`
-        if (bump === "minor") core = `${current.major}.${current.minor + 1}.0`
     } else {
-        if (!bump && !allowNoChanges)
+        if (current.channel === "stable" && !bump && !allowNoChanges)
             throw new Error("A stable source version needs a Changesets fragment before another release")
         core =
-            bump === "major"
-                ? `${current.major + 1}.0.0`
-                : bump === "minor"
-                  ? `${current.major}.${current.minor + 1}.0`
-                  : `${current.major}.${current.minor}.${current.patch + 1}`
+            cycleBump === "major"
+                ? `${base.major + 1}.0.0`
+                : cycleBump === "minor"
+                  ? `${base.major}.${base.minor + 1}.0`
+                  : `${base.major}.${base.minor}.${base.patch + 1}`
+        // Preserve an already selected target, including an explicit epoch, if notes are later reduced
+        if (current.channel !== "stable" && compareVersions(core, current.core) < 0) core = current.core
     }
     const targetCore = parseVersion(core)
     if (
@@ -83,8 +98,10 @@ export function planVersion({
         throw new Error("No pending Changesets fragments or readiness promotion")
     if (promotion && compareVersions(`${core}${channel === "stable" ? "" : `-${channel}.0`}`, currentVersion) <= 0)
         throw new Error("Readiness promotion must advance SemVer ordering")
-    if (channel === "stable" && current.channel === "canary" && current.core === core)
+    if (channel === "stable" && current.channel === "canary")
         throw new Error("Promote the canary to a release candidate before stable")
+    if (channel === "stable" && current.channel === "rc" && current.core !== core)
+        throw new Error("A changed release target must pass through a release candidate before stable")
     const number = current.channel === channel && current.core === core ? (current.number ?? -1) + 1 : 0
     const version = `${core}${channel === "stable" ? "" : `-${channel}.${number}`}`
     return {
@@ -95,6 +112,7 @@ export function planVersion({
         bump: bump ?? "patch",
         promotion,
         epoch: epoch ?? null,
+        releaseBase: baseVersion,
     }
 }
 

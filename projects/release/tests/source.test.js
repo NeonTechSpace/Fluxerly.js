@@ -124,6 +124,7 @@ test("Changesets notes survive unchanged-code canary to rc to stable promotion",
         assert.deepEqual(JSON.parse(await readFile(join(root, ".changeset/pre.json"), "utf8")), {
             mode: "pre",
             tag: "canary",
+            releaseBase: null,
         })
         await access(join(root, ".changeset/pre/first-generation.md"))
         await note(root, "preview-fix", "patch", "Fix cancellation during reconnect")
@@ -132,6 +133,7 @@ test("Changesets notes survive unchanged-code canary to rc to stable promotion",
         assert.deepEqual(JSON.parse(await readFile(join(root, ".changeset/pre.json"), "utf8")), {
             mode: "pre",
             tag: "rc",
+            releaseBase: null,
         })
         assert.equal((await applySourcePlan(root, { channel: "stable" })).version, "1000.0.0")
         const notes = changelogSection(await readFile(join(root, "sdk/CHANGELOG.md"), "utf8"), "1000.0.0")
@@ -145,16 +147,16 @@ test("Changesets notes survive unchanged-code canary to rc to stable promotion",
     }
 })
 
-test("Source planning applies unconsumed compatibility changes before readiness promotion", async () => {
+test("Initial-cycle breaking notes preserve the first stable target during readiness promotion", async () => {
     const root = await fixture("1000.0.0-canary.1")
     try {
         await note(root, "breaking-preview", "major", "Change the preview API")
         await note(root, "preview-fix", "patch", "Fix the preview implementation")
         const before = exactFiles(await readDirectory(root))
         const { plan, releasePlan } = await readSourcePlan(root, { channel: "rc" })
-        assert.equal(plan.version, "1001.0.0-rc.0")
+        assert.equal(plan.version, "1000.0.0-rc.0")
         assert.equal(plan.bump, "major")
-        assert.equal(plan.promotion, false)
+        assert.equal(plan.promotion, true)
         assert.equal(releasePlan.releases[0].newVersion, plan.version)
         assert.deepEqual(exactFiles(await readDirectory(root)), before)
     } finally {
@@ -162,7 +164,7 @@ test("Source planning applies unconsumed compatibility changes before readiness 
     }
 })
 
-test("Prerelease application advances only for unconsumed compatibility notes", async () => {
+test("Initial prerelease changes preserve their notes without moving the stable target", async () => {
     for (const { type, versions } of [
         {
             type: "patch",
@@ -175,15 +177,15 @@ test("Prerelease application advances only for unconsumed compatibility notes", 
         {
             type: "minor",
             versions: [
-                ["rc", "1000.1.0-rc.0"],
-                ["stable", "1000.1.0"],
+                ["rc", "1000.0.0-rc.0"],
+                ["stable", "1000.0.0"],
             ],
         },
         {
             type: "major",
             versions: [
-                ["rc", "1001.0.0-rc.0"],
-                ["stable", "1001.0.0"],
+                ["rc", "1000.0.0-rc.0"],
+                ["stable", "1000.0.0"],
             ],
         },
     ]) {
@@ -204,6 +206,77 @@ test("Prerelease application advances only for unconsumed compatibility notes", 
         } finally {
             await rm(root, { recursive: true })
         }
+    }
+})
+
+test("Later cycles retain their stable base, escalate once and preserve every cycle note", async () => {
+    const root = await fixture("1000.2.3")
+    try {
+        const changes = [
+            ["first-fix", "patch", "canary", "1000.2.4-canary.0"],
+            ["another-fix", "patch", "canary", "1000.2.4-canary.1"],
+            ["new-feature", "minor", "canary", "1000.3.0-canary.0"],
+            ["another-feature", "minor", "rc", "1000.3.0-rc.0"],
+            ["breaking-stable-api", "major", "rc", "1001.0.0-rc.0"],
+            ["another-breaking-change", "major", "rc", "1001.0.0-rc.1"],
+        ]
+        for (const [id, type, channel, version] of changes) {
+            await note(root, id, type, `Migration instructions for ${id}`)
+            assert.equal((await applySourcePlan(root, { channel })).version, version)
+            assert.deepEqual(JSON.parse(await readFile(join(root, ".changeset/pre.json"), "utf8")), {
+                mode: "pre", tag: channel, releaseBase: "1000.2.3",
+            })
+            const section = changelogSection(await readFile(join(root, "sdk/CHANGELOG.md"), "utf8"), version)
+            assert.match(section, new RegExp(`Migration instructions for ${id}`))
+            for (const [previous] of changes.slice(0, changes.findIndex(([name]) => name === id)))
+                assert.equal(section.includes(`Migration instructions for ${previous}`), false)
+        }
+        assert.equal((await applySourcePlan(root, { channel: "stable" })).version, "1001.0.0")
+        const stable = changelogSection(await readFile(join(root, "sdk/CHANGELOG.md"), "utf8"), "1001.0.0")
+        for (const [id] of changes) assert.equal(stable.split(`Migration instructions for ${id}`).length - 1, 1)
+        await assert.rejects(access(join(root, ".changeset/pre.json")), { code: "ENOENT" })
+        await note(root, "next-cycle", "minor", "Introduce a feature after the stable release")
+        assert.equal((await applySourcePlan(root, { channel: "canary" })).version, "1001.1.0-canary.0")
+        assert.equal(JSON.parse(await readFile(join(root, ".changeset/pre.json"), "utf8")).releaseBase, "1001.0.0")
+    } finally {
+        await rm(root, { recursive: true })
+    }
+})
+
+test("Missing, invalid or changed cycle state fails before consuming release inputs", async () => {
+    const root = await fixture("1000.1.0-rc.0")
+    try {
+        await note(root, "preview-fix", "patch", "Fix the current preview")
+        for (const releaseBase of [undefined, null, "1000.1.0", "1001.0.0", "1000.0.0-rc.0", false]) {
+            await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase })
+            const before = exactFiles(await readDirectory(root))
+            await assert.rejects(applySourcePlan(root, { channel: "rc" }), /releaseBase/)
+            assert.deepEqual(exactFiles(await readDirectory(root)), before)
+        }
+        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase: "1000.0.0" })
+        const prepared = await readSourcePlan(root, { channel: "rc" })
+        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase: "1000.0.1" })
+        const before = exactFiles(await readDirectory(root))
+        await assert.rejects(applySourcePlan(root, { channel: "rc" }, prepared), /inputs changed/)
+        assert.deepEqual(exactFiles(await readDirectory(root)), before)
+    } finally {
+        await rm(root, { recursive: true })
+    }
+})
+
+test("Target escalation cannot skip qualification of the new RC", async () => {
+    const root = await fixture("1000.0.0")
+    try {
+        await note(root, "feature", "minor", "Add a feature")
+        await applySourcePlan(root, { channel: "rc" })
+        await note(root, "breaking", "major", "Change the stable API")
+        const before = exactFiles(await readDirectory(root))
+        await assert.rejects(applySourcePlan(root, { channel: "stable" }), /changed release target/)
+        assert.deepEqual(exactFiles(await readDirectory(root)), before)
+        assert.equal((await applySourcePlan(root, { channel: "rc" })).version, "1001.0.0-rc.0")
+        assert.equal((await applySourcePlan(root, { channel: "stable" })).version, "1001.0.0")
+    } finally {
+        await rm(root, { recursive: true })
     }
 })
 

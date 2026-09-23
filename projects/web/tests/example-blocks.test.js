@@ -97,11 +97,11 @@ test("Remark converts executable JS and TS fences but leaves shell, JSON, text a
         { type: "code", lang: "ts", value: "interface Options { token: string }" },
         { type: "code", lang: "ts", value: 'import type { Client } from "@neontechspace/fluxerly"\ndeclare const client: Client' },
     ] }
-    await remarkExampleBlocks()(root, { path: "content/docs/dev/api/modules/js-ts.md" })
+    await remarkExampleBlocks()(root, { path: "content/docs/preview/api/modules/js-ts.md" })
     assert.equal(root.children[0].type, "html")
     assert.equal(root.children[1].children[0].type, "html")
     for (const child of root.children.slice(2)) assert.equal(child.type, "code")
-    for (const path of ["content/docs/dev/api/modules/Effect.md", "content/docs/dev/api/interfaces/Effect.Client.md",
+    for (const path of ["content/docs/preview/api/modules/Effect.md", "content/docs/preview/api/interfaces/Effect.Client.md",
         "C:\\docs\\api\\functions\\Effect.createClient.md"]) {
         assert.equal(isEffectExample("const value: number = 1", path), true)
         const effectRoot = { children: [{ type: "code", lang: "ts", value: "const value: number = 1" }] }

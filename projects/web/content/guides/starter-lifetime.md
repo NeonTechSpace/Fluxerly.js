@@ -1,39 +1,34 @@
 ---
-title: Own the starter lifetime
-navTitle: Starter lifetime
-description: Copy the application-owned lifecycle companion and keep critical command workers observable
+title: Run a bot with the SDK
+navTitle: Bot lifetime
+description: Let the SDK own connection and subscription cleanup while the application owns bot behavior
 ---
 
-The [first bot](/docs/{{version}}/quick-start/) separates command behavior from application lifetime. Both files belong to the bot application and can be edited independently. The companion is not another SDK API, runtime or command framework
+The public `runBot` helper creates a client, installs handlers before connecting and watches the subscriptions returned by the installer. The [first bot](/docs/{{version}}/quick-start/) uses it directly, so there is no separate lifecycle file to copy
 
-The installed package includes the same checked files under `examples/starter/`. Copy them into the application rather than importing package-private paths. JavaScript and TypeScript use `lifetime.js`. Native Effect uses `lifetime-effect.ts`
+## What the SDK and application handle
 
-## JavaScript and TypeScript companion
+The SDK reconnects after recoverable connection failures, watches subscriptions needed to keep the bot running and waits for SDK cleanup. A permanent connection failure or a failed or unexpectedly closed subscription stops the bot. A failed handler does not stop its subscription and is not retried automatically
 
-Save this file as `lifetime.js` next to `bot.js` or `bot.ts`. The JSDoc annotations provide optional editor checking without requiring TypeScript for execution
+The application supplies the token and handlers, decides how to report errors and closes any resources outside the SDK. Return every subscription the bot needs from the installer so `runBot` can watch it. Track database writes and other Promises in application code, and wait for them when they must finish before exit
 
-```js
-{{starter:lifetime.js}}
-```
+## Stop the bot
 
-The installer registers the fixed critical subscriptions before startup. A terminal client failure, failed worker or unexpected successful worker closure stops the application. Individual command failures remain isolated and are not automatically replayed
+Pass `{ processSignals: true }` as the third argument to handle Ctrl+C (SIGINT) and SIGTERM. Simply importing the SDK does not add signal handlers. The runner removes its handlers when the bot stops
 
-The companion owns process-signal handlers, observes each critical worker, waits for SDK-owned cleanup and preserves combined failures. It does not forcibly cancel or drain arbitrary handler Promises. External work that must finish needs its own application-owned tracking and drain policy, as described in [application supervision](/docs/{{version}}/application-supervision/)
+An `AbortSignal` can also be passed in the options object to stop the bot. Stopping waits for cleanup. If cleanup fails, the run still reports that failure
 
-## Native Effect companion
+## Choose the API
 
-Save this file as `lifetime-effect.ts` beside the [Effect starter](/docs/{{version}}/effect-first-bot/). The helper returns an Effect and runs inside the caller's services and scope, without a separate runtime
+The JavaScript and TypeScript runner returns a Result for expected failures. Catch unexpected defects and installer exceptions in the bot's top-level code. The [first-bot example](/docs/{{version}}/quick-start/) reports a safe failure message and sets the process exit code
 
-```ts
-{{starter:lifetime-effect.ts}}
-```
+The [Effect runner](/docs/{{version}}/effect-first-bot/) returns an Effect and keeps access to application services, scoped resources and failure causes. Run it once from the application's top-level code instead of starting a separate runtime inside handlers
 
-The application executes the final Effect once at its outer boundary. Native interruption waits for owned finalizers. A cleanup failure during interruption remains a failure rather than a successful stop
+For a custom startup or shutdown flow, the lower-level client and subscription APIs remain available. See [application supervision](/docs/{{version}}/application-supervision/) for tracking required subscriptions and waiting for work outside the SDK
 
-## Extend the application deliberately
+## Extend the application
 
-- Add fixed critical subscriptions to the installer's returned array so their closure affects application health
-- Keep ordinary command rejection and cooldown feedback in command definitions. No automatic user-facing error messages are installed
-- Handle expected operation Results in JavaScript and typed failures in Effect. Do not retry a mutation merely because its response was lost
-- Create a new client for a restart, with an application-owned restart budget. A restart does not recover missed events or replay failed command handlers
-- Keep dynamic worker limits, persistence and durable jobs in the application. The starter is a fixed worker inventory, not a process-wide admission controller
+- Handle expected reply failures without blindly repeating writes after a lost response
+- Keep command rejection, cooldown feedback and user-facing messages in command definitions
+- Create a new client when restarting and limit how often the application retries. Restarting does not replay missed events or failed handlers
+- Limit how many subscriptions the application creates at runtime. Store data and jobs that must survive a restart outside the SDK

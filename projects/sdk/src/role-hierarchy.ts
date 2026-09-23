@@ -38,7 +38,7 @@ const inputFailure = (operation: HierarchyOperation, path: string, explanation: 
  * `1` means left is higher, `-1` means right is higher, and `0` means the same role.
  * A larger position is higher. Tied positions use the smaller numeric role ID as higher.
  * Malformed or cross-guild snapshots return GuildOperationError hierarchy.compare/input without retaining the input.
- * This reports local ordering only.
+ * This reports only which role ranks higher in the supplied data.
  * It does not evaluate permissions, multi-factor authentication (MFA), membership visibility or whether a provider endpoint accepts an action
  */
 export function compareHierarchy(left: GuildRole, right: GuildRole): Result<-1 | 0 | 1, GuildOperationError> {
@@ -59,7 +59,7 @@ export function compareHierarchy(left: GuildRole, right: GuildRole): Result<-1 |
  *
  * Equal positions are ordered by numeric ID, with the smaller ID higher. Comparing a role with itself returns false.
  * Malformed or cross-guild snapshots return GuildOperationError hierarchy.isAbove/input without retaining the input.
- * This is a local ordering helper, not a permission or endpoint-authorization check
+ * This compares the supplied roles only. It does not check permissions or whether Fluxer will allow an action
  */
 export function isAboveInHierarchy(left: GuildRole, right: GuildRole): Result<boolean, GuildOperationError> {
     const above = isRoleAboveInHierarchy(left, right)
@@ -89,7 +89,7 @@ export function isAboveInHierarchy(left: GuildRole, right: GuildRole): Result<bo
  * Malformed, incomplete, duplicate, cross-guild or inconsistent snapshots return
  * GuildOperationError hierarchy.canManage/input without retaining the input
  *
- * A true result checks rank only and does not authorize an action.
+ * A true result confirms only the rank requirement and does not authorize an action.
  * It does not check permissions, multi-factor authentication (MFA), endpoint-specific requirements, current provider membership or concurrent remote changes
  * @example
  * ```ts

@@ -10,8 +10,8 @@ export type CountOperation = "guilds.fetchCounts" | "channels.fetchMemberCounts"
 
 /**
  * Member totals returned for one requested guild by Fluxer's gateway.
- * This frozen observation is not cached and can become outdated immediately.
- * Fluxer filters onlineCount by visibility, so it is not a complete account-presence inventory
+ * This frozen result is not cached and can become outdated immediately.
+ * Fluxer includes only visible members in onlineCount, so it does not count every online account
  */
 export interface GuildCount {
     /** Requested guild ID as a positive decimal string with no leading zeroes, within the unsigned 64-bit range */
@@ -23,8 +23,8 @@ export interface GuildCount {
 }
 
 /**
- * Results from one explicit request for several guild counts, ordered to match your requested IDs.
- * omittedGuildIds lists requested IDs for which Fluxer returned no count.
+ * Results from one explicit request for several guild counts, ordered to match the requested IDs.
+ * The `omittedGuildIds` field lists requested IDs for which Fluxer returned no count.
  * Do not treat an omission as zero or infer missing membership, denied access or a provider failure.
  * A guild assigned to an unowned or unready shard fails the call with notConnected instead
  */
@@ -48,8 +48,8 @@ export interface ChannelMemberCount extends GuildCount {
 }
 
 /**
- * Results from one guild's requested channel counts, ordered to match your requested channel IDs.
- * omittedChannelIds lists requested IDs for which Fluxer returned no count, without substituting zero or inferring why.
+ * Results from one guild's requested channel counts, ordered to match the requested channel IDs.
+ * The `omittedChannelIds` field lists requested IDs for which Fluxer returned no count. The SDK does not substitute zero or infer why.
  * A guild assigned to an unowned or unready shard fails the call with notConnected instead
  */
 export interface ChannelMemberCountsResult {
@@ -80,7 +80,7 @@ export interface DefaultCountOperationOptions extends CountOperationOptions, Ope
  * Error metadata includes no credential, requested IDs, correlation nonce or provider body
  */
 export class CountOperationError extends Error {
-    /** Stable expected-failure discriminator */
+    /** Fixed name that identifies this error type */
     readonly _tag = "CountOperationError"
     /** SDK-owned local input detail, or null for non-input failures */
     readonly inputValidation: InputValidationDetail | null

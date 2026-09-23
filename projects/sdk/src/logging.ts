@@ -35,7 +35,7 @@ export interface SdkLogRecordBase {
     readonly level: SdkLogLevel
 }
 
-/** A safe, low-cardinality connection record emitted when development logging is enabled */
+/** A connection log record with a fixed set of SDK event names and bounded diagnostic fields, emitted when development logging is enabled */
 export interface SdkLifecycleLogRecord extends SdkLogRecordBase {
     readonly category: "lifecycle"
     readonly event: SdkLifecycleEvent
@@ -54,7 +54,7 @@ export type SdkMeasurementOperation = "gateway.connection" | "rest.request" | "e
 /** Stable stages that divide an operation without exposing a URL, payload or resource identifier */
 export type SdkMeasurementStage = "queue" | "network" | "decode" | "handler"
 
-/** A safe, low-cardinality timing record emitted when measurements are enabled */
+/** A timing log record with a fixed set of SDK operation and stage names, emitted when measurements are enabled */
 export interface SdkMeasurementLogRecord extends SdkLogRecordBase {
     readonly category: "measurement"
     readonly event: "measurement"
@@ -83,9 +83,9 @@ export type StructuredLogger = (record: SdkLogRecord) => void
 
 /**
  * Adapt a plain JavaScript callback for logging.logger on a default-API client.
- * The callback receives frozen records without credentials, private payloads, URLs, Effect causes or application annotations.
+ * The callback receives frozen (read-only) records without credentials, private payloads, URLs, Effect causes or application annotations.
  * Delivery is synchronous and the callback's return value is ignored. Thrown callback errors are swallowed without retry.
- * A promise or thenable returned by mistake is not awaited, and its rejection is discarded. Blocking work can delay SDK work.
+ * The SDK does not wait for a returned Promise or thenable, and discards its rejection. Blocking work can delay SDK work.
  * The application owns any intentional asynchronous delivery, buffering, flushing and persistence.
  * Settings and records remain local to the client that receives the returned adapter
  * @throws ConfigurationError with field logger when logger is not a function
@@ -118,7 +118,7 @@ export interface LoggingOptions {
      */
     readonly development?: boolean
     /**
-     * Emit low-cardinality queue, network, decode and handler timing records at Info level.
+     * Emit queue, network, decode and handler timing records with fixed SDK operation and outcome names at Info level.
      * Defaults to false. Records use stable SDK operation and outcome names without URLs, payloads, credentials or resource identifiers.
      * Durations use the executing Effect runtime's monotonic clock, including a caller-provided Clock service for native clients.
      * Measurements use the existing logger synchronously and add no telemetry service, exporter, queue or persistence.

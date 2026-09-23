@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises"
+import { appendFile, mkdtemp, readFile, readdir, rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { tmpdir } from "node:os"
@@ -172,6 +172,7 @@ export async function deployPreview(env = process.env, io = {}) {
     const source = env.DOCS_SOURCE_COMMIT
     if (!/^[a-f0-9]{40}$/.test(source ?? "")) throw new Error("A verified source commit is required")
     const read = io.readFile ?? readFile
+    const list = io.readdir ?? readdir
     const request = io.fetch ?? fetch
     const publish = io.upload ?? upload
     const now = io.now ?? Date.now
@@ -189,6 +190,14 @@ export async function deployPreview(env = process.env, io = {}) {
     const globalHeaders = headers.match(/^\/\*\s*\r?\n((?:[ \t]+[^\r\n]*\r?\n?)*)/m)?.[1]
     if (!globalHeaders?.split(/\r?\n/).some((line) => /^\s+x-robots-tag\s*:/i.test(line) && noindex(line)))
         throw new Error("The built preview requires a global noindex header")
+    let docsEntries
+    try {
+        docsEntries = await list(join(webRoot, "dist/docs"))
+    } catch {
+        throw new Error("The built public documentation inventory is unavailable")
+    }
+    if (!Array.isArray(docsEntries) || !docsEntries.includes("latest") || docsEntries.includes("preview") || docsEntries.includes("dev"))
+        throw new Error("Preview upload requires published-only documentation without local source routes")
     const base = `https://api.cloudflare.com/client/v4/accounts/${settings.account}/pages/projects/${settings.project}`
     async function get(url, authenticated, timeout) {
         let response

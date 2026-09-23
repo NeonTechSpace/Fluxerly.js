@@ -406,6 +406,14 @@ export interface FactoryConformance {
 
 /** Selected lifecycle factories only; this is not a complete inventory of either module's exports. */
 export const clientFactoryConformance = {
+    runBot: {
+        classification: "local-factory",
+        rationale: "Creates and owns one bot client, its critical subscriptions and shutdown until the run ends",
+        defaultMode: "Starts immediately and returns ResultAsync; optional AbortSignal requests graceful shutdown",
+        effectMode: "Returns a lazy Effect using the caller's context, Scope and interruption",
+        positiveEvidence: ["tests/run-bot.test.ts", "tests/consumers/default.ts", "tests/consumers/effect.ts"],
+        negativeEvidence: ["tests/run-bot.test.ts"],
+    },
     "oauth.create": {
         classification: "local-factory",
         rationale: "Validates and owns a confidential OAuth client without making a provider request",

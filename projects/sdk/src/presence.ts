@@ -36,10 +36,10 @@ export interface CustomStatusInput {
  * Set the status this bot should publish on its gateway connections.
  * Use `customStatus: null` to request clearing the custom status.
  * Omission preserves this client's latest custom-status request, or leaves the provider value unchanged if there is no retained request.
- * The client copies and retains the latest accepted input, replacing earlier pending updates.
+ * The client copies the latest accepted settings and replaces earlier updates that have not been sent.
  * It publishes those settings on ready local shards and restores them after READY or RESUMED.
- * Acceptance confirms local configuration only, not atomic publication across shards or observation by another user.
- * Shutdown releases the saved settings and pending local timers
+ * A successful call means the client accepted the settings. It does not mean every shard published them at once or that another user can see them.
+ * Shutdown clears the saved settings and pending local timers
  */
 export interface PresenceInput {
     /** Visible status to publish on the bot's live gateway connections */

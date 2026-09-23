@@ -4,13 +4,13 @@ navTitle: Troubleshooting
 description: Separate command, worker, connection and request problems using safe SDK evidence
 ---
 
-Start with the failed operation's Result or native Effect failure, then inspect the owning worker and connection. A connected gateway alone does not prove that a command handler is alive or that a reply was permitted
+Start with the operation's Result or native Effect error. Then check whether its handler and the bot's connection are still running. A connected bot may still have a stopped handler or lack permission to reply
 
 ## No reply arrives
 
-Check the command prefix, registration result and attached router first. Registration is immutable, so attach the router returned by `register` or `registerMany`, not the earlier empty router
+For the first-bot example, send exactly `!ping` from a non-bot account. For a command router, check the prefix, registration result and attached router. Registration is immutable, so attach the router returned by `register` or `registerMany`, not the earlier empty router
 
-The maintained starter ignores bot-authored messages, unknown commands and extra arguments. A guard or cooldown can also reject a command before execution. Add deliberate feedback through `onReject` or `onUnmatched` when appropriate for the application, rather than treating every ignored message as an SDK failure
+The starter ignores bot-authored messages and content other than `!ping`. In a command router, a guard or cooldown can also reject a command before execution. Add deliberate feedback through `onReject` or `onUnmatched` when appropriate for the application, rather than treating every ignored message as an SDK failure
 
 If execution reaches the reply, inspect its Result. The starter logs the safe failure `_tag` for expected failures. Message error details distinguish local validation, provider rejection, timeout and delivery uncertainty. Check the bot's current channel visibility and send permission separately
 
@@ -20,11 +20,11 @@ Returning an `Err` from an ordinary callback does not report that failure automa
 
 Observe the critical subscription's `waitForClose()` outcome. An overflowing subscription closes independently of the gateway. An isolated handler failure does not close the subscription and is not retried automatically
 
-The [starter lifetime](/docs/{{version}}/starter-lifetime/) observes critical workers alongside the client. Add every fixed critical subscription to that inventory. The `diagnostics().events` counters show registrations and executing callbacks, but cannot identify whether a particular business workflow is healthy
+The [SDK runner](/docs/{{version}}/starter-lifetime/) watches the subscriptions returned by its installer and the client connection. Return every subscription the bot needs in that array. The `diagnostics().events` counters show registrations and running callbacks, but cannot tell whether a particular application task is working
 
 ## A request is slow
 
-Inspect `diagnostics().rest.queuedRequests` and `activeRequests` for this client. Queueing, a provider rate limit, slow transport and response decoding are different stages. A snapshot is local evidence, not proof of the exact cause or a process-wide quota
+Inspect `diagnostics().rest.queuedRequests` and `activeRequests` for this client. A request may wait in the queue, hit a provider rate limit, wait on the network or take time to decode. These counters cover one client and do not identify the cause by themselves
 
 Enable `logging.measurements` temporarily to distinguish REST queue, network and decode durations. Use the existing structured logger and its safe stage names, as shown in [logging](/docs/{{version}}/logging/#measure-sdk-work). Measurements add no exporter or history store
 
@@ -38,11 +38,11 @@ Do not create another client or repeat `connect()` merely because the existing c
 
 ## Shutdown is waiting, or application work finishes afterward
 
-First identify the owner. SDK shutdown waits for SDK-owned resource release. Collector progress work and native scoped finalizers are awaited, so callbacks or finalizers that do not finish can keep those owners pending
+Check which work is still running. SDK shutdown waits for its own resources to close. It also waits for collector progress callbacks and native scoped finalizers, so one of those that never finishes can hold up shutdown
 
 Ordinary JavaScript handler Promises are different: The SDK requests cancellation but does not drain arbitrary application work. Database writes or detached Promises can finish after the subscription closes. Use [explicit application tracking](/docs/{{version}}/application-supervision/#drain-application-owned-work) when that work must settle before exit
 
-Avoid `process.exit()` as a cleanup shortcut. Set `process.exitCode` after the application's cleanup boundary instead. Neither cancellation nor a timeout proves rollback of an external mutation
+Avoid `process.exit()` as a cleanup shortcut. Set `process.exitCode` after application cleanup instead. Neither cancellation nor a timeout proves rollback of an external mutation
 
 ## Keep diagnostics safe and useful
 

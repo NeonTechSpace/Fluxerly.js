@@ -2,6 +2,7 @@ import { Context, Effect, Stream, type Scope } from "effect"
 import {
     type GuildCreate,
     createClient,
+    runBot,
     oauth,
     OAuthScopes,
     colors,
@@ -74,6 +75,16 @@ import {
     type OAuthConnection,
     type OAuthIntrospection,
 } from "@neontechspace/fluxerly/effect"
+
+export const packedRunBot = runBot(
+    { token: "fixture-only" },
+    (client) =>
+        Effect.gen(function* () {
+            const subscription = yield* client.on("messageCreate", () => Effect.void)
+            return [subscription]
+        }),
+    { processSignals: false },
+)
 
 export function watchGuildJoins(client: Client) {
     return client.on("guildCreate", (event) =>

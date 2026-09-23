@@ -26,7 +26,7 @@ export async function fixture(version = "0.0.0") {
         privatePackages: { version: true, tag: false },
     })
     const channel = /-(canary|rc)\.\d+$/.exec(version)?.[1]
-    if (channel) await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: channel })
+    if (channel) await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: channel, releaseBase: null })
     return root
 }
 

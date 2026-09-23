@@ -36,7 +36,7 @@ jobs:
         working-directory: projects
       - name: Build and check the full Preview documentation inventory
         id: workspace
-        run: pnpm --filter fluxerly-docs check
+        run: pnpm --filter fluxerly-docs check:public
         working-directory: projects
       - name: Require successful Check for the exact checkout
         id: ci

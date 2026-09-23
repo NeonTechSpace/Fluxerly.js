@@ -8,11 +8,11 @@ This guide is for an application moving from `@fluxerjs/core` 3.1.0 to Fluxerly.
 
 The comparison uses the published [`@fluxerjs/core` 3.1.0 package](https://www.npmjs.com/package/@fluxerjs/core/v/3.1.0) and its [`v3.1.0` source](https://github.com/fluxerjs/core/tree/v3.1.0/packages/fluxer-core). Later releases may differ. Voice, Redis and framework integration are outside this fixture, so this guide makes no compatibility claim for them
 
-## Change the ownership model first
+## Change how the bot starts and stops
 
 `@fluxerjs/core` exposes mutable model objects, throws from asynchronous operations and lets `destroy()` reset a client for another login. Fluxerly exposes explicit client operations, returns `ResultAsync` from the default API and closes the client permanently on `shutdown()`
 
-Keep the database, job queue and other application services outside either SDK. Migrate one application-owned handler at a time, then replace the client lifetime at the process boundary
+Keep the database, job queue and other application services separate from either SDK. Migrate one handler at a time, then change how the application starts and stops the client
 
 | Concern       | `@fluxerjs/core` 3.1.0                               | Fluxerly default API                                                        |
 | ------------- | ---------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -26,9 +26,9 @@ Keep the database, job queue and other application services outside either SDK. 
 
 ## Move commands without moving the database into the SDK
 
-Keep command inputs and database access in application code. Pass the handler's signal into SDK work and check every registration and operation result. Return and await handler work for sequencing and failure reporting, not as a shutdown-draining guarantee
+Keep command inputs and database access in application code. Pass the handler's cancellation signal into SDK calls and check every registration and operation result. Return and await handler work so the SDK can report its failures. Shutdown still does not wait for arbitrary database work
 
-Ordinary handler Promises remain application-owned. Shutdown requests cancellation but does not wait for arbitrary database or other external work to settle. Track and drain work that must finish explicitly, using the [application supervision boundary](/docs/{{version}}/application-supervision/#drain-application-owned-work)
+Ordinary handler Promises remain application-owned. Shutdown requests cancellation but does not wait for arbitrary database or other external work to settle. Track and drain work that must finish, as shown in [application supervision](/docs/{{version}}/application-supervision/#drain-application-owned-work)
 
 ```ts
 import type { Client, Message } from "@neontechspace/fluxerly";
@@ -51,7 +51,7 @@ export function installGreeting(client: Client, store: GreetingStore) {
 }
 ```
 
-An application database failure is not an SDK transport failure. Decide whether that failure stops a critical worker, becomes a safe user response or enters an application-owned retry queue. Neither SDK can make a database write and a reply atomic
+A database failure needs an application decision: Stop the bot's critical subscription, send a safe response or queue the work for retry. Neither SDK can make a database write and a message reply succeed or fail as one operation
 
 ## Translate reads and cache use separately
 
@@ -77,7 +77,7 @@ export async function recentMessageIds(client: Client, channelId: string) {
 }
 ```
 
-The iterator starts when consumed, applies a deadline per page and emits one terminal `Err`. Messages already yielded remain application-owned if a later page fails
+The iterator starts fetching when the loop begins and gives each page request its own deadline. If a later page fails, it yields one final `Err`. Messages already received remain available to the application
 
 ## Preserve moderation uncertainty
 
@@ -143,15 +143,15 @@ export async function downloadFresh(
 
 Keep an explicit unsupported branch while the application still runs on both SDKs. Do not silently use an expired URL as the compatibility fallback
 
-## Rebuild health and shutdown around the new lifetime
+## Update health checks and shutdown
 
 `@fluxerjs/core` provides cache sizes through `client.cache.stats()` and gateway latency through `client.ws.ping` after login. Fluxerly's `client.diagnostics()` returns a payload-free snapshot of gateway state, request pressure, event registrations and bounded cache accounting
 
-These shapes are not equivalent. Normalize only the fields the application actually uses and keep the source visible. A local counter is not a cross-process total or an admission limit
+These reports contain different data. Normalize only the fields the application actually uses and record which SDK supplied them. A local counter is not a cross-process total or an admission limit
 
-On shutdown, abort the application lifetime, await the connection and critical workers, then call `client.shutdown()`. A Fluxerly client is closed after that call. An in-process restart must create a new client and new subscriptions, and it does not replay events missed between lifetimes. The [application supervision recipe](/docs/{{version}}/application-supervision/) shows that boundary
+On shutdown, abort the application lifetime, await the connection and critical workers, then call `client.shutdown()`. A Fluxerly client is closed after that call. An in-process restart must create a new client and new subscriptions, and it does not replay events missed between lifetimes. The [application supervision example](/docs/{{version}}/application-supervision/) shows how to stop and clean up the client
 
-## Verify the migration contract
+## Check the migrated behavior
 
 The repository fixture runs the same application contract for command and database behavior, bounded pagination, a single application call for each moderation request, attachment capability reporting, health normalization and idempotent cleanup
 
@@ -161,4 +161,4 @@ node projects/sdk/tests/migration/run-core-comparison.js
 
 The comparison runner installs only the exact locked `@fluxerjs/core` fixture into an operating-system temporary directory. It uses the public npm registry, disables lifecycle scripts, checks the installed version, typechecks the core mapping, runs the behavior contract and removes the owned temporary directory. The Fluxerly variant runs against the packed public exports during the SDK package check
 
-The Fluxerly fixture uses its HTTP boundary, while the core fixture replaces public REST methods and leaves channel, message and guild models intact. The moderation assertion proves that the application adapter makes one SDK call. It does not test either SDK's lower transport retry behavior. The fixture is not a live service test, performance benchmark or proof for features outside the stated scope
+The Fluxerly fixture supplies test HTTP responses, while the core fixture replaces public REST methods and leaves channel, message and guild models intact. The moderation check proves that the application calls the SDK once. It does not test either SDK's lower-level transport retries. These tests do not contact a live service, measure performance or cover features outside the stated scope

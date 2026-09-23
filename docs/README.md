@@ -5,10 +5,10 @@
   <img src="/docs/assets/mascot.png" width="220" alt="Fluxerly mascot">
 </h1>
 
-<h3 align="center">From your first reply to the bot of your dreams</h3>
+<h3 align="center">Build bots for Fluxer</h3>
 
 <p align="center">
-  A Fluxer-native bot SDK spanning from JavaScript to TypeScript all the way to Effect
+  A Fluxer-native bot SDK for JavaScript, TypeScript and Effect
 </p>
 
 <p align="center">
@@ -54,11 +54,11 @@ Keep your package manager's lockfile for reproducible installs. The SDK does not
 
 ### JavaScript & TypeScript
 
-Import `@neontechspace/fluxerly` and use `async` / `await`. Check Results for expected failures, and control shutdown with explicit methods and cancellation signals. This is the shortest path for a new bot or an existing Promise-based application. JavaScript users do not need TypeScript or Effect setup
+Import `@neontechspace/fluxerly` and use `async` / `await`. Check Results for expected failures, and control shutdown with explicit methods and cancellation signals. The default API works with new bots and existing Promise-based applications. JavaScript users do not need TypeScript or Effect setup
 
 ### Effect-native
 
-Import `@neontechspace/fluxerly/effect` and compose work with `Effect.gen` and `yield*`. Expected failures stay in the typed error channel. Scopes and interruption own cleanup. Choose this for an Effect application, or to learn structured concurrency with a real bot
+Import `@neontechspace/fluxerly/effect` and compose work with `Effect.gen` and `yield*`. Expected failures stay in the typed error channel. Scopes and interruption control cleanup. Choose this API for an Effect application, or to learn structured concurrency with a real bot
 
 Both entry points provide typed events, prefix commands, embeds, attachments, reactions and collectors. Optional bounded caches keep local lookup separate from remote reads
 

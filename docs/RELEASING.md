@@ -1,37 +1,25 @@
 # Releasing
 
-This guide is for maintainers preparing an SDK release from reviewed source.
-It covers local packaging, Changesets authoring, immutable candidates and publication.
-Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions and distribution tags
+This guide covers Changesets authoring, immutable candidates and publication from reviewed SDK source. Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions and distribution tags
 
 ## Registry publication contract
 
-The canonical SDK manifest remains `private` before, during and after release preparation.
-`stageRelease` creates the separately staged public npm package directory and its `sdk.tgz` tarball.
-Never publish directly from the SDK checkout
+The canonical SDK manifest remains `private`. `stageRelease` creates a separate public npm package directory and `sdk.tgz` tarball. Never publish from the SDK checkout
 
 The staged npm manifest receives the reviewed release version and retains Effect as an exact required peer.
 [The prerequisite check](/projects/release/support.js) requires that exact Effect version to match the SDK development dependency and rejects an optional peer.
 It does not authenticate an npm account or grant permission to publish
 
-Candidate schema 1 binds the npm package inventory, the staged manifest and tarball checksums, the source commit and the checked documentation snapshot checksum.
-Candidate validation reads the staged directory and tarball again before publication.
-The candidate checksum identifies the reviewed immutable candidate, not an uploaded package
+Candidate schema 1 binds the package inventory, staged manifest and tarball checksums, source commit and checked documentation snapshot checksum into one reviewed candidate. Validation rereads the staged directory and tarball before publication. The candidate checksum identifies that candidate, not uploaded content
 
 Code, comments, declarations, source maps, package metadata and the file inventory participate in the unchanged-content comparison.
 Published npm metadata establishes version availability, not uploaded file-content identity
 
 ## Available local work
 
-Use the pinned development runtime and run commands from [projects/](/projects/).
-Use [the repository checks](/docs/REPOSITORY.md#development-checks) for package and website validation.
-The [Check workflow](/.github/workflows/ci.yml) runs on pull requests, pushes to `main` and `codex/**`, and manual dispatch.
-It checks the workspace, npm package installation and rendered documentation without publishing
+Use the pinned runtime and run commands from [projects/](/projects/). [Repository checks](/docs/REPOSITORY.md#development-checks) cover package and website validation. [Check](/.github/workflows/ci.yml) validates pull requests, pushes to `main` or `codex/**`, and manual runs without publishing
 
-For an SDK change, author a fragment with `pnpm changeset` and select the public package and its compatibility bump.
-Write caller-relevant release notes, not a list of edited files.
-Website-only changes need no SDK fragment.
-The wrapper permits fragment authoring and status, not direct Changesets versioning or publication
+For an SDK change, run `pnpm changeset` and select the public package and compatibility bump. Write caller-relevant notes, not an edited-file list. In later prerelease cycles, classify compatibility against the stable starting version. Breaking only a new preview API still requires migration notes, but does not itself break the stable API. Website-only changes need no SDK fragment. The wrapper permits fragment authoring and status, not direct versioning or publication
 
 Inspect a source-only proposal with `pnpm release:plan --channel canary`.
 Planning does not compare published npm package bytes or prove that a release is publishable.
@@ -40,27 +28,27 @@ A version in the source manifest does not establish publication
 ## Version and content rules
 
 [Epoch Semantic Versioning](/docs/TECHNOLOGY.md#versioning-and-release-stages) defines compatibility and readiness separately.
-The planner reads the current version from the [SDK source manifest](/projects/sdk/package.json).
-Canary, RC and Stable are the only release channels.
-The planner starts a new prerelease counter at zero.
+The planner reads the [SDK source manifest](/projects/sdk/package.json). Canary, RC and Stable are the only channels, and each new prerelease counter starts at zero.
+The release wrapper retains the cycle's stable starting version in `projects/.changeset/pre.json` as `releaseBase`, with `null` for the initial `1000.0.0` cycle.
+Pending and archived Changesets together determine the target's compatibility impact, while only pending notes enter a new preview's changelog. Stable collects the complete cycle's notes.
+Repeated previews keep the target unless increased compatibility impact requires a higher one. A changed target must receive an RC before Stable
+
+The wrapper preserves `releaseBase` through Canary and RC, then removes prerelease state through Changesets on Stable. Missing or invalid state fails closed. For an older checkout lacking the field, restore the reviewed stable starting version before versioning. Use `null` only for the initial `1000.0.0` cycle, not an inferred registry baseline. Source versioning is not atomic. After interruption, reconcile the manifest, prerelease state, archived notes and changelog before retrying
+
 An explicit higher epoch is a multiple of 1000 and requires a major fragment.
 There are no permanent readiness branches.
 Normal development and release review are main-first, with occasional explicitly selected source branches for another release line
 
-The release guard selects the previous published npm version on the same readiness channel and `major.minor` line.
-An absent baseline requires explicit bootstrap, and bootstrap is forbidden when a baseline exists.
-Registry inventory failures are not permission to bootstrap
+The publication check compares against the previous npm version on the same channel and `major.minor` line. If none exists, the first release on that line requires explicit bootstrap. Do not use bootstrap when an earlier version exists or the registry lookup fails
 
 [Content fingerprints](/projects/release/content.js) ignore package-version fields and changelog bookkeeping, not arbitrary SDK bytes.
-An unchanged fingerprint skips version preparation without consuming fragments or creating a version PR.
-Candidate preparation also skips unchanged content without retaining a candidate artifact.
+If the package content has not changed, version preparation leaves Changesets fragments untouched and creates no version PR.
+Candidate preparation also creates no candidate artifact for unchanged content.
 On the same channel, changed publishable bytes require a pending Changesets fragment rather than an undocumented version bump.
 Readiness promotion must advance SemVer order, and Canary must pass through RC before Stable.
 Promotion alone does not bypass the unchanged-content guard
 
-Changesets creates and owns `projects/sdk/CHANGELOG.md` once the first version is prepared.
-The website renders that changelog and GitHub release notes use its exact version section.
-Do not maintain another manual changelog or invent a release entry before version preparation
+Changesets owns `projects/sdk/CHANGELOG.md` from first version preparation. The website renders it, and GitHub uses its exact version section for release notes. Do not keep another manual changelog or invent an entry before preparation
 
 For the first release, Release version creates the initial-canary Changeset only when the source manifest is `0.0.0`, the selected channel is `canary`, and no pending notes exist.
 Its text is `Initial canary release of Fluxerly.js for testing and feedback`.
@@ -73,9 +61,7 @@ No push or tag automatically publishes a package
 
 ### Choose a workflow
 
-In GitHub, open Actions, select the workflow and choose Run workflow for a manual run.
-Use a workflow branch containing the reviewed tooling.
-The `source_ref` input selects the SDK source independently of that workflow branch
+For a manual run, open GitHub Actions and select Run workflow. Choose a branch with reviewed tooling. The `source_ref` input selects SDK source independently of the workflow branch
 
 | Workflow | When to use it | Inputs and result |
 | --- | --- | --- |
@@ -85,9 +71,7 @@ The `source_ref` input selects the SDK source independently of that workflow bra
 | [Release publish](/.github/workflows/release-publish.yml) | Publish or reconcile the already reviewed candidate | Supply `preparation_run_id`, `candidate_checksum` and `operation`, which is `publish` by default or `reconcile` |
 | [Docs preview](/.github/workflows/docs-preview.yml) | Deploy the temporary documentation after Preview setup | No extra inputs, always reads `main`, imports released snapshots and deploys only the configured Preview target |
 
-`publish` uses npm OIDC publishing. The release App authenticates the GitHub tag and release only. Docs preview follows successful reconciliation
-`reconcile` skips npm publishing and verifies the npm version exists. The release App authenticates the GitHub tag and release only. Docs preview follows successful reconciliation
-Use `reconcile` only for the same immutable candidate after npm has already published
+`publish` uses npm OIDC. `reconcile` skips npm publication and verifies version availability for the same immutable candidate after npm has published. The release App authenticates only the GitHub tag and release, and Docs preview follows successful reconciliation
 
 Check also runs automatically on pull requests and pushes to `main` or `codex/**`.
 Release version PR and Release prepare accept optional `line` and `bootstrap` inputs.
@@ -96,47 +80,21 @@ Leave these unset unless the [version and content rules](/docs/RELEASING.md#vers
 
 ### Parallel checks and cancellation
 
-Check runs the aggregate `pnpm check` in one job.
-Browser checks build their own SDK and website on a separate runner.
-The consumer matrix checks packed and npm-installed packages on the pinned development Node version and the declared Node minimum.
-Both matrix entries run even if one fails, with at most two consumer jobs running at once.
-The final `check` job requires success from the workspace, browser and consumer jobs, including both matrix entries.
-Failed, cancelled, skipped or missing results cannot produce a passing gate.
-The existing `SDK consumers on the declared Node floor` result name is retained
+Check runs `pnpm check`, browser checks and a packed and npm-installed consumer matrix on the pinned Node version and declared minimum. Browser checks use a separate runner. Both matrix entries run despite one failure, with at most two consumer jobs at once. The final gate requires success from every job. Failed, cancelled, skipped or missing results cannot pass. The `SDK consumers on the declared Node floor` result name remains
 
-A newer automatic Check run cancels the previous run for the same event and ref.
-Push and pull-request runs remain separate because they check different Git states.
-Manual Check runs are independent and are not cancelled by newer automatic runs.
-Version PRs use `GITHUB_TOKEN`, so their pull-request checks require approval in the PR merge box before they run
+New automatic Check runs cancel older runs for the same event and ref. Push and pull-request checks remain separate Git states, and manual checks are independent. Version PRs use `GITHUB_TOKEN`, so approve their checks in the PR merge box before relying on them
 
-Release version PR serializes repository-wide because its version branch names are shared across source branches.
-Release prepare serializes matching source, line and bootstrap inputs, keeping validation and candidate creation in one checkout.
-Release publish serializes npm publication and GitHub reconciliation in separate queues.
-The reconciliation job runs after the publish job, or directly for `operation: reconcile`.
-Its subsequent Docs preview does not hold the npm publication lock.
-Docs preview has its own serialized queue shared by manual and called runs
+Release version PR serializes repository-wide because version branch names are shared. Release prepare serializes matching source, line and bootstrap inputs. Release publish uses separate npm publication and GitHub reconciliation queues. Reconciliation follows publication or runs directly for `operation: reconcile`. Docs preview has a separate queue shared by manual and called runs, without holding the npm lock
 
-These release and Preview queues do not automatically cancel running work.
-They use [GitHub's extended concurrency queue](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency) to retain up to 100 pending requests per group rather than replacing an older pending request.
-Queue order follows arrival at the lock, not necessarily manual dispatch order.
-Inspect cancelled overflow runs and partial external effects before retrying.
-Do not cancel an active publication to advance the queue
+Release and Preview queues do not cancel running work. [GitHub's extended queue](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency) retains up to 100 pending requests per group. Lock arrival, not dispatch, determines order. Inspect cancelled overflow runs and partial external effects before retrying. Do not cancel active publication to advance the queue
 
 ### Read the result
 
-Open the run's Summary tab for custom reports of the checked surfaces, step outcomes and next action.
-Candidate reports include their source, version, checksum and artifact identity when available.
-Publication and Preview reports distinguish successful readback from failed or skipped effects.
-The called Docs preview job supplies its own report.
-An unchanged-content result is a deliberate no-op, not a prepared release
+Read the run's Summary for the checks performed, their results and the next action. Candidate reports identify source, version, checksum and artifact when available. Publication and Preview reports separate confirmed npm or hosting results from actions that failed or were skipped. Called Docs preview results are reported separately. Unchanged content does not produce a prepared release
 
-The reconciliation summary records the operation, npm availability and completion state.
-An npm value of `missing` is an explicit unannounced state, so the release App does not create a tag or GitHub release and Docs preview does not run.
-Registry read failures are failures, not missing versions
+The reconciliation summary records the operation, npm availability and completion state. With npm `missing`, the release App creates no tag or release and Docs preview does not run. Registry read failures are not missing versions
 
-Raw output remains in each step's log for diagnosis.
-Summaries run after failed steps too, but cannot guarantee a report when GitHub terminates the runner.
-If checkout does not provide the summary helper, the fallback directs you to checkout and setup logs rather than claiming checks passed
+Step logs retain diagnostic output. Summaries also run after failures but may be absent if GitHub terminates the runner. If checkout lacks the summary helper, the fallback points to checkout and setup logs without claiming success
 
 ### Release sequence
 
@@ -173,12 +131,9 @@ Never treat a checksum taken only from an untrusted replacement candidate as ext
 
 ## Reconciliation and external setup
 
-The npm publisher is serialized by its publication-job concurrency and local `.release-publish-npm.lock`.
-Before removing a stale lock, verify that no publisher is active
+Publication-job concurrency and `.release-publish-npm.lock` serialize npm publishing. Verify that no publisher is active before removing a stale lock
 
-Publication first reads npm version metadata and rejects a version that already exists.
-It submits the retained tarball once, then reconciles an uncertain provider outcome by polling npm metadata and reading it again after publication appears.
-This establishes version availability, not file-content identity
+Publication stops if the npm version already exists. Otherwise it submits the retained tarball once. If npm's response is unclear, it checks registry metadata and reads it again when the version appears. This confirms that the version exists, but not that npm serves the reviewed file bytes
 
 If the provider outcome is uncertain, preserve the same immutable candidate and inspect its npm status before any further action.
 Do not rebuild a candidate or attempt publication for a version that metadata already reports as published
@@ -191,13 +146,9 @@ npm trusted publishing [requires the package to exist first](https://docs.npmjs.
 For the initial publication, publish the reviewed npm tarball interactively before configuring trusted publishing.
 Subsequent npm releases publish through GitHub OIDC, not a token fallback
 
-The protected `package` environment needs no npm token secret.
-[Release authentication](/projects/release/authentication.js) requires GitHub OIDC, removes inherited registry tokens and supplies an isolated token-free npm configuration.
-Missing or incomplete OIDC stops automated publication before npm requests or publication
+The protected `package` environment needs no npm token secret. [Release authentication](/projects/release/authentication.js) requires GitHub OIDC and strips inherited registry tokens with an isolated token-free npm configuration. Missing or incomplete OIDC stops publication before npm requests
 
-The workflows use GitHub's automatic `GITHUB_TOKEN` for repository reads, version PRs and artifacts.
-Do not add a separate `GH_TOKEN` or `GITHUB_TOKEN` secret.
-Check requires no custom secrets and never uses a Fluxer bot token
+Workflows use automatic `GITHUB_TOKEN` for repository reads, version PRs and artifacts. Do not add a `GH_TOKEN` or `GITHUB_TOKEN` secret. Check needs no custom secret or Fluxer bot token
 
 Allow the version workflow to open pull requests.
 GitHub tag and release reconciliation uses the dedicated release App described below, without changing npm OIDC

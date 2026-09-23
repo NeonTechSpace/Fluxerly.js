@@ -1,4 +1,4 @@
-/** Control the lifetime and reuse of an invitation to an existing channel.
+/** Set how long an invite lasts, how many times it can be used and whether Fluxer may reuse an existing code.
  * Creating an invite does not join the recipient or create the destination. Omission requests a new code with
  * unlimited uses that expires after one day. Fluxer enforces destination access, invite permissions and capacity
  * @example
@@ -23,10 +23,10 @@ export interface InviteCreate {
     readonly temporary?: boolean
 }
 
-/** An invitation link and the destination details Fluxer allowed this caller to inspect.
- * Fetching this frozen snapshot does not accept the invitation or change membership, and the SDK does not retain it.
+/** An invite link and the destination details Fluxer returned to this caller.
+ * These returned details are frozen (read-only). Fetching them does not accept the invite or change membership, and the SDK does not keep them.
  * Codes can grant access to the destination and should only be shared with intended recipients.
- * Counts and expiry are observations, not a guarantee that a later join will succeed
+ * The reported counts and expiry do not guarantee that someone can join later
  */
 export interface Invite {
     /** Provider code, not a full URL. The SDK never includes it in errors or diagnostics */

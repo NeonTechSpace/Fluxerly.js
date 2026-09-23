@@ -1,6 +1,6 @@
 # Artwork sources
 
-The [README mascot](/docs/assets/mascot.png) uses the accepted Fluxerly mascot artwork, with transparent padding trimmed and the export resized for display
+The [README mascot](/docs/assets/mascot.png) is the accepted Fluxerly artwork, resized for display with its transparent padding trimmed
 
 Original mascot concept: Neonsy's NeonConductor project and NTS organization mascot
 

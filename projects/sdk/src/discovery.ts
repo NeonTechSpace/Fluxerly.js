@@ -128,8 +128,8 @@ export interface DiscoveryApplication {
     readonly guildNsfwLevel?: number | null
 }
 
-/** Current directory eligibility and application state returned by discovery.fetchStatus.
- * Use this to inspect whether the guild currently qualifies, not to guarantee that a later submission will succeed
+/** Current listing eligibility and application state returned by discovery.fetchStatus.
+ * A guild may qualify now but fail a later submission if its status changes
  */
 export interface DiscoveryStatus {
     /** Current application or listing, null when no record exists */
@@ -173,7 +173,7 @@ export interface DiscoveryGuild {
 
 /** Filter and choose one page of public guild listings with discovery.search.
  * Omit filters to use the provider's unfiltered directory and default ordering.
- * Pages use an offset, not a stable snapshot, so changing listings can produce skips or repeats between calls
+ * Pages start at a numeric offset in the current results. If listings change, later pages can skip or repeat entries
  */
 export interface DiscoverySearchQuery {
     /** Free-text query of at most 100 UTF-16 code units */
@@ -200,8 +200,8 @@ export interface DiscoveryCategoryCount {
     readonly count: number
 }
 
-/** One public directory page, including its effective offset, limit and current matching totals.
- * The directory can change between requests, so total does not establish stable traversal or a complete inventory
+/** One page of public guild listings, with the offset, page limit and number of current matches.
+ * Listings can change between requests, so `total` does not guarantee that paging will visit every listing exactly once
  */
 export interface DiscoverySearchPage {
     /** Frozen directory results in provider order */

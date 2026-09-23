@@ -1,6 +1,7 @@
 import {
     type GuildCreate,
     createClient,
+    runBot,
     oauth,
     OAuthScopes,
     colors,
@@ -77,6 +78,18 @@ import {
     type OAuthConnection,
     type OAuthIntrospection,
 } from "@neontechspace/fluxerly"
+
+export function packedRunBot(signal: import("@neontechspace/fluxerly").OperationSignal) {
+    return runBot(
+        { token: "fixture-only" },
+        (client) => {
+            const subscribed = client.on("messageCreate", () => undefined)
+            if (subscribed.isErr()) throw subscribed.error
+            return [subscribed.value]
+        },
+        { signal, processSignals: false },
+    )
+}
 
 export function watchGuildJoins(client: Client) {
     return client.on("guildCreate", (event) => {

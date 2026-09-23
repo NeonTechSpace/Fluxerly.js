@@ -3,12 +3,12 @@ import type { PrefixCommandMetadata } from "./commands.js"
 /**
  * Choose the text prefix, page length and visible entries for `router.help`.
  * Help reads registered metadata only, without connecting a client, executing commands or sending messages.
- * You choose which returned pages to send and how to handle mention parsing
+ * The caller decides which returned pages to send and how to handle mentions
  */
 export interface CommandHelpOptions {
     /** Nonempty well-formed prefix to display, such as `!`. This can differ from dispatch prefixes and does not call the prefix resolver */
     readonly prefix: string
-    /** Positive safe integer maximum page length in JavaScript string units (UTF-16 code units). Required, with no default or provider-limit lookup */
+    /** Required maximum page length, measured in UTF-16 code units. Use a positive safe integer. There is no default or provider-limit lookup */
     readonly maxLength: number
     /** Choose a group by its registered names, not aliases, such as `["admin"]`.
      * Omit or use `[]` for root entries.
@@ -25,7 +25,7 @@ export interface CommandHelpOptions {
      * A hidden ancestor or selected group returns `[]` without inspecting later entries.
      * An included empty group remains visible, even if its children are hidden
      *
-     * Hiding help does not prevent execution. No guard or cooldown is evaluated
+     * Hiding an entry from help does not prevent the command from running. Help does not run guards or check cooldowns
      *
      * Throws or non-boolean returns fail with fixed ConfigurationError details that omit the callback's thrown value.
      * Promises are not supported or awaited. Keep this synchronous callback short because it cannot be interrupted while running

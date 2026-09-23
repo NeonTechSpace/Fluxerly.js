@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs"
 import AxeBuilder from "@axe-core/playwright"
 
 const guidesDirectory = new URL("../../content/guides/", import.meta.url)
+const { previewVersion } = JSON.parse(readFileSync(new URL("../../content/versions.json", import.meta.url), "utf8")) as { previewVersion: string | null }
+const previewLabel = previewVersion ? `Planned ${previewVersion} · Unreleased source preview` : "Unreleased source preview"
 const guideInventory = JSON.parse(readFileSync(new URL("meta.json", guidesDirectory), "utf8")) as { pages: string[] }
 const frontmatter = (source: string, name: string) => new RegExp(`^${name}:\\s*(.+)$`, "m").exec(source)?.[1].trim()
 const authoredGuides = guideInventory.pages.flatMap((slug) => {
@@ -15,11 +17,12 @@ const authoredGuides = guideInventory.pages.flatMap((slug) => {
         slug,
         title,
         navTitle: frontmatter(source, "navTitle"),
-        examples: slug === "quick-start" ? 4 : source.split(/\r?\n/).filter((line) => /^```\S+$/.test(line)).length,
+        examples: slug === "quick-start" ? 3 : source.split(/\r?\n/).filter((line) => /^```\S+$/.test(line)).length,
     }]
 })
 
 const navigationGroups = ["Getting started", "Bot guides", "Operations", "Effect", "Reference"]
+const quickStartTitle = authoredGuides.find((guide) => guide.slug === "quick-start")!.title
 
 for (const width of [390, 1440, 1920]) {
     test(`Readable guide and reference at ${width}px`, async ({ page }, info) => {
@@ -29,11 +32,12 @@ for (const width of [390, 1440, 1920]) {
         page.on("response", (response) => {
             if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`)
         })
-        await page.goto("/docs/dev/quick-start/")
+        await page.goto("/docs/preview/quick-start/")
         await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
         await page.evaluate(() => document.fonts.ready)
-        await expect(page.getByRole("heading", { level: 1, name: "Start your first bot" })).toBeVisible()
-        await expect(page.locator(".version-label")).toHaveText("Canary · Unreleased")
+        await expect(page.getByRole("heading", { level: 1, name: quickStartTitle, exact: true })).toBeVisible()
+        if (previewVersion) expect(previewVersion).toMatch(/^\d+\.\d+\.\d+(?:-(?:canary|rc)\.\d+)?$/)
+        await expect(page.locator(".version-label")).toHaveText(previewLabel)
         const notice = page.getByRole("complementary", { name: "Important preview notice" })
         await expect(notice.locator("strong")).toHaveText("IMPORTANT")
         await expect(notice.locator("span")).not.toBeEmpty()
@@ -59,19 +63,19 @@ for (const width of [390, 1440, 1920]) {
             .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
             .analyze()
         expect(accessibility.violations).toEqual([])
-        await page.goto("/docs/dev/api/interfaces/js-ts.Client/#messages")
+        await page.goto("/docs/preview/api/interfaces/js-ts.Client/#messages")
         await expect(page.getByRole("heading", { level: 1, name: "Client" })).toBeVisible()
         expect(await page.locator("#messages").count()).toBe(1)
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
         await page.screenshot({ path: info.outputPath(`reference-${width}.png`), fullPage: false })
-        await page.goto("/docs/dev/api/modules/js-ts/")
+        await page.goto("/docs/preview/api/modules/js-ts/")
         await expect(page.getByRole("heading", { level: 1, name: "JavaScript & TypeScript", exact: true })).toBeVisible()
         const usage = page.locator("details").filter({ has: page.locator("summary", { hasText: "Usage details" }) })
         await expect(usage).not.toHaveAttribute("open")
         if (width >= 1440) await expect(page.getByRole("link", { name: "Usage details", exact: true })).toBeVisible()
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
         await page.screenshot({ path: info.outputPath(`api-overview-${width}.png`), fullPage: true, animations: "disabled" })
-        await page.goto("/docs/dev/api/")
+        await page.goto("/docs/preview/api/")
         await expect(page.locator(".docs-content").getByRole("link", { name: "first-bot guide" })).toBeVisible()
         await expect(page.locator(".docs-content").getByRole("heading", { name: "JavaScript & TypeScript", exact: true })).toBeVisible()
         await expect(page.locator(".docs-content").getByRole("link", { name: "js-ts", exact: true })).toHaveCount(0)
@@ -82,10 +86,11 @@ for (const width of [390, 1440, 1920]) {
 }
 
 for (const width of [390, 1440]) {
-    test(`Starter lifetime code remains readable at ${width}px`, async ({ page }) => {
+    test(`Bot lifetime guide remains readable at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 })
-        await page.goto("/docs/dev/starter-lifetime/")
-        await expect(page.locator(".docs-content pre:visible")).toHaveCount(2)
+        await page.goto("/docs/preview/starter-lifetime/")
+        await expect(page.getByRole("heading", { level: 1, name: "Run a bot with the SDK" })).toBeVisible()
+        await expect(page.locator(".docs-content")).toContainText("runBot")
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
         const accessibility = await new AxeBuilder({ page })
             .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
@@ -95,12 +100,12 @@ for (const width of [390, 1440]) {
 }
 
 test("Search opens by keyboard, finds the current API and returns focus", async ({ page }, info) => {
-    await page.goto("/docs/dev/")
+    await page.goto("/docs/preview/")
     const trigger = page.getByRole("button", { name: "Search Ctrl K", exact: true })
     // Wait for the client-rendered shortcut hint, not only Astro's hydration marker
     await expect(trigger).toBeVisible()
     await page.keyboard.press("Control+k")
-    const input = page.getByRole("textbox", { name: "Search Canary documentation" })
+    const input = page.getByRole("textbox", { name: "Search source preview documentation" })
     await expect(input).toBeVisible()
     await input.fill("createClient")
     await expect(
@@ -113,7 +118,7 @@ test("Search opens by keyboard, finds the current API and returns focus", async 
     ).toBeLessThanOrEqual(3.1)
     await page.screenshot({ path: info.outputPath("search.png") })
     await page.keyboard.press("Enter")
-    await expect(page).toHaveURL(/\/docs\/dev\/api\/functions\/\w+\.createClient\/?$/)
+    await expect(page).toHaveURL(/\/docs\/preview\/api\/functions\/\w+\.createClient\/?$/)
     await page.goBack()
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
     await trigger.click()
@@ -121,8 +126,8 @@ test("Search opens by keyboard, finds the current API and returns focus", async 
     await page.keyboard.press("Escape")
     await expect(input).not.toBeVisible()
     await expect(trigger).toBeFocused()
-    await page.locator(".docs-content").getByRole("link", { name: "Start your first bot", exact: true }).click()
-    await expect(page).toHaveURL(/\/docs\/dev\/quick-start\/?$/)
+    await page.locator('.docs-content a[href="/docs/preview/quick-start/"]').click()
+    await expect(page).toHaveURL(/\/docs\/preview\/quick-start\/?$/)
     await page.goBack()
     await expect(page.getByRole("heading", { name: "Build a Fluxer bot", exact: true })).toBeVisible()
 })
@@ -130,7 +135,7 @@ test("Search opens by keyboard, finds the current API and returns focus", async 
 test("Dark reading remains usable with enlarged text and reduced motion", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" })
     await page.setViewportSize({ width: 780, height: 900 })
-    await page.goto("/docs/dev/quick-start/")
+    await page.goto("/docs/preview/quick-start/")
     await page.addStyleTag({ content: ":root { font-size: 36px !important; }" })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible()
@@ -138,7 +143,7 @@ test("Dark reading remains usable with enlarged text and reduced motion", async 
 
 test("API navigation stays compact on a deep symbol without losing reference access", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto("/docs/dev/api/interfaces/js-ts.Client/#messages")
+    await page.goto("/docs/preview/api/interfaces/js-ts.Client/#messages")
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
     const sidebar = page.locator("#nd-sidebar")
     await expect(sidebar.getByRole("link", { name: "API reference", exact: true })).toBeVisible()
@@ -151,14 +156,14 @@ test("API navigation stays compact on a deep symbol without losing reference acc
     await expect(page.getByRole("heading", { level: 1, name: "JavaScript & TypeScript", exact: true })).toBeVisible()
     await page.locator(".docs-content summary").getByText("Interfaces", { exact: true }).click()
     await expect(page.locator(".docs-content").getByRole("link", { name: "Client", exact: true }).first()).toBeVisible()
-    await page.goto("/docs/dev/api/modules/js-ts/#classes")
+    await page.goto("/docs/preview/api/modules/js-ts/#classes")
     await expect(page.locator(".docs-content").getByRole("link", { name: "AssetUrlError", exact: true })).toBeVisible()
 })
 
 for (const width of [390, 1440]) {
     test(`Grouped sidebar uses short labels without truncation at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 })
-        await page.goto("/docs/dev/quick-start/")
+        await page.goto("/docs/preview/quick-start/")
         const sidebar = page.locator(width < 768 ? "#nd-sidebar-mobile" : "#nd-sidebar")
         if (width < 768) {
             // The server-rendered trigger is focusable before React installs its keyboard action
@@ -174,11 +179,11 @@ for (const width of [390, 1440]) {
         }
         for (const group of navigationGroups) await expect(sidebar.getByText(group, { exact: true })).toBeVisible()
         for (const item of [
-            { name: "Overview", href: "/docs/dev" },
-            { name: "API reference", href: "/docs/dev/api" },
-            { name: "JavaScript & TypeScript", href: "/docs/dev/api/modules/js-ts" },
-            { name: "Effect-native", href: "/docs/dev/api/modules/Effect" },
-            { name: "Changelog", href: "/docs/dev/changelog" },
+            { name: "Overview", href: "/docs/preview" },
+            { name: "API reference", href: "/docs/preview/api" },
+            { name: "JavaScript & TypeScript", href: "/docs/preview/api/modules/js-ts" },
+            { name: "Effect-native", href: "/docs/preview/api/modules/Effect" },
+            { name: "Changelog", href: "/docs/preview/changelog" },
         ]) {
             const link = sidebar.getByRole("link", { name: item.name, exact: true })
             await expect(link).toHaveAttribute("href", item.href)
@@ -189,12 +194,12 @@ for (const width of [390, 1440]) {
         for (const guide of authoredGuides) {
             expect(guide.navTitle, `${guide.slug} has a short sidebar label`).toBeTruthy()
             const link = sidebar.getByRole("link", { name: guide.navTitle!, exact: true })
-            await expect(link).toHaveAttribute("href", `/docs/dev/${guide.slug}`)
+            await expect(link).toHaveAttribute("href", `/docs/preview/${guide.slug}`)
             expect(await link.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
         }
         const selected = sidebar.getByRole("link", { name: navigableGuide!.navTitle!, exact: true })
         await selected.click()
-        await expect(page).toHaveURL(new RegExp(`/docs/dev/${navigableGuide!.slug}/?$`))
+        await expect(page).toHaveURL(new RegExp(`/docs/preview/${navigableGuide!.slug}/?$`))
         await expect(page.getByRole("heading", { level: 1, name: navigableGuide!.title, exact: true })).toBeVisible()
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     })
@@ -211,26 +216,26 @@ for (const width of [390, 1440]) {
 
         expect(authoredGuides.length).toBeGreaterThan(0)
         if (width === 1440) {
-            await page.goto("/docs/dev/quick-start/")
+            await page.goto("/docs/preview/quick-start/")
             const sidebar = page.locator("#nd-sidebar")
             for (const guide of authoredGuides) {
                 expect(guide.navTitle, `${guide.slug} has a short sidebar label`).toBeTruthy()
                 await expect(sidebar.getByRole("link", { name: guide.navTitle!, exact: true }))
-                    .toHaveAttribute("href", `/docs/dev/${guide.slug}`)
+                    .toHaveAttribute("href", `/docs/preview/${guide.slug}`)
             }
         }
 
         for (const guide of authoredGuides) {
-            await page.goto(`/docs/dev/${guide.slug}/`)
+            await page.goto(`/docs/preview/${guide.slug}/`)
             await expect(page.getByRole("heading", { level: 1, name: guide.title, exact: true })).toBeVisible()
             await expect(page.locator(".docs-content pre:visible"), `Every ${guide.slug} example is visible`)
                 .toHaveCount(guide.examples)
             expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
         }
-        await page.goto("/docs/dev/messages/")
+        await page.goto("/docs/preview/messages/")
         await expect(page.locator(".docs-content .prose-keyword").filter({ hasText: "API" }).first()).toBeVisible()
         await expect(page.locator(".docs-content .prose-keyword").filter({ hasText: "SDK" }).first()).toBeVisible()
-        await page.goto("/docs/dev/effect-first-bot/")
+        await page.goto("/docs/preview/effect-first-bot/")
         for (const keyword of ["Node.js", "ESM", "TypeScript"])
             await expect(page.locator(".docs-content .prose-keyword").filter({ hasText: keyword }).first()).toBeVisible()
         expect(errors).toEqual([])
@@ -241,25 +246,25 @@ test("Inline command choices synchronize, survive navigation and reload, and cop
     await context.grantPermissions(["clipboard-read", "clipboard-write"])
     const errors: string[] = []
     page.on("pageerror", (error) => errors.push(error.message))
-    await page.goto("/docs/dev/quick-start/")
+    await page.goto("/docs/preview/quick-start/")
     const blocks = page.locator("[data-command-block]")
-    await expect(blocks).toHaveCount(4)
+    await expect(blocks).toHaveCount(3)
     const manager = blocks.first().getByLabel("Package manager", { exact: true })
     await expect(manager).toBeEnabled()
     await expect(manager).toHaveValue("npm")
     await manager.selectOption("pnpm")
-    await expect(blocks.first().locator("[data-command-code]")).toHaveText("pnpm add --save-exact @neontechspace/fluxerly@VERSION")
+    await expect(blocks.first().locator("[data-command-code]")).toHaveText("node bot.js")
     for (const block of await blocks.all()) {
         await expect(block.getByLabel("Package manager", { exact: true })).toHaveValue("pnpm")
     }
     await blocks.first().getByRole("button", { name: "Copy", exact: true }).click()
     await expect(blocks.first().getByRole("status")).toHaveText("Copied")
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("pnpm add --save-exact @neontechspace/fluxerly@VERSION")
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("node bot.js")
     await page.getByText("Using TypeScript or Effect?", { exact: true }).click()
     await blocks.last().getByLabel("Package manager", { exact: true }).selectOption("npm")
-    await expect(blocks.first().locator("[data-command-code]")).toHaveText("npm install --save-exact @neontechspace/fluxerly@VERSION")
+    await expect(blocks.first().locator("[data-command-code]")).toHaveText("node bot.js")
     await expect(blocks.last().locator("[data-command-code]")).toHaveText("npm list effect")
-    await expect(blocks.nth(1).locator("[data-command-code]")).toHaveText("node bot.js")
+    await expect(blocks.nth(1).locator("[data-command-code]")).toContainText("npm install --save-exact effect@")
     await blocks.nth(1).getByLabel("Package manager", { exact: true }).selectOption("pnpm")
     await page.locator(".docs-content").getByRole("link", { name: /client.s message methods/ }).click()
     await expect(page.getByRole("heading", { level: 1, name: "Client", exact: true })).toBeVisible()
@@ -280,7 +285,7 @@ test("Package manager selector remains keyboard usable on mobile and keeps worki
     })
     const errors: string[] = []
     page.on("pageerror", (error) => errors.push(error.message))
-    await page.goto("/docs/dev/quick-start/")
+    await page.goto("/docs/preview/quick-start/")
     const first = page.locator("[data-command-block]").first()
     const manager = first.getByLabel("Package manager", { exact: true })
     await expect(manager).toBeEnabled()
@@ -300,9 +305,9 @@ test("Default commands remain readable without JavaScript", async ({ browser }) 
     const context = await browser.newContext({ javaScriptEnabled: false })
     try {
         const page = await context.newPage()
-        await page.goto("/docs/dev/quick-start/")
+        await page.goto("/docs/preview/quick-start/")
         const first = page.locator("[data-command-block]").first()
-        await expect(first.locator("[data-command-code]")).toHaveText("npm install --save-exact @neontechspace/fluxerly@VERSION")
+        await expect(first.locator("[data-command-code]")).toHaveText("node bot.js")
         await expect(first.getByLabel("Package manager", { exact: true })).toBeDisabled()
         await expect(first.getByText("Enable JavaScript to change command preferences")).toBeVisible()
     } finally { await context.close() }

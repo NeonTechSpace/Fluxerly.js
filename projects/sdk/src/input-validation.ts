@@ -1,5 +1,5 @@
-/** The kind of rule a local input failed, such as type, range, format or a relationship between fields.
- * These categories identify SDK validation, not provider errors or finished user-facing messages
+/** Identifies why the SDK rejected an input before sending a request. The rule may concern its type, allowed range, format or relationship to another field.
+ * These categories do not describe Fluxer errors and are not ready-made messages for users
  */
 export type InputValidationConstraint =
     | "required"
@@ -14,10 +14,10 @@ export type InputValidationConstraint =
     | "size"
 
 /**
- * Explain a locally rejected input without retaining the value that failed.
+ * Describes why the SDK rejected an input without keeping the rejected value.
  * Read this detail from an operation error's inputValidation field when it is non-null.
- * Path names the input field, constraint names the rule, and explanation describes the accepted input.
- * The SDK reports the first detailed failure it encounters, not a complete list of invalid fields.
+ * The path names the input field, constraint names the rule, and explanation describes what the SDK accepts.
+ * The SDK reports the first failure it can describe, not every invalid field.
  * Paths and explanations are SDK-authored, with no arbitrary caller keys, rejected values or provider responses.
  * Write your own user-facing messages rather than displaying this diagnostic as application copy
  *

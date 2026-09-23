@@ -4,11 +4,11 @@ navTitle: Reliability
 description: Handle expected failures, cancellation, shutdown, and uncertain writes deliberately
 ---
 
-The default API returns expected operational failures in `Result` values. Unexpected SDK or cleanup defects reject instead. Keep those two paths separate so a normal permission or network failure does not look like a programming defect
+The default API puts expected failures, such as permission or network errors, in `Result` values. Unexpected SDK or cleanup defects reject the Promise instead. Handle these separately so routine failures do not look like programming defects
 
 ## Handle an expected reply failure without hiding defects
 
-Report a normal reply failure while allowing an unexpected defect to reach your application's error boundary. Call this reusable helper from your bot's message handler
+Report an expected reply failure while allowing an unexpected defect to reach the application's top-level error handler. Call this helper from the bot's message handler
 
 ```ts
 import type { Client, Message } from "@neontechspace/fluxerly"
@@ -24,13 +24,13 @@ export async function replyToPing(client: Client, message: Message) {
 }
 ```
 
-A normal operational failure is returned and logs only its typed kind. A successful reply returns a Result containing the created message
+An expected operational failure is returned and logs only its typed kind. A successful reply returns a Result containing the created message
 
-A rejected `SdkDefect` represents an unexpected SDK or cleanup failure. Handle it at the application's outer error boundary, where the application can alert, restart or record safe diagnostic details
+A rejected `SdkDefect` represents an unexpected SDK or cleanup failure. Handle it in the application's top-level error handler, where the application can alert, restart or record safe diagnostic details
 
-## Give one request a deadline and a cancellation owner
+## Set a request deadline and allow cancellation
 
-Stop waiting for a remote message when your surrounding task ends or takes too long. The caller owns an `AbortController` and passes its `signal` to this reusable helper
+Stop waiting for a remote message if the caller cancels or the request takes too long. Create an `AbortController` for that task and pass its `signal` to this helper
 
 ```ts
 import type { Client, MessageReference } from "@neontechspace/fluxerly"
@@ -47,7 +47,7 @@ export async function fetchUntilCancelled(
 }
 ```
 
-The remote read returns a message, a typed operation failure, or `CancelledError` after the caller aborts the signal. The five-second deadline interrupts the request, then waits for required cleanup
+The remote read's Result contains a message or a typed error. Aborting the signal produces `CancelledError`. The five-second deadline also stops the request and waits for SDK cleanup
 
 Cancellation waits for SDK cleanup. A provider can still complete work it already received. Keep the controller with the operation that owns the user request
 
@@ -59,9 +59,9 @@ Server-provided bucket identifiers also refine request grouping automatically, s
 
 Gateway receive protection is automatic and needs no bot configuration. A message beyond the fixed receive ceiling, or invalid UTF-8, stops the connection rather than repeatedly reconnecting to the same rejected data. The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) documents the ceiling and failure codes. Subscription queue limits apply separately and do not bound JSON parsing memory
 
-## Let one function own connection lifetime
+## Start, recover and stop the connection in one function
 
-Use `run` when one signal should own startup, recovery and shutdown. Pass a disconnected client with its handlers already registered and an `AbortSignal` owned by your application
+Use `run` when one signal should control startup, recovery and shutdown. Pass a disconnected client with its handlers already registered and an `AbortSignal` controlled by the application
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -71,7 +71,7 @@ export async function runUntilStopped(client: Client, signal: AbortSignal) {
 }
 ```
 
-After accepting the run, the helper stays pending through startup and recovery. Normal shutdown, permanent failure or caller cancellation ends the run only after owned cleanup
+Once `run()` starts, it waits through connection startup and recovery. It finishes after a normal stop, permanent failure or cancellation, once SDK cleanup is done
 
 The [`run`](/docs/{{version}}/api/interfaces/js-ts.Client/#run) method requires a disconnected client and closes it permanently once the accepted run ends. Alternatively, use `connect` for startup, `waitForClose` for later terminal failure and `shutdown` for final cleanup. Aborting `waitForClose` alone does not stop the client
 

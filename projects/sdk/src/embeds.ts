@@ -1,14 +1,14 @@
-/** A rich card to include in a message's embeds array, with optional text, images and named sections.
+/** A card for a message's `embeds` array, with optional text, images and named sections.
  * Message operations reject unknown keys and null values locally
  *
- * Text length limits use JavaScript UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
- * trimming. This normalization is validation-only, and the original text is sent unchanged
+ * Text length limits count UTF-16 code units, the units used by JavaScript string length. For validation, the SDK removes
+ * U+000C and U+202E and trims surrounding whitespace. It sends the original text unchanged
  *
  * URLs must use HTTP/HTTPS and contain at most 2048 characters, except image and thumbnail URLs may use attachment://filename.
  * An attachment URL must exactly and case-sensitively match one new PNG, JPG, JPEG, WEBP or GIF upload filename in the same send, reply or edit.
  * Its filename may contain letters, marks, numbers, underscores, dots and hyphens only
  *
- * The SDK does not fetch existing attachment metadata, so retained attachment IDs cannot supply an attachment URL.
+ * The SDK does not look up existing attachments, so an existing attachment ID cannot supply an attachment URL.
  * Fluxer moves referenced uploads into embed media, so they are not returned in the message's attachment list
  *
  * Fluxer fetches remote media and may normalize text. Permissions and instance-specific limits remain server-owned
@@ -153,8 +153,8 @@ export interface EmbedField {
 }
 
 /** One received card or link preview, without its optional child previews.
- * This object is frozen, missing or null server fields become omitted properties.
- * Use EmbedInput for sending, this received shape includes server-generated fields and omits unknown server properties
+ * This frozen object cannot be changed. Missing or null server fields are omitted.
+ * Use `EmbedInput` to send a card. A received card can include server-generated fields, but unknown fields are omitted
  */
 export interface EmbedChild {
     /** Server-provided type, including types unknown to this SDK */
@@ -185,7 +185,7 @@ export interface EmbedChild {
     readonly video?: EmbedMedia
     /** Audio metadata, not a playable SDK resource */
     readonly audio?: EmbedMedia
-    /** Preview HTML supplied by Fluxer. The SDK does not render or sanitize it, do not treat it as safe HTML for your own page */
+    /** Preview HTML supplied by Fluxer. The SDK does not render or sanitize it. Treat it as untrusted when displaying it on a page */
     readonly html?: string
     /** Preferred HTML preview width in pixels */
     readonly htmlWidth?: number

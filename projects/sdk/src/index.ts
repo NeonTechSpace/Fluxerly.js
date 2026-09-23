@@ -37,6 +37,9 @@
  * The gateway is the live connection that carries events.
  * A shard is one gateway connection assigned part of the bot's guilds.
  * Most resource reads and writes use HTTP requests and do not require that live connection.
+ * A frozen snapshot is a copy that does not change when Fluxer data changes.
+ * An uncertain write is a request that may have succeeded even though the SDK did not receive a clear result.
+ * Check the current remote state before repeating such a request.
  * HTTP 204 is a successful response without a value.
  * HTTP 429 means Fluxer rejected work due to a rate limit.
  * Options named timeoutMs and durationMs use milliseconds.
@@ -129,8 +132,8 @@ function oauthOwnerOptions(options: DefaultOAuthOperationOptions | undefined) {
 /**
  * Create Fluxer markup for mentions, timestamps, custom emoji and Markdown escaping.
  * Use these helpers when building message content, without creating a client or making a request.
- * Most helpers return a Result you must check.
- * escapeMarkdown returns a string directly.
+ * Most helpers return a Result. Check whether it contains Ok or Err.
+ * The escapeMarkdown helper returns a string directly.
  * A mention in the text does not enable notifications, which are controlled by allowedMentions when sending
  */
 export const format: typeof sharedFormat = sharedFormat
@@ -143,7 +146,7 @@ export const format: typeof sharedFormat = sharedFormat
 export const snowflakes: typeof sharedSnowflakes = sharedSnowflakes
 
 /**
- * Choose a display name from the user or member data you already have.
+ * Choose a display name from supplied user or member data.
  * No account request or cache lookup is made
  */
 export const display: typeof sharedDisplay = sharedDisplay
@@ -164,7 +167,7 @@ export const colors: typeof sharedColors = sharedColors
 
 /**
  * Split a string into frozen pieces without dropping or changing its text.
- * maxLength counts UTF-16 code units, as JavaScript string.length does.
+ * The maxLength option counts UTF-16 code units, as JavaScript string.length does.
  * This helper neither sends the pieces nor repairs Markdown split across them
  *
  * @example
@@ -197,7 +200,7 @@ export const links: typeof sharedLinks = sharedLinks
  * Calls return Result and do not download the image or need a client.
  * Use client.instance.resolve() for helpers tied to a self-hosted instance instead.
  * Member avatar and banner helpers read only guildId, userId and the chosen image hash.
- * displayMemberAvatar also reads profileFlags to choose the fallback image
+ * The displayMemberAvatar helper also reads profileFlags to choose the fallback image
  */
 export const assets: typeof sharedAssets = sharedAssets
 import {
@@ -539,6 +542,10 @@ export type {
     MessageReactionEmojiRemoval,
 } from "./reactions.js"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
+import { CriticalWorkerStoppedError, type RunBotOptions } from "./bot-runner.js"
+import { runBotCore } from "#sdk/internal/bot-runner"
+export { CriticalWorkerStoppedError } from "./bot-runner.js"
+export type { RunBotOptions } from "./bot-runner.js"
 import {
     createPkce,
     type OAuthAuthorizationInput,
@@ -646,22 +653,22 @@ export type {
 import { makeDefaultSupervisor } from "./default-supervisor.js"
 
 /**
- * Route prefixed messages such as !ping to handlers you register.
+ * Route prefixed messages such as !ping to registered handlers.
  * Create a router, register commands, then attach it to a client
  *
  * @remarks
  * Nothing listens until attach, which uses one bounded messageCreate subscription and does not connect the client.
- * Your handlers send replies and decide access.
+ * Application handlers send replies and decide access.
  * The router does not fetch permissions or retry failed handlers
  *
  * Optional groups organize names and help text, but a protected command still needs its own guard.
- * A guard is your callback that decides whether a matched command may run
+ * A guard is an application callback that decides whether a matched command may run
  *
  * Optional argument schemas convert raw args into frozen typed values after the guard.
  * Conversion rejection calls onReject without consuming a cooldown.
  * The original args remain available
  *
- * Help pages are strings you choose to send.
+ * Help pages are strings the application can send.
  * Hiding a command in help is not an access check
  *
  * Builders in the examples create independent plain message inputs, validated later by message operations
@@ -766,9 +773,9 @@ export const commands = defaultCommands
  * Each child entry module must call supervisor.child.run to create and run its client
  *
  * @remarks
- * start waits for assignment and configuration acknowledgements, not gateway READY.
+ * The start method waits for assignment and configuration acknowledgements, not gateway READY.
  * Use waitForReady for all-child READY, and waitForClose to wait until this supervisor's children have exited.
- * status returns a frozen local report with the last current-generation gateway state received from each child.
+ * The status method returns a frozen local report with the latest gateway state received from each current child.
  * Those states are separate observations, not an atomic health check across processes
  *
  * Fresh gateway Identify sends require a parent permit and are spaced by at least one second.
@@ -783,7 +790,7 @@ export const commands = defaultCommands
  * No process signal handlers are installed.
  * The child's stdout and stderr are ignored.
  * Optional restart settings limit child replacements and increase the delay exponentially between attempts.
- * childEnvironment, args and execArgv affect the child launch but are omitted from status and failures.
+ * The childEnvironment, args and execArgv options affect child launch but are omitted from status and failures.
  * This helper does not discover shard counts, coordinate other hosts, preserve replacement sessions or share REST rate limits
  *
  * @example
@@ -1141,7 +1148,7 @@ export interface EventSubscription<
 export interface EventHandlerOptions extends HandlerOptions {
     /**
      * Handle a report containing only the event name and failure kind, not the exception, stack or event payload.
-     * To inspect your own exception, catch it inside the event callback before rethrowing, as shown on Client.on.
+     * To inspect an exception, catch it inside the event callback before rethrowing, as shown on Client.on.
      * Only one custom report runs at a time for this registration.
      * While it is busy, further failures go to the default logger.
      * A failed reporter produces one safe fallback log and is never retried.
@@ -1167,7 +1174,7 @@ export interface Attachments {
      * This method never downloads media and never sends the bot credential to a requested or refreshed URL.
      * The credentialed POST follows no redirect. Use download explicitly afterward for a returned URL that belongs to this instance
      *
-     * timeoutMs defaults to 30,000 across endpoint discovery, shared REST admission, rate-limit waits and the bounded response.
+     * The timeoutMs option defaults to 30,000 for endpoint discovery, waiting for a REST request slot, rate-limit waits and the limited response read.
      * A confirmed 429 can retry after its required wait. An uncertain POST or malformed success is not retried automatically.
      * Aborting options.signal cancels only this refresh and waits for request cleanup.
      * HTTP 404 cannot distinguish an older unsupported deployment from an unavailable route or denied access.
@@ -1186,7 +1193,7 @@ export interface Attachments {
      * The URL must match this instance's discovered media /attachments/ path.
      * The GET sends no Authorization header, follows no redirects and stores no cached copy
      *
-     * timeoutMs defaults to 30,000 across endpoint discovery, waiting for a media slot and downloading.
+     * The timeoutMs option defaults to 30,000 for endpoint discovery, waiting for a media slot and downloading.
      * Four media downloads can run at once, separately from REST and uploads, without waiting for bot API rate limits
      *
      * Aborting options.signal waits for response-reader cleanup, but cannot undo bytes already received
@@ -1216,7 +1223,7 @@ export interface Attachments {
      *
      * This iterable can be consumed only once.
      * Overlapping next calls return busy without cancelling the pending read.
-     * timeoutMs defaults to 30,000 for the whole consumption, including time you pause between chunks.
+     * The timeoutMs option defaults to 30,000 for the whole download, including pauses between chunks.
      * Breaking the loop, return, throw, signal cancellation, failure and client shutdown cancel the body.
      * The SDK then waits for reader cleanup and releases the media slot.
      * Listener or cleanup failures reject with SdkDefect after independent cleanup is attempted.
@@ -1242,24 +1249,24 @@ export interface Attachments {
 /**
  * Read, send and change messages with client.messages, or collect future messages and reactions.
  * HTTP operations and local get lookups do not need a gateway connection.
- * Received messages are frozen snapshots, not objects that update when Fluxer changes.
+ * Received messages are frozen copies. They do not update when Fluxer changes.
  * Their fields follow this client's messageFields selection, which defaults to the full Message.
  * That selection also applies to nested messages, callbacks and cached snapshots
  *
  * @remarks
- * Remote calls start when called and normally return ResultAsync, which you can await to get Ok or Err.
+ * Remote calls start when called and normally return ResultAsync. Await one to get Ok or Err.
  * The default timeoutMs is 30,000 for the whole call, including queue, rate-limit and retry waits.
  * The SDK waits for request cleanup afterward, so the timeout is not a hard cleanup time limit.
  * This client runs four REST or upload requests at once and four separate attachment downloads.
  * Both pools together allow at most 256 waiting requests or 4 MiB of queued JSON bodies.
  * These limits apply across the shards assigned to this client
  *
- * fetch, fetchHistory, fetchReactionUsers and fetchPins retry transport failures and HTTP 500, 502, 503 or 504 at most twice.
+ * The fetch, fetchHistory, fetchReactionUsers and fetchPins methods retry transport failures and HTTP 500, 502, 503 or 504 at most twice.
  * The retry delays are 125–250 ms, then 250–500 ms, or a longer valid Retry-After.
  * Retries use the same target and query and never reset the deadline.
  * Results can change between attempts.
  * Confirmed HTTP 429 rejections have separate route and global waits and do not consume those two retries.
- * Writes retry only confirmed rate-limit rejections, never a write whose result is uncertain.
+ * Writes retry only confirmed rate-limit rejections. A write with no clear result may already have succeeded and is not retried.
  * Other rejections and malformed successes are not retried.
  * Successful JSON bodies are limited to 16 MiB before parsing, not total memory usage
  *
@@ -1276,7 +1283,7 @@ export interface Messages<M extends MessageCore = Message> {
     /**
      * Read older messages in a for await loop, newest first.
      * Pass maxItems to bound the scan.
-     * pageSize and maxPages use the limits in PaginationQuery
+     * The pageSize and maxPages options use the limits in PaginationQuery
      *
      * Creating the iterable makes no request.
      * Each consumption copies the inputs and has independent progress.
@@ -1285,7 +1292,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Each item is Ok(frozenMessage).
      * One expected failure or cancellation yields Err, then ends iteration
      *
-     * timeoutMs applies to each page, not to the whole scan.
+     * The timeoutMs option applies to each page, not to the whole scan.
      * Remote errors identify fetchHistory.
      * PaginationError reports invalid input, cursorStalled or pageLimit
      *
@@ -1300,7 +1307,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Completion and early exit leave no listener registered
      *
      * Unexpected SDK or combined operation and cleanup failures reject with SdkDefect.
-     * Messages already delivered to your code are not rolled back
+     * Messages already delivered to the caller are not rolled back
      *
      * @example
      * ```ts
@@ -1324,7 +1331,7 @@ export interface Messages<M extends MessageCore = Message> {
      * It neither connects the gateway nor reads or fills a cache
      *
      * The result is a frozen page or an indexing state.
-     * indexing means Fluxer accepted the search but is not ready.
+     * The indexing result means Fluxer accepted the search but is not ready.
      * Decide yourself whether and when to try again
      *
      * Use page numbers from 1 through 400 for later requests, keeping limit unchanged.
@@ -1354,12 +1361,12 @@ export interface Messages<M extends MessageCore = Message> {
         options?: DefaultMessageSearchOptions,
     ): ResultAsync<MessageSearchPage<M>, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
-     * Read indexed search hits in a for await loop, using the guild or channel context you supply.
+     * Read indexed search hits in a for await loop, using the supplied guild or channel context.
      * Pass maxItems.
-     * pageSize is 1–25 and maxPages defaults to 100.
+     * The pageSize option accepts 1–25, and maxPages defaults to 100.
      * Each consumption copies the filters, including recognized inherited and nonenumerable fields and their arrays.
      * The SDK retains one page and requests later numbered pages only as needed.
-     * Request capacity stays at the smaller of pageSize and maxItems throughout the scan; only maxItems hits are delivered.
+     * Request capacity stays at the smaller of pageSize and maxItems throughout the scan. At most maxItems hits are delivered.
      * Reaching maxPages or Fluxer's 400-page ceiling with more matches yields PaginationError pageLimit.
      * An unexpected echoed page number or capacity yields cursorStalled. Index changes can still skip or repeat observations.
      * An indexing response yields PaginationError with reason indexing rather than polling or claiming an empty result.
@@ -1387,12 +1394,12 @@ export interface Messages<M extends MessageCore = Message> {
      * Read users who reacted with one selected emoji, in ascending user-ID order.
      * Pass a literal Unicode emoji or custom emoji input, plus maxItems to bound the scan.
      * Like iterateHistory, this is lazy, keeps bounded results and yields Ok items or one terminal Err.
-     * timeoutMs applies per fetchReactionUsers page.
+     * The timeoutMs option applies to each fetchReactionUsers page.
      * Abort the signal to interrupt a pending pull.
      * Breaking the loop releases buffered items.
      * Unexpected SDK failures reject with SdkDefect.
      * The scan ends at maxItems or hasMore=false, without caching reactors or fetching members.
-     * Reactions may change while you scan.
+     * Reactions may change during the scan.
      * Not finding a user within the bound does not prove they never reacted
      *
      * @example
@@ -1463,7 +1470,7 @@ export interface Messages<M extends MessageCore = Message> {
      * A new pin creates a system message and notifications.
      * An already-pinned message stays unchanged
      *
-     * pin, unpin and fetchPins share the per-channel pins rate limit and the client's request limits.
+     * The pin, unpin and fetchPins methods share the per-channel pins rate limit and the client's request limits.
      * The default deadline is 30,000 ms.
      * Only confirmed HTTP 429 rejections are retried
      *
@@ -1499,7 +1506,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Fluxer checks the same permissions as pin.
      * Success is Ok(undefined) after HTTP 204, including when the message is already unpinned.
      * The last-pin timestamp is not reset.
-     * pin's request limits, deadline, rate-limit retries, cancellation and cache removal also apply.
+     * The pin method's request limits, deadline, rate-limit retries, cancellation and cache removal also apply.
      * Expected failures identify operation unpin.
      * Client closure returns ClientClosedError.
      * No gateway connection, confirmation fetch or automatic rollback is performed
@@ -1512,8 +1519,8 @@ export interface Messages<M extends MessageCore = Message> {
      * Fetch one frozen page of pinned messages in descending pin-time order.
      * Use a decimal channel ID
      *
-     * limit defaults to 50 and accepts 1–50.
-     * before is an ISO timestamp and defaults to the server's current time
+     * The limit option defaults to 50 and accepts 1–50.
+     * The before option is an ISO timestamp and defaults to the server's current time
      *
      * Use nextBefore for the next page and pinnedAt for each pin's time.
      * Equal timestamps can repeat messages, so skip duplicate IDs and stop if the cursor does not advance.
@@ -1534,7 +1541,7 @@ export interface Messages<M extends MessageCore = Message> {
     ): ResultAsync<MessagePinsPage<M>, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove one user's reaction for one emoji, leaving other users and emoji groups unchanged.
-     * userId is required as a decimal string.
+     * The userId input is required as a decimal string.
      * Use the bot's own ID to remove its reaction.
      * Accepts the same ReactionEmojiInput forms as addReaction
      *
@@ -1573,7 +1580,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Remove all users' reactions for one emoji on the message.
      * Other emoji groups remain.
      * Success is Ok(undefined) after HTTP 204, even if no matching reactions existed.
-     * removeUserReaction's permissions, request limits, deadline, failure and cleanup rules apply.
+     * The removeUserReaction method's permissions, request limits, deadline, failure and cleanup rules apply.
      * Expected failures identify clearReaction.
      * Fluxer emits a clear-emoji event, not individual removals.
      * The SDK does not create or wait for that event.
@@ -1588,7 +1595,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Remove all users' reactions for all emoji on the message, without deleting the message.
      * No emoji selector is needed.
      * HTTP 204 returns Ok(undefined), whether reactions existed or not.
-     * clearReaction's permissions, request limits, deadline, failure and cleanup rules apply.
+     * The clearReaction method's permissions, request limits, deadline, failure and cleanup rules apply.
      * Expected failures identify clearReactions.
      * Fluxer emits one clear-all event.
      * The SDK does not create per-user events or wait for notification.
@@ -1602,8 +1609,8 @@ export interface Messages<M extends MessageCore = Message> {
      * Fetch one page of users who currently have a selected reaction on the message.
      * Accepts the same ReactionEmojiInput forms as addReaction
      *
-     * limit defaults to 25 and accepts 1–100.
-     * after is an exclusive user-ID cursor.
+     * The limit option defaults to 25 and accepts 1–100.
+     * The after option is an exclusive user-ID cursor.
      * Users are ordered by ascending ID, not reaction time.
      * Use nextAfter for another page
      *
@@ -1671,7 +1678,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Remove only the bot's own reaction for the selected emoji.
      * Other users' reactions stay unchanged.
      * HTTP 204 returns Ok(undefined), even if the bot had not reacted.
-     * addReaction's emoji inputs, request limits, deadline, retry, failure and cancellation rules apply.
+     * The addReaction method's emoji inputs, request limits, deadline, retry, failure and cancellation rules apply.
      * Neither this operation nor gateway reaction events change the message cache
      */
     removeReaction(
@@ -1695,10 +1702,10 @@ export interface Messages<M extends MessageCore = Message> {
      *
      * Options are copied at registration.
      * Budgets must be positive safe integers.
-     * timeoutMs and optional idleMs must be at most 2,147,483,647 ms
+     * The timeoutMs and optional idleMs values must be at most 2,147,483,647 ms
      *
      * The total timeout starts at registration and never resets.
-     * idleMs also starts at registration, then resets after each newly accepted message ID, before its callback.
+     * The idleMs timer also starts at registration, then resets after each newly accepted message ID, before its callback.
      * Rejected, queued or duplicate messages do not reset idleMs.
      * Callback time counts toward both deadlines.
      * The earlier deadline wins, with timeout winning ties.
@@ -1723,11 +1730,11 @@ export interface Messages<M extends MessageCore = Message> {
      * Not-ready registration returns CollectorError notConnected.
      * Closing clients return ClientClosedError.
      * Invalid options return ConfigurationError.
-     * options.signal controls the collection itself.
+     * The options.signal value controls the collection itself.
      * Abort returns CancelledError, and a pre-aborted signal starts no collection.
      * Unexpected registration failures throw SdkDefect.
      * A timeout can succeed with no messages.
-     * Your code still manages the client's lifetime
+     * The application still manages the client's lifetime
      *
      * @example
      * ```ts
@@ -1803,7 +1810,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Rejected, queued and unprocessed batch entries do not reset it.
      * Callback time counts.
      * The earlier deadline wins, with timeout winning ties.
-     * timeoutMs and idleMs must be integers from 1 through 2,147,483,647 ms
+     * The timeoutMs and idleMs values must be integers from 1 through 2,147,483,647 ms
      *
      * Optional onReaction runs sequentially after acceptance and the retained-byte check.
      * Limit completion waits for the final callback.
@@ -1818,7 +1825,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Filter or overflow failure returns CollectorError without partial results.
      * Invalid target or options return ConfigurationError.
      * Closing clients return ClientClosedError.
-     * options.signal controls collection.
+     * The options.signal value controls collection.
      * Abort returns CancelledError, and a pre-aborted signal starts nothing.
      * Unexpected registration failures throw SdkDefect.
      * Supply a connected client and an existing message.
@@ -1874,11 +1881,11 @@ export interface Messages<M extends MessageCore = Message> {
      * Mentions are disabled by default.
      * Use allowedMentions to opt in.
      * Embed image and thumbnail URLs can use attachment://filename for a matching new image upload.
-     * flags accepts only MessageFlags' non-voice bits.
+     * The flags input accepts only MessageFlags' non-voice bits.
      * Suppressing previews is different from omitting embeds
      *
      * Attachments accept data bytes, a sized Blob or File source, or a finite stream with its exact byte count.
-     * data bytes are copied when called
+     * The data bytes are copied when called
      *
      * File and stream bytes are read after upload planning without copying or spooling.
      * Keep a file source stable while it is read.
@@ -1901,12 +1908,12 @@ export interface Messages<M extends MessageCore = Message> {
      * With inline multipart uploads, a confirmed HTTP 429 can replay copied data bytes only.
      * File and stream inputs return rateLimit instead of being read again
      *
-     * nonce can be a 1–32 character string or a nonnegative safe integer.
+     * The nonce input can be a 1–32 character string or a nonnegative safe integer.
      * If omitted, the SDK creates one nonce per send.
      * The same nonce is reused for confirmed rate-limit retries
      *
-     * Fluxer's duplicate suppression is best effort for five minutes after persistence.
-     * It is not durable idempotency or a guarantee of exactly-once delivery or atomic concurrent sends
+     * Fluxer tries to suppress duplicate sends for five minutes after saving a message.
+     * This does not guarantee that a repeated or concurrent send posts only one message
      *
      * A lost response or cancellation after dispatch can leave a message posted.
      * The SDK neither retries nor rolls it back
@@ -1927,12 +1934,12 @@ export interface Messages<M extends MessageCore = Message> {
      * Optional media selections must belong to the source.
      * Extra content, files, mentions and flags are rejected
      *
-     * messageSnapshots in the result are frozen copies, not live views of later source edits
+     * The result's messageSnapshots are frozen copies, not live views of later source edits
      *
      * Fluxer checks source access and destination permissions.
      * This uses send's shared request limits, default 30,000 ms deadline and optional destination-message caching
      *
-     * nonce follows send's accepted inputs, generated default and reuse on confirmed rate-limit retries.
+     * The nonce input follows send's accepted values, generated default and reuse on confirmed rate-limit retries.
      * Fluxer's five-minute duplicate suppression is best effort, not exactly-once delivery
      *
      * Success follows HTTP, not recipient acknowledgement.
@@ -1983,8 +1990,8 @@ export interface Messages<M extends MessageCore = Message> {
      * Typing refreshes run no sooner than every 8,000 ms until task settles.
      * A later typing or client-close failure stops refreshes and is reported after the task settles
      *
-     * task receives a signal aborted on caller cancellation or helper cleanup.
-     * Your task must cooperate with that signal.
+     * The task callback receives a signal aborted on caller cancellation or helper cleanup.
+     * The task must cooperate with that signal.
      * A promise that ignores it can delay cancellation
      *
      * A thrown or rejected task rejects with SdkDefect rather than returning an expected Err.
@@ -2015,7 +2022,7 @@ export interface Messages<M extends MessageCore = Message> {
      * A missing target fails instead of silently sending an unreferenced message.
      * Target and explicit reference checks run first.
      * After client-closure checks, body validation follows send.
-     * send's mention defaults, file copying, size limits, deadline, nonce and retry rules apply.
+     * The send method's mention defaults, file copying, size limits, deadline, nonce and retry rules apply.
      * Eligible replies can enter the message cache.
      * A lost response can leave the reply posted.
      * The SDK does not replay an uncertain send
@@ -2053,7 +2060,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Pass a decimal channel ID
      *
      * With no query, this reads the latest 50 messages.
-     * limit accepts 1–100.
+     * The limit option accepts 1–100.
      * Choose at most one before, after or around message-ID cursor.
      * Use the oldest returned ID as before to request an older page
      *
@@ -2083,7 +2090,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Pass authorId, a synchronous filter, or both.
      * When both are supplied, a message must match both
      *
-     * maxScanned and maxSelected are required integers from 1 through 10,000.
+     * The maxScanned and maxSelected values are required integers from 1 through 10,000.
      * History is scanned newest first until an empty page or either bound, without prefetch.
      * A short page does not end the scan.
      * History reads can populate an enabled message cache
@@ -2108,14 +2115,14 @@ export interface Messages<M extends MessageCore = Message> {
      * No history reread or filter rerun is performed
      *
      * A plan is single-use even when cleanup fails or is cancelled.
-     * Preview again, or use explicit deleteMany with your own recorded IDs when reconciling uncertain results
+     * To resolve an uncertain result, preview again or call deleteMany with separately recorded IDs
      *
      * One default 30,000 ms deadline covers all batch submissions.
-     * submittedBatches records only earlier HTTP-success submissions, in the report or MessageCleanupError.
+     * The submittedBatches field records only earlier HTTP-success submissions, in the report or MessageCleanupError.
      * The rejected or uncertain terminal batch is reported separately.
      * These records do not prove each deletion, a deletion count, atomicity or that retrying is safe
      *
-     * onProgress is synchronous best effort.
+     * The onProgress callback runs synchronously on a best-effort basis.
      * Throws and promise-like rejections are ignored
      *
      * Abort returns CancelledError and can leave the batch being submitted uncertain.
@@ -2155,7 +2162,7 @@ export interface Messages<M extends MessageCore = Message> {
      * [] clears files when nonempty text or embeds remain.
      * Retained file title or description can be replaced or cleared with null.
      * Unknown IDs may be ignored, and a stale list can remove concurrent additions.
-     * attachment:// image or thumbnail URLs must match a new image upload, not a retained attachment.
+     * An attachment:// image or thumbnail URL must match a new image upload, not a retained attachment.
      * New uploads use send's copying, size, budget and cleanup rules.
      * A flags-only edit is allowed.
      * Omission preserves flags, supplied flags replace writable bits, and 0 clears both non-voice bits
@@ -2196,7 +2203,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Successful or uncertain deletion removes this message's cached copy.
      * No events are created locally
      *
-     * notFound can mean the attachment is missing without proving the message is absent
+     * A notFound result can mean the attachment is missing without proving the message is absent
      *
      * Message request limits and deadlines apply
      *
@@ -2367,8 +2374,8 @@ export type { ShardingOptions, ShardRecoveryDiagnostic, ShardState } from "./sha
 
 /**
  * Read a guild's audit log with ViewAuditLog permission, without connecting the gateway.
- * fetchPage starts immediately.
- * iterate reads pages only as your loop needs them.
+ * The fetchPage method starts immediately.
+ * The iterate method reads pages only when the loop requests them.
  * The SDK does not cache audit records or create a permanent archive.
  * Guilds' shared request limits, deadlines and eligible read retries apply.
  * Input, permission and malformed-response failures return GuildOperationError.
@@ -2381,7 +2388,7 @@ export interface AuditLogs {
     /**
      * Fetch one filtered audit page with referenced users and webhook metadata that excludes tokens.
      * Supply cursors and filters in AuditLogQuery.
-     * The returned page is frozen and remains in memory while you retain it
+     * The returned page is frozen and remains in memory while the caller retains it
      */
     fetchPage(
         guildId: string,
@@ -2391,8 +2398,8 @@ export interface AuditLogs {
     /**
      * Read audit entries newest first in a for await loop.
      * Pass maxItems.
-     * pageSize defaults to 50 (1–100), and maxPages to 100.
-     * timeoutMs applies to each page
+     * The pageSize option defaults to 50 and accepts 1–100. The maxPages option defaults to 100.
+     * The timeoutMs option applies to each page
      *
      * The SDK buffers one page without prefetching.
      * An empty page or maxItems ends the scan, not a short page
@@ -2406,10 +2413,10 @@ export interface AuditLogs {
      * Abort interrupts pending request work and waits for cleanup.
      * Client closure releases the page and fails the next pull
      *
-     * Already delivered entries remain with your code.
+     * Already delivered entries remain with the caller.
      * Concurrent changes can prevent a complete scan
      *
-     * Use fetchPage instead if you also need the referenced users or webhooks
+     * Use fetchPage instead to also receive referenced users or webhooks
      */
     iterate(
         guildId: string,
@@ -2572,7 +2579,7 @@ export interface Emojis {
      * Remove an emoji and return Ok(undefined) after HTTP 204.
      * Retained metadata is invalidated.
      * A missing target returns an error, not proof of an earlier deletion.
-     * purge defaults to false.
+     * The purge option defaults to false.
      * Setting it to true also queues irreversible media removal, subject to Fluxer's restrictions
      */
     delete(
@@ -2597,7 +2604,7 @@ export interface Emojis {
 export interface Stickers {
     /**
      * Replace a sticker's name, description and tags without changing its image or fetching it first.
-     * You may spread a fetched sticker into input if its identity matches the target.
+     * A fetched sticker can be spread into input if its identity matches the target.
      * Unknown fields fail locally.
      * An empty or null description clears it, and [] clears tags.
      * Shared sticker write, failure and cancellation rules apply
@@ -2670,7 +2677,7 @@ export interface Stickers {
      * Remove a sticker and return Ok(undefined) after HTTP 204.
      * Retained metadata is invalidated.
      * A missing target returns an error, not proof of an earlier deletion.
-     * purge defaults to false.
+     * The purge option defaults to false.
      * Setting it to true also queues irreversible media removal, subject to Fluxer's restrictions
      */
     delete(
@@ -2698,7 +2705,7 @@ export interface Stickers {
 export interface Discovery {
     /**
      * Fetch one page from the current public guild directory.
-     * limit defaults to 24 and offset to 0.
+     * The limit option defaults to 24, and offset defaults to 0.
      * Later pages can change, so offset-based scans are not a stable snapshot.
      * This neither joins a guild nor caches its directory entry.
      * Shared eligible GET retries apply
@@ -2710,7 +2717,7 @@ export interface Discovery {
     /**
      * Fetch a guild's current directory eligibility and application state.
      * Use a decimal guild ID with ManageGuild permission.
-     * eligible=false can mean discovery is disabled or the member threshold is unmet, without distinguishing them.
+     * An eligible=false result can mean discovery is disabled or the member threshold is unmet, without distinguishing them.
      * Eligibility can change before application.
      * Available review or removal reasons are included
      */
@@ -2773,14 +2780,14 @@ export interface Discovery {
 /**
  * Read guild settings and bot memberships, manage bans, or use the optional guild cache.
  * Most operations use HTTP and do not need a gateway connection.
- * fetchCounts is different, requiring a ready gateway as described on that method
+ * The fetchCounts method differs because it requires a ready gateway, as described on that method
  *
  * @remarks
  * Requests share the client's four REST or upload slots across all assigned shards.
  * Four attachment-download slots are separate.
  * Both pools together allow 256 waiting requests or 4 MiB of queued JSON
  *
- * timeoutMs defaults to 30,000 for the whole request, including waits.
+ * The timeoutMs option defaults to 30,000 for the whole request, including waits.
  * Reads retry transport failures and HTTP 500, 502, 503 or 504 at most twice.
  * Delays are 125–250 ms, then 250–500 ms, or a longer Retry-After.
  * Confirmed HTTP 429 waits are separate and never reset the deadline.
@@ -2806,7 +2813,7 @@ export interface Guilds {
      * A missing whole reply returns timeout
      *
      * One call uses one of four client-wide gateway request slots until all shard commands and replies finish.
-     * channels.fetchMemberCounts and members.iterateChunks share those slots.
+     * The channels.fetchMemberCounts and members.iterateChunks methods share those slots.
      * There is no local queue, so excess calls return busy.
      * The default 30,000 ms deadline includes registration, commands and all reply fragments.
      * Fluxer also limits member and presence work, so a local slot does not guarantee a reply.
@@ -2833,11 +2840,11 @@ export interface Guilds {
     ): ResultAsync<GuildCountsResult, CountOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one page of guilds this bot belongs to, ordered by ascending guild ID.
-     * limit defaults to 200 and accepts 1–200.
+     * The limit option defaults to 200 and accepts 1–200.
      * Choose either before or after, not both.
      * Those cursors refer to existing memberships.
      * If a cursor guild was removed, Fluxer may restart the page.
-     * withCounts defaults to false.
+     * The withCounts option defaults to false.
      * Permission bits or requested approximate counts may be omitted.
      * An omitted value means unavailable, not zero.
      * The frozen summaries do not read or populate the guild cache.
@@ -2862,7 +2869,7 @@ export interface Guilds {
     /**
      * Read the bot's guild memberships in ascending ID order with a for await loop.
      * Pass maxItems.
-     * pageSize defaults to 200 and maxPages to 100
+     * The pageSize option defaults to 200, and maxPages defaults to 100
      *
      * The SDK retains one page without prefetch, ending at maxItems or an empty page, not a short page.
      * A repeated or backward ID after a removed cursor returns PaginationError cursorStalled before delivering that page.
@@ -2870,15 +2877,15 @@ export interface Guilds {
      * Remote failures preserve fetchPage's error
      *
      * Each consumption copies inputs independently and yields Ok guilds or one terminal Err.
-     * timeoutMs applies per page
+     * The timeoutMs option applies to each page
      *
      * Abort interrupts a pending next and waits for cleanup.
      * Breaking the loop releases the page.
      * Client closure releases it and fails the next pull
      *
-     * withCounts applies on every page, but missing permission bits or counts remain unavailable, not zero.
+     * The withCounts option applies to every page, but missing permission bits or counts remain unavailable, not zero.
      * No gateway connection or cache fill is needed.
-     * Already delivered guilds remain with your code.
+     * Already delivered guilds remain with the caller.
      * Separate pages do not guarantee a consistent inventory
      *
      * @example
@@ -2912,7 +2919,7 @@ export interface Guilds {
      * An uncertain result keeps that selection.
      * Any dispatched attempt clears channel and message caches, because messages need not identify their guild
      *
-     * Objects already returned to your code stay unchanged.
+     * Objects already returned to the caller stay unchanged.
      * This neither deletes the guild nor shuts down the client
      */
     leave(
@@ -3048,7 +3055,7 @@ export interface Guilds {
      * BanMembers is required.
      * A user who is not banned returns an API error, not a successful no-op.
      * The user is not rejoined and queued message deletion is not cancelled.
-     * ban's execution, failures, cleanup and cached-member invalidation apply
+     * The ban method's execution, failures, cleanup and cached-member invalidation apply
      */
     unban(
         target: MemberReference,
@@ -3093,7 +3100,7 @@ export interface Guilds {
  * Read, create and change guild channels, with optional local cache lookup.
  * Use directMessages for private conversations instead.
  * Most methods use HTTP without a gateway connection.
- * fetchMemberCounts requires a ready gateway
+ * The fetchMemberCounts method requires a ready gateway
  *
  * @remarks
  * Supply decimal guild-channel IDs.
@@ -3131,7 +3138,7 @@ export interface Channels {
      * The copied IDs produce frozen counts and omittedChannelIds in requested order.
      * Omission means unavailable, not zero, and does not explain access or other causes
      *
-     * guilds.fetchCounts' four shared gateway slots, default 30,000 ms deadline and failure rules apply.
+     * The guilds.fetchCounts method's four shared gateway slots, default 30,000 ms deadline and failure rules apply.
      * There is no queue, implicit connection, REST fallback, cache write or retry.
      * Only a gap on this guild's shard fails the request
      *
@@ -3178,9 +3185,9 @@ export interface Channels {
      * Omitting permissionOverwrites inherits the selected parent category's overwrites.
      * An empty [] creates no explicit overwrites, which does not make a channel private.
      * Explicit overwrites use Fluxer's required feature opt-in for ViewChannelMembers.
-     * Each allow and deny mask must be from 0n through 9_223_372_036_854_775_807n; invalid masks fail before dispatch.
+     * Each allow and deny mask must be from 0n through 9_223_372_036_854_775_807n. Invalid masks fail before dispatch.
      * The example denies ViewChannel to everyone and grants access to the named bot.
-     * Your application manages the created channel afterward.
+     * The application manages the created channel afterward.
      * For an uncertain create result, use fetchAll before deciding whether to create again.
      * The result does not confirm gateway delivery
      *
@@ -3234,7 +3241,7 @@ export interface Channels {
     /**
      * Submit guild-channel moves and return Ok(undefined) after HTTP 204.
      * Fluxer applies moves sequentially and may normalize positions.
-     * syncPermissionsOnMove copies the destination category's overwrites.
+     * The syncPermissionsOnMove option copies the destination category's overwrites.
      * A bulk channel event can arrive before that copy finishes.
      * Failures can leave partial movement because this is not a transaction.
      * Use fetchAll afterward when final order matters.
@@ -3249,7 +3256,7 @@ export interface Channels {
     /**
      * Replace one explicit role or member permission overwrite.
      * Supply the target ID and raw bigint allow and deny flags.
-     * Each mask must be from 0n through 9_223_372_036_854_775_807n; larger received masks cannot be written unchanged.
+     * Each mask must be from 0n through 9_223_372_036_854_775_807n. Larger received masks cannot be written unchanged.
      * HTTP 204 returns Ok(undefined).
      * Fluxer requires ManageRoles and uses a feature opt-in to set or clear ViewChannelMembers.
      * No target fetch or inherited-permission calculation is performed
@@ -3276,10 +3283,10 @@ export interface Channels {
 /**
  * Read guild members, search indexed members, moderate them and change role assignments.
  * HTTP methods use Guilds' shared request limits, deadlines and failure rules.
- * iterateChunks uses the connected gateway instead
+ * The iterateChunks method uses the connected gateway instead
  *
  * Returned members are frozen snapshots, not live objects.
- * cache.members can retain observations, without downloading the guild automatically or predicting permissions
+ * The cache.members setting can retain observations, without downloading the guild automatically or predicting permissions
  *
  * Writes retry only confirmed HTTP 429 rejection.
  * Cancellation cannot undo a dispatched change
@@ -3309,15 +3316,15 @@ export interface Members {
      * Optional presence data can omit unavailable, offline or invisible users.
      * Omission does not prove offline status
      *
-     * timeoutMs defaults to 30,000 for the whole reply.
-     * maxPendingBytes defaults to 4 MiB of source-JSON bytes counted for unread gateway batches.
+     * The timeoutMs option defaults to 30,000 for the whole reply.
+     * The maxPendingBytes option defaults to 4 MiB of source-JSON bytes counted for unread gateway batches.
      * This bounds the SDK's byte accounting, not total memory use
      *
-     * Fluxer sends batches without waiting for your loop, so slow readers can overflow.
+     * Fluxer sends batches without waiting for the loop, so slow readers can overflow.
      * Pausing the loop does not pause intake or the deadline
      *
      * Gateway loss, timeout, malformed replies or overflow drop unread batches and yield one terminal MemberChunkError.
-     * Already yielded batches remain with your code
+     * Already yielded batches remain with the caller
      *
      * Client closure releases buffers and returns ClientClosedError.
      * Abort releases intake even while paused, returning CancelledError on the next pull.
@@ -3382,7 +3389,7 @@ export interface Members {
      * Without filters, this reads 25 members ordered by newest join time first.
      * Recognized fields, including inherited and nonenumerable fields, are read and filter arrays copied when called.
      * Results can lag membership changes.
-     * indexing=true means the search is not complete, not that it found no members.
+     * An indexing=true result means the search is not complete, not that it found no members.
      * Even an empty indexing=false result can mean Fluxer's search service is unavailable.
      * Counts do not guarantee completeness
      *
@@ -3409,7 +3416,7 @@ export interface Members {
     /**
      * Read indexed member-search hits in a for await loop with a bounded scan.
      * Pass maxItems.
-     * pageSize defaults to 100 (1–100), and maxPages to 100
+     * The pageSize option defaults to 100 and accepts 1–100. The maxPages option defaults to 100
      *
      * Each consumption copies filters and their arrays, including recognized inherited and nonenumerable fields.
      * Pages are requested only as needed
@@ -3441,7 +3448,7 @@ export interface Members {
     /**
      * Change this bot's guild profile, not its global account or another member.
      * Omitted fields stay unchanged.
-     * null clears an override.
+     * Passing null clears an override.
      * An empty input or unknown key fails locally.
      * Fluxer checks permissions and field-specific rate limits.
      * Avatar, banner, bio and accentColor can be silently ignored without the guild-profile entitlement.
@@ -3484,11 +3491,11 @@ export interface Members {
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Move a member who is already in voice to a positive decimal voice-channel ID.
-     * target.connectionId selects one observed connection.
+     * The target.connectionId value selects one observed connection.
      * Omit it to move every active connection for that member.
      * Fluxer requires MoveMembers and checks hierarchy, destination visibility and permission to connect.
      * The frozen HTTP member result means Fluxer accepted the move, not that the participant has reconnected.
-     * voiceStateUpdate can first show channelId null, then a new connection ID in the destination.
+     * A voiceStateUpdate event can first show channelId null, then a new connection ID in the destination.
      * Shared moderation deadlines, auditReason validation, confirmed HTTP 429 retries and member-cache invalidation apply.
      * A lost response or cancellation can leave the move applied.
      * Inspect later observations rather than retrying blindly
@@ -3524,7 +3531,7 @@ export interface Members {
      * Fluxer requires MuteMembers and checks hierarchy.
      * The returned member contains isMuted, without waiting for a voice event.
      * This does not control self-mute or connect the bot to voice.
-     * move's deadline, audit, retry, cancellation and member-cache rules apply
+     * The move method's deadline, audit, retry, cancellation and member-cache rules apply
      */
     setMute(
         target: MemberReference,
@@ -3537,7 +3544,7 @@ export interface Members {
      * Fluxer requires DeafenMembers and checks hierarchy.
      * The returned member contains isDeafened, without waiting for a voice event.
      * This does not control self-deafen or connect the bot to voice.
-     * move's deadline, audit, retry, cancellation and member-cache rules apply
+     * The move method's deadline, audit, retry, cancellation and member-cache rules apply
      */
     setDeaf(
         target: MemberReference,
@@ -3583,7 +3590,7 @@ export interface Members {
     /**
      * Clear a member's timeout and return the HTTP member snapshot.
      * This sends null rather than a negative duration.
-     * timeout's permissions, deadline, execution, cache and failure rules apply.
+     * The timeout method's permissions, deadline, execution, cache and failure rules apply.
      * No gateway event is awaited
      */
     clearTimeout(
@@ -3596,7 +3603,7 @@ export interface Members {
      * This does not ban the user, restore membership automatically or wait for a removal event.
      * Missing membership returns an API error.
      * Dispatched actions invalidate the member cache even on rejection.
-     * timeout's execution, deadline and failure rules apply.
+     * The timeout method's execution, deadline and failure rules apply.
      * Uncertain results are not replayed
      */
     kick(
@@ -3606,13 +3613,13 @@ export interface Members {
     /**
      * Read guild members by ascending user ID in a for await loop, without connecting the gateway.
      * Pass maxItems.
-     * pageSize and maxPages both default to 100
+     * The pageSize and maxPages options both default to 100
      *
      * Each consumption copies inputs and keeps one page, requested only when needed.
      * An empty page or maxItems ends the scan, not a short page.
      * Items are frozen Ok members, followed by at most one terminal Err
      *
-     * timeoutMs applies per fetchPage call.
+     * The timeoutMs option applies to each fetchPage call.
      * Remote failures keep that method's error and read retry policy.
      * PaginationError covers input, cursorStalled and pageLimit
      *
@@ -3621,7 +3628,7 @@ export interface Members {
      * Client closure releases the page and fails the next pull with ClientClosedError.
      * Unexpected failures reject with SdkDefect
      *
-     * Delivered members remain with your code.
+     * Delivered members remain with the caller.
      * An enabled cache can receive page members.
      * No roles or permission decisions are fetched.
      * Separate pages are not a consistent membership snapshot
@@ -3645,7 +3652,7 @@ export interface Members {
     ): AsyncIterable<Result<GuildMember, GuildOperationFailure | PaginationError | CancelledError | ConfigurationError>>
     /**
      * Look up a guild member synchronously by decimal guildId and userId, without a request.
-     * Enable cache.members to retain members, and cache.roles if you also want local role-name lookup.
+     * Enable cache.members to retain members. Enable cache.roles for local role-name lookup.
      * Explicit fetches or later gateway events can fill those caches.
      * Guilds.get's cache-miss, stale-snapshot, error and recency rules apply.
      * The example makes no requests when rendering observed role names.
@@ -3706,7 +3713,7 @@ export interface Members {
     ): ResultAsync<boolean, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one page of members ordered by ascending user ID.
-     * limit defaults to 100 and accepts 1–1,000.
+     * The limit option defaults to 100 and accepts 1–1,000.
      * Use the last returned userId as after for another page.
      * Inputs are copied when called.
      * A malformed page fails as a whole.
@@ -3756,7 +3763,7 @@ export interface Members {
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove one role from a member while leaving other roles unchanged.
-     * addRole's permissions and completion rules apply.
+     * The addRole method's permissions and completion rules apply.
      * The SDK sends the request even if a local snapshot lacks the role.
      * Success does not prove the role was previously assigned
      */
@@ -3773,7 +3780,7 @@ export interface Members {
  */
 export interface PermissionHelpers {
     /**
-     * Calculate permission flags synchronously from guild, member, role and optional channel snapshots you supply.
+     * Calculate permission flags synchronously from supplied guild, member, role and optional channel data.
      * No request or cache read is made.
      * This also works after client shutdown.
      * The bigint result ranges from 0n through 18_446_744_073_709_551_615n and preserves unknown flags.
@@ -3816,7 +3823,7 @@ export interface PermissionHelpers {
  * Unexpected failures reject with SdkDefect.
  * Inputs are copied when called.
  * Results are snapshots, not gateway acknowledgement.
- * Role permissions use bigint, which you must convert explicitly before JSON serialization
+ * Role permissions use bigint, which requires explicit conversion before JSON serialization
  * Every remote role mutation accepts DefaultGuildAuditOperationOptions. The fetchAll method rejects auditReason
  */
 export interface Roles {
@@ -3836,12 +3843,12 @@ export interface Roles {
     ): ResultAsync<readonly GuildRole[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Create a role with a name, optional color and permission flags.
-     * permissions defaults to 0n, rather than copying the everyone role's grants.
+     * The permissions input defaults to 0n, rather than copying the everyone role's grants.
      * Supplied permissions must be from 0n through 9_223_372_036_854_775_807n.
      * Explicit permissions use Fluxer's feature opt-in for ViewChannelMembers.
-     * The result reports the actual server grants, which can differ from your request.
+     * The result reports the actual server grants, which can differ from the request.
      * Use a separate edit to change hoist or mentionable settings.
-     * Your application manages the created role afterward.
+     * The application manages the created role afterward.
      * For an uncertain result, use fetchAll before deciding whether to create again
      *
      * @example
@@ -3863,10 +3870,10 @@ export interface Roles {
         options?: DefaultGuildAuditOperationOptions,
     ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
-     * Change only the role fields you supply and return the server's snapshot.
+     * Change only supplied role fields and return the server's snapshot.
      * Empty inputs and unknown fields fail locally.
-     * permissions replaces all raw grants rather than adding flags.
-     * The replacement must be from 0n through 9_223_372_036_854_775_807n; larger received masks cannot be written unchanged.
+     * The permissions input replaces all raw grants rather than adding flags.
+     * The replacement must be from 0n through 9_223_372_036_854_775_807n. Larger received masks cannot be written unchanged.
      * The replacement can set or clear ViewChannelMembers.
      * The everyone role accepts only color and permissions.
      * Other supplied fields fail, even in a mixed input
@@ -3880,7 +3887,7 @@ export interface Roles {
      * Delete a role and remove its member assignments in Fluxer.
      * The everyone role cannot be deleted.
      * HTTP 204 returns Ok(undefined), without proving member-event delivery.
-     * Snapshots already returned to your code remain unchanged
+     * Snapshots already returned to the caller remain unchanged
      */
     delete(
         role: RoleReference,
@@ -3957,7 +3964,7 @@ export interface Webhooks {
     /**
      * Create a webhook in a channel using the bot's permissions.
      * The result separates metadata from credentials, which expose the token only through revealToken.
-     * Keep those credentials private if you pass them to createWebhookClient.
+     * Credentials passed to createWebhookClient must remain private.
      * An uncertain response may have left the webhook created
      */
     create(
@@ -4075,8 +4082,8 @@ export interface WebhookClient {
      * Keep file data stable and do not reuse a consumed stream
      *
      * Multipart file uploads are streamed with a maximum of 50 MiB per file.
-     * attachment:// image and thumbnail URLs must match a new upload in this request.
-     * flags accepts only the two non-voice MessageFlags bits
+     * An attachment:// image or thumbnail URL must match a new upload in this request.
+     * The flags input accepts only the two non-voice MessageFlags bits
      *
      * An uncertain failure can leave the message posted and is never replayed automatically.
      * A confirmed inline HTTP 429 can replay copied data bytes, but file and stream inputs return rateLimit without rereading
@@ -4132,7 +4139,7 @@ export interface WebhookClient {
 export interface ClientCache<M extends MessageCore = Message> {
     /**
      * Return frozen snapshots from one configured cache category, ordered least to most recently used.
-     * limit defaults to 100 and accepts a positive safe integer from 1 through 1,000.
+     * The limit option defaults to 100 and accepts a positive safe integer from 1 through 1,000.
      * Expired entries are released first.
      * Enumeration neither refreshes them nor changes eviction order.
      * Unlike diagnostics, the array contains actual cached resource data.
@@ -4147,7 +4154,7 @@ export interface ClientCache<M extends MessageCore = Message> {
     ): Result<readonly CachedResources<M>[K][], ConfigurationError>
     /**
      * Release data held by this client's caches without changing which caches are enabled.
-     * Objects already returned to your code, requests and remote resources stay unchanged.
+     * Objects already returned to the caller, requests and remote resources stay unchanged.
      * Older in-flight reads cannot refill the cleared entries.
      * Later reads can cache normally.
      * Existing write-related invalidation remains in effect.
@@ -4159,7 +4166,7 @@ export interface ClientCache<M extends MessageCore = Message> {
 /**
  * Use a bot client for messages, guild resources, HTTP requests and gateway events.
  * Call methods directly.
- * The SDK runs asynchronous work and returns ResultAsync, which you can await.
+ * The SDK runs asynchronous work and returns ResultAsync. Await it to receive Ok or Err.
  * If isErr() is true, read error.
  * Otherwise, read value.
  * Expected failures are Err values.
@@ -4179,19 +4186,19 @@ export interface ClientCache<M extends MessageCore = Message> {
  * A valid global assertion wins over conflicting local metadata. Malformed scope values are ignored.
  * A global header with a valid Retry-After starts the pause before body inspection, including when
  * the body is missing, malformed, oversized or too slow. Body inspection stays bounded to 8 KiB and 100 ms before awaited cleanup.
- * Without global metadata, the wait stays in the applicable route bucket. Without a usable delay, the rejection fails rather than inventing a wait.
+ * Without global metadata, only requests in the same rate-limit group wait. Without a usable delay, the rejection fails instead of guessing how long to wait.
  * Waits remain within each call's original deadline. Cancelling a queued call removes only that call, not the shared pause.
  * Separate clients do not coordinate these waits. Attachment downloads do not wait for API rate limits.
  * Writes retry only confirmed rate-limit rejection, never an uncertain outcome
  *
- * Valid X-RateLimit-Bucket metadata refines provisional local groups automatically, without application configuration.
- * Known Fluxer templates retain their channel, guild, user, webhook or invite resource partitions.
- * Unknown templates conservatively share one bucket across this client's routes that report that identifier.
+ * Valid X-RateLimit-Bucket metadata tells the client which requests share a rate limit, without application configuration.
+ * For known Fluxer routes, requests remain grouped by their channel, guild, user, webhook or invite resource.
+ * Unknown routes reporting the same bucket identifier share one rate-limit group within this client.
  * Initial requests can still receive 429 before the server's grouping is learned.
- * Learning retains at most 2,048 route aliases and 2,048 bucket states per client. Idle aliases expire after five minutes unless preserving an active pause.
- * Old responses cannot undo newer mappings or reopen an exhausted window. A changed mapping preserves any known prior pause until it expires.
- * Tracking pressure discards nonblocking observations first. If active pauses fill capacity or resource metadata cannot be bound,
- * the client waits conservatively rather than dropping a known limit. Closing the client clears this transient state
+ * Each client tracks at most 2,048 route aliases and 2,048 rate-limit groups. Unused aliases expire after five minutes unless a pause is still active.
+ * An older response cannot replace a newer grouping or lift a rate-limit pause early. Regrouping preserves an existing pause until it expires.
+ * When tracking is full, the client discards groups without active pauses first. If active pauses fill capacity or a request cannot be grouped safely,
+ * the client waits rather than ignoring a known limit. Closing the client clears this temporary tracking data
  *
  * Each gateway connection accepts complete uncompressed text messages up to 100 MiB (104,857,600 bytes), including fragments combined.
  * The transport enforces this fixed receive ceiling before UTF-8 decoding and JSON parsing. It preserves the previous transport default.
@@ -4223,7 +4230,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
     readonly users: Users
     /**
      * Open and manage one-to-one or group conversations.
-     * Use messages for content operations once you have their channel IDs
+     * Use messages for content operations once the channel IDs are known
      */
     readonly directMessages: DirectMessages<M>
     /**
@@ -4276,7 +4283,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
     readonly messages: Messages<M>
     /**
      * Enumerate or release locally cached data.
-     * Caching is disabled unless you enable it in ClientOptions.cache
+     * Caching is disabled unless enabled in ClientOptions.cache
      */
     readonly cache: ClientCache<M>
     /**
@@ -4294,12 +4301,12 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Overflow closes only this subscription.
      * Callback failure is reported without retrying that invocation
      *
-     * Return or await your asynchronous callback work, and inspect Err results from message operations.
+     * Return or await asynchronous callback work, and inspect Err results from message operations.
      * The second callback argument is a signal requesting cancellation on unsubscribe or shutdown.
-     * The SDK cannot stop promises that ignore it or manage work you did not return.
+     * The SDK cannot stop promises that ignore it or manage work the callback did not return.
      * Observe the subscription's outcome as well as the client's run or waitForClose outcome.
-     * Catch your own callback exceptions locally if you need their original error and stack.
-     * onError and SDK logs keep only safe event and failure-kind data, not the original exception.
+     * Catch callback exceptions locally to inspect their original error and stack.
+     * The onError callback and SDK logs keep only safe event and failure-kind data, not the original exception.
      * Keep credentials, event payloads and arbitrary exception text out of logs.
      * Local registration failures return Err.
      * Unexpected synchronous failures throw SdkDefect
@@ -4333,7 +4340,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
         options?: EventHandlerOptions,
     ): Result<Subscription, RegistrationError>
     /**
-     * Open a subscription that lets you request future events one at a time.
+     * Open a subscription to request future events one at a time.
      * Call next for each payload and unsubscribe when finished.
      * Payloads follow receive order, with bounded buffering and no history replay or splitting of bulk events.
      * Enabled cache changes happen before delivery and remain independent of subscription overflow.
@@ -4345,12 +4352,12 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
         options?: EventBufferOptions,
     ): Result<EventSubscription<K, M>, RegistrationError>
     /**
-     * Wait for the first future event of one type that passes your synchronous filter.
+     * Wait for the first future event of one type that passes the supplied synchronous filter.
      * Observation starts immediately, without connecting the client, reading history or making a remote request
      *
      * The default timeout is 30,000 ms from registration.
      * A timeout or invalid or throwing filter returns EventWaitError without input or exception text.
-     * Inspect your own filter exception inside the filter before rethrowing if needed
+     * Inspect a filter exception inside the filter before rethrowing if needed
      *
      * Buffer limits match events.
      * Reconnection can miss events and does not reset the deadline.
@@ -4403,7 +4410,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * A competing call returns ClientBusyError without disturbing active work.
      * Closing clients return ClientClosedError.
      * After initial readiness, permanent failure of a required shard in a multi-shard plan closes the client.
-     * waitForClose retains ShardConnectionError with shardId and failure.
+     * The waitForClose method retains ShardConnectionError with shardId and failure.
      * Unexpected SDK or cleanup failures reject with SdkDefect
      */
     connect(options?: OperationOptions): ResultAsync<void, ConnectError | CancelledError | ConfigurationError>
@@ -4415,7 +4422,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Success means normal shutdown, not merely reaching READY.
      * A permanent required-shard failure after readiness closes a multi-shard client with ShardConnectionError
      *
-     * run requires a Disconnected client with no competing connection work.
+     * The run method requires a Disconnected client with no competing connection work.
      * A rejected or pre-cancelled call does not take over or close the client.
      * Expected connection, busy, closed and cancellation failures return Err.
      * Unexpected SDK or cleanup failures reject with SdkDefect, including failures during cancellation cleanup
@@ -4444,12 +4451,12 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
     /**
      * Wait for this client's final shutdown or permanent connection failure, without starting a connection.
      * Recovery keeps the wait pending.
-     * An expected connect failure before initial readiness also leaves this wait pending, because you can try connecting again.
+     * An expected connect failure before initial readiness also leaves this wait pending. The client can connect again.
      * Multiple or later waiters receive the same terminal outcome.
      * Normal shutdown returns Ok(undefined).
      * A permanent connection failure returns Err.
      * After initial readiness, required-shard failure in a multi-shard plan is retained as ShardConnectionError.
-     * Aborting this wait cancels only your wait, not the client or other waiters.
+     * Aborting this wait cancels only this wait, not the client or other waiters.
      * Unexpected background or cleanup failures reject with SdkDefect
      */
     waitForClose(options?: OperationOptions): ResultAsync<void, ConnectionFailure | CancelledError | ConfigurationError>
@@ -4465,7 +4472,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Established sockets get up to 5,000 ms to close gracefully, then are terminated and their close events awaited.
      * Pending handshakes are terminated immediately.
      * Forced termination can discard unsent data.
-     * No signal is accepted that could abandon cleanup, and this method never exits your application.
+     * No signal is accepted that could abandon cleanup, and this method never exits the application.
      * Create a new client to connect again.
      * Success is Ok(undefined) after cleanup.
      * Unexpected SDK or cleanup failures reject with SdkDefect.
@@ -4487,7 +4494,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
 
 /**
  * Find the selected Fluxer instance's endpoints and build links and asset URLs for it.
- * resolve fetches the unauthenticated well-known document only when needed.
+ * The resolve method fetches the unauthenticated well-known document only when needed.
  * Concurrent callers share that request.
  * A successful frozen result is retained until client shutdown, without background refresh.
  * Cancelling one caller leaves other callers using the request.
@@ -4508,7 +4515,7 @@ export interface Instance {
     /**
      * Return this client's instance endpoints and its pure link and asset URL helpers.
      * The unauthenticated discovery request is shared with other resolves, REST work or gateway startup.
-     * timeoutMs defaults to 30,000 for your wait only.
+     * The timeoutMs option defaults to 30,000 for this wait only.
      * Abort cancels this wait, not other users of discovery.
      * Document, rate-limit, timeout, closure and invalid timeout-option failures return Err.
      * Unexpected cleanup failures reject with SdkDefect, retaining safe details of accompanying failure or interruption
@@ -4533,7 +4540,9 @@ export interface DefaultEventWaitOptions<K extends EventName, M extends MessageC
 
 type OperationFailure =
     | ConfigurationError
+    | CancelledError
     | ConnectError
+    | CriticalWorkerStoppedError
     | InstanceResolveError
     | EventReadError
     | EventWaitFailure
@@ -4707,7 +4716,7 @@ function fromExit<A, E extends OperationFailure>(
  * It copies the credential into a separate reference that hides the token when displayed.
  * Reuse one client per credential to share its request limits and rate waits.
  * The default instance is hosted Fluxer.
- * You can explicitly select a self-hosted instance.
+ * A self-hosted instance can be selected explicitly.
  * No token store or gateway is created.
  * Always await shutdown in finally when finished.
  * Invalid settings return ConfigurationError.
@@ -4809,7 +4818,7 @@ export interface Presence {
      * Set the bot's requested status and optional custom status, including before connecting.
      * The input is validated and frozen synchronously.
      * Omitted customStatus keeps the previous request.
-     * null clears it.
+     * Passing null clears it.
      * Expired custom statuses are not restored after reconnect.
      * Ok(undefined) means the request was accepted locally and scheduled for each shard, not acknowledged by Fluxer.
      * Shutdown releases this intent and its timer.
@@ -4848,7 +4857,7 @@ export interface Presence {
      * None of these attempts guarantees an event or proves provider acceptance.
      * Initial state and transitions can be missed during recovery.
      * Loss of shared channel visibility can remove the provider subscription.
-     * Resend your selection after access returns.
+     * Resend the selection after access returns.
      * Clear explicitly or shut down the client to release local intent.
      * Input or limit failures return PresenceError.
      * Closing clients return ClientClosedError.
@@ -4929,10 +4938,10 @@ export interface Users {
         options?: DefaultUserOperationOptions,
     ): ResultAsync<User, UserOperationFailure | CancelledError | ConfigurationError>
     /**
-     * Fetch a user's privacy-filtered profile, optionally for a guild you specify in query.guildId.
+     * Fetch a user's privacy-filtered profile, optionally for the guild specified in query.guildId.
      * The frozen result includes only documented identity and profile fields.
-     * isLimited reports Fluxer's privacy restriction, not missing guild membership.
-     * guildProfile=null means no contextual profile was supplied, not proof the user is outside the guild.
+     * The isLimited field reports Fluxer's privacy restriction, not missing guild membership.
+     * A guildProfile=null result means no contextual profile was supplied, not proof the user is outside the guild.
      * No gateway connection, hidden member fetch or account or profile cache use is performed.
      * Users' shared deadlines and eligible read retries apply.
      * Fluxer may clear expired premium state while serving this GET.
@@ -5036,7 +5045,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
         options?: DefaultUserOperationOptions,
     ): ResultAsync<readonly DirectMessageChannel[], UserOperationFailure | CancelledError | ConfigurationError>
     /**
-     * Fetch the latest messages for 1–100 distinct private channel IDs you select.
+     * Fetch the latest messages for 1–100 selected, distinct private channel IDs.
      * IDs are copied by index when called.
      * This does not enumerate conversations or fill a cache.
      * A null message is ambiguous.
@@ -5085,7 +5094,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
 }
 
 /**
- * Create a bot client from your token, initially Disconnected
+ * Create a bot client from a token, initially Disconnected
  *
  * Use `run` or `connect` to receive gateway events. HTTP requests work without connecting.
  * Always finish with `shutdown` unless an accepted `run` already manages the client's full lifetime
@@ -5106,7 +5115,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
  * Caching is disabled by default.
  * Cache settings are copied and validated without calling retention policies or reporters.
  * Unknown cache or message-cache keys fail validation.
- * messageFields selects received message fields once for this client's lifetime
+ * The messageFields option selects received message fields once for this client's lifetime
  *
  * **Connection and sharding**
  *
@@ -6399,13 +6408,13 @@ export function createClient<const F extends MessageFields | undefined = undefin
  * Use a standalone OAuth client to exchange authorization codes, refresh or revoke tokens, and read delegated user data.
  * This confidential client requires a server-held client secret, not a bot token.
  * It does not open a browser, handle callbacks, compare state, store tokens or run a gateway.
- * Your application owns those steps and coordinates refreshes
+ * The application owns those steps and coordinates refreshes
  *
  * @remarks
  * The secret is copied until shutdown.
  * Calls start immediately and return ResultAsync.
  * At most eight operations run concurrently, without a queue.
- * timeoutMs defaults to 30,000 across discovery and the operation, with request cleanup awaited afterward.
+ * The timeoutMs option defaults to 30,000 for discovery and the operation, with request cleanup awaited afterward.
  * Responses are capped at 1 MiB and requests are never retried automatically.
  * Discovery throttling returns OAuthOperationError with rateLimit, notDispatched, status 429 and available retryAfterMs
  *
@@ -6416,7 +6425,7 @@ export interface OAuthClient {
     /**
      * Build an authorization URL for the selected instance using its discovered web application URL, including its path.
      * Supply the redirect URI, scopes, state and S256 PKCE challenge.
-     * Keep state correlation and the PKCE verifier in your application.
+     * The application must retain state correlation and the PKCE verifier.
      * Bot guild and permission parameters are consent hints, not proof of installation or authorization.
      * This returns the URL without opening it
      */
@@ -6438,7 +6447,7 @@ export interface OAuthClient {
      * Exchange a refresh token for a new token pair.
      * Form tokens must contain 1–256 well-formed UTF-16 units without surrounding whitespace, U+000C or U+202E.
      * Invalid values fail locally rather than being normalized. This also applies to revoke and introspect tokens.
-     * Fluxer rotates refresh tokens, so your application must coordinate refreshes and atomically replace the stored pair after success.
+     * Fluxer rotates refresh tokens. The application must coordinate refreshes and atomically replace both stored tokens after success, so it never stores a mixed pair.
      * An uncertain result must not be retried
      */
     refresh(
@@ -6498,7 +6507,7 @@ export interface OAuthClient {
      * Permanently stop OAuth work, release the client's secret reference and abort active requests.
      * Waits for fetch and response-reader cleanup.
      * An active operation's response-cleanup failure rejects that operation with SdkDefect.
-     * shutdown waits for it but may itself succeed.
+     * The shutdown method waits for it but may itself succeed.
      * A failure in shutdown's own discovery cleanup rejects shutdown with SdkDefect
      */
     shutdown(): ResultAsync<void, never>
@@ -6509,10 +6518,10 @@ export interface OAuthClient {
  * Use these helpers on a trusted server where the client secret is not exposed to a browser
  *
  * @remarks
- * Your application handles browser navigation, callbacks, state correlation, consent and token storage.
+ * The application handles browser navigation, callbacks, state correlation, consent and token storage.
  * It also decides installation policy and coordinates refreshes.
- * create returns Result synchronously without making a request.
- * createPkce returns a new verifier and S256 challenge for the same authorization flow.
+ * The create method returns Result synchronously without making a request.
+ * The createPkce method returns a new verifier and S256 challenge for the same authorization flow.
  * PKCE links authorization to the code exchange using a private random verifier and its public SHA-256 hash challenge.
  * Keep the verifier private and send only the challenge to authorizationUrl
  *
@@ -6626,3 +6635,122 @@ export const oauth: Readonly<{
     },
     createPkce,
 })
+
+type BotFailure = ConfigurationError | ConnectError | CancelledError | EventOverflowError | CriticalWorkerStoppedError
+
+function restoreTrustedSdkDefect<A, E extends OperationFailure>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> {
+    return effect.pipe(
+        Effect.catchCause((cause) => {
+            const reason = cause.reasons.length === 1 ? cause.reasons[0] : undefined
+            if (reason?._tag !== "Die" || !(reason.defect instanceof SdkDefect)) return Effect.failCause(cause)
+            if (reason.defect.reasons.length === 0) return Effect.failCause(Cause.die(undefined))
+            const restored = reason.defect.reasons.reduce<Cause.Cause<E>>(
+                (combined, detail) =>
+                    Cause.combine(
+                        combined,
+                        detail.kind === "Failure"
+                            ? Cause.fail(detail.failure as E)
+                            : detail.kind === "Interruption"
+                              ? Cause.interrupt()
+                              : Cause.die(undefined),
+                    ),
+                Cause.empty,
+            )
+            return Effect.failCause(restored)
+        }),
+    )
+}
+
+function botOperation<A, E extends BotFailure>(
+    start: (signal: AbortSignal) => ResultAsync<A, E>,
+    trustedSdkDefects = false,
+): Effect.Effect<A, E> {
+    const controller = new AbortController()
+    const operation = Promise.resolve(start(controller.signal))
+    const awaited = Effect.promise(() => operation)
+    const observed = trustedSdkDefects ? restoreTrustedSdkDefect(awaited) : awaited
+    return observed.pipe(
+        Effect.flatMap((result) => (result.isErr() ? Effect.fail(result.error) : Effect.succeed(result.value))),
+        Effect.onInterrupt(() =>
+            Effect.sync(() => controller.abort()).pipe(
+                Effect.andThen(observed),
+                Effect.flatMap((result) =>
+                    result.isErr() &&
+                    result.error._tag !== "CancelledError" &&
+                    result.error._tag !== "ClientClosedError"
+                        ? Effect.fail(result.error)
+                        : Effect.void,
+                ),
+            ),
+        ),
+    )
+}
+
+/**
+ * Start a bot and watch its connection and required subscriptions. The returned ResultAsync starts immediately.
+ * The install callback runs before the gateway starts. Its returned subscriptions must stay open.
+ * If one closes normally while the bot is still running, the result fails with CriticalWorkerStoppedError.
+ * The runner does not restart handlers or wait for unrelated Promises started by application callbacks
+ *
+ * Aborting the optional signal requests a normal stop, not a cancellation Err. Success means the client has
+ * stopped and cleanup has finished. The runner always shuts down its client, including after a failure.
+ * Expected creation, connection and subscription failures return Err. Unexpected SDK failures or exceptions
+ * thrown by install reject with SdkDefect after cleanup. Its reasons include combined operation and
+ * cleanup failures without exposing raw exception values. Process signals are handled only when enabled, and
+ * their listeners are removed when the run finishes. The runner never exits the process
+ *
+ * @example
+ * ```ts
+ * import { runBot } from "@neontechspace/fluxerly"
+ *
+ * const result = await runBot({ token: "YOUR_BOT_TOKEN" }, (client) => {
+ *     const subscribed = client.on("messageCreate", () => undefined)
+ *     if (subscribed.isErr()) throw subscribed.error
+ *     return [subscribed.value]
+ * }, { processSignals: true })
+ * if (result.isErr()) console.error(result.error.message)
+ * ```
+ */
+export function runBot<const F extends MessageFields | undefined = undefined>(
+    options: ClientOptions<F>,
+    install: (client: Client<SelectedMessage<F>>) => readonly Subscription[],
+    runOptions: RunBotOptions = {},
+): ResultAsync<
+    void,
+    ConfigurationError | ConnectError | CancelledError | EventOverflowError | CriticalWorkerStoppedError
+> {
+    const program = runBotCore(
+        Effect.sync(() => createClient(options)).pipe(
+            Effect.flatMap((created) =>
+                created.isErr()
+                    ? Effect.fail(created.error)
+                    : Effect.succeed({
+                          source: created.value,
+                          get state() {
+                              return created.value.state
+                          },
+                          run: () => botOperation((signal) => created.value.run({ signal }), true),
+                          shutdown: () =>
+                              restoreTrustedSdkDefect(Effect.promise(() => created.value.shutdown())).pipe(
+                                  Effect.asVoid,
+                              ),
+                      }),
+            ),
+        ),
+        (client) =>
+            Effect.sync(() => {
+                const workers = install(client.source)
+                if (!Array.isArray(workers))
+                    throw new TypeError("Bot installation must return an array of subscriptions")
+                return workers.map((worker) => ({
+                    waitForClose: () => botOperation((signal) => worker.waitForClose({ signal })),
+                }))
+            }),
+        runOptions,
+    )
+    return new ResultAsync(
+        Effect.runPromiseExit(program as Effect.Effect<void, BotFailure>).then((exit) =>
+            fromExit<void, BotFailure>(exit, "runBot"),
+        ),
+    )
+}

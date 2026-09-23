@@ -1,13 +1,13 @@
 import { err, ok, type Result } from "neverthrow"
 import { HelperError } from "./helpers.js"
 
-/** Choose the largest piece `text.split` may return. Supply your own limit, this does not discover a server's message limit */
+/** Choose the largest piece `text.split` may return. Supply a limit explicitly. This helper does not discover a server's message limit */
 export interface TextSplitOptions {
     /** Maximum `string.length` of each piece, a positive safe integer with no default. Most emoji count as two or more units */
     readonly maxLength: number
 }
 
-/** Break long text into smaller strings before deciding how to send or display them. No message is sent */
+/** Break long text into smaller strings for later sending or display. No message is sent */
 export const text: Readonly<{
     /**
      * Return a Result containing a frozen array of strings, each with `string.length` at most `options.maxLength`

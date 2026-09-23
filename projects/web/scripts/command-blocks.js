@@ -5,7 +5,7 @@ export function validateCommand(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid command metadata")
     const keys = Object.keys(value).sort().join(",")
     if (value.kind === "install" && keys === "kind,package,version" && value.package === "@neontechspace/fluxerly" &&
-        (value.version === "dev" || (typeof value.version === "string" && exactVersion.test(value.version) && value.version !== "0.0.0"))) return value
+        typeof value.version === "string" && exactVersion.test(value.version) && value.version !== "0.0.0") return value
     if (value.kind === "add" && keys === "kind,package,version" && value.package === "effect" &&
         typeof value.version === "string" && exactVersion.test(value.version)) return value
     if (value.kind === "list" && keys === "kind,package" && value.package === "effect") return value
@@ -19,9 +19,7 @@ export function commandVariant(metadata, manager = "npm", language = "js") {
     let command
     let note = ""
     if (value.kind === "install") {
-        const version = value.version === "dev" ? "VERSION" : value.version
-        if (value.version === "dev") note = "This Canary preview is not published. VERSION is a placeholder for a future release"
-        command = `${manager === "npm" ? "npm install" : "pnpm add"} --save-exact ${value.package}@${version}`
+        command = `${manager === "npm" ? "npm install" : "pnpm add"} ${value.package}@${value.version}`
     } else if (value.kind === "add") {
         command = `${manager === "npm" ? "npm install" : "pnpm add"} --save-exact ${value.package}@${value.version}`
     } else if (value.kind === "list") command = `${manager} list ${value.package}`

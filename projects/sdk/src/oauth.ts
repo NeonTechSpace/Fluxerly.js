@@ -32,7 +32,7 @@ export type OAuthScope = (typeof OAuthScopes)[keyof typeof OAuthScopes]
 
 /** Create a server-side OAuth client for exchanging authorization codes with an application secret.
  * Keep the secret on your server, not in browser code.
- * This client is separate from a bot-token client and does not own your consent callback or token storage
+ * This client is separate from a bot-token client. The application handles the consent callback and stores tokens
  */
 export interface OAuthConfig {
     /** Decimal Fluxer application ID */
@@ -46,8 +46,8 @@ export interface OAuthConfig {
 }
 
 /** Build the consent URL for an authorization-code request with PKCE.
- * Retain state and the PKCE verifier in your application, then verify state when you receive the callback.
- * The SDK does not store these values, open a browser or receive the redirect.
+ * The application keeps state and the PKCE verifier. When the callback arrives, it checks that state matches the sent value.
+ * The SDK does not save these values, open a browser or handle the redirect.
  * Values are sampled once when authorizationUrl starts, then validated and encoded from that snapshot
  */
 export interface OAuthAuthorizationInput {
@@ -99,7 +99,7 @@ export interface OAuthCodeExchangeInput {
 
 /** Credentials returned by a successful exchangeCode or refresh call.
  * Store and protect these values in your application, since the SDK does not retain them or schedule refreshes.
- * After refresh, use the returned credentials rather than assuming the previous refresh token remains usable
+ * After a refresh, use the new credentials. The previous refresh token may no longer work
  */
 export interface OAuthTokens {
     /** Bearer credential for delegated reads, not a bot token */
@@ -179,7 +179,7 @@ export interface OAuthActiveIntrospection {
 }
 
 /** Result of introspect, which explicitly asks Fluxer whether a token is active for this application.
- * An inactive result does not establish why the token is inactive or prove revocation
+ * An inactive result does not explain why the token is inactive or prove it was revoked
  */
 export type OAuthIntrospection = OAuthInactiveIntrospection | OAuthActiveIntrospection
 

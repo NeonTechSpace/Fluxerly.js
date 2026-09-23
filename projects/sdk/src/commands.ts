@@ -53,11 +53,11 @@ export interface PrefixCommandGroupDefinition {
     readonly description?: string
 }
 
-/** Frozen registered group information, including the canonical path used to add children or select help */
+/** Frozen group information copied at registration, including its registered-name path for adding children or selecting help */
 export interface PrefixCommandGroupMetadata extends PrefixCommandGroupDefinition {
     /** Distinguishes this non-executable group from a command in help visibility callbacks */
     readonly kind: "group"
-    /** Registered names through this group, such as `["admin", "users"]`, regardless of invocation aliases */
+    /** Registered names from the outermost group to this one, such as `["admin", "users"]`, even if the message used aliases */
     readonly path: readonly string[]
 }
 
@@ -226,7 +226,7 @@ export interface PrefixCommandsOptions<M extends MessageCore = Message> {
     readonly parse?: (input: PrefixCommandParseInput<M>) => PrefixCommandParse | undefined
     /** Skip messages whose author has `isBot` set, before prefix resolution. Defaults to true */
     readonly ignoreBots?: boolean
-    /** Match command and group names and aliases with exact case. Defaults to false. This does not change prefix or argument matching */
+    /** Require matching letter case for command and group names and aliases. Defaults to false. This does not change prefix or argument matching */
     readonly caseSensitive?: boolean
 }
 
@@ -242,7 +242,7 @@ export interface CommandCooldownRequest {
  * Outcome of reserving a cooldown, selected by `_tag`.
  * Only `CooldownAcquired` permits execution.
  * A denied claim may call `onReject`, but the router does not wait or retry.
- * Retry times are Unix epoch milliseconds, not durations
+ * Retry times are millisecond timestamps since 1970-01-01 UTC, not wait durations
  */
 export type CommandCooldownClaim =
     | {
@@ -264,7 +264,7 @@ export type CommandCooldownClaim =
           readonly retryAtMs: number | null
       }
 
-/** Limit retained cooldown keys in one memory store, without persistence or coordination between processes */
+/** Limit the cooldown keys held by one memory store in one process. Keys are not saved or shared with other processes */
 export interface MemoryCooldownOptions {
     /** Positive safe integer key limit, defaulting to 1,024. Claims sweep expired keys before checking space and never evict active keys */
     readonly maxEntries?: number

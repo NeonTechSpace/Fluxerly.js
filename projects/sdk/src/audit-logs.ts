@@ -124,7 +124,7 @@ export interface AuditLogPermissionsDiff {
     readonly removed: readonly string[]
 }
 
-/** A JSON value the SDK accepts as a recorded setting before or after an audit-log change */
+/** A JSON value recorded as a setting before or after an audit-log change */
 export type AuditLogChangeValue =
     string | number | boolean | null | readonly string[] | readonly number[] | AuditLogPermissionsDiff
 
@@ -141,7 +141,7 @@ export interface AuditLogChange {
     readonly newValue?: AuditLogChangeValue
 }
 
-/** Action-specific details explaining an audit record, such as the destination channel or affected entity count.
+/** Extra details for an audit record, such as the destination channel or number of affected items.
  * Context fields remain absent when Fluxer did not supply them.
  * Their meaning depends on the entry's actionType
  */
@@ -178,7 +178,7 @@ export interface AuditLogOptions {
     readonly uses?: number
 }
 
-/** One recorded administrative action in a guild, with available actor, target, reason and changed settings.
+/** One recorded administrative action in a guild, with any available actor, target, reason and changed settings.
  * The record is frozen. Fetch current resources when a decision depends on their present state.
  * The targetId field can contain an invite code, and reason can contain caller-authored text. Treat both as potentially sensitive
  */
@@ -215,9 +215,9 @@ export interface AuditLogWebhook {
     readonly avatarHash?: string | null
 }
 
-/** A filtered page of administrative records with public user and token-free webhook details referenced by the page.
- * Match an entry's userId to users when that account was supplied. Related resources are page-local observations,
- * not cache writes or a complete directory of guild users and webhooks
+/** One filtered page of administrative records, with public user and token-free webhook details used by that page.
+ * Match an entry's userId against users when Fluxer supplied that account. The related resources describe this page only.
+ * They do not update the cache or list every guild user and webhook
  */
 export interface AuditLogPage {
     /** Entries in descending entry-ID order for filtered requests */
@@ -232,9 +232,9 @@ export interface AuditLogPage {
 interface AuditLogQueryBase {
     /** Maximum returned entries, 1–100, default 50 */
     readonly limit?: number
-    /** Exclusive decimal audit-entry cursor selecting older entries. Cannot be combined with after */
+    /** Audit-entry ID for reading older entries, excluding the entry itself. Cannot be combined with after */
     readonly before?: string
-    /** Exclusive decimal audit-entry cursor selecting newer entries. Cannot be combined with before */
+    /** Audit-entry ID for reading newer entries, excluding the entry itself. Cannot be combined with before */
     readonly after?: string
     /** Acting-user filter. Omit only with actionType: Fluxer rewrites unfiltered message-delete records */
     readonly userId?: string
@@ -257,9 +257,9 @@ type AuditLogFilter =
           readonly actionType: AuditLogActionType
       }
 
-/** Inspect one page of recorded guild activity, filtered by actor, action category or both.
- * At least one filter is required because an unfiltered provider read can change the log rather than only observe it.
- * Fluxer can delete individual message-delete records and write a replacement when neither filter is supplied
+/** Read one page of guild audit records for an actor, action category or both.
+ * At least one filter is required because an unfiltered Fluxer read can change the log.
+ * Without either filter, Fluxer can replace individual message-deletion records with a combined record
  * @example
  * ```ts
  * import { AuditLogActions, type Client } from "@neontechspace/fluxerly"
@@ -279,9 +279,8 @@ interface AuditLogIterationQueryBase extends PaginationQuery {
     readonly before?: string
 }
 
-/** Read filtered administrative entries from newest to oldest across bounded pages.
- * maxItems is required through PaginationQuery. Related page users and webhooks are not yielded by this traversal.
- * Filters prevent Fluxer's unfiltered message-delete consolidation behavior, but concurrent activity can still change
- * the observed log between pages
+/** Read filtered audit entries from newest to oldest, bounded by the requested page and item limits.
+ * PaginationQuery requires maxItems. This iterator yields entries, not the related users and webhooks in each page.
+ * Filters prevent Fluxer from combining message-deletion records during this read. Other activity can still change the log between pages
  */
 export type AuditLogIterationQuery = AuditLogIterationQueryBase & AuditLogFilter

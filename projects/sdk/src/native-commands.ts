@@ -36,7 +36,7 @@ import { Clock, Effect, type Scope } from "effect"
 import type { Client, EventHandlerOptions, Subscription } from "./effect.js"
 
 /**
- * Frozen message and parsed argument information for one native command's guard and rejection callback.
+ * Message and parsed arguments for a native command's guard and rejection callback. These values cannot be changed.
  * Execution and cooldown-key callbacks receive the extended context with converted values.
  * Native callbacks run in the attachment's Effect context, with interruption rather than the default API's AbortSignal field
  */
@@ -56,10 +56,10 @@ export interface NativePrefixCommandContext<M extends MessageCore = Message> {
     /** Argument text retained by the parser. The default removes command-name separator whitespace but preserves the remainder */
     readonly rawArgs: string
     /**
-     * Reply to the incoming message through the attached client. The returned Effect inherits handler interruption and fails with SendError.
+     * Reply to the incoming message through the attached client. The returned Effect follows handler interruption and can fail with SendError.
      * Delegates to `client.messages.reply`, including its validation, deadline, nonce, retry, cache and defect behavior.
      * Interruption or a lost response can leave the reply posted. Failure does not always mean nothing was sent, and uncertain sends are not replayed.
-     * No automatic reply or error response is added by the router
+     * The router does not send a reply or error message on its own
      */
     readonly reply: (input: ReplyInput, options?: SendOptions) => Effect.Effect<M, SendError>
 }
@@ -110,7 +110,7 @@ export interface NativePrefixCommandsOptions<
 
 /**
  * Storage that checks and reserves a command cooldown in one atomic claim.
- * You own persistence, concurrency and coordination between processes.
+ * The application owns persistence and coordination of competing claims, including across processes.
  * A claim can be immediate or return an Effect requiring the handler's services
  */
 export interface NativeCooldownStore<E = never, R = never> {
@@ -126,7 +126,7 @@ export interface NativeCooldownStore<E = never, R = never> {
 /**
  * Reserve a cooldown after the command guard allows execution and all arguments convert.
  * The router calls the store before executing the handler.
- * An acquired claim is not rolled back after handler failure or interruption
+ * A claimed cooldown remains claimed if the handler fails or is interrupted
  */
 export interface NativePrefixCommandCooldown<
     E = never,
@@ -246,7 +246,7 @@ export interface MemoryCooldownStore {
  * Immutable registered commands and groups for attachment to a native client.
  * Registration Effects produce new snapshots, leaving earlier routers and attachments unchanged.
  * `R` records services required by registered callbacks, which you must provide when attaching the router.
- * Creating or registering a router does not execute its callbacks
+ * Creating or registering a router does not run its callbacks
  */
 export interface NativePrefixCommandRouter<R = never, M extends MessageCore = Message> {
     /** Frozen executable-command information in registration order across groups, without callbacks or resource candidates. Grouped commands include canonical paths */

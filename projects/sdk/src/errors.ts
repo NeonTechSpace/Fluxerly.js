@@ -121,6 +121,7 @@ export type Operation =
     | "commands"
     | "connect"
     | "run"
+    | "runBot"
     | "waitForClose"
     | "waitFor"
     | "shutdown"
@@ -334,8 +335,8 @@ export type ConnectionFailure =
 export type ConnectError = ConnectionFailure | ClientBusyError | ClientClosedError
 
 /** Safe details of what caused an SdkDefect in the default API.
- * Failure retains a typed SDK error, Defect marks an unexpected fault, and Interruption marks cancellation.
- * Multiple entries can describe a primary failure combined with a cleanup fault, without exposing the raw fault
+ * Failure holds an expected SDK error, Defect marks an unexpected fault, and Interruption marks cancellation.
+ * More than one entry can describe both the original failure and a cleanup fault. Raw faults are not exposed
  */
 export type DefectReason =
     | {
@@ -366,6 +367,7 @@ export type DefectReason =
               | import("./supervisor.js").SupervisorError
               | import("./supervisor.js").SupervisorChildError
               | CancelledError
+              | import("./bot-runner.js").CriticalWorkerStoppedError
       }
     | {
           /** An unexpected fault occurred, with its raw value deliberately omitted */
@@ -380,7 +382,7 @@ export type DefectReason =
  * An unexpected fault thrown or rejected by the default API instead of returned as a typed error result.
  * Client creation throws synchronously, while asynchronous operations reject.
  * This includes expected failures or cancellation combined with an unexpected cleanup fault.
- * Reasons retain safe failure categories without raw upstream faults or private payloads.
+ * Reasons retain safe failure categories without the original fault or private data.
  * The native entry point uses Effect causes rather than wrapping them in this exception
  */
 export class SdkDefect extends Error {

@@ -7,13 +7,10 @@ export function channelTargets(versions) {
         const version = sorted.find((v) => parseVersion(v).channel === channel)
         return version ? [{ version, label }] : []
     })
-    // The local preview occupies Canary only until a published Canary is available
-    return targets.some((target) => target.label === "Canary")
-        ? targets
-        : [...targets, { version: "dev", label: "Canary" }]
+    return targets
 }
 export function defaultVersion(versions) {
-    return channelTargets(versions).find((target) => target.version !== "dev")?.version ?? "dev"
+    return channelTargets(versions)[0]?.version ?? null
 }
 export function validateSnapshot(snapshot) {
     if (snapshot?.schemaVersion !== 1 || !/^[a-f0-9]{40}$/.test(snapshot.sourceCommit))

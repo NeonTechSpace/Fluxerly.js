@@ -7,8 +7,10 @@
         "dev": "astro dev",
         "generate": "node scripts/generate.js",
         "build": "pnpm run generate && astro build",
+        "build:public": "node scripts/generate.js --public && astro build",
         "preview": "astro preview",
         "check": "pnpm run build && astro check && node --test tests/*.test.js",
+        "check:public": "pnpm run build:public && astro check && node --test tests/*.test.js",
         "test:browser": "playwright test",
         "test:versions": "node tests/version-fixtures.js"
     },

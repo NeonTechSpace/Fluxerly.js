@@ -10,7 +10,7 @@ const staticOrigin = "https://fluxerstatic.com"
 const largestSize = 4_294_967_295
 const hashPattern = /^[A-Za-z0-9_]+$/u
 
-/** Choose the image file format for an asset URL. Webp is the default, stickers do not accept a format choice */
+/** Choose the image format for an asset URL. WebP is the default. Sticker URLs do not accept this choice */
 export const AssetFormats: Readonly<{
     /** Static PNG image, use animated false for an animated source */
     Png: "png"
@@ -33,8 +33,8 @@ export const AssetFormats: Readonly<{
 /** One image encoding the hosted Fluxer media proxy can produce */
 export type AssetFormat = (typeof AssetFormats)[keyof typeof AssetFormats]
 
-/** Choose the format, size and animation requested by an asset URL.
- * Unknown keys or invalid values return AssetUrlError. Options are checked even when the target's image is absent
+/** Choose the format, size and animation to request in an asset URL.
+ * Unknown keys or invalid values return AssetUrlError, even when the target has no image
  */
 export interface AssetUrlOptions {
     /** Requested image size in pixels, an integer from 0 through 4_294_967_295.
@@ -59,9 +59,9 @@ export interface StickerAssetUrlOptions {
     readonly animated?: boolean
 }
 
-/** The SDK could not make an asset URL from your input.
- * Read operation to identify the helper and reason to identify the invalid part.
- * Default API helpers return this in a Result, native helpers fail with it when run. It does not store the rejected value
+/** The SDK could not make an asset URL from the supplied input.
+ * The operation identifies the helper. The reason identifies which part was invalid.
+ * Default API helpers return this in a Result. Effect helpers fail with it when run. It does not store the rejected value
  */
 export class AssetUrlError extends Error {
     /** Stable expected-failure discriminator */
@@ -323,10 +323,10 @@ function memberProfileFlags(
 }
 
 /**
- * Make image URLs from user, member, server, emoji or sticker information you already have.
- * Each method returns a Result immediately, with a URL on success or AssetUrlError for invalid input.
- * URLs use the hosted media and static-CDN origins. Making one does not fetch profiles, download an image or verify that it exists.
- * For optional image hashes, undefined stays undefined (the observation did not include it), while null stays null (no image was supplied).
+ * Make image URLs from user, member, server, emoji or sticker information already available to the caller.
+ * Each method immediately returns a Result containing a URL or an AssetUrlError for invalid input.
+ * URLs use Fluxer's media and static CDN addresses. Making a URL does not fetch a profile, download an image or check that it exists.
+ * If an optional image hash is undefined, the result is undefined because the field was not observed. If it is null, the result is null because no image was supplied.
  * These helpers do not transform attachment or embed URLs, refresh expired URLs or change caches
  *
  * @example
@@ -344,8 +344,8 @@ function memberProfileFlags(
  * ```
  */
 export const assets: Readonly<{
-    /** Build an account-banner URL directly from a users.fetchProfile observation, reading only user.id and profile.banner.
-     * A null banner stays null, including withheld limited-profile data, it does not prove the account has no banner.
+    /** Build an account-banner URL from a users.fetchProfile result, using only user.id and profile.banner.
+     * A null banner stays null, even when a limited profile withheld the banner. Null does not prove that the account has no banner.
      * Uses AssetUrlOptions' WebP default and transform validation, without fetching, selecting a guild banner or verifying existence
      */
     userBanner(
@@ -381,7 +381,7 @@ export const assets: Readonly<{
         member: Pick<GuildMember, "guildId" | "userId" | "banner">,
         options?: AssetUrlOptions,
     ): Result<string | null | undefined, AssetUrlError>
-    /** Choose an avatar to display for a user in a server. The user id must match member.userId.
+    /** Choose an avatar to display for a user in a server. The user ID must match member.userId.
      * Normally chooses the member avatar, then the account avatar, then a static default. AvatarUnset instead selects the static default directly.
      * Returns undefined if profileFlags is omitted or avatar is omitted without AvatarUnset.
      * Reads guildId, userId, avatar and profileFlags from the member. Invalid targets or options return AssetUrlError

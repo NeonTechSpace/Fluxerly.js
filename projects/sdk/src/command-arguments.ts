@@ -1,10 +1,11 @@
 /**
  * Describe positional arguments by name, such as `{ text: { type: "text" }, count: { type: "integer" } }`.
- * Properties are consumed in their own enumerable property order, and converted values keep these names.
+ * The router reads the schema's own enumerable properties in order, ignoring inherited and non-enumerable properties.
+ * Converted values keep those property names.
  * Names must begin with an ASCII letter and use only ASCII letters, digits or `_`.
  * Required arguments must precede optional arguments, and only the final text argument may use `rest`.
  * Registration validates and freezes a copy, including choices and resource candidates.
- * Omitted schemas leave raw arguments unrestricted, while an empty schema rejects any supplied token
+ * Omit the schema to accept any unconverted arguments. Use an empty schema to reject all supplied arguments
  */
 export type CommandArgumentSchema = Readonly<Record<string, CommandArgumentDescriptor>>
 
@@ -14,7 +15,7 @@ export interface CommandArgumentMetadata {
     readonly name: string
     /** Conversion applied to this positional token, such as `integer` or `user` */
     readonly type: CommandArgumentType
-    /** True when omission produces undefined rather than a missing-argument rejection */
+    /** True when a missing argument produces undefined instead of an error */
     readonly optional: boolean
     /** True when this final text argument joins all remaining tokens with spaces */
     readonly rest: boolean
@@ -40,7 +41,7 @@ export type CommandArgumentType =
 export type CommandArgumentMention = "user" | "channel" | "role"
 
 /**
- * User data you supply as a candidate for a `user` argument.
+ * User data that a `user` argument can match.
  * Registration copies only `id` and `username`, and conversion returns that frozen copy.
  * No cache or network search occurs, and later changes to the original candidate do not affect selection
  */
@@ -52,7 +53,7 @@ export interface CommandArgumentUser {
 }
 
 /**
- * Channel data you supply as a candidate for a `channel` argument.
+ * Channel data that a `channel` argument can match.
  * Registration copies only `id` and `name`, and conversion returns that frozen copy.
  * The router does not fetch channels or observe later changes to the supplied data
  */
@@ -64,7 +65,7 @@ export interface CommandArgumentChannel {
 }
 
 /**
- * Role data you supply as a candidate for a `role` argument.
+ * Role data that a `role` argument can match.
  * Registration copies only `id` and `name`, and conversion returns that frozen copy.
  * Selection does not fetch roles or verify the invoking user's permissions or role hierarchy
  */
@@ -150,7 +151,7 @@ export interface CommandArgumentId {
     readonly optional?: true
 }
 
-/** Match one of your explicit nonempty strings exactly, returning that string rather than its list position */
+/** Match one of the configured nonempty strings exactly, returning that string rather than its list position */
 export interface CommandArgumentChoice<C extends readonly string[] = readonly string[]> {
     /** Compare the token to the configured strings without case folding */
     readonly type: "choice"

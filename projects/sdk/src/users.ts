@@ -6,7 +6,7 @@ import type { Message, MessageCore } from "./messages.js"
 import type { OperationOptions } from "./client.js"
 
 /** Public identity of a Fluxer account, suitable for displaying who sent a message or belongs to a conversation.
- * This frozen snapshot does not update in place. It excludes private account fields even for users.fetchSelf.
+ * This returned data cannot be changed and does not update when the account changes. It excludes private account fields even for users.fetchSelf.
  * Guild nicknames and guild-specific profile settings are separate from this account-wide identity
  */
 export interface User {
@@ -40,7 +40,7 @@ export interface UserProfileQuery {
 }
 
 /** Displayable biography, pronouns and visual customization from a profile read.
- * Null can mean either unset or withheld by profile privacy. These fields alone cannot distinguish those cases.
+ * Null can mean either that the value is unset or that Fluxer hid it for privacy. These fields alone cannot distinguish those cases.
  * Undefined bannerColor means Fluxer did not supply it
  */
 export interface UserProfileFields {
@@ -126,7 +126,7 @@ export interface DirectMessageRecipientChange {
 
 /** Latest-message lookup results for the private channel IDs you selected.
  * Look in messages for returned IDs and omittedChannelIds for requested IDs missing from the response.
- * A returned null is a different result from an omitted ID and does not establish why no message was returned
+ * A channel returned with null differs from a channel missing from the response. Neither explains why no message was returned
  */
 export interface DirectMessageLatestMessages<M extends MessageCore = Message> {
     /** Returned entries keyed by requested channel ID. Null is ambiguous and does not prove an empty channel or access denial */

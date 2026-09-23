@@ -1,10 +1,10 @@
 ---
 title: Send messages, embeds and files
 navTitle: Messages
-description: Build replies, edit your bot's messages and send a file without changing APIs
+description: Build replies, edit bot messages and send a file
 ---
 
-Start with a bot that can reply to `!ping`. These helpers take the `client` from [your first bot](/docs/{{version}}/quick-start/), so they do not create another connection. Add the helpers to your bot and call them from a command or message handler
+Start with a bot that can reply to `!ping`. Add these helpers to the [first bot example](/docs/{{version}}/quick-start/) and call them from a command or message handler. They use its existing `client` rather than opening another connection
 
 ## Reply and check what happened
 
@@ -63,11 +63,11 @@ export async function postStatus(client: Client, channelId: string) {
 }
 ```
 
-This example performs two SDK operations. An edit failure does not undo the first message, and a connection failure does not prove that a write failed remotely. The caller should inspect the returned Result rather than retry the whole function automatically
+This example sends a message, then edits it. If the edit fails, the first message stays posted. If the connection fails, the write may still have reached Fluxer. Check the returned Result before deciding whether to try again
 
-## Compose an embed
+## Build an embed
 
-Builders help when a message has several parts. They produce plain input objects, so you can also write those objects directly. Building is local and sends nothing
+Builders assemble messages with several parts into plain input objects. The same objects can be written directly. Calling `build()` does not send anything
 
 ```ts
 import { builders, type Client } from "@neontechspace/fluxerly"
@@ -88,11 +88,11 @@ export async function postSchedule(client: Client, channelId: string) {
 }
 ```
 
-The send operation checks the embed and Fluxer's limits. Each `build()` returns a fresh snapshot, so later builder changes do not edit a message you already sent. Use `messages.edit` for that
+The send operation checks the embed and Fluxer's limits. Each `build()` returns a new value, so later builder changes do not edit a sent message. Use `messages.edit` for that
 
 ## Attach a small generated file
 
-For text you already have in memory, encode it to bytes and name the attachment. You do not need a temporary disk file
+For text already in memory, encode it to bytes and name the attachment. No temporary disk file is needed
 
 ```ts
 import { builders, type Client } from "@neontechspace/fluxerly"
@@ -110,7 +110,7 @@ export async function sendChecklist(client: Client, channelId: string) {
 
 Builders retain the byte reference. The default send operation copies data-byte input when called. For larger files, use the [attachment input reference](/docs/{{version}}/api/modules/js-ts/) to choose a sized file or stream rather than loading everything into memory
 
-## Download only when you need the bytes
+## Download an attachment when needed
 
 Received messages contain attachment metadata, not downloaded files. Require a byte limit and handle download failures before processing any content
 

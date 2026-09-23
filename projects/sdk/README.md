@@ -1,74 +1,59 @@
 # Fluxerly.js
 
-A Fluxer-native bot SDK spanning from JavaScript to TypeScript all the way to Effect
+A Fluxer bot SDK for JavaScript, TypeScript and Effect
 
 Fluxerly.js handles HTTP requests and gateway connections for messages, events, server resources and commands.
-Both public entry points share the same SDK implementation
+Both APIs use the same underlying code
 
 | API                       | Import                           | Application style                                            |
 | ------------------------- | -------------------------------- | ------------------------------------------------------------ |
-| JavaScript and TypeScript | `@neontechspace/fluxerly`        | Async/await with explicit success and failure Results        |
+| JavaScript and TypeScript | `@neontechspace/fluxerly`        | Async/await with a Result that reports success or failure    |
 | Effect-native             | `@neontechspace/fluxerly/effect` | Effect programs with typed failures, scopes and interruption |
 
-The default API needs no Effect-specific application setup.
-Native applications import Effect directly and must use the matching version described below
+The default API does not require learning or setting up Effect.
+Applications that use Effect directly must install the matching version described below
 
 ## Requirements
 
 This package is under development and has not reached its first stable release.
 Use Node.js 24.11.0 or newer.
-JavaScript needs no compiler. TypeScript 7 is required when typechecking or compiling TypeScript
+JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code
 
 Keep the package manager's lockfile for reproducible installs and review prerelease changes before upgrading
 
 ## Start a bot
 
-The included starter replies **Pong!** to **!ping** and provides a second **!about** command
+This bot replies **Pong!** to **!ping**
 
 After installing the SDK:
 
 1. Add `"type": "module"` to the bot project's `package.json`
-2. Copy `lifetime.js` from `node_modules/@neontechspace/fluxerly/examples/starter/` into the bot folder
-3. Save the following as `bot.js`, or `bot.ts` for TypeScript
-4. Set `FLUXER_BOT_TOKEN` in the process environment. Keep the token and any configuration containing it private
+2. Save the following as `bot.js`, or `bot.ts` for TypeScript
+3. Set the `FLUXER_BOT_TOKEN` environment variable. Keep the token and any files containing it private
 
-The lifetime companion is editable application code, not a public SDK export.
-It supervises the connection and returned critical command workers, then awaits SDK-owned cleanup
+The `runBot` function starts the client and watches the connection and returned subscriptions. It closes the client before finishing. No extra helper files are needed
 
 ```js
-import { commands } from "@neontechspace/fluxerly"
-import { runBot } from "./lifetime.js"
+import { runBot } from "@neontechspace/fluxerly"
 
 const token = process.env.FLUXER_BOT_TOKEN
 if (!token) throw new Error("FLUXER_BOT_TOKEN is required")
 
 try {
-    await runBot({ token }, (client) => {
-        const router = commands.create({ prefix: "!" })
-        if (router.isErr()) throw router.error
-
-        const registered = router.value.registerMany({
-            ping: {
-                arguments: {},
-                execute: async ({ reply }) => {
-                    const sent = await reply({ content: "Pong!" })
-                    if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
-                },
-            },
-            about: {
-                arguments: {},
-                execute: async ({ reply }) => {
-                    const sent = await reply({ content: "A Fluxer bot built with Fluxerly" })
-                    if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
-                },
-            },
-        })
-        if (registered.isErr()) throw registered.error
-
-        const attached = registered.value.attach(client)
-        if (attached.isErr()) throw attached.error
-        return [attached.value]
-    })
+    const result = await runBot(
+        { token },
+        (client) => {
+            const subscription = client.on("messageCreate", async (message, signal) => {
+                if (message.author.isBot || message.content !== "!ping") return
+                const sent = await client.messages.reply(message, { content: "Pong!" }, { signal })
+                if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
+            })
+            if (subscription.isErr()) throw subscription.error
+            return [subscription.value]
+        },
+        { processSignals: true },
+    )
+    if (result.isErr()) throw result.error
 } catch {
     console.error("Bot stopped because an operation or cleanup failed")
     process.exitCode = 1
@@ -78,21 +63,19 @@ try {
 The same code works in JavaScript and TypeScript.
 Run `node bot.js` or `node bot.ts`, then send **!ping** in a channel where the bot can read and reply
 
-Press Ctrl+C to stop the bot and await SDK cleanup.
-An unexpected connection or critical-worker failure stops the starter with a failing exit status instead of leaving a partially working bot.
-Application-owned work, such as database writes started by event handlers, still needs its own cancellation and cleanup
+Press Ctrl+C to stop the bot and wait for SDK cleanup.
+An unexpected failure in the connection or a required subscription stops the bot and reports failure to the operating system.
+The bot must still stop or finish work it starts outside the SDK, such as database writes
 
 ## Start an Effect-native bot
 
-The same installed `examples/starter/` folder includes `bot-effect.ts` and `lifetime-effect.ts`.
-Copy both into the bot folder, retain `"type": "module"`, set `FLUXER_BOT_TOKEN` and run `node bot-effect.ts`.
-The native lifetime companion composes with application-provided Effect services and scoped cleanup, without creating a separate hidden runtime
+The Effect API also provides `runBot`. Its setup function returns an Effect containing the subscriptions that must stay running. The runner uses the application's Effect runtime and services, and waits for cleanup before finishing. The file `examples/starter/bot-effect.ts` shows the complete bot
 
-Before running the native starter, declare Effect as a direct dependency using the exact `peerDependencies.effect` value in `node_modules/@neontechspace/fluxerly/package.json`.
+Before running the Effect example, add Effect to the bot project's dependencies. Use the exact version listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`.
 For example, run `pnpm add effect@VERSION` or `npm install effect@VERSION`, replacing `VERSION` with that value
 
-Modern npm and pnpm normally install the required Effect peer automatically, including for default-API applications.
-If automatic peer installation is disabled, install the declared version explicitly.
+Modern npm and pnpm normally install the SDK's Effect dependency automatically, even when the bot uses only the default API.
+If automatic peer installation is disabled, install that exact version separately.
 Do not substitute Effect's latest release for the SDK's declared version
 
 Run `pnpm list effect` or `npm ls effect` in the bot project to inspect the installed version.
@@ -101,8 +84,8 @@ Recheck the SDK manifest when upgrading the SDK
 ## For coding agents
 
 Open `consumer/AGENTS.md` inside the installed package before implementing SDK usage.
-It covers API selection, checked examples, lifecycle ownership and verification.
+It explains which API to use, how to start and stop the client, and how to check the result.
 Agent tools do not necessarily discover instructions inside dependencies automatically
 
-The installed `package.json` owns the supported runtime and public entry points.
-The `types` paths selected by its `exports` contain the API reference and examples
+The installed `package.json` lists the supported Node.js version and import paths.
+The files listed in the `types` entries inside `exports` contain the API reference and examples

@@ -1,14 +1,14 @@
 ---
 title: Build workflows with Effect
 navTitle: Effect workflows
-description: Handle expected failures, collect replies with scoped cleanup and compose bounded concurrent reads
+description: Handle expected failures, collect replies and limit concurrent reads
 ---
 
-Continue after [your first Effect bot](/docs/{{version}}/effect-first-bot/). These examples take a native `Client` that remains inside its creation scope. Each helper returns an Effect for the caller to compose with `yield*` in the existing runtime
+After the [first Effect bot](/docs/{{version}}/effect-first-bot/), these examples use a native `Client` that stays open in the scope where it was created. Each helper returns an Effect. Call it with `yield*` inside the application program
 
-## Turn expected failure into an application result
+## Handle success and expected failure
 
-Use `Effect.match` when both success and expected failure should become an ordinary value. For example, a status panel can show whether a notice was sent without retaining its content or a raw error
+Use `Effect.match` to turn either success or an expected failure into a value. For example, a status panel can report whether a notice was sent without storing its content or a raw error
 
 ```ts
 import { Effect } from "effect"
@@ -26,9 +26,9 @@ export function sendNotice(client: Client, channelId: string) {
 
 The failure branch retains the expected SDK error for the caller. A message error's `delivery` field identifies whether dispatch was ruled out or the outcome needs reconciliation before another send attempt. Defects and interruption still propagate to the caller
 
-## Ask, collect and release in one scope
+## Collect replies and clean up
 
-A nested scope can own a short conversation without owning the whole bot. Compared with the [default collector example](/docs/{{version}}/events-and-collectors/), you do not need a manual `finally` block to stop this collector
+A nested scope can clean up a short conversation's collector while the bot stays open. Unlike the [default collector example](/docs/{{version}}/events-and-collectors/), this code does not need a `finally` block to stop the collector
 
 ```ts
 import { Effect } from "effect"
@@ -56,7 +56,7 @@ A timeout can return `undefined`. A gateway gap fails collection because replies
 
 ## Run independent reads together
 
-Use bounded concurrency to run independent reads together. This example fetches a guild and its channels without opening the gateway
+Fetch independent data at the same time, with a limit on concurrent requests. This example fetches a guild and its channels without opening the gateway
 
 ```ts
 import { Effect } from "effect"
@@ -72,9 +72,9 @@ export function readGuildOverview(client: Client, guildId: string) {
 
 On success, the result has `guild` and `channels` properties. A failure interrupts unfinished sibling work and waits for its finalizers. The SDK's request limits and rate-limit handling still apply. Concurrent reads can observe different remote revisions
 
-## Reduce a bounded history stream
+## Count messages without storing them all
 
-A Stream describes a sequence of values that can be processed as they arrive. You can process a remote scan without collecting the whole result in an array
+A Stream describes values processed as they arrive. A remote scan can run without collecting every result in an array
 
 ```ts
 import { Stream } from "effect"
@@ -89,9 +89,9 @@ export function countRecentHumanMessages(client: Client, channelId: string) {
 
 The returned Effect counts human-authored observations among at most 200 messages, newest first. Requests begin when the Stream is consumed, page failures remain failures, and interruption waits for in-flight cleanup
 
-## Compose a whole job
+## Read history and post a summary
 
-Keep reusable work as Effects and execute only at the boundary. This creates one scoped client, performs a bounded read, sends a summary and then closes the client
+Keep reusable work as Effects and run the completed program at the application entry point. This example creates one scoped client, reads at most 200 messages, sends a summary and then closes the client
 
 ```ts
 import { Effect, Stream } from "effect"

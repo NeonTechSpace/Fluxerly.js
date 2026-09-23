@@ -2,12 +2,12 @@ import type { Message, MessageCore } from "./messages.js"
 
 /** Set memory-only cache bounds for a resource category such as users, guilds or channels.
  * Use true or an options object in ClientOptions.cache to enable that category, which is otherwise disabled.
- * The SDK stores frozen resources encountered through supported reads and events, not a complete copy of remote state.
+ * The SDK keeps frozen copies of resources encountered through supported reads and events, not every remote resource.
  * Fetches still contact Fluxer, writes still execute, and the SDK does no preload, persistence or background refresh.
  * When capacity is full, the least recently used snapshot is removed first.
- * Expiry, conflicting reads and lost gateway connections can cause misses.
- * Connection gaps clear affected snapshots even after resume and block older requests from refilling them.
- * Shutdown releases the SDK's references, not copies still held by your application
+ * Expired entries, overlapping reads and lost gateway connections can make a lookup miss.
+ * A connection gap clears affected snapshots even if the connection resumes. Responses started before the gap cannot restore them.
+ * Shutdown releases the SDK's copies, not copies still held by the application
  */
 export interface ResourceCacheSettings {
     /** Maximum snapshots kept for this category across the client, as a positive safe integer.
@@ -29,7 +29,7 @@ export interface ResourceCacheSettings {
     readonly maxAgeMs?: number | null
 }
 
-/** A message age-policy failure reported without the message, rejected return value or thrown exception */
+/** A message cache-duration failure reported without the message, invalid return value or thrown exception */
 export interface CachePolicyErrorReport {
     /** threw means the duration callback threw, while invalidReturn means it returned neither null nor a nonnegative safe integer */
     readonly reason: "threw" | "invalidReturn"
@@ -46,12 +46,12 @@ export interface CachePolicyErrorReport {
  * A cache hit is a past observation, not proof of current server state or complete channel history
  *
  * Connection gaps prevent older responses from refilling affected snapshots, even after resume.
- * Conflicting reads or mutations can make a pending response ineligible to insert or renew a snapshot.
- * Such a response removes a different retained copy but may leave an identical one
+ * If a newer read or change overlaps a pending response, that response cannot add or renew a snapshot.
+ * It can remove a different saved copy but may leave an identical copy in place
  *
  * Channel deletion or visibility loss removes that channel's snapshots.
  * Batch deletion evicts selected messages after dispatch even on rejection.
- * These operations also prevent older responses from entering the cache, including some pending reads of unaffected resources
+ * These operations also stop older responses from entering the cache, including some pending reads of other resources
  *
  * A ban that requests message deletion evicts this author's cached messages across guilds because some messages lack guild context.
  * The server deletion job is asynchronous, so later observations do not establish whether the job has finished
@@ -83,12 +83,12 @@ export interface MessageCacheSettings<M extends MessageCore = Message> {
      * Keep the function nonblocking and side-effect-free, since it runs while the SDK accepts an observation.
      * Changing state captured by the function affects later observations only
      *
-     * Cache removal is neither persistence management nor secure erasure
+     * Removing a cache entry does not delete persistent data or securely erase memory
      */
     readonly maxAgeMs?: number | null | ((message: M) => number | null)
 }
 
-/** Configure the default API's message cache and optionally handle age-policy failures.
+/** Configure the default API's message cache and optionally handle failures in the duration callback.
  * An options object enables caching with defaults for omitted settings
  */
 export interface MessageCacheOptions<M extends MessageCore = Message> extends MessageCacheSettings<M> {

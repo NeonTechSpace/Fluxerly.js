@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test"
 import AxeBuilder from "@axe-core/playwright"
 
-const routerPath = "/docs/dev/api/interfaces/Effect.NativePrefixCommandRouter/"
-const commandPath = "/docs/dev/api/interfaces/Effect.NativePrefixCommand/"
+const routerPath = "/docs/preview/api/interfaces/Effect.NativePrefixCommandRouter/"
+const commandPath = "/docs/preview/api/interfaces/Effect.NativePrefixCommand/"
 
 test("Public type previews support hover, focus, dismissal and ordinary navigation", async ({ page }, info) => {
     await page.setViewportSize({ width: 1440, height: 900 })
@@ -114,7 +114,7 @@ test("Hover previews do not fetch a different documentation version", async ({ p
 for (const width of [390, 1440, 1920]) {
     test(`Prose boundaries and syntax colours remain readable at ${width}px`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 })
-        await page.goto("/docs/dev/api/interfaces/Effect.Members/")
+        await page.goto("/docs/preview/api/interfaces/Effect.Members/")
         const article = page.locator(".docs-content")
         const intro = article.locator(":scope > p:not(h2 ~ p)")
         await expect(intro.first()).toBeVisible()
@@ -122,7 +122,7 @@ for (const width of [390, 1440, 1920]) {
         for (let i = 1; i < boxes.length; i++) expect(boxes[i]!.top - boxes[i - 1]!.bottom).toBeGreaterThanOrEqual(16)
         await expect(article.locator(".prose-keyword").filter({ hasText: /^HTTP$/ }).first()).toBeVisible()
         await page.screenshot({ path: info.outputPath(`members-prose-${width}.png`), animations: "disabled" })
-        await page.goto("/docs/dev/api/interfaces/Effect.Members/#addrole")
+        await page.goto("/docs/preview/api/interfaces/Effect.Members/#addrole")
         const signature = article.locator("blockquote").first()
         const signatureText = await signature.evaluate((node) => {
             const copy = node.cloneNode(true) as HTMLElement
@@ -132,7 +132,7 @@ for (const width of [390, 1440, 1920]) {
         expect(signatureText).toBe("addRole(member, roleId, options?): Effect<void, GuildOperationFailure>")
         const colours = await signature.locator(".syntax-token").evaluateAll((nodes) => [...new Set(nodes.map((node) => getComputedStyle(node).color))])
         expect(colours.length).toBeGreaterThanOrEqual(3)
-        await expect(signature.getByRole("link", { name: "GuildOperationFailure", exact: true })).toHaveAttribute("href", "/docs/dev/api/types/js-ts.GuildOperationFailure/")
+        await expect(signature.getByRole("link", { name: "GuildOperationFailure", exact: true })).toHaveAttribute("href", "/docs/preview/api/types/js-ts.GuildOperationFailure/")
         await expect(article.locator(".prose-constant").filter({ hasText: /^MANAGE_ROLES$/ }).first()).toBeVisible()
         await expect(article.locator(".prose-number").filter({ hasText: /^204$/ }).first()).toBeVisible()
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -143,7 +143,7 @@ for (const width of [390, 1440, 1920]) {
     test(`Client introductions and linked return types are readable at ${width}px`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 })
         for (const entry of ["Effect", "js-ts"]) {
-            await page.goto(`/docs/dev/api/functions/${entry}.createClient/`)
+            await page.goto(`/docs/preview/api/functions/${entry}.createClient/`)
             const article = page.locator(".docs-content")
             const details = article.locator("details").filter({ has: page.getByText("Usage details", { exact: true }) })
             await expect(details).toHaveCount(1)
@@ -151,7 +151,7 @@ for (const width of [390, 1440, 1920]) {
             await expect(article.locator("blockquote")).toHaveCount(2)
             const result = article.locator("blockquote").last()
             await expect(result.locator("br")).toHaveCount(entry === "Effect" ? 4 : 0)
-            await expect(result.getByRole("link", { name: "ConfigurationError", exact: true })).toHaveAttribute("href", "/docs/dev/api/classes/js-ts.ConfigurationError/")
+            await expect(result.getByRole("link", { name: "ConfigurationError", exact: true })).toHaveAttribute("href", "/docs/preview/api/classes/js-ts.ConfigurationError/")
             await page.screenshot({ path: info.outputPath(`${entry}-intro-${width}.png`), animations: "disabled" })
             await details.locator("summary").press("Enter")
             await expect(details).toHaveAttribute("open", "")
@@ -185,7 +185,7 @@ for (const width of [390, 1440, 1920]) {
         await page.locator("#type-parameters-2").scrollIntoViewIfNeeded()
         await page.screenshot({ path: info.outputPath(`register-tables-${width}.png`), animations: "disabled" })
         for (const module of ["js-ts", "Effect"]) {
-            await page.goto(`/docs/dev/api/modules/${module}/`)
+            await page.goto(`/docs/preview/api/modules/${module}/`)
             const borders = await page.locator(".docs-content details").evaluateAll((nodes) => nodes.map((node) => ({ top: getComputedStyle(node).borderTopWidth, bottom: getComputedStyle(node).borderBottomWidth })))
             expect(borders.length).toBeGreaterThan(1)
             expect(borders.every((border) => border.top === "1px" && border.bottom === "0px")).toBe(true)

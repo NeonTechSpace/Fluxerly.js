@@ -5,9 +5,9 @@ import { freezeInputValidationDetail, type InputValidationDetail } from "./input
 import type { MessageOperationOptions } from "./messages.js"
 
 /**
- * Basic application details returned by application.fetchCurrent for this client's bot token.
- * Use id to build an installation link and the bot flags to inspect current installation settings.
- * This frozen result is not cached and includes no owner identity, redirect URIs, verification keys, client secrets or nested bot account
+ * Application details returned by application.fetchCurrent for this client's bot token.
+ * Use id to build an installation link. The bot flags show the current installation settings.
+ * The SDK freezes this result but does not cache it. It contains no owner identity, redirect URIs, verification keys, client secrets or nested bot account
  */
 export interface BotApplication {
     /** Decimal application ID, suitable for links.installation */
@@ -24,17 +24,17 @@ export interface BotApplication {
     readonly botRequireCodeGrant: boolean
 }
 
-/** Per-call deadline for a current-application read, separate from gateway startup */
+/** Set the deadline for this application read without changing the gateway startup deadline */
 export interface BotApplicationOperationOptions extends MessageOperationOptions {}
 
 /** Cancellation in the default API affects this read only and never changes the application */
 export interface DefaultBotApplicationOperationOptions extends BotApplicationOperationOptions, OperationOptions {}
 
-/** Current-application operation identified by safe failure metadata */
+/** Operation name included in application-read failures */
 export type BotApplicationOperation = "application.fetchCurrent"
 
 /** The SDK could not read the current bot application.
- * The read failed local checks, transport, its deadline or provider response handling.
+ * Local input checks, the connection, the deadline or an unusable Fluxer response stopped the read.
  * Metadata includes no credentials, private application fields or upstream response bodies.
  * This read cannot modify the application, even when its request outcome is unknown
  */
@@ -78,7 +78,7 @@ export class BotApplicationOperationError extends Error {
     }
 }
 
-/** Expected current-application failures shared by both entry points.
- * Native interruption remains in the Effect cause, while default API calls additionally return CancelledError
+/** Expected application-read failures in both APIs.
+ * The Effect API reports interruption in its Cause. The default API can also return CancelledError
  */
 export type BotApplicationOperationFailure = BotApplicationOperationError | ClientClosedError

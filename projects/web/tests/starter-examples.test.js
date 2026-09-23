@@ -11,7 +11,7 @@ test("Starter documentation embeds the exact application file without rewriting 
 })
 
 test("Starter includes reject unknown files, traversal and incomplete markers", async () => {
-    for (const marker of ["{{starter:../package.json}}", "{{starter:missing.js}}", "{{starter:bot.js}"]) {
+    for (const marker of ["{{starter:../package.json}}", "{{starter:missing.js}}", "{{starter:lifetime.js}}", "{{starter:lifetime-effect.ts}}", "{{starter:bot.js}"]) {
         await assert.rejects(expandStarterExamples(marker))
     }
 })

@@ -8,7 +8,7 @@ import { pageUrl } from "../scripts/reference-theme.js"
 import { remarkReferenceAnchors } from "../scripts/reference-anchors.js"
 
 test("Channel pointers prefer stable, retain exact archives and omit absent stages", () => {
-    assert.deepEqual(channelTargets([]), [{ version: "dev", label: "Canary" }])
+    assert.deepEqual(channelTargets([]), [])
     assert.equal(defaultVersion(["1000.1.0-canary.0", "1000.0.0"]), "1000.0.0")
     assert.equal(defaultVersion(["1000.0.0-canary.2", "1000.0.0-rc.0"]), "1000.0.0-rc.0")
     assert.equal(channelTargets(["1000.0.0-canary.9", "1000.0.0-canary.10"])[0].version, "1000.0.0-canary.10")
@@ -50,7 +50,7 @@ test("Temporary deployment rejects a production hostname and unsafe configuratio
 })
 
 test("Generated symbol links preserve exact route and anchor identities", () => {
-    assert.equal(pageUrl("/docs/dev/api/index.md"), "/docs/dev/api/")
+    assert.equal(pageUrl("/docs/preview/api/index.md"), "/docs/preview/api/")
     assert.equal(
         pageUrl("/docs/1000.0.0/api/interfaces/js-ts.Client.md#messages"),
         "/docs/1000.0.0/api/interfaces/js-ts.Client/#messages",

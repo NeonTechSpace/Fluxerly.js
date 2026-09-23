@@ -48,7 +48,13 @@ The release suffix describes readiness, independently of compatibility changes
 | No suffix | Stable release supported for public use |
 
 There is no literal `-none` suffix.
-A prerelease containing breaking changes targets the next breaking version even when the suffix is Canary or RC
+Release targets reflect compatibility with the preceding stable release, not the preceding preview.
+The initial release cycle targets `1000.0.0`, including breaking changes between its previews.
+Later cycles accumulate compatibility changes against their stable starting version, so repeated major notes do not repeatedly increase the target major.
+An increased compatibility impact can raise the target, but an already selected target never decreases. Preview-to-preview breaking changes still require migration notes
+
+Canary iterations allow experimentation. RC indicates an intended settled API under final validation.
+A changed target must pass through RC before Stable
 
 The first published preview starts at `1000.0.0-canary.0`, then moves through RC to Stable.
 The first stable public generation is called Epoch 1 and starts at `1000.0.0`, not `1.0.0`
@@ -56,7 +62,7 @@ The first stable public generation is called Epoch 1 and starts at `1000.0.0`, n
 | Example release | Package version |
 | --- | --- |
 | First public release preview | `1000.0.0-canary.0` |
-| First release candidate | `1000.0.0-rc.1` |
+| First release candidate | `1000.0.0-rc.0` |
 | First stable release | `1000.0.0` |
 | Compatible bug fix | `1000.0.1` |
 | Compatible feature | `1000.1.0` |
@@ -71,8 +77,8 @@ Release documentation snapshots use the matching exact package version, includin
 
 ### Effect and diagnostics
 
-Effect owns internal concurrency, cancellation, resource management and logging.
-Keep neverthrow conversion at the default public boundary.
+Effect handles internal concurrency, cancellation, resource management and logging.
+Convert results to neverthrow only at the default public API.
 The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and diagnostic constraints
 
 ### Optional consumer Effect integration
@@ -90,11 +96,11 @@ Start with TypeScript 7 compiler-only output: Readable ESM JavaScript, public ty
 Keep deliberate public exports and clean package contents.
 Validate the packed artifacts through default JavaScript, TypeScript 7 and native Effect consumers rather than relying only on source imports
 
-The SDK source manifest remains private and records the version used for local package checks and release preparation.
+The SDK source manifest stays private and records the version used for local package checks and release preparation.
 Its tarball includes readable compiled output, public declarations, JavaScript and declaration maps, and sources for navigation.
 The staged npm package includes the package README, consumer agent guidance and Apache-2.0 license, plus the Changesets changelog when present
 
-The staged npm manifest derives its public identity and release version from the private SDK source manifest.
+The staged npm manifest takes its public package name and release version from the private SDK source manifest.
 TypeScript 7 remains authoritative for SDK compilation and consumer checks.
 Manual release workflows and immutable candidate tooling enforce the [registry publication contract](/docs/RELEASING.md#registry-publication-contract)
 
@@ -156,7 +162,7 @@ TypeScript 7 builds the SDK and emits its public declarations with authored docu
 TypeDoc runs with TypeScript 6 in the documentation tooling to read those declarations.
 This keeps the SDK compiler and TypeScript consumer policy on TypeScript 7
 
-Generated Markdown supplies the API reference within Astro, alongside handwritten learning guides and examples.
+Generated Markdown provides the API reference in Astro, alongside handwritten guides and examples.
 The website must explicitly map generated reference links to its page routes and preserve fragment targets.
 Generated reference files must not require manual link edits
 
@@ -171,13 +177,13 @@ Before adding or expanding documentation, choose its owner:
 | Content | Owner |
 | --- | --- |
 | Member signatures, defaults and caller-visible behavior | Public source comments, preserved in declarations for the website reference |
-| User guides, tutorials, recipes and design explanations for SDK users | Documentation website |
+| User guides, tutorials, examples and design explanations for SDK users | Documentation website |
 | Introduction, contributor setup, navigation, testing procedures and release policy | Repository Markdown |
 | Instructions for agents consuming the installed package | [Consumer agent guide](/projects/sdk/consumer/AGENTS.md), discovered through the package README |
 | Cross-component ownership, invariants and coordination that maintainers need beyond documented public members | Concise repository implementation contracts |
 
 Keep member behavior in source comments and handwritten guides in website source.
-Link to existing owners instead of repeating API reference, defaults, feature inventories or test assertions.
+Link to the relevant source comments, website pages or tests instead of repeating API reference, defaults, feature inventories or test assertions.
 Update repository docs only when the milestone changes a maintainer-facing rule, boundary, navigation or procedure
 
 Before completing a documentation change, inspect each added or expanded passage against this table.

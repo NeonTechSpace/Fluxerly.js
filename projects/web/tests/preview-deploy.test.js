@@ -47,6 +47,10 @@ function fixture(options = {}) {
                 ? JSON.stringify(options.localMarker ?? { sourceCommit: source })
                 : (options.headers ?? "/*\n  X-Robots-Tag: noindex, nofollow\n")
         },
+        readdir: async (path) => {
+            calls.push(["directory", path])
+            return options.docsEntries ?? ["latest", "1000.0.0-canary.0"]
+        },
         upload: async (settings, commit) => {
             calls.push(["upload", settings.project, settings.account, settings.branch, commit])
             if (options.uploadError) throw options.uploadError
@@ -109,6 +113,14 @@ test("Local source identity and global noindex are verified before provider read
     const { io, calls } = fixture()
     await assert.rejects(deployPreview({ ...env, DOCS_SOURCE_COMMIT: "main" }, io), /source commit/)
     assert.equal(calls.length, 0)
+})
+
+test("Upload rejects local source routes and missing published latest before provider reads", async () => {
+    for (const docsEntries of [["preview"], ["latest", "preview"], ["latest", "dev"]]) {
+        const { io, calls } = fixture({ docsEntries })
+        await assert.rejects(deployPreview(env, io), /published-only documentation/)
+        assert.ok(calls.every(([kind]) => kind === "file" || kind === "directory"))
+    }
 })
 
 test("Project, Production and Git-auto-production mismatches fail before upload", async () => {

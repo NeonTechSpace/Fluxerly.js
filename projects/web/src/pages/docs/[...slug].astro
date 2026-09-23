@@ -18,25 +18,28 @@ const { Content, headings } = await render(entry)
 const routeSlugs = Astro.params.slug!.split('/')
 const routeVersion = routeSlugs[0]!
 const sourceVersion = routeVersion === 'latest' ? versions.defaultVersion : routeVersion
-const channel = sourceVersion === 'dev' ? 'canary' : parseVersion(sourceVersion).channel
-const channelTabs = versions.targets.map((target) => ({
+const channel = sourceVersion === 'preview' ? 'preview' : parseVersion(sourceVersion).channel
+const availableTargets = routeVersion === 'preview' || versions.previewVersion
+  ? [...versions.targets, { version: 'preview', label: 'Source preview' }]
+  : versions.targets
+const channelTabs = availableTargets.map((target) => ({
   label: target.label,
   url: source.getPage([
     routeVersion === 'latest' && target.version === sourceVersion ? 'latest' : target.version,
     ...routeSlugs.slice(1),
   ])?.url ?? `/docs/${routeVersion === 'latest' && target.version === sourceVersion ? 'latest' : target.version}/`,
-  active: channel === (target.version === 'dev' ? 'canary' : parseVersion(target.version).channel),
+  active: channel === (target.version === 'preview' ? 'preview' : parseVersion(target.version).channel),
 }))
 const toc = headings.map((h) => ({ depth: h.depth, title: h.text === 'Remarks' ? 'Usage details' : h.text, url: `#${h.slug}` }))
 ---
 <Layout title={entry.data.title}>
   <Docs tree={source.getPageTree()} pathname={Astro.url.pathname} params={Astro.params}
     page={{ toc, footer: { enabled: routeSlugs[1] !== 'api' } }} version={routeVersion} channelTabs={channelTabs} client:load>
-    <div class="version-label">{sourceVersion === 'dev' ? 'Canary · Unreleased' : `SDK ${sourceVersion}`}</div>
+    <div class="version-label">{sourceVersion === 'preview' ? `${versions.previewVersion ? `Planned ${versions.previewVersion} · ` : ''}Unreleased source preview` : `SDK ${sourceVersion}`}</div>
     <h1>{entry.data.title}</h1>
     <aside class="preview-notice" aria-label="Important preview notice">
       <strong>IMPORTANT</strong>
-      <span>This is a quick preview build of the docs, not the final website or documentation</span>
+      <span>{sourceVersion === 'preview' ? 'This version is still in development and cannot be installed yet' : 'This is a preview of the documentation website, not the final version'}</span>
     </aside>
     {entry.data.description && <p class="description">{entry.data.description}</p>}
     <div class="prose docs-content flex-1" data-api-reference={routeSlugs[1] === 'api' || undefined}><Content /></div>

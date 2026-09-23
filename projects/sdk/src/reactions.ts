@@ -26,7 +26,7 @@ export interface ReactionUser {
 
 /** One frozen page of users who reacted with the requested emoji.
  * Users are ordered by ascending ID. Concurrent reaction changes can affect later pages.
- * A sequence of pages is not one consistent snapshot of the reactor list
+ * Several pages do not represent one fixed list of people who reacted
  */
 export interface ReactionUsersPage {
     /** Users ordered by ascending decimal ID, with no more than the requested limit */
@@ -47,7 +47,7 @@ export interface ReactionUsersPage {
  * Custom animation flags are optional and do not change the request identity or collector match
  *
  * Unicode input is limited to 128 UTF-16 code units and rejects spaces, control characters and reserved markup characters.
- * Fluxer checks that the emoji is supported and that the bot may use it. The SDK does not look it up or infer permissions
+ * Fluxer checks that the emoji is supported and that the bot may use it. The SDK does not fetch the emoji or decide whether the bot has permission to use it
  */
 export type ReactionEmojiInput = string | ReactionEmoji | GuildEmoji
 
@@ -65,7 +65,7 @@ export interface ReactionEmoji {
 
 /** Message address carried by a reaction event, with optional server context.
  * The `id` field is the message ID.
- * Events can be missed during gateway recovery and do not establish current counts or the complete reactor list.
+ * Gateway reconnection can miss events. An event does not show current counts or everyone who reacted.
  * Additional provider data, such as member details and session identifiers, is not retained
  */
 export interface ReactionTarget extends MessageReference {
@@ -95,7 +95,7 @@ export interface MessageReactionEmojiRemoval extends ReactionTarget {
  * Entries retain received order. This does not also emit messageReactionAdd for each entry.
  * Subscribe to both addition events if you need both forms. Reaction collectors already accept both.
  * A batch counts as one queued event, and its full received JSON counts toward the pending-byte budget.
- * The SDK neither requests batching nor reconstructs changes Fluxer omitted
+ * The SDK does not ask Fluxer to batch events or fill in changes Fluxer did not send
  */
 export interface MessageReactionBatch extends ReactionTarget {
     /** Frozen additions on the target message, in received order */

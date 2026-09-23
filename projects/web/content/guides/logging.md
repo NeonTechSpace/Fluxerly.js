@@ -4,7 +4,7 @@ navTitle: Logging
 description: Route safe structured records and measure SDK work without adding a telemetry service
 ---
 
-Use client logging to follow connection lifecycle, operation timing and safe operational reports. Logging is client-local, synchronous and off by default except for handler, cache-policy and observer error reports
+Use client logging to see connection changes, operation timings and errors without logging message contents. Each client logs separately. Its logger runs synchronously and is off by default except for handler, cache-policy and observer errors
 
 ## Enable development logging
 
@@ -55,7 +55,7 @@ export function createLoggedClient(token: string) {
 
 Every record includes `source`, `timestamp`, `level`, `category` and `event`. Category-specific fields use stable SDK names and bounded values. Records exclude tokens, payloads, URLs, Effect causes and application annotations
 
-The SDK calls the callback synchronously and does not await its return value. A thrown callback error or rejected Promise accidentally returned by the callback cannot change an SDK outcome. Blocking work can still delay the bot. The application owns asynchronous delivery, buffering, flushing and persistence
+The SDK calls the logging callback immediately and does not wait for a returned Promise. If the callback throws or returns a rejected Promise, the SDK operation keeps its original result. Slow callback work can still delay the bot. The application must handle queued log delivery, flushing and storage itself
 
 ## Measure SDK work
 
@@ -77,7 +77,7 @@ export function createMeasuredClient(token: string) {
 }
 ```
 
-All stages use the executing Effect runtime's monotonic clock and stable low-cardinality names. The default API uses the runtime default, while a native program can provide its own `Clock` service. Measurements do not include request paths, resource IDs, signed URLs, audit reasons, OAuth values or payloads. Omission adds no exporter, telemetry service, delivery queue or stored history
+All stages use the executing Effect runtime's monotonic clock and stable low-cardinality names. The default API uses the runtime default, while a native program can provide its own `Clock` service. Measurements do not include request paths, resource IDs, signed URLs, audit reasons, OAuth values or payloads. Enabling measurements does not create an exporter, telemetry service, delivery queue or stored history
 
 ## Report application failures safely
 
@@ -125,7 +125,7 @@ export function registerPing(client: Client) {
 }
 ```
 
-The operation metadata identifies invalid inputs, permission rejections and transport failures without exposing message content. An unknown delivery result needs reconciliation before retrying. The error callback excludes the event payload and original exception. Catch an application error inside the handler when application-specific reporting needs more context, then choose only safe fields for that output
+The error details distinguish invalid input, permission rejection and transport failure without exposing message content. If message delivery is uncertain, check what happened before retrying. The error callback omits the event payload and original exception. To report an application error with more context, catch it in the handler and log only fields safe to share
 
 ## Keep native logs in the application context
 

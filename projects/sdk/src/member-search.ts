@@ -27,12 +27,10 @@ export const GuildMemberJoinSourceTypes: Readonly<{
 export type GuildMemberJoinSourceType = (typeof GuildMemberJoinSourceTypes)[keyof typeof GuildMemberJoinSourceTypes]
 
 /**
- * Find guild members by text, roles, join dates or membership source using Fluxer's search index.
- * The search index can lag behind current membership and profile changes. Search results are partial
- * records, not the SDK cache or complete GuildMember snapshots.
+ * Search Fluxer's guild member index by text, roles, join dates or how members joined.
+ * Search results may lag behind current membership and profile changes. They contain only search fields, not complete GuildMember objects, and do not come from the SDK cache.
  * Fluxer requires a member-management permission for every search.
- * Join-source and source-invite filters require ManageGuild. The SDK checks that permission before sending these
- * filters, which Fluxer would otherwise silently ignore. Filter arrays are copied by index when the operation starts.
+ * Join-source and source-invite filters require ManageGuild. The SDK checks for ManageGuild before sending those filters because Fluxer would otherwise ignore them without an error. Filter arrays are copied by index when the operation starts.
  * Timestamps use whole Unix seconds. Unknown keys and values outside the documented
  * bounds fail locally before the POST. The provider can return an empty, non-indexing page when its search service is
  * unavailable
@@ -53,7 +51,7 @@ export interface MemberSearchQuery {
     readonly query?: string
     /** Results in this offset page, 1–100, default 25 */
     readonly limit?: number
-    /** Zero-based indexed-result offset, a nonnegative safe integer, default 0. It is not a durable cursor or snapshot token */
+    /** Zero-based indexed-result offset, a nonnegative safe integer, default 0. It does not mark a fixed position in an unchanging result set */
     readonly offset?: number
     /** Require every supplied role ID. At most 10 distinct decimal role IDs. An empty list has no filtering effect */
     readonly roleIds?: readonly string[]
@@ -78,7 +76,7 @@ export interface MemberSearchQuery {
 }
 
 /** A member matched by the search index, with indexed identity, roles and available membership-source details.
- * Use guildId and userId with members.fetch when you need a fresh GuildMember. This frozen hit does not populate
+ * Call members.fetch with guildId and userId when current member details are needed. This frozen hit does not populate
  * the member cache and cannot establish current membership or permissions
  */
 export interface MemberSearchHit {

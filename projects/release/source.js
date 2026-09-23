@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { sha256 } from "./content.js"
-import { parseVersion, planVersion } from "./planning.js"
+import { parseVersion, planVersion, releaseBaseFor } from "./planning.js"
 
 export async function readSourcePlan(workspace, options) {
     const [{ assembleReleasePlan }, { readChangesets }, { getPackages }, { readConfig }] = await Promise.all([
@@ -25,7 +25,7 @@ export async function readSourcePlan(workspace, options) {
     }
     const pending = fragments.filter((fragment) => !fragment.id.startsWith("pre/"))
     const current = parseVersion(sdk.packageJson.version)
-    await assertSourceReleaseState(workspace, current, fragments)
+    const state = await assertSourceReleaseState(workspace, current, fragments)
     const preState =
         options.channel === "stable"
             ? current.channel === "stable"
@@ -35,13 +35,14 @@ export async function readSourcePlan(workspace, options) {
     const releasePlan = assembleReleasePlan(fragments, packages, configResult.config, preState)
     if (releasePlan.releases.some((release) => release.name !== sdk.packageJson.name))
         throw new Error("Changesets attempted to release a non-SDK package")
-    // Changesets owns note and changelog application. Epoch SemVer planning uses only unconsumed notes
-    // because a Changesets prerelease proposal can preserve the old core while changing readiness
+    // Archived notes retain cycle-wide compatibility impact. Pending notes determine new preview work
     const plan = planVersion({
         currentVersion: sdk.packageJson.version,
         channel: options.channel,
         epoch: options.epoch,
         pendingTypes: pending.map((fragment) => fragment.releases[0].type),
+        releaseTypes: fragments.map((fragment) => fragment.releases[0].type),
+        releaseBase: state?.releaseBase,
         allowNoChanges: options.allowNoChanges ?? false,
     })
     if (options.line && options.line !== plan.line)
@@ -97,8 +98,12 @@ export async function assertSourceReleaseState(workspace, current, fragments) {
     if (current.channel === "stable") {
         if (state || fragments.some((fragment) => fragment.id.startsWith("pre/")))
             throw new Error("Stable source has leftover prerelease state, reconcile partial version preparation")
-    } else if (!state || state.mode !== "pre" || state.tag !== current.channel)
-        throw new Error("SDK source version and Changesets prerelease state disagree")
+    } else {
+        if (!state || state.mode !== "pre" || state.tag !== current.channel)
+            throw new Error("SDK source version and Changesets prerelease state disagree")
+        releaseBaseFor(current, state.releaseBase)
+    }
+    return state
 }
 
 export async function applySourcePlan(workspace, options, prepared) {
@@ -122,7 +127,7 @@ export async function applySourcePlan(workspace, options, prepared) {
     if (options.channel !== "stable")
         await writeFile(
             join(workspace, ".changeset", "pre.json"),
-            JSON.stringify({ mode: "pre", tag: options.channel }, null, 4) + "\n",
+            JSON.stringify({ mode: "pre", tag: options.channel, releaseBase: result.plan.releaseBase }, null, 4) + "\n",
         )
     const manifest = JSON.parse(await readFile(join(workspace, "sdk", "package.json"), "utf8"))
     if (manifest.version !== result.plan.version || manifest.private !== true)

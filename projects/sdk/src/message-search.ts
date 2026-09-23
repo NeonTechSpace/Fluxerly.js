@@ -4,7 +4,7 @@ import type { PaginationQuery } from "./pagination.js"
 
 /** Server or channel in which to search messages visible to the bot.
  * Supply at least guildId or channelId, as decimal strings. You may supply both.
- * Search always uses Fluxer's current scope, not a cross-account or historical visibility scope.
+ * Search uses the bot's current access permissions, not another account's permissions or access the bot had earlier.
  * The SDK captures the supplied IDs once when the request or traversal starts
  */
 export type MessageSearchContext =
@@ -34,11 +34,11 @@ export type MessageSearchContentType =
 export type MessageSearchEmbedType = "image" | "video" | "sound" | "article"
 
 /** Filters and paging settings for one messages.search request.
- * Fluxer searches its index, so recent edits and deletions may not yet be reflected.
- * This does not read message history or the local cache, and results do not populate the message cache.
+ * Fluxer searches an index that may not yet include recent edits or deletions.
+ * Search does not read message history or the local cache. Results are not added to the message cache.
  * Omit a filter to leave that criterion unspecified. Fluxer combines and interprets the supplied search criteria.
  * Unknown properties, invalid values and lists exceeding the documented limits are rejected locally.
- * Filter arrays are copied by index when the operation starts.
+ * The SDK copies each filter array when the operation starts, so later changes to the array do not affect this request.
  * All ID filters use decimal strings. Text limits count UTF-16 code units, the units used by JavaScript string.length
  */
 export interface MessageSearchQuery {
@@ -158,7 +158,7 @@ export type MessageSearchPage<M extends MessageCore = Message> = MessageSearchIn
 /** Limit how many messages and pages messages.iterateSearch can read.
  * Each consumption starts at page 1 for the given context and filters, then reads later numbered pages as Fluxer's total requires.
  * Limits are captured once when that consumption starts.
- * Fluxer supports at most 400 numbered pages. A remaining result after page 400 fails with PaginationError pageLimit.
+ * Fluxer supports at most 400 numbered pages. If more results remain after page 400, traversal fails with PaginationError reason pageLimit.
  * No background prefetch runs. An indexing response fails traversal with PaginationError reason indexing rather than polling
  */
 export interface MessageSearchIterationLimits extends PaginationQuery {

@@ -1,3 +1,4 @@
 ---
-return Astro.redirect('/docs/latest/')
+import versions from '../../content/versions.json'
+return Astro.redirect(versions.defaultVersion ? '/docs/latest/' : '/docs/preview/')
 ---

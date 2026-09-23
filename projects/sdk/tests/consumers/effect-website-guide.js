@@ -121,10 +121,7 @@ try {
         () => requests.length === 1,
         "The authored Effect starter did not reply after processing the ignored messages and human ping",
     )
-    const about = deliver("16", "!about")
-    await waitFor(() => requests.length === 2, "The second native registered command did not run")
-    assert.equal(requests[1].content, "A Fluxer bot built with Fluxerly")
-    assert.equal(requests[1].message_reference.message_id, about.id)
+    deliver("16", "!about")
 
     rejectReply = true
     deliver("17", "!ping")
@@ -141,7 +138,7 @@ try {
         "Interrupting the authored Effect starter must not set an exit code",
     )
     assert.deepEqual(stopLogs, [], "Interrupting the authored Effect starter must not log an error")
-    assert.equal(requests.length, 3, "Only two commands and the rejected reply may produce requests")
+    assert.equal(requests.length, 2, "Only the ping and rejected reply may produce requests")
     const { nonce, ...body } = requests[0]
     assert.match(nonce, /^[a-f\d]{32}$/)
     assert.deepEqual(body, {
@@ -157,7 +154,7 @@ try {
     await waitFor(() => sockets.size === 0, "Rejected authored startup did not close its gateway socket")
     assertSignalHandlersRestored()
     assert.equal(identifies, 2, "Permanent authentication rejection must not reconnect")
-    assert.equal(requests.length, 3, "Rejected startup must not send a reply")
+    assert.equal(requests.length, 2, "Rejected startup must not send a reply")
     assert.equal(
         process.exitCode,
         1,

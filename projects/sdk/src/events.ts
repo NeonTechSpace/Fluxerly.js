@@ -91,9 +91,9 @@ export interface GuildStickersUpdate {
     readonly items: readonly GuildSticker[]
 }
 
-/** A frozen guild-availability observation with event-specific join metadata.
- * It retains the Guild fields without adding lifecycle state to REST results or cached Guild snapshots.
- * Subscribe before connect to observe the startup availability burst. connect does not wait for that burst
+/** Frozen guild data received with an availability event, plus information about whether this is a new join.
+ * The event keeps the Guild fields. REST results and cached Guild values do not gain join state.
+ * Subscribe before connecting to receive startup availability events. The `connect` call does not wait for them
  *
  * Join classification requires a Fluxer bot gateway implementing the unavailable-marker distinction.
  * Older or custom instances that omit the marker for startup snapshots cannot be classified reliably.
@@ -227,7 +227,7 @@ export interface VoiceState {
 
 /**
  * Visible voice connections supplied when a server becomes available.
- * Register before connecting if you need startup snapshots.
+ * Register before connecting to receive startup snapshots.
  * An empty voiceStates array means Fluxer explicitly supplied no initial connections. No event is emitted when the collection is absent.
  * The frozen collection is not a complete member roster or a voice-state cache, and can become stale immediately
  */
@@ -239,8 +239,9 @@ export interface VoiceStateSnapshot {
 }
 
 /** Event names and payload types accepted by on, events and waitFor.
- * Register listeners before triggering an action when you need to observe its event.
- * Payloads are frozen observations received from Fluxer, not live objects or previously cached history.
+ * Register listeners before triggering an action to observe its event.
+ * Payloads are frozen copies of data received from Fluxer. They cannot be changed and do not update as Fluxer changes.
+ * A new listener does not receive earlier events from the cache.
  * Requests do not generate synthetic events. Changes can be missed during disconnection and recovery.
  * Bulk events remain one event instead of also delivering their individual entries.
  * Message events use this client's messageFields selection. Known malformed received data still fails the connection even if excluded.
@@ -378,9 +379,9 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
 /** Event-name strings accepted by on, events and waitFor in both entry points */
 export type EventName = keyof EventMap
 
-/** Bound the waiting queue for one event subscription or collector.
+/** Limit the waiting queue for one event subscription or collector.
  * Each registration owns its own queue. Filling it stops that registration, not unrelated subscriptions.
- * These budgets measure pending payloads and received JSON bytes, not the total memory used by your application
+ * These limits measure pending payloads and received JSON bytes, not total application memory use
  */
 export interface EventBufferOptions {
     /** Maximum waiting payloads, excluding active handlers. A bulk event counts once, positive safe integer, default 256 */
@@ -397,7 +398,7 @@ export interface EventBufferOptions {
 export interface EventWaitOptions<K extends EventName, M extends MessageCore = Message> extends EventBufferOptions {
     /** Return true to complete with this event, false to keep waiting. Omit to accept the first event.
      * Runs synchronously and can run while the gateway receives events. Keep it short, since deadlines cannot preempt blocking JavaScript.
-     * A throw or non-boolean return fails with EventWaitError reason filter, without exposing your original error.
+     * A throw or non-boolean return fails with EventWaitError reason filter, without exposing the original error.
      * Do not return a Promise. Mistaken asynchronous work is neither awaited nor cancelled, and its rejection is discarded
      */
     readonly filter?: (event: EventMap<M>[K]) => boolean
@@ -421,7 +422,7 @@ export interface HandlerOptions extends EventBufferOptions {
 /** Safe notification that an event callback failed or its waiting queue overflowed.
  * No message bodies, credentials or original callback errors are exposed.
  * When no error hook is configured or it fails, fallback diagnostics identify the event and failure kind.
- * To inspect your original failure, catch it inside a default API callback or use Effect.tapCause inside a native handler.
+ * To inspect the original failure, catch it inside a default API callback or use Effect.tapCause inside a native handler.
  * The SDK error hook does not provide access to the raw exception
  */
 export interface HandlerErrorReport {

@@ -112,10 +112,10 @@ export interface StickerEdit {
     readonly tags: readonly string[]
 }
 
-/** Which emoji or stickers were created and which failed in a batch request.
+/** Results of creating emoji or stickers in one batch request.
  * Inspect both lists even when the HTTP request succeeded. Entries in success were created independently of
  * failures, so repeating the whole batch can duplicate successful creations. Provider order does not map failures
- * back to input indexes when names repeat
+ * back to input positions when names repeat
  */
 export interface ExpressionBatch<A> {
     /** Created resources. They remain created even when another entry fails */
@@ -131,7 +131,7 @@ export interface ExpressionBatch<A> {
 
 /** Choose whether deleting a guild emoji or sticker also requests removal of its image asset.
  * The inherited timeout and auditReason follow ModerationOptions.
- * Purging is a separate queued job. Deleting the guild entry does not wait for the image purge to finish
+ * Removing the image is a separate queued job. Deleting the guild entry does not wait for it to finish
  */
 export interface ExpressionDeleteOptions extends ModerationOptions {
     /** False/default removes the guild entry without asking to purge its image.

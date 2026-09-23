@@ -18,20 +18,11 @@ test("Authored guide command blocks render with supported metadata", async () =>
 
 test("SDK install variants retain the exact selected release", () => {
     assert.deepEqual(managers.map((manager) => commandVariant(install, manager).command), [
-        "npm install --save-exact @neontechspace/fluxerly@1000.0.0-rc.2",
-        "pnpm add --save-exact @neontechspace/fluxerly@1000.0.0-rc.2",
+        "npm install @neontechspace/fluxerly@1000.0.0-rc.2",
+        "pnpm add @neontechspace/fluxerly@1000.0.0-rc.2",
     ])
     assert.equal(commandVariant(install).note, "")
     assert.equal(commandVariant(install, "pnpm").note, "")
-})
-
-test("Unreleased Canary uses an explicit placeholder for each package manager", () => {
-    for (const manager of managers) {
-        const variant = commandVariant({ ...install, version: "dev" }, manager)
-        assert.match(variant.command, /@VERSION$/)
-        assert.doesNotMatch(variant.command, /@dev|@0\.0\.0/)
-        assert.match(variant.note, /\S/)
-    }
 })
 
 test("Effect add and list use the chosen manager, while node execution follows the example language", () => {
@@ -47,7 +38,7 @@ test("Effect add and list use the chosen manager, while node execution follows t
 })
 
 test("Invalid command metadata fails closed without exposing input", () => {
-    for (const value of [null, [], {}, { ...install, version: "latest" }, { ...install, version: "0.0.0" },
+    for (const value of [null, [], {}, { ...install, version: "latest" }, { ...install, version: "dev" }, { ...install, version: "0.0.0" },
         { ...install, version: "1.0.0; secret-value" }, { ...install, package: "other" }, { ...install, token: "secret-value" },
         { kind: "run", command: "echo secret-value" }, { kind: "add", package: "effect", version: "4.0.0-rc.01" },
         { kind: "list", package: "effect", version: "4.0.0" }]) {
@@ -70,7 +61,7 @@ test("Static widgets use native labeled inert controls and escaped metadata", ()
     assert.match(selects[0], /\baria-label="Package manager"/)
     assert.match(selects[0], /\bdisabled(?:\s|=|>)/)
     assert.match(html, /<pre tabindex="0">/)
-    assert.match(html, /<code data-command-code>npm install --save-exact @neontechspace\/fluxerly@1000\.0\.0-rc\.2<\/code>/)
+    assert.match(html, /<code data-command-code>npm install @neontechspace\/fluxerly@1000\.0\.0-rc\.2<\/code>/)
     assert.match(html, /data-command-copy hidden/)
     assert.match(html, /data-command-copy-status role="status"/)
     assert.match(html, /data-command-fallback>[^<]+</)
@@ -85,9 +76,9 @@ test("Static widgets use native labeled inert controls and escaped metadata", ()
 
 test("Astro Markdown renders the widget as static HTML rather than a highlighted JSON fence", async () => {
     const processor = await createMarkdownProcessor({ remarkPlugins: [remarkCommandBlocks] })
-    const result = await processor.render(`\`\`\`command\n${JSON.stringify({ ...install, version: "dev" })}\n\`\`\``)
+    const result = await processor.render(`\`\`\`command\n${JSON.stringify(install)}\n\`\`\``)
     assert.match(result.code, /<div class="command-block"/)
-    assert.match(result.code, /npm install --save-exact @neontechspace\/fluxerly@VERSION/)
+    assert.match(result.code, /npm install @neontechspace\/fluxerly@1000\.0\.0-rc\.2/)
     assert.doesNotMatch(result.code, /language-command|&lt;select/)
 })
 

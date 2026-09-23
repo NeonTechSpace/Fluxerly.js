@@ -1,16 +1,16 @@
 ---
 title: React to events and collect replies
 navTitle: Events & collectors
-description: Distinguish guild joins, wait for one observation and collect a bounded conversation
+description: Detect guild joins, wait for an event and collect replies for a limited time
 ---
 
-The gateway carries live observations from Fluxer. Register listeners before connecting when you need startup events. A successful `connect()` means authenticated READY, not that the guild roster or every resource has finished arriving
+The gateway delivers live events from Fluxer. Register listeners before connecting to receive startup events. A successful `connect()` means authenticated READY, not that the guild roster or every resource has finished arriving
 
-These helpers use the client from [your first bot](/docs/{{version}}/quick-start/). Unlike REST reads and writes, collecting future messages requires a connected gateway
+These helpers use the client from the [first bot example](/docs/{{version}}/quick-start/). Unlike REST reads and writes, collecting future messages requires a connected gateway
 
 ## Distinguish a join from guild availability
 
-The `guildCreate` event also arrives when startup data becomes available or a guild recovers. Filter `isNewJoin` when your handler should react only to the provider's join observation
+The `guildCreate` event also arrives when startup data becomes available or a guild recovers. Filter `isNewJoin` when a handler should react only to a new guild join
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -23,11 +23,11 @@ export function observeGuildJoins(client: Client, rememberGuild: (id: string) =>
 }
 ```
 
-Check the returned registration Result and retain the subscription. This classification requires a Fluxer gateway with the bot-session marker distinction. It does not infer joins from a timer, readiness or an empty cache. Replayed events can repeat an observation, so make persistent welcome or onboarding work idempotent. Membership already present at a fresh session is not reported as a missed join
+Check the registration Result and keep the subscription. The `isNewJoin` flag requires a Fluxer gateway that distinguishes new joins from startup guild data. It does not guess from timing, readiness or an empty cache. A replayed event can trigger the handler again, so check whether a welcome or onboarding action already ran before repeating it. Guilds the bot already belonged to when it connected are not reported as new joins
 
 ## Wait for one future event
 
-Use `waitFor` for one matching future observation. The filter runs synchronously, so keep it small and do not make requests inside it
+Use `waitFor` for one matching future event. The filter runs synchronously, so keep it small and do not make requests inside it
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -45,7 +45,7 @@ export async function waitForTyping(client: Client, channelId: string, userId: s
 }
 ```
 
-Timeout is an expected failure for `waitFor`. No old event or cache entry can satisfy it. If you need registration to finish before sending a prompt, use a collector instead of racing a wait against a write
+`waitFor` reports a timeout as an expected failure. Only a future event can satisfy it, not a cached one. Use a collector to start listening before sending a prompt
 
 ## Ask a question without missing a fast reply
 
@@ -77,7 +77,7 @@ export async function askPreferredName(client: Client, channelId: string, userId
 }
 ```
 
-Unlike `waitFor`, a collector timeout is successful completion and can contain no replies. This helper returns `undefined` in that case. A gateway gap fails collection
+Unlike `waitFor`, a collector that times out completes successfully, possibly with no replies. This helper returns `undefined` when no one replies. A gateway gap fails collection
 
 The `finally` block stops intake if sending fails and waits for cleanup. Do not call client shutdown or await the same collector's completion from inside its progress callback
 

@@ -4,7 +4,7 @@ import { createRequire } from "node:module"
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { build } from "astro"
-import { authoredGuideNavigation, authoredGuides, filesIn, generate, webRoot } from "../scripts/generate.js"
+import { filesIn, generate, webRoot } from "../scripts/generate.js"
 import { validateSnapshot } from "../scripts/versions.js"
 
 const require = createRequire(import.meta.url)
@@ -61,24 +61,22 @@ try {
         saved.set(version, bytes)
         await writeFile(join(released, `${version}.json`), bytes, { flag: "wx" })
     }
-    await generate({ releasesDirectory: released })
-    const guidePages = (await authoredGuides()).map((guide) => guide.slug)
-    const developmentMeta = JSON.parse(await readFile(join(webRoot, "content/docs/dev/meta.json"), "utf8"))
-    assert.deepEqual(developmentMeta.pages, await authoredGuideNavigation())
-    for (const guide of guidePages) await readFile(join(webRoot, "content/docs/dev", `${guide}.md`), "utf8")
+    await generate({ releasesDirectory: released, publicBuild: true })
+    assert.equal(await readFile(join(webRoot, "content/versions.json"), "utf8").then((value) => JSON.parse(value).previewVersion), null)
+    assert.ok(!(await filesIn(join(webRoot, "content/docs"))).some((file) => file.path.startsWith("preview/") || file.path.startsWith("dev/")))
     const before = new Map()
     for (const [version] of fixtures) before.set(version, await filesIn(join(webRoot, "content/docs", version)))
-    // A clean regeneration discards stale development output, never the release snapshot source
+    // A clean regeneration discards stale generated output, never the release snapshot source
     await writeFile(
-        join(webRoot, "content/docs/dev/stale.md"),
-        markdown("Stale development page", "Not part of a release"),
+        join(webRoot, "content/docs/latest/stale.md"),
+        markdown("Stale generated page", "Not part of a release"),
     )
-    await generate({ releasesDirectory: released })
+    await generate({ releasesDirectory: released, publicBuild: true })
     for (const [version] of fixtures) {
         assert.equal(await readFile(join(released, `${version}.json`), "utf8"), saved.get(version))
         assert.deepEqual(await filesIn(join(webRoot, "content/docs", version)), before.get(version))
     }
-    assert.ok(!(await filesIn(join(webRoot, "content/docs/dev"))).some((file) => file.path === "stale.md"))
+    assert.ok(!(await filesIn(join(webRoot, "content/docs/latest"))).some((file) => file.path === "stale.md"))
     const outDir = join(root, "dist")
     await build({ root: webRoot, outDir, logLevel: "warn" })
     execFileSync(

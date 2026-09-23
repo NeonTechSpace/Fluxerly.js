@@ -15,7 +15,7 @@ function validRgbChannel(value: unknown): value is number {
     return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255
 }
 
-/** Convert colors locally before using them in an embed or role. Methods return a Result immediately, with a value on success or HelperError on failure */
+/** Convert colors without a server request before using them in an embed or role. Each method immediately returns a Result with a value or HelperError */
 export const colors: Readonly<{
     /** Convert a six-digit hexadecimal string, RGB array or color number to the integer used by embeds and roles.
      * The leading `#` is optional. CSS names, three-digit shorthand, alpha channels and surrounding whitespace fail.
@@ -27,7 +27,7 @@ export const colors: Readonly<{
      * Invalid numbers return HelperError
      */
     toHex(value: number): Result<string, HelperError>
-    /** Separate a color integer into a new frozen `[red, green, blue]` array, each from 0 through 255.
+    /** Split a color integer into a new frozen `[red, green, blue]` array, each from 0 through 255.
      * Accepts only integers from 0 through 0xffffff. Invalid numbers return HelperError
      */
     toRgb(value: number): Result<RgbColor, HelperError>

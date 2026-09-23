@@ -6,11 +6,11 @@ import { packages, tarball } from "./helpers.js"
 
 test("Epoch versions separate compatibility changes from readiness", () => {
     const plan = (currentVersion, channel, pendingTypes = [], extra = {}) =>
-        planVersion({ currentVersion, channel, pendingTypes, ...extra }).version
+        planVersion({ currentVersion, channel, pendingTypes, releaseBase: null, ...extra }).version
     assert.equal(plan("0.0.0", "canary"), "1000.0.0-canary.0")
     assert.equal(plan("1000.0.0-canary.4", "canary", ["patch"]), "1000.0.0-canary.5")
-    assert.equal(plan("1000.0.0-canary.4", "rc", ["minor"]), "1000.1.0-rc.0")
-    assert.equal(plan("1000.0.0-canary.4", "rc", ["major", "patch"]), "1001.0.0-rc.0")
+    assert.equal(plan("1000.0.0-canary.4", "rc", ["minor"]), "1000.0.0-rc.0")
+    assert.equal(plan("1000.0.0-canary.4", "rc", ["major", "patch"]), "1000.0.0-rc.0")
     assert.equal(plan("1000.0.0-canary.4", "rc"), "1000.0.0-rc.0")
     assert.equal(plan("1000.0.0-rc.2", "stable"), "1000.0.0")
     assert.equal(plan("1000.0.0", "stable", ["patch"]), "1000.0.1")
@@ -29,6 +29,23 @@ test("Epoch versions separate compatibility changes from readiness", () => {
     assert.throws(() => plan("1000.0.0", "canary", ["major"], { epoch: 1001 }), /higher multiple/)
     assert.equal(compareVersions("1000.0.0-canary.10", "1000.0.0-rc.0") < 0, true)
     assert.equal(compareVersions("1000.0.0-rc.10", "1000.0.0") < 0, true)
+})
+
+test("Later prereleases use the stable base rather than repeatedly bumping the preview", () => {
+    const plan = (currentVersion, channel, pendingTypes, extra = {}) => planVersion({
+        currentVersion, channel, pendingTypes, releaseBase: "1000.2.3", ...extra,
+    }).version
+    assert.equal(plan("1000.2.4-canary.0", "canary", ["patch"]), "1000.2.4-canary.1")
+    assert.equal(plan("1000.2.4-canary.1", "canary", ["minor"]), "1000.3.0-canary.0")
+    assert.equal(plan("1000.3.0-canary.0", "rc", ["minor"]), "1000.3.0-rc.0")
+    assert.equal(plan("1000.3.0-rc.0", "rc", ["major"]), "1001.0.0-rc.0")
+    assert.equal(plan("1001.0.0-rc.0", "rc", ["major"]), "1001.0.0-rc.1")
+    assert.equal(plan("1001.0.0-rc.1", "stable", []), "1001.0.0")
+    assert.equal(plan("2000.0.0-canary.0", "rc", ["major"]), "2000.0.0-rc.0")
+    assert.throws(() => plan("1000.3.0-rc.0", "stable", ["major"]), /changed release target/)
+    assert.throws(() => plan("1000.3.0-canary.0", "stable", ["major"]), /release candidate/)
+    for (const releaseBase of [undefined, null, "1000.3.0", "1001.0.0", "1000.2.3-rc.0", "0.0.0"])
+        assert.throws(() => plan("1000.3.0-canary.0", "rc", [], { releaseBase }), /releaseBase/)
 })
 
 test("Only Canary, RC and Stable are accepted release channels", () => {

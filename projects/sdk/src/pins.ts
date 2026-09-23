@@ -1,7 +1,7 @@
 import type { Message, MessageCore } from "./messages.js"
 
 /** Choose one page of pins for messages.fetchPins.
- * Pages follow pin times, not message creation times. Use iteratePins for bounded multi-page traversal.
+ * Pages are ordered by when messages were pinned, not when they were created. Use iteratePins for bounded multi-page traversal.
  * Fields are captured once. Invalid timestamps, limits and unknown properties are rejected before the request
  */
 export interface MessagePinsQuery {
@@ -25,7 +25,7 @@ export interface MessagePin<M extends MessageCore = Message> {
 }
 
 /** One frozen page of pins, ordered newest pin time first.
- * Concurrent changes and tied timestamps can make multi-page enumeration incomplete.
+ * Pins added or removed during traversal, or pins with the same timestamp, can cause a multi-page list to miss messages.
  * A message can recur on later timestamp pages, even though IDs are unique within one page
  */
 export interface MessagePinsPage<M extends MessageCore = Message> {
@@ -40,7 +40,7 @@ export interface MessagePinsPage<M extends MessageCore = Message> {
 }
 
 /** Notice that a channel's pins changed, without identifying the pinned or unpinned message.
- * Fetch pins explicitly when you need the current list. No automatic fetch follows this event
+ * Fetch pins explicitly for the current list. This event does not fetch it automatically
  */
 export interface ChannelPinsUpdate {
     /** Affected channel ID as a decimal string */

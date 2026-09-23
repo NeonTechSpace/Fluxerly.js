@@ -97,11 +97,11 @@ export interface InstallationLinkOptions {
     readonly permissions?: bigint
 }
 
-/** A helper could not use your input. Default-API helpers return this in a Result, native helpers fail with it when run.
+/** A helper could not use its input. Default-API helpers return this in a Result, while native helpers fail with it when run.
  * Read `operation` and `reason` to identify the problem. The error does not store the rejected value
  */
 export class HelperError extends Error {
-    /** Stable expected-failure discriminator */
+    /** Fixed name that identifies this error type */
     readonly _tag = "HelperError"
 
     constructor(
@@ -143,8 +143,8 @@ export class HelperError extends Error {
 /** A key of Permissions, such as `"ManageMessages"`, accepted by the named permissionBits helpers */
 export type PermissionName = keyof typeof Permissions
 
-/** What permissionBits.inspect found in a stored bigint: Known names and any remaining unnamed flags.
- * Both this object and its names array are frozen. This is not a check of what a user is allowed to do
+/** Known permission names and any unnamed bits found by permissionBits.inspect.
+ * This object and its names array are frozen. They do not decide what a user may do
  */
 export interface PermissionBitInspection {
     /** Present known names in Permissions declaration order, not sorted by display label */
@@ -400,7 +400,7 @@ export const snowflakes: Readonly<{
     },
 })
 
-/** Choose a name to show from user and optional server-member information already held by your application */
+/** Choose a name to show from user and optional server-member information already held by the application */
 export const display: Readonly<{
     /** Return the member's nickname, otherwise the user's displayName, otherwise username.
      * Only null or undefined trigger a fallback. Supply a member for the same user, this helper does not check identity or fetch data

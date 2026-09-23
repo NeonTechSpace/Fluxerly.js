@@ -13,7 +13,8 @@ export async function writeHostingArtifacts(directory) {
         }
     }
     await visit(join(root, "docs"))
-    if (!pages.includes("/docs/latest")) throw new Error("Build has no latest documentation root")
+    if (!pages.includes("/docs/latest") && !pages.includes("/docs/preview"))
+        throw new Error("Build has no documentation root")
     const runtime = await readFile(new URL("./docs-routing.js", import.meta.url), "utf8")
     await writeFile(join(root, "_worker.js"), `${runtime}\nexport default createDocsHandler(${JSON.stringify(pages.sort())})\n`)
     await writeFile(join(root, "_routes.json"), JSON.stringify({

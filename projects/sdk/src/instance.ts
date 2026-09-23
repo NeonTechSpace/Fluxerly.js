@@ -2,14 +2,14 @@ import type { assets } from "./assets.js"
 import type { links } from "./helpers.js"
 
 /**
- * Connect a client to a selected Fluxer instance instead of the hosted default.
+ * Connect a client to a selected Fluxer server instead of the hosted default.
  * Omit the whole option to use hosted Fluxer.
- * The SDK reads the root's unauthenticated `/.well-known/fluxer` document when an operation first needs service endpoints.
+ * When an operation first needs service addresses, the SDK reads `/.well-known/fluxer` from that server without credentials.
  * It retains the resolved endpoints for this client's lifetime without background refresh
  *
  * Select only an instance you trust, since its advertised API and gateway origins can receive this client's credential.
  * Discovery follows at most three validated unauthenticated redirects.
- * Credentialed service requests do not follow redirects
+ * Requests that send credentials do not follow redirects
  */
 export interface InstanceOptions {
     /** Absolute HTTPS root URL that publishes `/.well-known/fluxer`, such as https://fluxer.example.
@@ -21,11 +21,11 @@ export interface InstanceOptions {
     readonly allowInsecure?: boolean
 }
 
-/** Set the time budget for an explicit instance.resolve call.
+/** Set how long an explicit instance.resolve call may spend finding the server's addresses.
  * The deadline covers discovery work, but the SDK still waits for owned response cleanup before completing
  */
 export interface InstanceResolveOptions {
-    /** Total discovery deadline in milliseconds, integer 1–2,147,483,647, default 30,000.
+    /** Time allowed to find service addresses, in milliseconds. Use an integer from 1–2,147,483,647. Default 30,000.
      * Includes bootstrap redirects and document reads, but required cleanup can take longer
      */
     readonly timeoutMs?: number
@@ -50,7 +50,7 @@ export interface InstanceEndpoints {
 }
 
 /**
- * The selected instance's resolved service endpoints and matching URL helpers.
+ * The selected server's service addresses and matching URL helpers.
  * This frozen result is retained for one client, not refreshed each time you resolve it.
  * Use assets and links to build URLs for this instance rather than the hosted default.
  * These helpers make no requests, inspect no credentials and do not refresh discovery or change caches

@@ -17,9 +17,9 @@ export interface ShardRecoveryDiagnostic {
 }
 
 /**
- * Divide the bot's server (guild) events among multiple gateway connections, called shards.
+ * Divide the bot's server (guild) events among gateway connections called shards.
  * Set this when the bot needs more than one gateway connection or this client should own only part of a shared shard plan.
- * A single client can own several shards. Separate processes are optional
+ * One client can own several shards within one process. Separate processes use separate clients
  *
  * Every process serving the same bot must use the same total and avoid overlapping ownership.
  * Omit shardIds to own every ID from zero through totalShards minus one

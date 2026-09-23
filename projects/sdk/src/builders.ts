@@ -6,8 +6,8 @@ import type { AllowedMentions, MessageInput, MessageReference } from "./messages
  * Assemble an embed by chaining methods, then pass `build()`'s plain object to a message operation.
  * Setters change this builder and return it so calls can be chained. Later setters replace earlier values, while field methods append.
  * Every build returns a fresh object, including copied author, footer, media and field objects.
- * Supported structural fields are read by name, including inherited and non-enumerable getters.
- * Non-record inputs and unknown own enumerable fields remain for message-operation validation.
+ * The builder reads supported properties by name, including inherited properties and getters that do not appear in normal key lists.
+ * Values that are not objects and unknown own enumerable fields remain for the message operation to validate.
  * Building sends nothing and performs no validation. Message operations check lengths, URLs and server limits
  */
 export class EmbedBuilder {
@@ -77,7 +77,7 @@ export class EmbedBuilder {
     }
 
     /** Add a named section after existing fields and return this builder.
-     * `inline` requests side-by-side display when true, it defaults to false when the message is sent
+     * Set inline to true to request side-by-side display. It defaults to false when the message is sent
      */
     field(name: string, value: string, inline?: boolean): this {
         this.fieldValues.push(inline === undefined ? { name, value } : { name, value, inline })
@@ -113,10 +113,10 @@ export class EmbedBuilder {
 /**
  * Assemble a message by chaining methods, then send the plain object returned by `build()`.
  * Methods change the same builder. Content and settings replace earlier values, while embeds, attachments and stickers append.
- * Supported structural fields are read by name, including inherited and non-enumerable getters.
- * Non-record inputs and unknown own enumerable fields remain for message-operation validation.
+ * The builder reads supported properties by name, including inherited properties and getters that do not appear in normal key lists.
+ * Values that are not objects and unknown own enumerable fields remain for the message operation to validate.
  * Building does not send or validate a message. In TypeScript, select content, an embed, an attachment or a sticker before calling build.
- * JavaScript can build an empty object, but message operations reject it. The HasBody type parameter tracks selection, not valid content
+ * JavaScript can build an empty object, but message operations reject it. The HasBody type parameter tracks whether a body was selected, not whether its content is valid
  */
 export class MessageBuilder<HasBody extends boolean = false> {
     declare private readonly hasBodyState: HasBody
@@ -308,8 +308,8 @@ function copyMessageReference(value: MessageReference): MessageReference {
     return copyStructuralInput(value, ["id", "channelId"])
 }
 
-/** Snapshot a record's own enumerable keys and each defined supported property read from the original receiver.
- * Non-record values stay intact for message-operation validation
+/** Copy an object's enumerable own keys and supported properties read from that object.
+ * Other values remain unchanged for the message operation to validate
  */
 function copyStructuralInput<Value extends object>(value: Value, properties: readonly (keyof Value)[]): Value {
     if (!structuralRecord(value)) return value

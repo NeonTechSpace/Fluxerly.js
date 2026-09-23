@@ -22,10 +22,10 @@ export const ChannelType: Readonly<{
     Link: 998,
 })
 
-/** Channel-specific grants and denials for one role or member.
- * A bit absent from both allow and deny leaves that permission to the other applicable roles and overwrites.
- * Use Permissions constants and bigint bitwise operators to build the bitfields. This is one explicit overwrite,
- * not the member's final permissions. SDK writes accept values through 9_223_372_036_854_775_807n and advertise
+/** Give or deny channel permissions to one role or member.
+ * A permission absent from both allow and deny remains subject to other applicable roles and overwrites.
+ * Build these bitfields with Permissions constants and bigint bitwise operators. This is one explicit overwrite,
+ * not the member's final permissions. SDK writes accept values through 9_223_372_036_854_775_807n and send
  * ViewChannelMembers replacements to Fluxer. Received values can use the full unsigned 64-bit range
  */
 export interface PermissionOverwrite {
@@ -39,8 +39,8 @@ export interface PermissionOverwrite {
     readonly deny: bigint
 }
 
-/** Settings and identity of a channel inside a guild, as observed by a read or gateway event.
- * The object is frozen and does not update when the channel changes. Optional fields can be unavailable rather than
+/** Settings and identity of a guild channel returned by a read or gateway event.
+ * The object is frozen and does not update when the channel changes. Optional fields may be unavailable rather than
  * set to their creation defaults. This excludes private conversations, which use DirectMessageChannel
  */
 export interface GuildChannel {
@@ -87,7 +87,7 @@ export interface GuildChannel {
 }
 
 /** Settings shared by new text, voice, category and link channels.
- * Supply the matching type through ChannelCreate. Fluxer decides which settings apply to that channel type and
+ * Supply the matching ChannelCreate type. Fluxer decides which settings apply to that channel type and
  * enforces permissions. Omitted permissionOverwrites inherit from the parent category, while [] requests none.
  * Unknown input keys fail locally. The encoded request body must fit within 4,194,304 bytes
  */
@@ -157,9 +157,9 @@ export interface LinkChannelCreate extends ChannelCreateBase {
 /** One supported guild-channel creation request, with Fluxer positioning a new channel itself */
 export type ChannelCreate = TextChannelCreate | VoiceChannelCreate | CategoryChannelCreate | LinkChannelCreate
 
-/** Change settings of an existing guild channel without replacing the channel.
- * Omitted fields stay unchanged. permissionOverwrites replaces the whole explicit list, so preserve entries you
- * still need. Use channels.reorder for category moves and ordering. Unknown keys and an empty patch fail locally.
+/** Change an existing guild channel's settings without replacing the channel.
+ * Omitted fields stay unchanged. permissionOverwrites replaces the whole explicit list, so include entries that
+ * must stay. Use channels.reorder to move a channel between categories or change its order. Unknown keys and an empty patch fail locally.
  * Fluxer checks channel-type compatibility and permissions after local validation
  */
 export interface ChannelEdit {
@@ -203,9 +203,9 @@ export interface ChannelEdit {
     readonly rtcRegion?: string | null
 }
 
-/** Move or reorder one existing guild channel as part of channels.reorder.
- * Unlisted channels are not explicit targets. Fluxer applies submitted entries sequentially, so this describes the
- * requested placement rather than a guaranteed final index during concurrent changes
+/** Move or reorder one guild channel with channels.reorder.
+ * Channels left out of the request are not explicit targets. Fluxer applies entries in order, so the requested position
+ * may not be the final position if another change happens at the same time
  */
 export interface ChannelPosition {
     /** Decimal channel ID */
@@ -265,9 +265,9 @@ export type ChannelOperation =
     | "channels.removePermissionOverwrite"
 
 /** Expected failure when reading or changing guild channels.
- * Read reason to identify the failure and check outcome before retrying a change. Metadata excludes tokens, private
- * input values and upstream response bodies. Default API calls return this error in an Err, while Effect-native calls
- * fail in the typed error channel
+ * Check reason to identify the failure. Check outcome before retrying a change because an uncertain write may have happened.
+ * The error contains no token, private input value or server response body. The default API returns it in an Err.
+ * The Effect API fails with it in its typed error channel
  */
 export class ChannelOperationError extends Error {
     /** Stable expected-failure discriminator */

@@ -24,13 +24,13 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * Selecting a field includes its nested values.
      * For example, messageSnapshots keeps its own media even when top-level media fields are excluded
      *
-     * This reduces locally constructed objects, not network payloads or server-side data.
+     * This reduces the objects the SDK builds locally, not network payloads or data stored by Fluxer.
      * The SDK still rejects malformed recognized response fields, even when you exclude them
      *
      * Unknown field names and non-arrays fail with ConfigurationError whose field is messageFields.
      * Including core field names is allowed and does not change the required core
      *
-     * TypeScript infers exact selections from literal tuples, but makes optional fields optional for arrays whose contents are unknown.
+     * TypeScript knows the exact selection when given a literal tuple. For an array whose contents are unknown, optional fields remain optional.
      * The copied selection lasts for this client's lifetime and does not affect separately created webhook clients or other resource types
      *
      * @example
@@ -46,7 +46,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * Select a self-hosted or other Fluxer instance instead of hosted Fluxer.
      * Creation checks the root URL without a request.
      * The first REST, gateway or instance.resolve operation that needs endpoints reads the unauthenticated discovery document.
-     * The client retains those endpoints until shutdown and trusts them for credentialed service requests.
+     * The client keeps those service addresses until shutdown and sends authenticated requests to them.
      * HTTPS and WSS are required unless you explicitly allow HTTP and WS with allowInsecure
      */
     readonly instance?: InstanceOptions
@@ -64,7 +64,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
     /**
      * Configure this client's log output without changing another client.
      * Creation copies and checks these settings without invoking a logger.
-     * Connection diagnostics and low-cardinality operation measurements are off by default, while handler, cache-policy and observer error reports remain enabled.
+     * Connection diagnostics and grouped operation measurements are off by default. Handler, cache-policy and observer error reports remain enabled.
      * SDK messages omit credentials, private payloads and raw upstream errors.
      * Logging does not consume or replace returned operation failures, and adds no telemetry service, background work or stored history
      *
@@ -97,15 +97,15 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      */
     readonly cache?: {
         /** Cache public account profiles from explicit reads and complete user events, not partial message authors.
-         * Local lookups improve eviction priority without renewing age.
+         * A local lookup makes the item less likely to be removed for capacity, but does not extend its age limit.
          * Targeted reads conflict only with later observations of the same account, so unrelated IDs can both populate.
-         * Reads without a target ID, lost gateway connections, clear and shutdown retain collection-wide fences
+         * Reads without a target ID, lost gateway connections, clear and shutdown can prevent older responses from restoring the whole category
          */
         readonly users?: boolean | ResourceCacheSettings
         /** Cache private conversations from explicit reads and complete channel events, without automatically listing them.
-         * Local lookups improve eviction priority without renewing age.
+         * A local lookup makes the item less likely to be removed for capacity, but does not extend its age limit.
          * Targeted reads, mutations and channel events conflict only for the same conversation.
-         * Full-list reads, opening by user ID, account updates, connection gaps, clear and shutdown retain collection-wide fences
+         * Full-list reads, opening by user ID, account updates, connection gaps, clear and shutdown can prevent older responses from restoring the whole category
          */
         readonly directMessages?: boolean | ResourceCacheSettings
         /** Cache guild details from explicit reads and guild create or update events, without preloading members or roles.
@@ -123,7 +123,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
          * Role deletion also clears cached memberships because assignments can change without individual member events.
          * A full list removes missing roles only when no conflicting observation overlaps the read.
          * Partial bulk events replace only the roles they supply.
-         * Byte accounting represents bigint permission fields as decimal strings
+         * The cache counts bigint permission fields as decimal strings when measuring bytes
          */
         readonly roles?: boolean | ResourceCacheSettings
         /** Cache emoji metadata from REST reads and writes, not image bytes or creator accounts.
@@ -147,7 +147,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
          * Omission or false disables this category, while true or an options object enables it.
          * Updates replace snapshots, while deletions and uncertain mutations remove them.
          * Lost gateway connections clear affected entries even when the session resumes successfully.
-         * Conflicting in-flight observations can cause misses.
+         * Overlapping reads and events can cause cache misses.
          * Shutdown releases this client's references, not messages still held by your application
          */
         readonly messages?: boolean | MessageCacheOptions<NoInfer<SelectedMessage<F>>>
@@ -184,10 +184,10 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
 }
 
 /**
- * The client's current gateway lifecycle state, not a history of events.
- * Disconnected permits startup, and Connecting includes startup retries until every local shard is ready at the same time.
+ * The client's current gateway connection state, not a history of events.
+ * Disconnected permits startup. Connecting includes startup retries until every shard owned by this client is ready at the same time.
  * Connected means every local shard is ready.
- * Recovering means an established shard has lost readiness and lasts until all local shards are ready again.
+ * Recovering means an established shard lost readiness and lasts until all shards owned by this client are ready again.
  * Other ready shards can continue work during Recovering.
  * Closing means permanent cleanup is underway, and Closed requires a new client to connect again
  */
@@ -243,7 +243,7 @@ export interface CacheDiagnostic {
     readonly maxBytes: number | null
 }
 
-/** Inspect this client's current connection state, request occupancy and cache accounting.
+/** Inspect this client's current connection state, occupied request slots and cache usage.
  * These local values do not describe other processes or guarantee that a later request can start or the gateway will stay ready.
  * Diagnostics include no token, remote route, resource ID or cached payload
  */
@@ -254,7 +254,7 @@ export interface ClientDiagnostics {
     readonly gatewayLatencyMs: number | null
     /** Current locally owned shard state only, in configured local order */
     readonly shards: readonly ShardState[]
-    /** Active and queued HTTP work shared by this client's operations.
+    /** HTTP requests running or waiting for a slot in this client.
      * Active values combine four REST or upload slots with four separate media-download slots.
      * Queued JSON bytes exclude attachment transfers and do not measure heap or process memory
      */
@@ -286,7 +286,7 @@ export interface ClientDiagnostics {
         /** Maximum logical requests allowed concurrently by this client */
         readonly activeCapacity: number
     }
-    /** Current event-work registrations owned by this client, not process memory or an enforced aggregate quota.
+    /** Current event sources, collectors and running callbacks owned by this client, not process memory or a shared quota.
      * Counts exclude other clients and application tasks outside SDK event handlers
      */
     readonly events: {

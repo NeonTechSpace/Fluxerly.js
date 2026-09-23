@@ -4,11 +4,11 @@ navTitle: Effect application testing
 description: Put the scoped client behind application services and replace those services in tests
 ---
 
-The native SDK client already belongs to the caller's Effect scope. An application Layer can expose that client alongside application-owned services without adding an SDK-specific Layer constructor or hidden runtime
+The native SDK client closes when the caller's Effect scope closes. An application Layer can provide that client alongside other services, so handlers can use both without starting another runtime
 
 ## Define application services and handlers
 
-Keep handler logic behind small application services. The live reply service delegates to the scoped SDK client, while tests can replace it without editing `handlePing`
+Keep the handler separate from the services it calls. In the running bot, the reply service uses the SDK client. In tests, replace that service without changing `handlePing`
 
 ```ts
 import { Context, Effect, Layer } from "effect";
@@ -70,11 +70,11 @@ export const repliesLayer = Layer.effect(
 );
 ```
 
-`Layer.effect` uses the Layer's scope for `createClient`. Closing the application scope runs the client's registered finalizer once. `BotReplies` keeps SDK operations out of the database-facing handler contract, but does not hide another runtime or connection
+`Layer.effect` creates the client inside the Layer's scope. Closing the application scope closes the client once. `BotReplies` lets the handler send replies without depending directly on SDK methods or starting another connection
 
 ## Assemble the live program
 
-The worker Layer needs the client Layer, while the assembled graph also retains that client for its scoped lifetime. `Layer.provideMerge` retains both services, and Layer memoization shares one client within this graph
+The worker Layer needs a client, which must stay available until the worker stops. `Layer.provideMerge` keeps both services available, and Layer memoization makes them share one client
 
 ```ts
 import { Context, Effect, Layer } from "effect";
@@ -154,9 +154,9 @@ export const liveApplication = (token: string) => {
 };
 ```
 
-This block inlines the small handler so it can be copied independently. A real application can import the `handlePing` function from the previous section instead
+This example includes its own handler so it can be copied alone. An application can import `handlePing` from the previous section instead
 
-Race `subscription.waitForClose()` with `client.run()` for every critical worker. Unexpected normal worker closure becomes `CriticalWorkerStopped`, while a typed subscription failure remains the application failure. `Effect.raceFirst` interrupts the other lifetime and the surrounding scope runs finalizers. A failed subscription must either fail the application or enter an explicit bounded restart policy. Effect does not replay failed event handlers
+Run `subscription.waitForClose()` and `client.run()` together for every subscription the bot needs, stopping when either finishes. If a subscription closes unexpectedly without an error, report `CriticalWorkerStopped`. A typed subscription error remains the application failure. `Effect.raceFirst` stops the other operation and the surrounding scope runs cleanup. A failed subscription must either stop the bot or trigger a restart with a limit on attempts. Effect does not replay failed event handlers
 
 ## Replace application services in a deterministic test
 
@@ -215,8 +215,8 @@ export function testPing(message: Message, replies: Array<string>) {
 }
 ```
 
-The test does not open a gateway or replace SDK internals. It replaces the application boundary consumed by the handler. Provider protocol scenarios still need the repository's controlled gateway fixtures or a separately designed public transport seam
+The test does not open a gateway or replace SDK internals. It replaces the application services used by the handler. Provider protocol scenarios still need the repository's controlled gateway fixtures or a separately designed public transport interface
 
 A native client captures the provided Effect `Clock` when `createClient` runs. Create the client inside the same provided Clock and Scope context when a test needs logical SDK time. `TestClock` can then advance event waits, message and reaction collectors, member-chunk timeouts, native command cooldowns, queued REST admission and deadlines, cache expiry, and presence or member-subscription pacing without real waiting
 
-`TestClock` does not control protocol absolute wall timestamps such as an HTTP-date `Retry-After`, bounded external I/O, WebSocket behavior or process shutdown watchdogs. Those boundaries still need controlled transport fixtures or their existing host-time tests
+`TestClock` does not control protocol timestamps such as an HTTP-date `Retry-After`, external I/O including WebSockets, or process shutdown watchdogs. Those cases still need controlled transport fixtures or tests using real time

@@ -4,7 +4,7 @@ const preferenceKey = "fluxerly.docs.example-language"
 
 test("Example language follows guide filenames, execution, navigation, reload and copy", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"])
-    await page.goto("/docs/dev/quick-start/")
+    await page.goto("/docs/preview/quick-start/")
     const example = page.locator("[data-example-block]").first()
     const selector = example.getByRole("combobox", { name: "Example language" })
     await expect(selector).toBeEnabled()
@@ -39,7 +39,7 @@ test("Example language follows guide filenames, execution, navigation, reload an
 
 test("Messages guide defaults to JavaScript and copies each selected language faithfully", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"])
-    await page.goto("/docs/dev/messages/")
+    await page.goto("/docs/preview/messages/")
     const examples = page.locator(".docs-content [data-example-block]")
     const first = examples.first()
     await expect(first).toBeVisible()
@@ -66,7 +66,7 @@ test("Messages guide defaults to JavaScript and copies each selected language fa
 })
 
 test("Canonical API TypeScript retains types that the executable JavaScript variant removes", async ({ page }) => {
-    await page.goto("/docs/dev/api/variables/js-ts.text/")
+    await page.goto("/docs/preview/api/variables/js-ts.text/")
     const example = page.locator("[data-example-block]").first()
     await expect(example.locator('[data-example-variant="js"]')).toBeVisible()
     const javascript = await example.locator('[data-example-variant="js"] code').textContent()
@@ -84,12 +84,12 @@ test("Canonical API TypeScript retains types that the executable JavaScript vari
 
 test("Global JavaScript preference never changes the native Effect guide examples", async ({ page }) => {
     await page.addInitScript((key) => localStorage.setItem(key, "js"), preferenceKey)
-    await page.goto("/docs/dev/api/modules/Effect/")
+    await page.goto("/docs/preview/api/modules/Effect/")
     await expect(page.locator("[data-example-language]")).toHaveCount(0)
     await expect(page.locator(".docs-content pre").first()).toBeVisible()
     await expect(page.locator(".docs-content pre").first()).toContainText("Effect")
     for (const slug of ["effect-first-bot", "effect-workflows"]) {
-        await page.goto(`/docs/dev/${slug}/`)
+        await page.goto(`/docs/preview/${slug}/`)
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible()
         await expect(page.locator("[data-example-language]")).toHaveCount(0)
         await expect(page.locator("[data-example-block]")).toHaveCount(0)
@@ -98,9 +98,9 @@ test("Global JavaScript preference never changes the native Effect guide example
 })
 
 test("Example preferences synchronize between open pages", async ({ page, context }) => {
-    await page.goto("/docs/dev/quick-start/")
+    await page.goto("/docs/preview/quick-start/")
     const other = await context.newPage()
-    await other.goto("/docs/dev/quick-start/")
+    await other.goto("/docs/preview/quick-start/")
     await page.locator("[data-example-language]").first().selectOption("ts")
     await expect(other.locator("[data-example-language]").first()).toHaveValue("ts")
     await expect(other.locator("[data-example-filename]")).toHaveText("bot.ts")
@@ -112,7 +112,7 @@ test("Blocked storage leaves language selection and execution usable for the cur
     await page.addInitScript(() => {
         Object.defineProperty(window, "localStorage", { get() { throw new DOMException("Blocked", "SecurityError") } })
     })
-    await page.goto("/docs/dev/quick-start/")
+    await page.goto("/docs/preview/quick-start/")
     await page.locator("[data-example-language]").first().selectOption("ts")
     await expect(page.locator("[data-example-filename]")).toHaveText("bot.ts")
     await expect(page.locator("[data-command-code]").filter({ hasText: "node bot.ts" })).toHaveCount(1)
@@ -123,7 +123,7 @@ test("Blocked storage leaves language selection and execution usable for the cur
 test("Without client JavaScript, the first bot remains readable and runnable", async ({ browser }) => {
     const context = await browser.newContext({ javaScriptEnabled: false })
     const page = await context.newPage()
-    await page.goto("http://127.0.0.1:4322/docs/dev/quick-start/")
+    await page.goto("http://127.0.0.1:4322/docs/preview/quick-start/")
     const example = page.locator("[data-example-block]").first()
     await expect(example.getByRole("combobox", { name: "Example language" })).toBeDisabled()
     await expect(example.locator('[data-example-variant="js"]')).toBeVisible()

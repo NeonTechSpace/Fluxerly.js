@@ -4,11 +4,11 @@ navTitle: Application supervision
 description: Keep gateway and worker health separate, then choose a fail or restart policy
 ---
 
-A connected gateway does not prove that every event subscription is still working. Handler failures are isolated so later events can continue, while a full subscription queue closes only that subscription. Application health therefore needs both the client state and the critical worker state
+A connected bot can still have a stopped event subscription. A failed handler does not stop later events, but a full subscription queue closes that subscription. Check both the connection and any subscription the bot needs to keep running
 
-## Run the client and critical worker together
+## Watch the connection and subscription
 
-This recipe treats a stopped `messageCreate` subscription as an application failure. It reports only typed failure kinds and counts, never event bodies or raw exceptions
+This example stops the bot if its `messageCreate` subscription stops. Health reports contain error types and counts, never event bodies or raw exceptions
 
 ```ts
 import {
@@ -189,29 +189,29 @@ export async function runSupervisedBot(
 }
 ```
 
-The health callback can feed a readiness endpoint or process supervisor. `diagnostics.state` describes gateway lifetime, request pressure and local queues. It does not establish that a critical worker is alive, so the separate worker state remains necessary
+The health callback can feed a readiness endpoint or process supervisor. `diagnostics.state` describes gateway state, request pressure and local queues. It does not establish that a critical worker is alive, so the separate worker state remains necessary
 
-`onError` counts an isolated handler failure while the subscription continues. Overflow changes the worker state to failed and `waitForClose` retains `EventOverflowError`. The recipe then aborts `client.run()` and awaits both lifetimes and final cleanup
+`onError` counts an isolated handler failure while the subscription continues. Overflow changes the worker state to failed and `waitForClose` retains `EventOverflowError`. The example then aborts `client.run()` and waits for the connection, worker and final cleanup
 
 ## Choose the application policy
 
-For a process-managed bot, return a failing exit status after `critical-worker-failed` and let the process manager create a fresh application. For an in-process restart policy, call `runSupervisedBot` again with a newly created client and an explicit bounded restart budget
+If a process manager runs the bot, exit with a failure status after `critical-worker-failed` so it can start a new process. To restart within the same process, call `runSupervisedBot` again with a new client and a limit on restart attempts
 
-A restart begins a new subscription from that point forward. It does not replay the failed handler invocation or events missed while no subscription was active. Durable jobs need an application-owned queue, idempotency rules and reconciliation rather than automatic event-handler replay
+A restart subscribes only to future events. It does not rerun the failed handler or recover events missed while the subscription was stopped. For work that must survive a restart, the application needs a durable queue, rules to prevent duplicate work and a way to check what already completed
 
 Noncritical subscriptions can keep their existing isolated-failure policy. Their handler failure does not close this critical subscription or the client. If a noncritical worker must affect readiness, supervise its `waitForClose()` explicitly too
 
-## Bound dynamic worker admission
+## Limit subscriptions created while the bot runs
 
-Each SDK subscription and collector has its own queue limits. Those limits are not a client-wide cap on the number of registrations, retained payloads or active handlers
+Each SDK subscription and collector limits its own queue. These limits do not cap how many subscriptions, stored event payloads or active handlers the client can have in total
 
-Keep fixed startup workers in one reviewed inventory. If the application creates workers dynamically, route every such creation through one application-owned budget. Reserve capacity before registration and release it only after registration fails or the worker's `waitForClose()` and required cleanup finish. A wrapper cannot enforce the budget when other code can register directly, so keep raw client access behind the same application boundary
+Keep a reviewed list of workers registered at startup. If the application creates workers dynamically, route every such creation through one application-owned budget. Reserve capacity before registration and release it only after registration fails or the worker's `waitForClose()` and required cleanup finish. A wrapper cannot enforce the budget if other code can register directly, so restrict direct client access to code that applies the same budget
 
-The `diagnostics.events` snapshot reports this client's open event sources, message collectors, reaction collectors and currently executing subscription callbacks. Use those payload-free counters to observe the policy and alert near its limits. They are not enforced caps, process-memory measurements or counts of collector filters and arbitrary application tasks. The application-owned reservation remains the admission authority
+The `diagnostics.events` snapshot reports this client's open event sources, message collectors, reaction collectors and currently executing subscription callbacks. Use those payload-free counters to monitor usage and alert near the budget's limits. They are not enforced caps, process-memory measurements or counts of collector filters and arbitrary application tasks. The application's reservations determine whether another worker can register
 
-Default handlers receive an `AbortSignal`, but ordinary callback Promises remain application-owned even when they cooperate with cancellation. Subscription closure and client shutdown do not wait for their eventual settlement. Returning and awaiting work preserves handler sequencing and failure reporting, not a drain guarantee
+Default handlers receive an `AbortSignal`, but the application must still track its own Promises, even when they respond to cancellation. Closing a subscription or client does not wait for those Promises to finish. Returning a Promise lets the SDK wait for that handler's work and report its failure while events are being handled, but does not make shutdown wait for that work
 
-Collector progress callbacks have a different ownership contract: Their completion waits for the returned callback work. Native Effect handlers use interruption and awaited scoped finalizers, as shown in the [Effect application testing recipe](/docs/{{version}}/effect-application-testing/)
+Collector progress callbacks behave differently: Their completion waits for the returned callback work. Native Effect handlers use interruption and awaited scoped finalizers, as shown in the [Effect application testing guide](/docs/{{version}}/effect-application-testing/)
 
 ## Drain application-owned work
 

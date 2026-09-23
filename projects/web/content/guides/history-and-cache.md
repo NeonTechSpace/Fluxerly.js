@@ -1,14 +1,14 @@
 ---
 title: Read history and use the message cache
 navTitle: History & cache
-description: Scan bounded history and treat cached messages as local observations
+description: Search a limited number of messages and use locally cached copies
 ---
 
-After your first reply bot works, use bounded history scans, indexed search and cached observations to read channel messages. This guide uses the default API, with switchable JavaScript and TypeScript examples
+After the [first reply bot](/docs/{{version}}/quick-start/) works, scan a limited number of messages, search the index or read cached copies. This guide uses the default API, with switchable JavaScript and TypeScript examples
 
-## Scan until you find one message
+## Scan for one message
 
-Find the first recent message that satisfies a rule. Add this reusable helper to a module where your bot already has a [`Client`](/docs/{{version}}/api/interfaces/js-ts.Client/)
+Find the first recent message that satisfies a rule. Add this helper to a module that already has a bot [`Client`](/docs/{{version}}/api/interfaces/js-ts.Client/)
 
 ```ts
 import type { Client, Message } from "@neontechspace/fluxerly"
@@ -26,13 +26,13 @@ export async function findRecentMessage(
 }
 ```
 
-The helper returns a Result containing the matching message or an iteration failure, or `undefined` after examining at most 200 messages
+The helper returns a Result with the matching message or an error from reading history. It returns `undefined` if none of the first 200 messages match
 
 The [`iterateHistory`](/docs/{{version}}/api/interfaces/js-ts.Messages/#iteratehistory) method reads newest first and requests later pages only as needed. Breaking after a match releases the buffered page. Older or inaccessible messages can remain outside this bounded result
 
 ## Search the message index
 
-When you know the text to find, ask Fluxer's search index for one page. Indexed search can lag behind recent messages and may report that the index is still being prepared
+When the search text is known, ask Fluxer's search index for one page. Indexed search can lag behind recent messages and may report that the index is still being prepared
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -45,13 +45,13 @@ export async function searchChannel(client: Client, channelId: string, text: str
 }
 ```
 
-This returns matching snapshots, an expected failure, or `undefined` while indexing. It does not poll or populate the cache. The SDK uses numbered pages. For another page, increase `page` while keeping `limit` unchanged
+This returns matching messages, an expected failure, or `undefined` while Fluxer prepares its search index. It does not keep checking the index or add results to the cache. To read another page, increase `page` and keep `limit` unchanged
 
-Use [`iterateSearch`](/docs/{{version}}/api/interfaces/js-ts.Messages/#iteratesearch) with an explicit `maxItems` when you want bounded multi-page traversal. Index changes can shift results while you scan
+Use [`iterateSearch`](/docs/{{version}}/api/interfaces/js-ts.Messages/#iteratesearch) with `maxItems` to limit a multi-page search. Index changes can shift results during the scan
 
-## Give the cache a small, explicit budget
+## Limit the message cache
 
-Retain a recent working set for local lookups. Create a client with a token supplied by your application
+Keep recent messages in memory for local lookups. Create a client with a token supplied by the application
 
 ```ts
 import { createClient } from "@neontechspace/fluxerly"
@@ -72,13 +72,13 @@ export function createCachedClient(token: string) {
 
 Eligible message reads, writes, history pages, and gateway events can retain up to 500 snapshots, subject to a two-megabyte accounted JSON budget and a one-minute age limit
 
-Caching is opt-in and memory-only. The client-wide entry and byte bounds exclude runtime overhead and copies your application still holds. Eviction, expiry, conflicting reads, and gateway gaps can all produce a miss
+The cache is disabled until configured, and stores data only in memory. Its entry and byte limits do not count runtime overhead or copies held elsewhere in the application. A message may be missing because it was removed to make room, expired, conflicted with another read or arrived during a gateway gap
 
 See [`ClientOptions.cache.messages`](/docs/{{version}}/api/interfaces/js-ts.ClientOptions/#cache) and [`MessageCacheSettings`](/docs/{{version}}/api/interfaces/js-ts.MessageCacheSettings/) for the complete cache contract
 
-## Use a local hit, then fetch when you need a remote read
+## Use the cache, then fetch if needed
 
-Avoid a request when an acceptable local observation is available, while still having a clear remote path. Pass a message reference with its `channelId` and `id`
+Use a cached message when it is recent enough for the task, and fetch it when a remote read is needed. Pass a message reference with its `channelId` and `id`
 
 ```ts
 import type { Client, MessageReference } from "@neontechspace/fluxerly"

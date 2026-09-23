@@ -22,8 +22,8 @@ export interface DefaultSupervisorChildContext {
     readonly client: Client
     /** Fixed assignment for this child process. It cannot be changed during this run */
     readonly assignment: SupervisorAssignment
-    /** Stop signal aborted when the parent requests shutdown or its message channel disconnects.
-     * Make asynchronous configure work cooperate with this signal. The helper cannot forcibly cancel a JavaScript promise
+    /** Signal aborted when the parent requests shutdown or its message channel disconnects.
+     * Setup work should check this signal and stop when it is aborted. The helper cannot forcibly cancel a JavaScript promise
      */
     readonly signal: import("#sdk/client").OperationSignal
 }
@@ -33,19 +33,19 @@ export interface DefaultSupervisorChildOptions extends SupervisorChildOptions {
     /** Register subscriptions and local application behavior before the helper calls client.run.
      * Return when setup is finished, not when the bot stops. Do not call client.run, connect or shutdown here.
      * A thrown error or rejected promise is a defect and rejects child.run with SdkDefect.
-     * Parent stop can finish child.run without awaiting this promise, so setup must observe context.signal to avoid later work
+     * A parent stop can finish child.run without waiting for this promise. Setup must check context.signal to avoid continuing afterward
      */
     readonly configure: (context: DefaultSupervisorChildContext) => void | Promise<void>
 }
 
 /**
- * Parent that starts and stops the child processes in one fixed local shard plan.
+ * Parent that starts and stops child processes for one fixed set of local shards.
  * Methods start their asynchronous work when called and return ResultAsync for expected failures.
  * Unexpected defects reject with SdkDefect instead of returning Err.
  * Creating this parent starts no child. Call shutdown to release its owned processes
  */
 export interface DefaultSupervisor {
-    /** Start the configured children and return Ok when each child acknowledges its assignment and finishes configure.
+    /** Start the configured children and return Ok when each child accepts its shard assignment and finishes configure.
      * This is setup completion, not gateway readiness. Use waitForReady to observe connected gateway sessions.
      * Concurrent calls share startup. Calling again does not create extra children or await replacement startup.
      * Failure returns SupervisorError only after owned processes exit. Start during or after shutdown returns reason closed.

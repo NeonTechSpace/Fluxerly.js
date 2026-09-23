@@ -1,7 +1,7 @@
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** Read a remote list one page at a time through an iterator or Effect Stream, with explicit item and page limits.
- * Supply maxItems to bound the number of delivered items. Pages are requested only when the current page has been consumed
+/** Read a Fluxer list one page at a time through an iterator or Effect Stream. Set item and page limits.
+ * Set maxItems to limit the number of delivered items. The SDK requests the next page only after the current one is consumed
  *
  * Each time you consume the iterator or Stream, it starts independently and copies the inputs then, not at creation
  *
@@ -11,7 +11,7 @@ import { freezeInputValidationDetail, type InputValidationDetail } from "./input
  * The SDK does not fetch ahead, persist results or remove duplicates across separate consumptions
  *
  * Each page uses its own request deadline. The item and page caps do not provide a total elapsed-time deadline.
- * Concurrent remote changes mean traversal is not a complete, consistent snapshot
+ * Changes on Fluxer during traversal can cause the pages to differ from a single complete snapshot
  */
 export interface PaginationQuery {
     /** Maximum items to deliver, a required positive safe integer. Reaching this cap finishes normally, without proving remote exhaustion */
@@ -24,7 +24,7 @@ export interface PaginationQuery {
      */
     readonly pageSize?: number
     /** Maximum page requests, a positive safe integer, default 100.
-     * A retry within one page does not count as another page. Duplicate-only pin pages do count.
+     * Retrying a request for the same page does not use another page allowance. Duplicate-only pin pages do count.
      * Needing a further page after this allowance fails with PaginationError reason pageLimit, preserving already-delivered items
      */
     readonly maxPages?: number
@@ -81,7 +81,7 @@ export type PaginationOperation =
 
 /** Reading multiple pages failed because of invalid settings, a page limit, a stalled cursor or search readiness.
  * Contains no resource IDs, response bodies or accumulated partial result.
- * Items already delivered remain yours. A remote request failure keeps the underlying page-operation error instead of becoming PaginationError.
+ * Items returned before the failure remain available to the application. A remote request failure keeps the underlying page-operation error instead of becoming PaginationError.
  * Default-API cancellation uses CancelledError, while native interruption stays in Effect Cause. Unexpected defects remain separate
  */
 export class PaginationError extends Error {

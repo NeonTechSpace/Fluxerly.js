@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path"
 import { channelTargets, defaultVersion, parseVersion, validateSnapshot } from "./versions.js"
 import { latestAliasFiles } from "./latest-alias.js"
 import { expandStarterExamples } from "./starter-examples.js"
+import { readSourcePlan } from "../../release/source.js"
 
 export const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdkRoot = resolve(webRoot, "../sdk")
@@ -89,8 +90,9 @@ export async function filesIn(directory, prefix = "") {
     return files.sort((a, b) => a.path.localeCompare(b.path))
 }
 
-export async function generateVersion(version, output) {
-    if (version !== "dev") parseVersion(version)
+export async function generateVersion(version, output, { plannedVersion } = {}) {
+    if (version !== "preview") parseVersion(version)
+    if (version === "preview" && plannedVersion) parseVersion(plannedVersion)
     await mkdir(output, { recursive: true })
     const { guides, navigation } = await readGuideInventory()
     const manifest = JSON.parse(await readFile(join(sdkRoot, "package.json"), "utf8"))
@@ -144,28 +146,28 @@ export async function generateVersion(version, output) {
     for (const name of ["Rest", "Gateway", "validateMessageBody", "InternalClient"])
         if (reflections.some((reflection) => reflection.name === name))
             throw new Error(`Internal-only declaration escaped into reference: ${name}`)
-    const intro = `Fluxerly.js connects your Node.js app to Fluxer.
-Use it to send messages, respond to events and build your own bot in JavaScript or TypeScript
+    const intro = `Fluxerly.js connects Node.js applications to Fluxer.
+It supports sending messages, responding to events and building bots in JavaScript or TypeScript
 
-${version === "dev" ? "These docs preview unreleased Canary code. There is no published package matching this preview" : `You're reading the docs for SDK **${version}**`}
+${version === "preview" ? `These docs describe changes in development${plannedVersion ? ` for SDK **${plannedVersion}**` : ""}. This version has not been released and cannot be installed yet` : `These docs cover SDK **${version}**`}
 
-## Start your bot
+## Start a bot
 
-Follow [Start your first bot](/docs/${version}/quick-start/) to install the SDK and make a bot that replies to !ping.
-Continue through the [cookbook](/docs/${version}/messages/) to add messages, commands, events, history, permissions and recovery.
-For an Effect application, start with [your first Effect bot](/docs/${version}/effect-first-bot/)
+Follow the [quick start](/docs/${version}/quick-start/) to install the SDK and make a bot that replies to !ping.
+The [message guide](/docs/${version}/messages/) covers replies, embeds and files.
+For an Effect application, start with [the Effect bot guide](/docs/${version}/effect-first-bot/)
 
 ## Find a method
 
-Already building? The [API reference](/docs/${version}/api/) lists the available methods and types.
+The [API reference](/docs/${version}/api/) lists the available methods and types.
 Use search to jump to a name such as \`createClient\`
 
 See the [changelog](/docs/${version}/changelog/) for version history
 `
     await writeFile(join(output, "index.md"), frontmatter("Build a Fluxer bot", "Overview") + intro)
-    const installation =
-        (version === "dev" ? "" : `This installs SDK **${version}**, matching these docs\n`) +
-        `\n\`\`\`command\n${JSON.stringify({ kind: "install", package: manifest.name, version })}\n\`\`\`\n`
+    const installation = version === "preview"
+        ? "This version is not available to install yet. Select a released version of the docs to follow this tutorial\n"
+        : `This installs SDK **${version}**, matching these docs\n\n\`\`\`command\n${JSON.stringify({ kind: "install", package: manifest.name, version })}\n\`\`\`\n`
     for (const guide of guides)
         await writeFile(
             join(output, `${guide.slug}.md`),
@@ -183,15 +185,15 @@ See the [changelog](/docs/${version}/changelog/) for version history
     await writeFile(
         join(output, "changelog.md"),
         frontmatter("Changelog") +
-            (version === "dev"
-                ? "This is unreleased Canary history. Prepared versions are not proof of registry publication\n\n"
+            (version === "preview"
+                ? "This is unreleased source history. Prepared versions are not proof of registry publication\n\n"
                 : `Release history recorded for SDK ${version}\n\n`) +
             (changelog || "No package releases have been recorded yet\n"),
     )
     await writeFile(
         join(output, "meta.json"),
         JSON.stringify({
-            title: version === "dev" ? "Canary" : version,
+            title: version === "preview" ? "Source preview" : version,
             root: "version",
             pages: navigation,
         }),
@@ -199,18 +201,31 @@ See the [changelog](/docs/${version}/changelog/) for version history
     await writeFile(join(output, "api/meta.json"), JSON.stringify({ title: "API reference" }))
 }
 
-export async function generate({ releasesDirectory = join(webRoot, "released") } = {}) {
+export async function generate({ releasesDirectory = join(webRoot, "released"), publicBuild = false, plannedVersion, previewChannel } = {}) {
     // This path is exclusively generated output, never an authored content directory
     if (generatedRoot !== resolve(webRoot, "content/docs")) throw new Error("Unsafe generated docs path")
-    await rm(generatedRoot, { recursive: true, force: true })
-    await generateVersion("dev", join(generatedRoot, "dev"))
-    const versions = []
     await mkdir(releasesDirectory, { recursive: true })
+    const snapshots = []
+    const versions = []
     for (const name of await readdir(releasesDirectory)) {
         if (!name.endsWith(".json")) continue
         const snapshot = validateSnapshot(JSON.parse(await readFile(join(releasesDirectory, name), "utf8")))
         if (versions.includes(snapshot.version)) throw new Error("Duplicate docs version")
         versions.push(snapshot.version)
+        snapshots.push(snapshot)
+    }
+    const selectedVersion = defaultVersion(versions)
+    if (publicBuild && !selectedVersion) throw new Error("Public documentation requires an imported published snapshot")
+    if (!publicBuild && plannedVersion === undefined) {
+        const manifest = JSON.parse(await readFile(join(sdkRoot, "package.json"), "utf8"))
+        const current = parseVersion(manifest.version)
+        const channel = previewChannel ?? (manifest.version === "0.0.0" ? "canary" : current.channel)
+        const plan = await readSourcePlan(resolve(webRoot, ".."), { channel, allowNoChanges: true })
+        plannedVersion = plan.plan.noPendingChanges ? null : plan.plan.version
+    }
+    await rm(generatedRoot, { recursive: true, force: true })
+    if (!publicBuild) await generateVersion("preview", join(generatedRoot, "preview"), { plannedVersion })
+    for (const snapshot of snapshots) {
         for (const file of snapshot.files) {
             const target = join(generatedRoot, snapshot.version, file.path)
             await mkdir(dirname(target), { recursive: true })
@@ -225,28 +240,36 @@ export async function generate({ releasesDirectory = join(webRoot, "released") }
             target,
             JSON.stringify({
                 ...metadata,
-                title: version === "dev" ? label : `${label} · ${version}`,
+                title: `${label} · ${version}`,
                 root: "version",
             }),
         )
     }
-    const selectedVersion = defaultVersion(versions)
-    for (const file of latestAliasFiles(await filesIn(join(generatedRoot, selectedVersion)), selectedVersion)) {
-        const target = join(generatedRoot, "latest", file.path)
-        await mkdir(dirname(target), { recursive: true })
-        await writeFile(target, file.content)
+    if (selectedVersion) {
+        for (const file of latestAliasFiles(await filesIn(join(generatedRoot, selectedVersion)), selectedVersion)) {
+            const target = join(generatedRoot, "latest", file.path)
+            await mkdir(dirname(target), { recursive: true })
+            await writeFile(target, file.content)
+        }
     }
     const selected = new Set(targets.map((target) => target.version))
     await writeFile(
         join(generatedRoot, "meta.json"),
         JSON.stringify({
-            pages: ["latest", ...targets.map((target) => target.version), ...versions.filter((v) => !selected.has(v))],
+            pages: [...(selectedVersion ? ["latest"] : []), ...(!publicBuild ? ["preview"] : []), ...targets.map((target) => target.version), ...versions.filter((v) => !selected.has(v))],
         }),
     )
     await writeFile(
         join(webRoot, "content/versions.json"),
-        JSON.stringify({ versions, targets, defaultVersion: selectedVersion }, null, 2) + "\n",
+        JSON.stringify({ versions, targets, defaultVersion: selectedVersion, previewVersion: publicBuild ? null : plannedVersion }, null, 2) + "\n",
     )
-    console.log(`Generated development reference and ${versions.length} released documentation snapshots`)
+    console.log(`Generated ${publicBuild ? "public" : "local"} documentation with ${versions.length} released snapshots`)
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await generate()
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+    const args = process.argv.slice(2)
+    if (args.length === 0) await generate()
+    else if (args[0] === "--public" && args.length === 1) await generate({ publicBuild: true })
+    else if (args[0] === "--preview-channel" && args.length === 2)
+        await generate({ previewChannel: args[1] })
+    else throw new Error("Use generate.js [--public | --preview-channel CHANNEL]")
+}

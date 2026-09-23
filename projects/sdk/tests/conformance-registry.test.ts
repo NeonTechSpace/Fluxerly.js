@@ -65,7 +65,7 @@ function publicInterfaces(path: "src/index.ts" | "src/effect.ts") {
             clientMembers: memberTypes("Client"),
             webhookMembers: memberTypes("WebhookClient"),
             factories: [
-                ...["createClient", "createWebhookClient"].filter((name) => exports.has(name)),
+                ...["createClient", "runBot", "createWebhookClient"].filter((name) => exports.has(name)),
                 ...valueMembers("oauth").map((name) => `oauth.${name}`),
             ].sort(),
             operations: new Map(

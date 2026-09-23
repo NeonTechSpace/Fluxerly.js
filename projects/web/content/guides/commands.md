@@ -1,16 +1,16 @@
 ---
-title: Give your bot prefix commands
+title: Add prefix commands to a bot
 navTitle: Commands
 description: Register a command, convert arguments and generate help from the same definitions
 ---
 
-A prefix command is a message such as `!ping` or `!greet Maya`. Fluxerly's optional command router matches the prefix, finds a registered command and calls your handler. It uses your existing client and does not connect another bot
+A prefix command is a message such as `!ping` or `!greet Maya`. Fluxerly's optional command router reads the name after the configured prefix and calls the matching handler. It uses the existing client and does not connect another bot
 
-These examples extend [the starter bot](/docs/{{version}}/quick-start/). Add commands to its existing batch or replace that batch with an installer. Call installers inside the `runBot` installation callback and return their subscriptions so the starter supervises each critical worker. Attaching a second router with another `ping` command can make both handlers reply
+These examples replace the plain message handler in [the starter bot](/docs/{{version}}/quick-start/). Call the command installer inside the `runBot` installation callback, check its Result and return its subscription in the array. Remove the original `!ping` handler to avoid duplicate replies
 
 ## Register and attach commands
 
-Register related commands in one immutable batch. The object keys become command names, and a failed definition or name collision rejects the whole batch without changing the earlier router
+Register related commands together. Each object key becomes a command name. If a definition is invalid or a name is already in use, registration fails and the existing router stays unchanged
 
 ```ts
 import { commands, type Client } from "@neontechspace/fluxerly"
@@ -42,11 +42,11 @@ export function installCommands(client: Client) {
 }
 ```
 
-Check the installer's Result. Its successful value is a subscription, which lets your application stop this router and observe its closure. Attachment errors are different from a later command execution failure
+Check the installer's Result. On success, it returns a subscription that the application can stop or wait for. An attachment failure happens during setup, while a command failure happens after a matching message arrives
 
-The bound `reply` uses the incoming message as its reference and forwards the handler's cancellation signal. The handler still checks its Result and throws an expected failure into the router's handler-error boundary. Returning an Err by itself would not report a callback failure
+The bound `reply` uses the incoming message as its reference and forwards the handler's cancellation signal. The handler still checks its Result and throws an expected failure for the router to report. Returning an Err by itself would not report a callback failure
 
-Batch entries follow JavaScript own enumerable string-key order and ignore inherited keys. Use `arguments: {}` when a command accepts no positional arguments. Use `arguments: undefined` when it should keep unrestricted raw `args`, matching an individually registered command with no argument schema. A group can be selected once with the batch's second argument
+Commands in a batch use the order of the object's own string keys. Inherited keys are ignored. Use `arguments: {}` when a command accepts no positional arguments. Use `arguments: undefined` to keep unrestricted raw `args`, as with an individually registered command that has no argument schema. Pass a group as the batch's second argument to apply it to every command
 
 ## Convert arguments before execution
 
@@ -130,6 +130,6 @@ export async function replyWithHelp(
 }
 ```
 
-Pass your final registered router to this helper from a help handler. Sequential sends preserve page order. A failed page does not remove pages already posted
+Pass the final registered router to this helper from a help handler. Sequential sends preserve page order. A failed page does not remove pages already posted
 
-For a larger bot, separate command definitions by feature and attach one composed router. [Groups, guards and cooldowns](/docs/{{version}}/api/interfaces/js-ts.DefaultPrefixCommandRouter/) can add structure when needed. Hidden help entries are presentation, not authorization. Apply your application's access policy in each command's guard
+For a larger bot, separate command definitions by feature and attach one combined router. [Groups, guards and cooldowns](/docs/{{version}}/api/interfaces/js-ts.DefaultPrefixCommandRouter/) can add structure when needed. Hidden help entries do not restrict access. Apply the application's access policy in each command's guard
