@@ -25,7 +25,7 @@
 </p>
 
 > [!NOTE]
-> Fluxerly is a prerelease SDK. Start with the [temporary Canary documentation](https://preview.fluxerly.neontechspace.com/docs/1000.0.0-canary.1/). Install the explicit `@canary` channel and review changes when upgrading
+> Fluxerly is a prerelease SDK. Start with the [temporary docs](https://preview.fluxerly.neontechspace.com/). Install the explicit `@canary` channel and review changes when upgrading
 >
 > Pull requests and issues open with the first stable release, alongside contribution guides and templates
 
