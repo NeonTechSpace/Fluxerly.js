@@ -19,13 +19,13 @@
 </p>
 
 <p align="center">
-<a href="https://www.npmjs.com/package/@neontechspace/fluxerly"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/canary.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Canary&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=dark"><img src="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/canary.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Canary&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=light" alt="npm Canary version"></picture></a>
+<a href="https://www.npmjs.com/package/@neontechspace/fluxerly"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/latest.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=npm&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=dark"><img src="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/latest.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=npm&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=light" alt="npm version"></picture></a>
   <a href="https://ossinsight.io/analyze/NeonTechSpace/Fluxerly.js#overview"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/OSS%20Insight-Analytics-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=OSS%20Insight&amp;labelColor=111827&amp;color=0891b2&amp;logo=github&amp;mode=dark"><img src="https://shieldcn.dev/badge/OSS%20Insight-Analytics-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=OSS%20Insight&amp;labelColor=111827&amp;color=0891b2&amp;logo=github&amp;mode=light" alt="OSS Insight: Repository analytics"></picture></a>
   <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Fluxer-Coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Fluxer&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=dark"><img src="https://shieldcn.dev/badge/Fluxer-Coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Fluxer&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=light" alt="Fluxer: Public community invite coming soon"></picture>
 </p>
 
 > [!NOTE]
-> Fluxerly is a prerelease SDK. Start with the [temporary docs](https://preview.fluxerly.neontechspace.com/). Install the explicit `@canary` channel and review changes when upgrading
+> Fluxerly is a prerelease SDK. Start with the [temporary docs](https://preview.fluxerly.neontechspace.com/) and review the changelog before upgrading
 >
 > Pull requests and issues open with the first stable release, alongside contribution guides and templates
 
@@ -39,13 +39,13 @@ Use Node.js 24.11 or newer. JavaScript needs no compiler. If you typecheck or co
 **npm**
 
 ```sh
-npm install @neontechspace/fluxerly@canary
+npm install @neontechspace/fluxerly
 ```
 
 **pnpm**
 
 ```sh
-pnpm add @neontechspace/fluxerly@canary
+pnpm add @neontechspace/fluxerly
 ```
 
 Keep your package manager's lockfile for reproducible installs. The SDK does not require the `--save-exact` option. Modern npm and pnpm normally install the required Effect peer automatically, even when you only use the default API
