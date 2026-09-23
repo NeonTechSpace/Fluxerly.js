@@ -2,22 +2,33 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { readFile, readdir } from "node:fs/promises"
 import { resolve, join, relative } from "node:path"
-import { channelTargets, defaultVersion, validateSnapshot } from "../scripts/versions.js"
+import { channelTargets, defaultVersion, retainedVersions, validateSnapshot } from "../scripts/versions.js"
 import { previewSettings } from "../scripts/preview-deploy.js"
 import { pageUrl } from "../scripts/reference-theme.js"
 import { remarkReferenceAnchors } from "../scripts/reference-anchors.js"
 
-test("Channel pointers prefer stable, retain exact archives and omit absent stages", () => {
+test("Channel pointers prefer Stable, use rolling prerelease paths and omit absent stages", () => {
     assert.deepEqual(channelTargets([]), [])
     assert.equal(defaultVersion(["1000.1.0-canary.0", "1000.0.0"]), "1000.0.0")
     assert.equal(defaultVersion(["1000.0.0-canary.2", "1000.0.0-rc.0"]), "1000.0.0-rc.0")
     assert.equal(channelTargets(["1000.0.0-canary.9", "1000.0.0-canary.10"])[0].version, "1000.0.0-canary.10")
     assert.deepEqual(channelTargets(["1000.0.0", "1000.1.0-rc.0", "1000.2.0-canary.0", "1000.2.0-canary.1"]), [
-        { version: "1000.0.0", label: "Stable" },
-        { version: "1000.1.0-rc.0", label: "RC" },
-        { version: "1000.2.0-canary.1", label: "Canary" },
+        { version: "1000.0.0", label: "Stable", path: "1000.0.0" },
+        { version: "1000.1.0-rc.0", label: "RC", path: "rc" },
+        { version: "1000.2.0-canary.1", label: "Canary", path: "canary" },
     ])
     for (const version of ["1000.0.0-alpha.0", "1000.0.0-beta.0"]) assert.throws(() => channelTargets([version]))
+})
+
+test("Retention keeps all Stable versions and only the newest of each prerelease channel", () => {
+    const versions = ["1000.0.0-canary.9", "1000.0.0-rc.0", "1000.0.0", "1000.0.0-canary.10",
+        "1000.0.0-rc.1", "1000.0.1", "1000.1.0", "1001.0.0"]
+    const original = [...versions]
+    assert.deepEqual(retainedVersions(versions), ["1000.0.0", "1000.0.0-canary.10", "1000.0.0-rc.1",
+        "1000.0.1", "1000.1.0", "1001.0.0"])
+    assert.deepEqual(versions, original)
+    assert.deepEqual(retainedVersions([]), [])
+    assert.deepEqual(retainedVersions(["1000.1.0-canary.9", "1000.2.0-canary.0"]), ["1000.2.0-canary.0"])
 })
 
 test("Snapshots reject traversal, duplicates, missing guides and invalid provenance", () => {

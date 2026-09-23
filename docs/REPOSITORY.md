@@ -98,7 +98,7 @@ Run these commands from [projects/](/projects/) using the development Node versi
 | `pnpm --filter @neontechspace/fluxerly test:npm` | Check npm installation of the packed SDK and required Effect peer |
 | `pnpm docs:dev` | Build the SDK, generate its public reference and start local Astro development |
 | `pnpm --filter fluxerly-docs test:browser` | Check the rendered development documentation in Chromium |
-| `pnpm --filter fluxerly-docs test:versions` | Check exact-version documentation using isolated release fixtures |
+| `pnpm --filter fluxerly-docs test:versions` | Check Stable history and rolling prerelease documentation using isolated release fixtures |
 | `pnpm --filter @neontechspace/fluxerly test:upstream:guild-features` | Opt-in current Fluxer toggle-set and cloning-guard source comparison, requiring authenticated `gh`. No provider requests or mutations |
 | `pnpm --filter @neontechspace/fluxerly test:experiment:effect-transport` | Run the rejected Effect unstable HTTP/socket transport characterization outside the default SDK check |
 
@@ -108,6 +108,8 @@ Formatting runs only within the SDK and respects its [.gitignore](/projects/sdk/
 The website and repository documents are outside these formatting commands
 
 Local networking checks use owned loopback fixtures, not Fluxer credentials or live sessions
+
+SDK tests use at most four workers by default so compiler-backed inventory checks do not overload the host alongside deadline-sensitive runtime checks. An explicit `VITEST_MAX_WORKERS` value overrides this limit for local investigation without skipping tests or changing their deadlines
 
 Run the packed-consumer check with Node.js 24.11.0 as well as the development runtime when changing runtime compatibility.
 Use `pnpm --filter @neontechspace/fluxerly test:package` after building with the development runtime.
@@ -476,6 +478,6 @@ A passing run establishes only its checked scenarios, not complete replay, prolo
 ## Release and documentation operations
 
 Use [releasing](/docs/RELEASING.md) for registry verification, manual workflow inputs and external setup.
-Use [documentation maintenance](/docs/DOCUMENTATION.md) for generated reference ownership, version archives and Preview delivery.
+Use [documentation maintenance](/docs/DOCUMENTATION.md) for generated reference ownership, published version channels and Preview delivery.
 The workflows share [.github/actions/setup](/.github/actions/setup/action.yml), which reads `projects/.node-version` and uses the pinned upstream `pnpm/setup` action to install Node, pnpm and locked dependencies.
 There is no separate `setup-node` step or second authored Node version

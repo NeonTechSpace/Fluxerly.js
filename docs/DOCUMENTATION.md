@@ -1,6 +1,6 @@
 # Documentation maintenance
 
-This guide covers SDK documentation authoring, local checks, exact-version archives and Preview delivery. The Astro website combines handwritten guides with a generated public API reference. Public delivery is Preview only. The permanent cinematic site remains deferred until the first stable SDK release
+This guide covers SDK documentation authoring, local checks, published version channels and Preview delivery. The Astro website combines handwritten guides with a generated public API reference. Public delivery is Preview only. The permanent cinematic site remains deferred until the first stable SDK release
 
 ## Where to edit
 
@@ -15,7 +15,7 @@ Apply [documentation placement](/docs/TECHNOLOGY.md#documentation-placement) bef
 Introduce the SDK with a bot that responds to a message. Show client creation, one handler and connection before configuration, error handling and shutdown. Put advanced overview notes in JSDoc `@remarks`, not in place of precise member behavior
 
 Use JavaScript & TypeScript for the default API section, `js-ts` in its generated URLs and `Default` in SDK identifiers.
-Published snapshot URLs remain tied to their original release
+Published Stable URLs remain tied to their original release. Canary and RC URLs show the newest published snapshot in their respective channels
 
 Lead with the reader's next task and explain unfamiliar concepts before use. Keep conditions beside consequences, and place necessary warnings before optional detail. Group sentences by purpose, with blank lines between Markdown paragraphs and empty comment lines between JSDoc paragraphs. Source wrapping does not end a paragraph. Omit the final period only at the end of a rendered paragraph, while retaining periods between its sentences
 
@@ -33,7 +33,7 @@ Each block offers a package-manager selector. The choice is saved in the browser
 
 After changing Markdown transforms, run `pnpm --filter fluxerly-docs exec astro build --force` to refresh Astro's content cache before inspecting the result
 
-Keep the complete generated reference tree for search, breadcrumbs and exact-version navigation even when the sidebar is compact
+Keep the complete current-version reference tree for search, breadcrumbs and version navigation even when the sidebar is compact. Each page sends only that version's navigation tree to the browser, with channel choices supplied separately
 
 Author default API examples in TypeScript. The build derives JavaScript, and the reader's language choice is remembered. Effect-native examples remain TypeScript-only. The starter uses the selected `bot.js` or `bot.ts` filename and run command, with `"type": "module"` in `package.json`
 
@@ -64,7 +64,7 @@ The packed-consumer check compiles guide examples against their authored packed 
 
 For rendered checks, install Chromium with `pnpm --filter fluxerly-docs exec playwright install chromium`.
 Run `pnpm --filter fluxerly-docs test:browser` for the development documentation.
-Run `pnpm --filter fluxerly-docs test:versions` for isolated exact-version fixtures
+Run `pnpm --filter fluxerly-docs test:versions` for isolated published-version fixtures
 
 The browser checks run Wrangler Pages on loopback port 4322 and refuse an occupied port. They check the emitted worker and static pages. Astro development or preview alone does not check HTTP redirects. Fixture versions are test data, not releases
 
@@ -73,7 +73,7 @@ The selected reading UI is dark and cozy with 20px body text.
 Keep noindex controls, and add no SEO or sitemap to this temporary site.
 See [the public API documentation gate](/docs/TECHNOLOGY.md#public-api-documentation-completion-gate) when SDK behavior changes
 
-## Exact-version archives
+## Published version channels
 
 The local `/docs/preview/` preview is regenerated from the current SDK build and labeled with its planned version and Unreleased status.
 Released docs come from retained snapshots, not the latest declarations relabeled with an old version
@@ -84,23 +84,22 @@ Release preparation binds that snapshot to the immutable package candidate.
 Publication requires the [registry contract and external setup](/docs/RELEASING.md#registry-publication-contract)
 
 Release import (`projects/web/scripts/fetch-releases.js`) uses authenticated `gh` reads for `NeonTechSpace/Fluxerly.js`.
-It checks the unique `docs.json` asset, SHA256 digest, size, version tag and resolved tag commit against the snapshot source
+It selects every Stable release and the newest published Canary and RC before downloading snapshots. Each selected snapshot requires a unique `docs.json` asset, matching SHA256 digest, size, version tag and resolved source commit. A failed newest snapshot stops the build rather than falling back to an older prerelease
 
 Imported archives live under ignored `projects/web/released/`.
 An import requires an empty generated archive directory and preserves existing or partial files on failure.
 Reconcile partial output explicitly rather than deleting it to hide an error.
 Archive imports are not multi-file atomic writes
 
-Each exact version has its own guide, reference, changelog and search index.
-The selector has one entry per available channel, ordered Stable, RC and Canary.
-The default uses that same order.
-The local source preview remains separate from published channels and is excluded from public builds
+The public site serves every published Stable version at its exact-version URL, plus the newest published Canary at `/docs/canary/` and the newest published RC at `/docs/rc/`. Each served version has its own guide, reference, changelog and search index. The rolling channel pages prominently identify the exact package version used for their content and installation commands
+
+The selector has one entry per available channel, ordered Stable, RC and Canary, with channel-only labels. Keep Canary and RC available after a Stable release, even if their newest snapshots are older than Stable. The local source preview remains separate from published channels and is excluded from public builds
 
 Release and documentation version parsing share the [release planner](/projects/release/planning.js)
 
-Changing channels keeps the same page when it exists in the destination version, otherwise it opens that version's introduction.
-Older exact versions stay accessible by URL without adding more selector entries.
-Exact version URLs remain tied to the retained snapshot even when a channel target advances
+Changing channels keeps the same page when it exists in the destination channel, otherwise it opens that channel's introduction. Navigation, search and documentation links on rolling channel pages use the channel path, without rewriting code examples or the original snapshots
+
+Retain every immutable release `docs.json` asset. Do not automatically delete Stable pages or introduce separate archive hosting. Use deployment file and byte counts, together with build and deployment timing, to decide whether Stable retention needs reconsideration later
 
 No channel or version should imply that a prepared version was actually published
 
@@ -108,16 +107,15 @@ No channel or version should imply that a prepared version was actually publishe
 
 The `/docs/latest/` address contains a build-time copy of the newest imported Stable snapshot, otherwise the newest RC, otherwise the newest Canary.
 It never falls back to unpublished source. Public builds require at least one imported published snapshot.
-The visible SDK label identifies the selected source version. Navigation, reference previews and search remain under `latest`, while changing to another channel opens its exact version
+The visible SDK label identifies the selected source version. Navigation, reference previews and search remain under `latest`, while changing to another channel opens its rolling channel path or a Stable exact-version path
 
-The generator rebases documentation link destinations in the alias without rewriting code examples or changing retained exact-version pages.
-An updated alias requires another build and separately authorized deployment. It does not query release metadata on each request
+The generator rebases documentation link destinations in aliases without rewriting code examples or changing retained snapshots. Alias updates require a successful documentation build and separately authorized deployment. They do not query npm or release metadata on each request
 
 The hosting integration (`projects/web/scripts/hosting.js`) inventories the emitted HTML and produces a self-contained Cloudflare Pages `_worker.js` and `_routes.json` in the selected build directory.
 The routing policy (`projects/web/scripts/docs-routing.js`) handles `/`, `/docs` and documentation paths. Both documentation entrances return HTTP 302 to `/docs/latest/`, without waiting for page JavaScript or a meta refresh
 
-Existing exact-version and latest pages pass through unchanged. Unknown versions and broken documentation paths redirect to an existing equivalent latest page when unambiguous, otherwise to its introduction.
-Malformed encoded paths fall back to the introduction rather than being interpreted as another path.
+Stable exact-version, rolling channel and latest pages pass through unchanged. Numbered Canary and RC paths return 404, with no redirects or compatibility routes. Other unknown versions and broken non-channel documentation paths redirect to an existing equivalent latest page when unambiguous, otherwise to its introduction. Missing pages in an emitted rolling channel redirect to that channel's introduction. An absent channel remains a 404 rather than falling back to Stable
+Malformed encoded paths fall back to the applicable channel introduction or latest introduction rather than being interpreted as another page, except numbered prerelease paths remain 404.
 Queries are preserved, and redirect targets come only from the built page inventory. Browsers retain fragments across redirects when the response supplies none
 
 Fallback applies only to GET and HEAD document requests. Assets, scripts, search JSON, unrelated routes and other methods are not redirected into documentation.
@@ -192,7 +190,7 @@ See [challenge-response detection](https://developers.cloudflare.com/cloudflare-
 
 Readback is bounded and retries transient reads, including provider rate-limit delays
 
-The deployment log identifies preflight, upload and readback phases, with elapsed upload messages every 30 seconds and elapsed readback waits.
+The deployment log reports local file count, total bytes and largest-file bytes, plus separate local preflight, target preflight, Wrangler and readback durations. Local bytes are not transferred bytes, and Wrangler time includes work other than network transfer. Elapsed upload messages appear every 30 seconds, with elapsed readback waits.
 Raw Wrangler output and child-process error details remain suppressed to protect credentials.
 An upload timeout starts child termination and waits for its close before reconciling the recorded deployment identity
 

@@ -3,10 +3,11 @@ import { createHash } from "node:crypto"
 import { lstat, mkdir, readFile, writeFile, readdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { validateSnapshot } from "./versions.js"
+import { parseVersion, retainedVersions, validateSnapshot } from "./versions.js"
 
 const repository = "NeonTechSpace/Fluxerly.js"
 const webRoot = fileURLToPath(new URL("../", import.meta.url))
+/** @param {string[]} args */
 function authenticatedRead(args) {
     try {
         return execFileSync("gh", args, {
@@ -27,6 +28,9 @@ function parseJson(bytes) {
     }
 }
 
+/**
+ * @param {{ root?: string, gh?: (args: string[]) => Buffer | Promise<Buffer> }} [options]
+ */
 export async function fetchReleases({ root = webRoot, gh = authenticatedRead } = {}) {
     const read = async (args) => {
         try {
@@ -46,11 +50,24 @@ export async function fetchReleases({ root = webRoot, gh = authenticatedRead } =
     const pages = parseJson(await read(["api", "--paginate", "--slurp", `repos/${repository}/releases?per_page=100`]))
     if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page)))
         throw new Error("Invalid paginated GitHub release inventory")
-    const archives = new Map()
+    const published = new Map()
     for (const release of pages.flat()) {
         if (release?.draft === true) continue
         if (release?.draft !== false || typeof release.tag_name !== "string" || !Array.isArray(release.assets))
             throw new Error("Invalid published GitHub release metadata")
+        const version = release.tag_name.slice(1)
+        try {
+            if (!release.tag_name.startsWith("v") || published.has(version)) throw new Error()
+            parseVersion(version)
+        } catch {
+            throw new Error("Release tag does not identify a unique docs version")
+        }
+        published.set(version, release)
+    }
+    const archives = new Map()
+    // Older prerelease snapshots stay on GitHub, but do not add downloads or pages to each build
+    for (const version of retainedVersions([...published.keys()])) {
+        const release = published.get(version)
         const docs = release.assets.filter((asset) => asset?.name === "docs.json")
         if (docs.length !== 1) throw new Error("Published release has no unique docs snapshot")
         const asset = docs[0]

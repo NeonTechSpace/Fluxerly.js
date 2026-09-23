@@ -1,25 +1,28 @@
-const escapePattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+import { parseVersion } from "./versions.js"
 
-function rebaseLinkTargets(value, sourceVersion) {
+const escapePattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+const labels = { latest: "Latest", rc: "RC", canary: "Canary" }
+
+function rebaseLinkTargets(value, sourceVersion, alias) {
     const version = escapePattern(sourceVersion)
     const boundary = "(?=[/#?\\s)\\\"'>]|$)"
     return value
-        .replace(new RegExp(`(\\]\\(\\s*<?)/docs/${version}${boundary}`, "g"), "$1/docs/latest")
-        .replace(new RegExp(`^(\\s{0,3}\\[[^\\]]+\\]:\\s*<?)/docs/${version}${boundary}`, "g"), "$1/docs/latest")
+        .replace(new RegExp(`(\\]\\(\\s*<?)/docs/${version}${boundary}`, "g"), `$1/docs/${alias}`)
+        .replace(new RegExp(`^(\\s{0,3}\\[[^\\]]+\\]:\\s*<?)/docs/${version}${boundary}`, "g"), `$1/docs/${alias}`)
         .replace(
             new RegExp(`(\\b(?:href|src)\\s*=\\s*[\\\"'])/docs/${version}${boundary}`, "g"),
-            "$1/docs/latest",
+            `$1/docs/${alias}`,
         )
 }
 
-function rebaseOutsideInlineCode(line, sourceVersion) {
+function rebaseOutsideInlineCode(line, sourceVersion, alias) {
     let output = ""
     let cursor = 0
     while (cursor < line.length) {
         const opening = line.slice(cursor).match(/`+/)
-        if (!opening || opening.index === undefined) return output + rebaseLinkTargets(line.slice(cursor), sourceVersion)
+        if (!opening || opening.index === undefined) return output + rebaseLinkTargets(line.slice(cursor), sourceVersion, alias)
         const start = cursor + opening.index
-        output += rebaseLinkTargets(line.slice(cursor, start), sourceVersion)
+        output += rebaseLinkTargets(line.slice(cursor, start), sourceVersion, alias)
         const delimiter = opening[0]
         const end = line.indexOf(delimiter, start + delimiter.length)
         if (end < 0) return output + line.slice(start)
@@ -29,8 +32,9 @@ function rebaseOutsideInlineCode(line, sourceVersion) {
     return output
 }
 
-export function rebaseLatestMarkdown(content, sourceVersion) {
-    if (!sourceVersion || sourceVersion === "latest") throw new Error("Latest alias requires an exact source version")
+export function rebaseAliasMarkdown(content, sourceVersion, alias) {
+    parseVersion(sourceVersion)
+    if (!Object.hasOwn(labels, alias)) throw new Error("Unknown documentation alias")
     let fence
     return content
         .split(/(?<=\n)/)
@@ -47,20 +51,22 @@ export function rebaseLatestMarkdown(content, sourceVersion) {
                 fence = { character: marker[1][0], length: marker[1].length }
                 return line
             }
-            return rebaseOutsideInlineCode(line, sourceVersion)
+            return rebaseOutsideInlineCode(line, sourceVersion, alias)
         })
         .join("")
 }
 
-export function latestAliasFiles(files, sourceVersion) {
-    if (!Array.isArray(files) || files.length === 0) throw new Error("Latest alias source is empty")
+export function docsAliasFiles(files, sourceVersion, alias) {
+    parseVersion(sourceVersion)
+    if (!Object.hasOwn(labels, alias)) throw new Error("Unknown documentation alias")
+    if (!Array.isArray(files) || files.length === 0) throw new Error("Documentation alias source is empty")
     return files.map((file) => {
         if (file.path === "meta.json") {
             const metadata = JSON.parse(file.content)
-            return { ...file, content: JSON.stringify({ ...metadata, title: "Latest", root: "version" }) }
+            return { ...file, content: JSON.stringify({ ...metadata, title: labels[alias], root: "version" }) }
         }
         return file.path.endsWith(".md")
-            ? { ...file, content: rebaseLatestMarkdown(file.content, sourceVersion) }
+            ? { ...file, content: rebaseAliasMarkdown(file.content, sourceVersion, alias) }
             : { ...file }
     })
 }

@@ -3,6 +3,7 @@ import { render, type CollectionEntry } from 'astro:content'
 import { Docs } from '../../components/Docs'
 import Layout from '../../components/Layout.astro'
 import { source } from '../../lib/source'
+import { treeForVersion } from '../../lib/docs-tree'
 import versions from '../../../content/versions.json'
 import { parseVersion } from '../../../scripts/versions.js'
 
@@ -17,23 +18,25 @@ const { entry } = Astro.props
 const { Content, headings } = await render(entry)
 const routeSlugs = Astro.params.slug!.split('/')
 const routeVersion = routeSlugs[0]!
-const sourceVersion = routeVersion === 'latest' ? versions.defaultVersion : routeVersion
+const targets: { version: string; label: string; path: string }[] = versions.targets
+const sourceVersion = routeVersion === 'latest' ? versions.defaultVersion
+  : targets.find((target) => target.path === routeVersion)?.version ?? routeVersion
 const channel = sourceVersion === 'preview' ? 'preview' : parseVersion(sourceVersion).channel
 const availableTargets = routeVersion === 'preview' || versions.previewVersion
-  ? [...versions.targets, { version: 'preview', label: 'Source preview' }]
-  : versions.targets
+  ? [...targets, { version: 'preview', label: 'Source preview', path: 'preview' }]
+  : targets
 const channelTabs = availableTargets.map((target) => ({
   label: target.label,
   url: source.getPage([
-    routeVersion === 'latest' && target.version === sourceVersion ? 'latest' : target.version,
+    routeVersion === 'latest' && target.version === sourceVersion ? 'latest' : target.path,
     ...routeSlugs.slice(1),
-  ])?.url ?? `/docs/${routeVersion === 'latest' && target.version === sourceVersion ? 'latest' : target.version}/`,
+  ])?.url ?? `/docs/${routeVersion === 'latest' && target.version === sourceVersion ? 'latest' : target.path}/`,
   active: channel === (target.version === 'preview' ? 'preview' : parseVersion(target.version).channel),
 }))
 const toc = headings.map((h) => ({ depth: h.depth, title: h.text === 'Remarks' ? 'Usage details' : h.text, url: `#${h.slug}` }))
 ---
 <Layout title={entry.data.title}>
-  <Docs tree={source.getPageTree()} pathname={Astro.url.pathname} params={Astro.params}
+  <Docs tree={treeForVersion(source.getPageTree(), routeVersion)} pathname={Astro.url.pathname} params={Astro.params}
     page={{ toc, footer: { enabled: routeSlugs[1] !== 'api' } }} version={routeVersion} channelTabs={channelTabs} client:load>
     <div class="version-label">{sourceVersion === 'preview' ? `${versions.previewVersion ? `Planned ${versions.previewVersion} · ` : ''}Unreleased source preview` : `SDK ${sourceVersion}`}</div>
     <h1>{entry.data.title}</h1>

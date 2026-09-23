@@ -19,7 +19,7 @@ Published npm metadata establishes version availability, not uploaded file-conte
 
 Use the pinned runtime and run commands from [projects/](/projects/). [Repository checks](/docs/REPOSITORY.md#development-checks) cover package and website validation. [Check](/.github/workflows/ci.yml) validates pull requests, pushes to `main` or `codex/**`, and manual runs without publishing
 
-For an SDK change, run `pnpm changeset` and select the public package and compatibility bump. Write caller-relevant notes, not an edited-file list. In later prerelease cycles, classify compatibility against the stable starting version. Breaking only a new preview API still requires migration notes, but does not itself break the stable API. Website-only changes need no SDK fragment. The wrapper permits fragment authoring and status, not direct versioning or publication
+For an SDK change, run `pnpm changeset` and select the public package and compatibility bump. Write caller-relevant notes, not an edited-file list. In later prerelease cycles, classify compatibility against the stable starting version. Breaking only a new preview API still requires migration notes, but does not itself break the stable API. Website, test and release-tooling changes that do not alter the published SDK need no SDK fragment. The wrapper permits fragment authoring and status, not direct versioning or publication
 
 Inspect a source-only proposal with `pnpm release:plan --channel canary`.
 Planning does not compare published npm package bytes or prove that a release is publishable.
@@ -69,7 +69,7 @@ For a manual run, open GitHub Actions and select Run workflow. Choose a branch w
 | [Release version PR](/.github/workflows/release-version.yml) | Prepare a reviewable version change | `source_ref` is a branch and `channel` is canary, rc or stable, producing a version and changelog PR unless content is unchanged |
 | [Release prepare](/.github/workflows/release-prepare.yml) | Validate merged release source and retain its exact candidate | `source_ref` is the reviewed merged ref or commit, producing the candidate artifact, preparation run ID and review checksum |
 | [Release publish](/.github/workflows/release-publish.yml) | Publish or reconcile the already reviewed candidate | Supply `preparation_run_id`, `candidate_checksum` and `operation`, which is `publish` by default or `reconcile` |
-| [Docs preview](/.github/workflows/docs-preview.yml) | Deploy the temporary documentation after Preview setup | No extra inputs, always reads `main`, imports released snapshots and deploys only the configured Preview target |
+| [Docs preview](/.github/workflows/docs-preview.yml) | Deploy the temporary documentation after Preview setup | No extra inputs, always reads `main`, imports verified release snapshots and deploys only the configured Preview target. The public build serves the newest Canary and RC under rolling channel paths and retains published Stable exact-version pages |
 
 `publish` uses npm OIDC. `reconcile` skips npm publication and verifies version availability for the same immutable candidate after npm has published. The release App authenticates only the GitHub tag and release, and Docs preview follows successful reconciliation
 
@@ -83,6 +83,9 @@ Leave these unset unless the [version and content rules](/docs/RELEASING.md#vers
 Check runs `pnpm check`, browser checks and a packed and npm-installed consumer matrix on the pinned Node version and declared minimum. Browser checks use a separate runner. Both matrix entries run despite one failure, with at most two consumer jobs at once. The final gate requires success from every job. Failed, cancelled, skipped or missing results cannot pass. The `SDK consumers on the declared Node floor` result name remains
 
 New automatic Check runs cancel older runs for the same event and ref. Push and pull-request checks remain separate Git states, and manual checks are independent. Version PRs use `GITHUB_TOKEN`, so approve their checks in the PR merge box before relying on them
+
+Release prepare reuses the newest successful main-push Check for the exact source commit, including its current attempt. A running check is awaited, while failed, cancelled, mismatched or unreadable evidence blocks preparation. Only a verified absence of matching runs falls back to full workspace, browser and declared-minimum-Node consumer checks.
+Reusing source checks does not reuse built artifacts. Preparation builds fresh SDK and documentation output, validates the exact-version snapshot and candidate checksums, then installs the candidate's actual tarball through npm and checks both public entry points before retaining it
 
 Release version PR serializes repository-wide because version branch names are shared. Release prepare serializes matching source, line and bootstrap inputs. Release publish uses separate npm publication and GitHub reconciliation queues. Reconciliation follows publication or runs directly for `operation: reconcile`. Docs preview has a separate queue shared by manual and called runs, without holding the npm lock
 
@@ -133,7 +136,9 @@ Never treat a checksum taken only from an untrusted replacement candidate as ext
 
 Publication-job concurrency and `.release-publish-npm.lock` serialize npm publishing. Verify that no publisher is active before removing a stale lock
 
-Publication stops if the npm version already exists. Otherwise it submits the retained tarball once. If npm's response is unclear, it checks registry metadata and reads it again when the version appears. This confirms that the version exists, but not that npm serves the reviewed file bytes
+Publication stops if the npm version already exists. Otherwise it submits the retained tarball once and waits up to 20 minutes for registry availability, reporting progress without repeating the upload. Transient metadata failures use the same deadline. A final metadata read confirms that the version exists, but not that npm serves the reviewed file bytes
+
+GitHub reconciliation retains a newly created release's ID and polls delayed release, asset, tag and latest visibility for one minute per check. Individual provider requests have separate timeouts. Lost create, upload or update responses lead to readback, not repeated writes. Source, release notes and asset-content conflicts still stop reconciliation
 
 If the provider outcome is uncertain, preserve the same immutable candidate and inspect its npm status before any further action.
 Do not rebuild a candidate or attempt publication for a version that metadata already reports as published

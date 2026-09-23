@@ -15,6 +15,7 @@ on:
         type: boolean
 permissions:
   contents: read
+  actions: read
 cache-mode: read
 concurrency:
   group: release-prepare-${{ inputs.source_ref }}-${{ inputs.line }}-${{ inputs.bootstrap }}
@@ -36,24 +37,34 @@ jobs:
         id: support
         working-directory: projects
         run: pnpm release:check
+      - name: Reuse successful checks for the exact source or require full validation
+        id: ci
+        working-directory: projects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node web/scripts/checked-source.js --allow-missing
       - name: Run the aggregate workspace check
         id: workspace
+        if: steps.ci.outputs.reused == 'false'
         working-directory: projects
         run: pnpm check
-      - name: Check npm consumer installation
-        id: npm
-        working-directory: projects
-        run: pnpm --filter @neontechspace/fluxerly test:npm
       - name: Install the test browser
         id: browser_install
+        if: steps.ci.outputs.reused == 'false'
         working-directory: projects
         run: pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
       - name: Check the documentation in a browser
         id: browser
+        if: steps.ci.outputs.reused == 'false'
         working-directory: projects
         run: |
           pnpm --filter fluxerly-docs test:browser
           pnpm --filter fluxerly-docs test:versions
+      - name: Build fresh artifacts from the CI-checked source
+        id: build
+        if: steps.ci.outputs.reused == 'true'
+        working-directory: projects
+        run: pnpm build
       - name: Snapshot the checked documentation and prepare an immutable candidate
         id: candidate
         working-directory: projects
@@ -90,6 +101,23 @@ jobs:
             appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
           }
           NODE
+      - name: Check installation of the exact candidate tarball
+        id: npm
+        if: steps.candidate.outputs.skipped != 'true'
+        working-directory: projects
+        run: pnpm --filter @neontechspace/fluxerly test:npm --candidate "$RUNNER_TEMP/release-candidate"
+      - uses: ./.github/actions/setup
+        id: floor_setup
+        if: steps.ci.outputs.reused == 'false' && steps.candidate.outputs.skipped != 'true'
+        with:
+          runtime-policy: consumer-floor
+      - name: Check consumers on the declared Node floor when CI is unavailable
+        id: floor
+        if: steps.ci.outputs.reused == 'false' && steps.candidate.outputs.skipped != 'true'
+        working-directory: projects
+        run: |
+          pnpm --filter @neontechspace/fluxerly test:package
+          pnpm --filter @neontechspace/fluxerly test:npm --candidate "$RUNNER_TEMP/release-candidate"
       - name: Retain the immutable candidate
         id: artifact
         if: steps.candidate.outputs.skipped != 'true'

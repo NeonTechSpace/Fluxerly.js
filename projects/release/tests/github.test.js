@@ -83,10 +83,14 @@ async function fixture(t, { version = "1000.0.0", existing, newer = false } = {}
         async release() {
             return release ? structuredClone(release) : null
         },
+        async releaseById(id) {
+            return release?.id === id ? structuredClone(release) : null
+        },
         async create(input) {
             mutations.push("create")
             release = { ...input, id: 1, assets: [], html_url: "https://github.com/example/release" }
             if (uncertainCreation) throw new Error("Connection lost after create")
+            return structuredClone(release)
         },
         async tagCommit() {
             return release ? (release.sourceCommit ?? sourceCommit) : null
@@ -150,6 +154,139 @@ test("A lost create/upload response is reconciled by exact readback and rerun do
     await reconcileRelease(f.candidate, f.directory, f.github)
     assert.equal(f.mutations.filter((value) => value.startsWith("upload:")).length, 5)
     assert.equal(f.mutations.filter((value) => value === "publish").length, 1)
+})
+
+test("A successful create response uses its ID while tag and list reads lag", async (t) => {
+    const f = await fixture(t)
+    let elapsed = 0
+    let idReads = 0
+    let tagReads = 0
+    const release = f.github.release
+    const releaseById = f.github.releaseById
+    f.github.release = async () => ++tagReads <= 4 ? null : release()
+    f.github.releaseById = async (id) => {
+        idReads++
+        return idReads <= 3 ? null : releaseById(id)
+    }
+    const result = await reconcileRelease(f.candidate, f.directory, f.github, {
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    })
+    assert.equal(result.tag, "v1000.0.0")
+    assert.equal(f.mutations.filter((value) => value === "create").length, 1)
+    assert.ok(elapsed >= 15_000)
+})
+
+test("A lost create response waits for delayed tag visibility without creating twice", async (t) => {
+    const f = await fixture(t)
+    f.setUncertainCreation()
+    let elapsed = 0
+    let invisibleReads = 3
+    const release = f.github.release
+    f.github.release = async (...args) => invisibleReads-- > 0 ? null : release(...args)
+    await reconcileRelease(f.candidate, f.directory, f.github, {
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    })
+    assert.equal(f.mutations.filter((value) => value === "create").length, 1)
+    assert.ok(elapsed >= 10_000)
+})
+
+test("A lost upload response waits for delayed asset visibility without uploading twice", async (t) => {
+    const f = await fixture(t)
+    f.setUncertainUpload()
+    let elapsed = 0
+    let staleReads = 2
+    const releaseById = f.github.releaseById
+    f.github.releaseById = async (id) => {
+        const item = await releaseById(id)
+        if (item?.assets.length && staleReads-- > 0) item.assets = []
+        return item
+    }
+    await reconcileRelease(f.candidate, f.directory, f.github, {
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    })
+    assert.equal(f.mutations.filter((value) => value === "upload:notes.md").length, 1)
+    assert.ok(elapsed >= 10_000)
+})
+
+test("An in-progress asset waits for uploaded state without a second upload", async (t) => {
+    const f = await fixture(t)
+    let elapsed = 0
+    let pendingReads = 2
+    const releaseById = f.github.releaseById
+    f.github.releaseById = async (id) => {
+        const item = await releaseById(id)
+        if (item?.assets.length && pendingReads-- > 0) item.assets[0].state = "new"
+        return item
+    }
+    await reconcileRelease(f.candidate, f.directory, f.github, {
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    })
+    assert.equal(f.mutations.filter((value) => value === "upload:notes.md").length, 1)
+    assert.ok(elapsed >= 10_000)
+})
+
+test("An invisible asset fails explicitly at the deadline without a second upload", async (t) => {
+    const f = await fixture(t)
+    let elapsed = 0
+    const releaseById = f.github.releaseById
+    f.github.releaseById = async (id) => {
+        const item = await releaseById(id)
+        if (item?.assets.length) item.assets = []
+        return item
+    }
+    await assert.rejects(reconcileRelease(f.candidate, f.directory, f.github, {
+        visibilityTimeout: 10_000,
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    }), /asset contents are unconfirmed/)
+    assert.equal(f.mutations.filter((value) => value === "upload:notes.md").length, 1)
+    assert.equal(elapsed, 10_000)
+})
+
+test("A lost publish update response is reconciled without repeating the update", async (t) => {
+    const f = await fixture(t)
+    const update = f.github.update
+    f.github.update = async (...args) => {
+        await update(...args)
+        throw new Error("Response lost after update")
+    }
+    await reconcileRelease(f.candidate, f.directory, f.github)
+    assert.equal(f.getRelease().draft, false)
+    assert.equal(f.mutations.filter((value) => value === "publish").length, 1)
+})
+
+test("Final tag verification waits for delayed Git ref visibility", async (t) => {
+    const f = await fixture(t)
+    let elapsed = 0
+    let missingReads = 2
+    const tagCommit = f.github.tagCommit
+    f.github.tagCommit = async (...args) =>
+        f.getRelease() && !f.getRelease().draft && missingReads-- > 0 ? null : tagCommit(...args)
+    await reconcileRelease(f.candidate, f.directory, f.github, {
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    })
+    assert.equal(elapsed, 10_000)
+})
+
+test("An unconfirmed publish update stops at the deadline without repeating the update", async (t) => {
+    const f = await fixture(t)
+    let elapsed = 0
+    f.github.update = async () => {
+        f.mutations.push("publish")
+        throw new Error("Update failed")
+    }
+    await assert.rejects(reconcileRelease(f.candidate, f.directory, f.github, {
+        visibilityTimeout: 10_000,
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    }), /final readback/)
+    assert.equal(f.mutations.filter((value) => value === "publish").length, 1)
+    assert.equal(elapsed, 10_000)
 })
 
 test("Older stable lines and prereleases never become latest", async (t) => {
@@ -222,7 +359,7 @@ test("An interrupted asset upload leaves a draft and retry resumes only missing 
         if (path.endsWith("docs.json")) throw new Error("No response before upload")
         return upload(tag, path)
     }
-    await assert.rejects(reconcileRelease(f.candidate, f.directory, f.github), /unconfirmed/)
+    await assert.rejects(reconcileRelease(f.candidate, f.directory, f.github, { visibilityTimeout: 0 }), /unconfirmed/)
     assert.equal(f.getRelease().draft, true)
     assert.deepEqual(f.mutations, ["create", "upload:notes.md"])
     f.github.upload = upload

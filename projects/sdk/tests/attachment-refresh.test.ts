@@ -9,7 +9,10 @@ import { hostedOperationCalls, stubFetchWithHostedDiscovery } from "./hosted-dis
 const modes = ["default", "native"] as const
 const operationUrl = "https://api.fluxer.app/v1/attachments/refresh-urls"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+})
 
 async function settle<A>(value: ResultAsync<A, unknown> | Effect.Effect<A, unknown>): Promise<A> {
     if (Effect.isEffect(value)) {
@@ -222,10 +225,16 @@ test.each(modes)("%s bounds the refresh response body and cancels its reader", a
 })
 
 test.each(modes)("%s applies the shared request deadline and awaits abort cleanup", async (mode) => {
+    vi.useFakeTimers({ now: 0, toFake: ["Date", "performance", "setTimeout", "clearTimeout"] })
     let cleaned = false
+    let markRequestStarted!: () => void
+    const requestStarted = new Promise<void>((resolve) => {
+        markRequestStarted = resolve
+    })
     stubFetchWithHostedDiscovery(
         (_url, init) =>
             new Promise<Response>((_resolve, reject) => {
+                markRequestStarted()
                 init.signal?.addEventListener(
                     "abort",
                     () => {
@@ -238,11 +247,16 @@ test.each(modes)("%s applies the shared request deadline and awaits abort cleanu
     )
     const api = await setup(mode)
 
-    await expect(api.refresh(["x"], { timeoutMs: 10 })).rejects.toMatchObject({
+    const pending = api.refresh(["x"], { timeoutMs: 10 })
+    const failure = expect(pending).rejects.toMatchObject({
         _tag: "AttachmentRefreshError",
         reason: "timeout",
         outcome: "unknown",
     })
+    await requestStarted
+    expect(cleaned).toBe(false)
+    await vi.advanceTimersByTimeAsync(10)
+    await failure
     expect(cleaned).toBe(true)
 })
 

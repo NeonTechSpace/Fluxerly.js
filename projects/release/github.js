@@ -52,22 +52,71 @@ export function validatePreparation(run, artifacts, { repository, runId, workflo
     return { artifactId: artifact.id, artifactName: artifact.name, sourceCommit, workflowCommit: run.head_sha }
 }
 
-export async function reconcileRelease(candidate, directory, github) {
+export async function reconcileRelease(
+    candidate,
+    directory,
+    github,
+    {
+        wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+        now = () => performance.now(),
+        visibilityTimeout = 60_000,
+        delay = 5000,
+    } = {},
+) {
     if (!commitPattern.test(candidate.sourceCommit) || !candidate.docs)
         throw new Error("GitHub announcements require the checked source commit and documentation snapshot")
+    if (!Number.isFinite(visibilityTimeout) || visibilityTimeout < 0 || !Number.isFinite(delay) || delay <= 0)
+        throw new Error("Invalid GitHub release visibility deadline or delay")
     parseVersion(candidate.version)
     const tag = `v${candidate.version}`
     const notes = await readFile(join(directory, "notes.md"), "utf8")
     const expected = new Map(
         await Promise.all(assetNames.map(async (name) => [name, await readFile(join(directory, name))])),
     )
+    async function readRelease(id) {
+        const byId = id === undefined ? null : await github.releaseById(id)
+        return byId ?? github.release(tag)
+    }
+    async function awaitVisibility(id, matches = () => true) {
+        const started = now()
+        for (;;) {
+            const visible = await readRelease(id)
+            if (visible && matches(visible)) return visible
+            const remaining = visibilityTimeout - (now() - started)
+            if (remaining <= 0) return visible
+            await wait(Math.min(delay, remaining))
+        }
+    }
+    async function awaitLatest() {
+        const started = now()
+        for (;;) {
+            const latestRelease = await github.latest()
+            if (latestRelease?.tag_name === tag) return true
+            const remaining = visibilityTimeout - (now() - started)
+            if (remaining <= 0) return false
+            await wait(Math.min(delay, remaining))
+        }
+    }
+    async function awaitTagCommit() {
+        const started = now()
+        for (;;) {
+            const commit = await github.tagCommit(tag)
+            if (commit === candidate.sourceCommit) return true
+            if (commit !== null) return false
+            const remaining = visibilityTimeout - (now() - started)
+            if (remaining <= 0) return false
+            await wait(Math.min(delay, remaining))
+        }
+    }
     let release = await github.release(tag)
+    let createdHere = false
     if (!release) {
         const existingCommit = await github.tagCommit(tag)
         if (existingCommit !== null && existingCommit !== candidate.sourceCommit)
             throw new Error("Existing GitHub tag source conflicts with this candidate")
+        let created
         try {
-            await github.create({
+            created = await github.create({
                 tag_name: tag,
                 target_commitish: candidate.sourceCommit,
                 name: tag,
@@ -77,10 +126,11 @@ export async function reconcileRelease(candidate, directory, github) {
                 make_latest: "false",
             })
         } catch {
-            // A failed response can follow a completed creation, read back before retrying
+            // A failed response can follow a completed creation. Never create again here
         }
-        release = await github.release(tag)
+        release = await awaitVisibility(created?.id)
         if (!release) throw new Error("GitHub release creation is unconfirmed, retry the same candidate")
+        createdHere = true
     }
     const taggedCommit = await github.tagCommit(tag)
     if (
@@ -92,6 +142,12 @@ export async function reconcileRelease(candidate, directory, github) {
         release.prerelease !== (candidate.channel !== "stable")
     )
         throw new Error("Existing GitHub release tag, source, notes or readiness conflicts with this candidate")
+    // The upload command resolves a draft by tag, not by release ID
+    if (createdHere) {
+        const tagVisible = await awaitVisibility(undefined, (item) => item.id === release.id)
+        if (tagVisible?.id !== release.id)
+            throw new Error("GitHub release tag is not visible for asset upload, retry the same candidate")
+    }
     for (const asset of release.assets) {
         if (!expected.has(asset.name)) throw new Error("Existing GitHub release contains an unexpected asset")
     }
@@ -104,7 +160,11 @@ export async function reconcileRelease(candidate, directory, github) {
             } catch {
                 // Do not clobber an existing asset after an uncertain upload result
             }
-            release = await github.release(tag)
+            release = await awaitVisibility(release.id, (item) =>
+                item.assets.some((asset) => asset.name === name && asset.state === "uploaded"),
+            )
+            if (!release)
+                throw new Error("GitHub release asset contents are unconfirmed or conflicting, retry the same candidate")
         }
         const assets = release.assets.filter((asset) => asset.name === name)
         if (
@@ -129,21 +189,29 @@ export async function reconcileRelease(candidate, directory, github) {
     const latest =
         candidate.channel === "stable" && versions.every((version) => compareVersions(candidate.version, version) >= 0)
     if (release.draft) {
-        await github.update(release.id, {
-            draft: false,
-            target_commitish: candidate.sourceCommit,
-            make_latest: latest ? "true" : "false",
-        })
-    } else if (latest && (await github.latest()).tag_name !== tag) {
-        await github.update(release.id, { make_latest: "true" })
+        try {
+            await github.update(release.id, {
+                draft: false,
+                target_commitish: candidate.sourceCommit,
+                make_latest: latest ? "true" : "false",
+            })
+        } catch {
+            // A failed response can follow a completed update. Reconcile without repeating it
+        }
+    } else if (latest && (await github.latest())?.tag_name !== tag) {
+        try {
+            await github.update(release.id, { make_latest: "true" })
+        } catch {
+            // Confirm the latest-release state without issuing a second update
+        }
     }
-    const final = await github.release(tag)
+    const final = await awaitVisibility(release.id, (item) => !item.draft && item.assets.length === expected.size)
     if (
         !final ||
         final.draft ||
         final.body !== notes ||
         final.prerelease !== (candidate.channel !== "stable") ||
-        (await github.tagCommit(tag)) !== candidate.sourceCommit ||
+        !(await awaitTagCommit()) ||
         final.assets.length !== expected.size
     )
         throw new Error("GitHub release final readback does not match this candidate")
@@ -157,7 +225,7 @@ export async function reconcileRelease(candidate, directory, github) {
         )
             throw new Error("GitHub release final asset readback does not match this candidate")
     }
-    if (latest && (await github.latest()).tag_name !== tag)
+    if (latest && !(await awaitLatest()))
         throw new Error("GitHub latest-release readback failed, retry this candidate")
     return { tag, sourceCommit: candidate.sourceCommit, url: final.html_url, latest }
 }
@@ -217,10 +285,11 @@ export function createGithub(repository) {
             if (matches.length > 1) throw new Error("GitHub has ambiguous releases for this tag")
             return matches[0] ?? null
         },
+        releaseById: (id) => api(`releases/${id}`, { allowMissing: true }),
         create: (input) => api("releases", { method: "POST", input }),
         update: (id, input) => api(`releases/${id}`, { method: "PATCH", input }),
         releases: () => pages("releases"),
-        latest: () => api("releases/latest"),
+        latest: () => api("releases/latest", { allowMissing: true }),
         async tagCommit(tag) {
             const ref = await api(`git/ref/tags/${encodeURIComponent(tag)}`, { allowMissing: true })
             if (!ref) return null

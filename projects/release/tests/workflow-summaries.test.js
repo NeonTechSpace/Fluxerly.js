@@ -102,6 +102,36 @@ test("Preview credentials are read from the website environment", () => {
     assert.match(source, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/)
 })
 
+test("Preparation retains fresh builds and exact candidate installation when reusing source checks", () => {
+    const source = readFileSync(join(repository, ".github/workflows/release-prepare.yml"), "utf8")
+    assert.match(source, /actions: read/)
+    assert.match(source, /node web\/scripts\/checked-source\.js --allow-missing/)
+    const steps = source.split(/^      - /m).slice(1)
+    const step = (id) => steps.find((body) => body.includes(`id: ${id}\n`) || body.includes(`id: ${id}\r\n`))
+    for (const id of ["workspace", "browser_install", "browser"])
+        assert.match(step(id), /if: steps\.ci\.outputs\.reused == 'false'/)
+    assert.match(step("build"), /if: steps\.ci\.outputs\.reused == 'true'/)
+    assert.match(step("build"), /run: pnpm build/)
+    assert.match(step("npm"), /test:npm --candidate "\$RUNNER_TEMP\/release-candidate"/)
+    assert.ok(steps.indexOf(step("candidate")) < steps.indexOf(step("npm")))
+    assert.ok(steps.indexOf(step("npm")) < steps.indexOf(step("artifact")))
+    for (const id of ["floor_setup", "floor"])
+        assert.match(step(id), /if: steps\.ci\.outputs\.reused == 'false' && steps\.candidate\.outputs\.skipped != 'true'/)
+    assert.match(step("floor_setup"), /runtime-policy: consumer-floor/)
+    assert.match(step("floor"), /test:package/)
+    assert.match(step("floor"), /test:npm --candidate/)
+    assert.ok(steps.indexOf(step("floor")) < steps.indexOf(step("artifact")))
+    for (const reused of [true, false]) {
+        const checks = successfulSteps("prepare")
+        checks.ci.outputs = { reused: String(reused), run_url: reused ? "https://github.com/example/run/123" : "" }
+        for (const id of reused ? ["workspace", "browser_install", "browser", "floor_setup", "floor"] : ["build"])
+            checks[id].outcome = "skipped"
+        assert.match(renderSummary({ kind: "prepare", steps: checks }), /Listed checks and effects succeeded/)
+        checks.npm.outcome = "skipped"
+        assert.match(renderSummary({ kind: "prepare", steps: checks }), /Incomplete/)
+    }
+})
+
 test("Preview reuses exact-source CI without dropping the full published documentation check", () => {
     const source = readFileSync(join(repository, ".github/workflows/docs-preview.yml"), "utf8")
     assert.match(source, /actions: read/)

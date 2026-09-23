@@ -95,6 +95,31 @@ test("Drafts are skipped without reading assets or source tags", async (t) => {
     assert.equal(f.calls.length, 1)
 })
 
+test("Imports retain Stable history and read only the newest published RC and Canary snapshots", async (t) => {
+    const items = [release("1000.0.0-canary.9", 1), release("1000.0.0", 2), release("1000.0.0-rc.0", 3),
+        release("1000.0.1", 4), release("1000.0.0-canary.10", 5), release("1000.0.0-rc.1", 6)]
+    const draft = release("1000.1.0-canary.0", 7)
+    draft.metadata.draft = true
+    const f = await fixture(t, [...items, draft], { pages: [items.slice(0, 3).map((item) => item.metadata),
+        [...items.slice(3).map((item) => item.metadata), draft.metadata]] })
+    assert.deepEqual((await f.run()).imported, ["1000.0.0", "1000.0.1", "1000.0.0-canary.10", "1000.0.0-rc.1"])
+    for (const id of [1, 3, 7]) assert.ok(!f.calls.some((args) => args.includes(`repos/${repository}/releases/assets/${id}`)))
+    for (const item of [items[1], items[3], items[4], items[5]]) {
+        const version = item.metadata.tag_name.slice(1)
+        assert.deepEqual(await readFile(join(f.directory, `${version}.json`)), item.bytes)
+    }
+})
+
+test("A broken newest prerelease fails instead of falling back to an older release", async (t) => {
+    const previous = release("1000.0.0-rc.0", 1)
+    const newest = release("1000.0.0-rc.1", 2)
+    newest.bytes = Buffer.from("Invalid newest snapshot")
+    const f = await fixture(t, [previous, newest])
+    await assert.rejects(f.run(), /checksum mismatch/)
+    assert.deepEqual(await readdir(f.directory), [])
+    assert.ok(!f.calls.some((args) => args.includes(`repos/${repository}/releases/assets/1`)))
+})
+
 test("Malformed inventories and incomplete or duplicate docs assets are rejected without output", async (t) => {
     const item = release()
     const inventories = [
@@ -202,7 +227,7 @@ test("Existing archives and files added during reads are preserved and reject th
     assert.equal(existing.calls.length, 0)
     assert.equal(await readFile(join(existing.directory, "user-owned.json"), "utf8"), "Keep this file")
     const concurrent = await fixture(t, [], {
-        read: async (args, count, root) => {
+        read: async (_args, _count, root) => {
             await writeFile(join(root, "released", "concurrent.json"), "Keep concurrent file")
             return encode([[]])
         },

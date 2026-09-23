@@ -1,4 +1,5 @@
 // This module is also emitted into the Cloudflare Pages worker
+const prereleaseVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(?:canary|rc)\.(?:0|[1-9]\d*)$/
 export function docsRedirect(request, routes, root = "/docs/latest/") {
     if (request.method !== "GET" && request.method !== "HEAD") return null
     const url = new URL(request.url)
@@ -15,11 +16,28 @@ export function docsRedirect(request, routes, root = "/docs/latest/") {
     const asset = /\.(?:js|mjs|cjs|css|json|map|png|jpe?g|gif|svg|ico|webp|avif|woff2?|ttf|otf|pdf|txt|xml|wasm|zip)$/i
     if (asset.test(decoded ?? path) || /\/(?:_astro|assets|_image|search)(?:\/|$)/.test(decoded ?? path)) return null
     if (path === "/" || path === "/docs" || path === "/docs/") return root + url.search
-    // Reject ambiguous encodings rather than interpreting them as another route
-    if (!decoded || /[%\\\x00-\x1f\x7f]/.test(decoded) || /%2f|%5c/i.test(path) || decoded.includes("//")) return root + url.search
+    // Reject ambiguous encodings rather than interpreting them as another page
+    if (!decoded || /[%\\\x00-\x1f\x7f]/.test(decoded) || /%2f|%5c/i.test(path) || decoded.includes("//")) {
+        const rawVersion = /^\/docs\/([^/]+)(?:\/|$)/.exec(path)?.[1]
+        if (prereleaseVersion.test(rawVersion)) return null
+        const channel = rawVersion === "canary" || rawVersion === "rc" ? rawVersion : null
+        if (channel) return routes.has(`/docs/${channel}`) ? `/docs/${channel}/` + url.search : null
+        return root + url.search
+    }
     const canonical = decoded.replace(/\/$/, "")
-    if (routes.has(canonical)) return null
     const parts = canonical.slice("/docs/".length).split("/")
+    const version = parts[0]
+    // Numbered prerelease pages are not published and must not fall back to another version
+    if (prereleaseVersion.test(version)) return null
+    const channel = version === "canary" || version === "rc" ? version : null
+    if (channel) {
+        const channelRoot = `/docs/${channel}`
+        // A channel that was not emitted must remain a 404, never a Stable fallback
+        if (!routes.has(channelRoot)) return null
+        if (routes.has(canonical)) return null
+        return `${channelRoot}/` + url.search
+    }
+    if (routes.has(canonical)) return null
     const suffix = parts.slice(1).join("/")
     const candidates = new Set([
         ...(suffix ? [`${root}${suffix}`.replace(/\/$/, "")] : []),

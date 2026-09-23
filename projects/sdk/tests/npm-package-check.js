@@ -3,9 +3,10 @@ import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { stageRelease } from "../scripts/packages.js"
+import { readCandidate } from "../../release/candidate.js"
 
 const sdk = fileURLToPath(new URL("../", import.meta.url))
 const source = JSON.parse(readFileSync(join(sdk, "package.json"), "utf8"))
@@ -13,6 +14,12 @@ const require = createRequire(import.meta.url)
 const npmManifest = require("npm/package.json")
 assert.match(source.devDependencies.npm, /^\d+\.\d+\.\d+$/, "Pin the npm consumer-test CLI exactly")
 const npm = join(dirname(require.resolve("npm/package.json")), npmManifest.bin.npm)
+const args = process.argv.slice(2)
+if (args.length && (args.length !== 2 || args[0] !== "--candidate" || !isAbsolute(args[1])))
+    throw new Error("Use no arguments or --candidate ABSOLUTE_DIRECTORY")
+const candidate = args.length ? await readCandidate(args[1]) : null
+if (candidate && (candidate.name !== source.name || candidate.version !== source.version))
+    throw new Error("Candidate identity does not match the checked source")
 const root = realpathSync(tmpdir())
 const temporary = mkdtempSync(join(root, "fluxerly-npm-package-check-"))
 function run(args, cwd, timeout = 120_000) {
@@ -22,7 +29,12 @@ try {
     const npmVersion = run([npm, "--version"], temporary).trim()
     assert.equal(npmVersion, source.devDependencies.npm, "Use the pinned npm CLI on the selected Node runtime")
     console.log(`npm packed peer check runtime: Node ${process.version}, npm ${npmVersion}`)
-    const staged = await stageRelease({ version: source.version, output: join(temporary, "artifacts") })
+    const staged = candidate
+        ? { npm: { tarball: join(args[1], "sdk.tgz"), directory: join(args[1], "npm") } }
+        : await stageRelease({ version: source.version, output: join(temporary, "artifacts") })
+    const files = candidate
+        ? Object.keys(candidate.files)
+        : JSON.parse(readFileSync(staged.manifestPath, "utf8")).npm.map((file) => file.path)
     const install = [
         npm,
         "install",
@@ -60,11 +72,8 @@ try {
         }
         assert.equal(result.status, 0, result.stdout + result.stderr)
         const installed = join(consumer, "node_modules", source.name)
-        for (const file of JSON.parse(readFileSync(staged.manifestPath, "utf8")).npm) {
-            assert.deepEqual(
-                readFileSync(join(installed, file.path)),
-                readFileSync(join(staged.npm.directory, file.path)),
-            )
+        for (const file of files) {
+            assert.deepEqual(readFileSync(join(installed, file)), readFileSync(join(staged.npm.directory, file)))
         }
         assert.equal(
             existsSync(join(consumer, "node_modules/typescript")),

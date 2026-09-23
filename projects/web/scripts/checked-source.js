@@ -13,11 +13,11 @@ function readGitHub(path, timeout) {
             timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true,
         }))
     } catch {
-        throw new Error("Exact-source Check evidence is unavailable, no Preview upload is authorized")
+        throw new Error("Exact-source Check evidence is unavailable")
     }
 }
 
-export async function requireCheckedSource(source, io = {}) {
+export async function requireCheckedSource(source, io = {}, { allowMissing = false } = {}) {
     if (!/^[a-f0-9]{40}$/.test(source ?? "")) throw new Error("An exact checkout source commit is required")
     const read = io.read ?? readGitHub
     const now = io.now ?? Date.now
@@ -47,7 +47,7 @@ export async function requireCheckedSource(source, io = {}) {
                 throw new Error("The Check run does not match the exact main checkout and workflow")
             if (run.status === "completed") {
                 if (run.conclusion !== "success")
-                    throw new Error(`Check run ${run.id} did not pass, no Preview upload is authorized`)
+                    throw new Error(`Check run ${run.id} did not pass`)
                 if (now() >= deadline) break
                 return { sourceCommit: source, runId: run.id, runAttempt: run.run_attempt,
                     runUrl: `https://github.com/${repository}/actions/runs/${run.id}` }
@@ -55,19 +55,28 @@ export async function requireCheckedSource(source, io = {}) {
             if (!["queued", "in_progress", "waiting", "pending", "requested"].includes(run.status))
                 throw new Error("The Check run state is not recognized")
             progress(`Waiting for Check run ${run.id} to finish for the exact checkout`)
-        } else progress("Waiting for the exact checkout's main push Check run to appear")
+        } else {
+            // Only a verified empty inventory permits full local validation instead
+            if (allowMissing && now() < deadline) return null
+            progress("Waiting for the exact checkout's main push Check run to appear")
+        }
         if (attempt < 30 && now() < deadline) await sleep(Math.min(20_000, deadline - now()))
     }
-    throw new Error("The exact-source Check gate timed out, no Preview upload is authorized")
+    throw new Error("The exact-source Check gate timed out")
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     try {
         const source = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).trim()
-        const result = await requireCheckedSource(source, { progress: console.log })
+        const args = process.argv.slice(2)
+        if (args.length && (args.length !== 1 || args[0] !== "--allow-missing"))
+            throw new Error("Only --allow-missing is supported")
+        const result = await requireCheckedSource(source, { progress: console.log }, { allowMissing: args.length === 1 })
         if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT,
-            `run_id=${result.runId}\nrun_url=${result.runUrl}\nsource_commit=${result.sourceCommit}\n`)
-        console.log(`Reused successful Check run ${result.runId}, attempt ${result.runAttempt}, for ${source}`)
+            `reused=${result !== null}\nrun_id=${result?.runId ?? ""}\nrun_url=${result?.runUrl ?? ""}\nsource_commit=${source}\n`)
+        console.log(result
+            ? `Reused successful Check run ${result.runId}, attempt ${result.runAttempt}, for ${source}`
+            : "No main-push Check exists for this source. Full preparation checks are required")
     } catch (error) {
         console.error(error.message)
         process.exitCode = 1

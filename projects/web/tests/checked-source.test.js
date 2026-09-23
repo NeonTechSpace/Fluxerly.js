@@ -103,3 +103,17 @@ test("Invalid source and deadline-expired evidence cannot be reused", async () =
     await assert.rejects(requireCheckedSource(source, slow.io), /timed out/)
     assert.deepEqual(slow.sleeps, [])
 })
+
+test("Preparation fallback requires a verified empty inventory, never failed or unreadable evidence", async () => {
+    const missing = fixture([inventory([])])
+    assert.equal(await requireCheckedSource(source, missing.io, { allowMissing: true }), null)
+    assert.deepEqual(missing.sleeps, [])
+    for (const data of [inventory([{ ...run, conclusion: "failure" }]), {},
+        inventory([run, { ...run, id: 789, conclusion: "cancelled" }])])
+        await assert.rejects(requireCheckedSource(source, fixture([data]).io, { allowMissing: true }))
+    await assert.rejects(requireCheckedSource(source, { read: async () => { throw new Error("Unavailable") } },
+        { allowMissing: true }), /Unavailable/)
+    const queued = fixture([inventory([{ ...run, status: "queued", conclusion: null }]), inventory([run])])
+    assert.equal((await requireCheckedSource(source, queued.io, { allowMissing: true })).runId, run.id)
+    assert.deepEqual(queued.sleeps, [20_000])
+})

@@ -61,10 +61,14 @@ export const summaryProfiles = {
         checks: [
             ...common,
             ["support", "Registry publication contract gate"],
+            ["ci", "Exact-source Check evidence or full-validation fallback"],
             ["workspace", "Aggregate workspace check"],
-            ["npm", "npm-installed consumers"],
             ...browser,
+            ["build", "Fresh SDK and documentation build when CI is reused"],
             ["candidate", "Checked documentation snapshot and immutable candidate"],
+            ["npm", "npm installation and runtime checks of the exact candidate tarball"],
+            ["floor_setup", "Declared minimum Node runtime when CI is unavailable"],
+            ["floor", "Packed and candidate consumers on the declared Node floor"],
             ["artifact", "Immutable candidate artifact upload"],
         ],
         scope: "Preparation does not publish packages. The registry support gate remains enforced",
@@ -159,7 +163,11 @@ export function renderSummary({ kind, steps = {}, details = {}, runId, workflowC
         outcome(steps.deploy) === "success" &&
         (!previewDeploymentUrl || !["verified", "challenged"].includes(previewDomainStatus))
     const required = profile.checks.filter(
-        ([id]) => id !== "browser_evidence" && !(unpublished && ["release_token", "announce"].includes(id)),
+        ([id]) => id !== "browser_evidence" && !(unpublished && ["release_token", "announce"].includes(id)) &&
+            !(kind === "prepare" && outcome(steps.ci) === "success" && (
+                (output("ci", "reused") === "true" && ["workspace", "browser_install", "browser", "floor_setup", "floor"].includes(id)) ||
+                (output("ci", "reused") === "false" && id === "build")
+            )),
     )
     const failed = profile.checks.filter(([id]) => ["failure", "cancelled"].includes(outcome(steps[id])))
     const skipped = required.filter(([id]) => ["skipped", "not reported"].includes(outcome(steps[id])))
@@ -226,6 +234,8 @@ export function renderSummary({ kind, steps = {}, details = {}, runId, workflowC
             ["Candidate version", output("candidate", "version")],
             ["Candidate channel", output("candidate", "channel")],
             ["Candidate retention", "90 days after upload"],
+            ["Source validation", output("ci", "reused") === "true" ? "Reused exact-source Check" : "Full preparation checks"],
+            ["Reused Check run", output("ci", "run_url")],
         )
     if (kind === "version")
         values.push(

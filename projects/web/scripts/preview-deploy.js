@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { appendFile, mkdtemp, readFile, readdir, rm } from "node:fs/promises"
+import { appendFile, lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { tmpdir } from "node:os"
@@ -36,6 +36,34 @@ const webRoot = fileURLToPath(new URL("../", import.meta.url))
 const deploymentId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
 const noindex = (value) => /(?:^|[\s,:])noindex(?:$|[\s,])/i.test(value ?? "")
 const elapsed = (milliseconds) => `${Math.max(0, Math.floor(milliseconds / 1_000))}s`
+
+// Count the checked local files, not bytes sent over the network or Wrangler's upload payload
+export async function measureLocalArtifact(root, io = {}) {
+    const list = io.readdir ?? readdir
+    const inspect = io.lstat ?? lstat
+    let fileCount = 0
+    let totalBytes = 0
+    let largestFileBytes = 0
+    async function walk(directory) {
+        for (const name of await list(directory)) {
+            if (typeof name !== "string" || !name || name === "." || name === ".." || /[\\/]/.test(name))
+                throw new Error("The local Preview artifact inventory is invalid")
+            const entry = await inspect(join(directory, name))
+            if (entry.isDirectory()) {
+                await walk(join(directory, name))
+            } else if (entry.isFile() && Number.isSafeInteger(entry.size) && entry.size >= 0 &&
+                Number.isSafeInteger(totalBytes + entry.size)) {
+                fileCount++
+                totalBytes += entry.size
+                largestFileBytes = Math.max(largestFileBytes, entry.size)
+            } else {
+                throw new Error("The local Preview artifact inventory contains an unsupported entry")
+            }
+        }
+    }
+    try { await walk(root) } catch { throw new Error("The local Preview artifact inventory is unavailable or unsafe") }
+    return { fileCount, totalBytes, largestFileBytes }
+}
 
 export function runSilentProcess(file, args, options, io = {}) {
     const start = io.spawn ?? spawn
@@ -173,11 +201,13 @@ export async function deployPreview(env = process.env, io = {}) {
     if (!/^[a-f0-9]{40}$/.test(source ?? "")) throw new Error("A verified source commit is required")
     const read = io.readFile ?? readFile
     const list = io.readdir ?? readdir
+    const inspect = io.lstat ?? lstat
     const request = io.fetch ?? fetch
     const publish = io.upload ?? upload
     const now = io.now ?? Date.now
     const sleep = io.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
     const progress = io.progress ?? (() => {})
+    const localStarted = now()
     progress("Checking the local Preview artifact")
     let marker, headers
     try {
@@ -198,6 +228,9 @@ export async function deployPreview(env = process.env, io = {}) {
     }
     if (!Array.isArray(docsEntries) || !docsEntries.includes("latest") || docsEntries.includes("preview") || docsEntries.includes("dev"))
         throw new Error("Preview upload requires published-only documentation without local source routes")
+    const artifact = await measureLocalArtifact(join(webRoot, "dist"), { readdir: list, lstat: inspect })
+    progress(`Local Preview artifact: ${artifact.fileCount} files, ${artifact.totalBytes} bytes ` +
+        `(largest file ${artifact.largestFileBytes} bytes); local preflight ${elapsed(now() - localStarted)}`)
     const base = `https://api.cloudflare.com/client/v4/accounts/${settings.account}/pages/projects/${settings.project}`
     async function get(url, authenticated, timeout) {
         let response
@@ -271,6 +304,7 @@ export async function deployPreview(env = process.env, io = {}) {
         try { served = await response.json() } catch { return null }
         return served?.sourceCommit === source ? "verified" : null
     }
+    const targetStarted = now()
     progress("Verifying the Cloudflare Pages Preview target")
     const project = await api()
     if (project.name !== settings.project || typeof project.id !== "string" || !project.id)
@@ -289,14 +323,20 @@ export async function deployPreview(env = process.env, io = {}) {
     }
     if (!Array.isArray(project.domains) || !project.domains.includes(new URL(settings.origin).hostname))
         throw new Error("The public preview hostname is not associated with the selected Pages project")
+    progress(`Cloudflare Pages Preview target verified in ${elapsed(now() - targetStarted)}`)
 
     // Never rerun Wrangler after an uncertain acknowledgement
     // Wrangler itself may retry Cloudflare UNKNOWN_ERROR during deployment creation
     // Pages has no conditional upload guard against concurrent project-setting changes
+    const wranglerStarted = now()
     progress("Uploading the checked Preview artifact with Wrangler")
-    const id = await publish(settings, source, progress)
+    let id
+    try { id = await publish(settings, source, progress) } catch {
+        throw new Error("Upload outcome is unknown; reconcile this source and branch in Cloudflare before another upload")
+    }
     if (!deploymentId.test(id ?? ""))
         throw new Error("Upload identity is unknown; reconcile Cloudflare before another upload")
+    progress(`Wrangler completed in ${elapsed(now() - wranglerStarted)} (not a network transfer measurement)`)
     progress("Upload acknowledged. Verifying the exact Preview deployment")
     const readbackStarted = now()
     const deadline = now() + 120_000
@@ -325,8 +365,10 @@ export async function deployPreview(env = process.env, io = {}) {
                 const deploymentUrl = deploymentOrigin(project, deployment)
                 if (await verifyContent(deploymentUrl, timeout, false) === "verified") {
                     const customDomainStatus = await verifyContent(settings.origin, timeout, true)
-                    if (customDomainStatus && now() < deadline)
+                    if (customDomainStatus && now() < deadline) {
+                        progress(`Preview readback verified in ${elapsed(now() - readbackStarted)}`)
                         return { origin: settings.origin, deploymentId: id, sourceCommit: source, deploymentUrl, customDomainStatus }
+                    }
                 }
             }
         } catch (error) {

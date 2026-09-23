@@ -8,7 +8,9 @@ import { createDocsHandler } from "../scripts/docs-routing.js"
 import { writeHostingArtifacts } from "../scripts/hosting.js"
 
 const pages = ["/docs/latest", "/docs/latest/quick-start", "/docs/latest/api/interfaces/Client",
-    "/docs/1000.0.0", "/docs/1000.0.0/old-guide", "/docs/latest/space guide"]
+    "/docs/1000.0.0", "/docs/1000.0.0/old-guide", "/docs/latest/space guide",
+    "/docs/canary", "/docs/canary/quick-start", "/docs/canary/space guide",
+    "/docs/rc", "/docs/rc/api/interfaces/Client"]
 const handler = createDocsHandler(pages)
 const calls = []
 const assets = { ASSETS: { fetch(request) { calls.push(request); return new Response("Asset", { status: 404 }) } } }
@@ -24,12 +26,45 @@ test("Entrances issue temporary HTTP redirects with query and noindex", async ()
     }
 })
 
-test("Existing latest and historical pages delegate without rewriting", async () => {
+test("Existing latest, rolling-channel and Stable exact-version pages delegate without rewriting", async () => {
     for (const path of pages) for (const suffix of ["", "/"]) {
         const incoming = request(path + suffix)
         const response = await handler.fetch(incoming, assets)
         assert.equal(response.status, 404)
         assert.equal(calls.at(-1), incoming)
+    }
+})
+
+test("Numbered prerelease paths return 404 without channel or latest fallback", async () => {
+    for (const channel of ["canary", "rc"]) for (const suffix of [
+        "", "/", "/quick-start?from=link", "/space%20guide#section", "/api/interfaces/Client",
+        "/missing", "/%ZZ", "/%252Fquick-start", "//quick-start",
+    ]) for (const method of ["GET", "HEAD"]) {
+        const incoming = request(`/docs/1.2.3-${channel}.4${suffix}`, { method })
+        const response = await handler.fetch(incoming, assets)
+        assert.equal(response.status, 404, incoming.url)
+        assert.equal(response.headers.get("location"), null, incoming.url)
+        assert.equal(calls.at(-1), incoming)
+    }
+    assert.equal((await handler.fetch(request("/docs/%31.2.3-rc.4/quick-start"), assets)).status, 404)
+})
+
+test("Missing rolling-channel pages stay in their channel and unavailable channels delegate as 404s", async () => {
+    for (const [path, target] of [
+        ["/docs/canary/missing", "/docs/canary/"],
+        ["/docs/rc/quick-start", "/docs/rc/"],
+        ["/docs/canary/api/interfaces/Client", "/docs/canary/"],
+        ["/docs/canary/%ZZ", "/docs/canary/"],
+        ["/docs/rc/%252Fquick-start", "/docs/rc/"],
+    ]) {
+        assert.equal((await handler.fetch(request(path), assets)).headers.get("location"), target, path)
+    }
+    const withoutRc = createDocsHandler(["/docs/latest", "/docs/latest/quick-start", "/docs/canary"])
+    for (const path of ["/docs/rc", "/docs/rc/quick-start", "/docs/1.2.3-rc.2/quick-start", "/docs/rc/%ZZ"]) {
+        const incoming = request(path)
+        const response = await withoutRc.fetch(incoming, assets)
+        assert.equal(response.status, 404, path)
+        assert.equal(calls.at(-1), incoming, path)
     }
 })
 
@@ -65,14 +100,17 @@ test("Broken pages select equivalent latest pages or its root without loops", as
 
 test("Assets, endpoints, unrelated routes and non-navigation methods never fall back", async () => {
     for (const path of ["/api/search/missing.json", "/_astro/missing.js", "/missing", "/docs/missing/file.js",
-        "/docs/missing/assets/unknown", "/docs/latest/search", "/docs/missing/file.css", "/docs/missing/file.json"]) {
+        "/docs/missing/assets/unknown", "/docs/latest/search", "/docs/missing/file.css", "/docs/missing/file.json",
+        "/docs/canary/search", "/docs/canary/missing.css", "/docs/1.2.3-rc.2/file.js"]) {
         assert.equal((await handler.fetch(request(path), assets)).headers.get("location"), null, path)
     }
     for (const method of ["POST", "PUT", "DELETE", "OPTIONS"]) {
         assert.equal((await handler.fetch(request("/docs/missing", { method }), assets)).headers.get("location"), null)
+        assert.equal((await handler.fetch(request("/docs/1.2.3-canary.4/quick-start", { method }), assets)).headers.get("location"), null)
     }
     for (const headers of [{ accept: "application/json" }, { "sec-fetch-dest": "script" }, { "sec-fetch-dest": "image" }]) {
         assert.equal((await handler.fetch(request("/docs/missing", { headers }), assets)).headers.get("location"), null)
+        assert.equal((await handler.fetch(request("/docs/1.2.3-canary.4/quick-start", { headers }), assets)).headers.get("location"), null)
     }
     assert.equal((await handler.fetch(request("/docs/missing", { method: "HEAD" }), assets)).status, 302)
 })
@@ -94,6 +132,9 @@ test("Hosting artifacts inventory emitted pages and run independently of source 
         const emitted = (await import(pathToFileURL(module).href)).default
         assert.equal((await emitted.fetch(request("/docs/unknown/quick-start"), assets)).headers.get("location"), "/docs/latest/quick-start/")
         assert.equal((await emitted.fetch(request("/docs/1000.0.0/old-guide"), assets)).headers.get("location"), null)
+        assert.equal((await emitted.fetch(request("/docs/1000.0.0-canary.7/quick-start?old=1"), assets)).status, 404)
+        assert.equal((await emitted.fetch(request("/docs/1000.0.0-rc.7/quick-start"), assets)).status, 404)
+        assert.equal((await emitted.fetch(request("/docs/rc/api/interfaces/Client"), assets)).headers.get("location"), null)
     } finally {
         if (dirname(resolve(directory)) !== resolve(tmpdir())) throw new Error("Unexpected routing fixture directory")
         await rm(directory, { recursive: true, force: true })

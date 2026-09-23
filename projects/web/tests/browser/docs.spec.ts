@@ -89,9 +89,17 @@ for (const width of [390, 1440]) {
     test(`Bot lifetime guide remains readable at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 })
         await page.goto("/docs/preview/starter-lifetime/")
+        await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+        await page.evaluate(() => document.fonts.ready)
         await expect(page.getByRole("heading", { level: 1, name: "Run a bot with the SDK" })).toBeVisible()
         await expect(page.locator(".docs-content")).toContainText("runBot")
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+        if (width === 390) {
+            // Scan the settled mobile heading, not the outgoing label halfway through its fade
+            const label = authoredGuides.find((guide) => guide.slug === "starter-lifetime")!.navTitle!
+            await expect(page.locator("[data-toc-popover-trigger]").getByText(label, { exact: true }))
+                .toHaveCSS("opacity", "0")
+        }
         const accessibility = await new AxeBuilder({ page })
             .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
             .analyze()

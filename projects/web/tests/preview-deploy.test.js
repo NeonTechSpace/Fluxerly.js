@@ -4,6 +4,7 @@ import test from "node:test"
 import {
     deploymentOrigin,
     deployPreview,
+    measureLocalArtifact,
     previewSettings,
     runSilentProcess,
 } from "../scripts/preview-deploy.js"
@@ -35,6 +36,7 @@ function fixture(options = {}) {
     const calls = []
     let clock = 0
     let reads = 0
+    let docsListed = false
     const io = {
         now: () => clock,
         sleep: async (ms) => {
@@ -49,19 +51,35 @@ function fixture(options = {}) {
         },
         readdir: async (path) => {
             calls.push(["directory", path])
-            return options.docsEntries ?? ["latest", "1000.0.0-canary.0"]
+            if (/[\\/]dist[\\/]docs$/.test(path)) {
+                if (!docsListed) clock += options.localMs ?? 0
+                docsListed = true
+                return options.docsEntries ?? ["latest", "1000.0.0-canary.0"]
+            }
+            if (/[\\/]dist$/.test(path)) return ["deployment.json", "_headers", "docs"]
+            return ["index.html"]
+        },
+        lstat: async (path) => {
+            calls.push(["stat", path])
+            const directory = /[\\/](?:docs|latest|1000\.0\.0-canary\.0)$/.test(path)
+            const size = path.endsWith("deployment.json") ? 100 : path.endsWith("_headers") ? 20 : 30
+            return { size, isDirectory: () => directory, isFile: () => !directory }
         },
         upload: async (settings, commit) => {
             calls.push(["upload", settings.project, settings.account, settings.branch, commit])
+            clock += options.wranglerMs ?? 0
             if (options.uploadError) throw options.uploadError
             return options.uploadId ?? id
         },
         fetch: async (url, init) => {
             calls.push(["fetch", url, init])
-            if (!url.includes("/deployments/") && url.startsWith("https://api.cloudflare.com/"))
+            if (!url.includes("/deployments/") && url.startsWith("https://api.cloudflare.com/")) {
+                clock += options.targetMs ?? 0
                 return json({ success: true, result: options.project ?? project }, options.preflightStatus ?? 200)
+            }
             if (url.includes("/deployments/")) {
                 reads++
+                clock += options.readbackMs ?? 0
                 if (options.readError && reads === 1) throw new Error(env.CLOUDFLARE_API_TOKEN)
                 if (options.readStatus && reads === 1) return json({}, options.readStatus, options.readHeaders)
                 return json({ success: true, result: options.deployment?.(reads) ?? deployment })
@@ -81,6 +99,26 @@ function fixture(options = {}) {
     }
     return { io, calls, reads: () => reads }
 }
+
+test("Local artifact metrics count regular files without exposing names or following symlinks", async () => {
+    const names = {
+        root: ["safe.html", "nested"],
+        "root/nested": ["secret-token-like-name.js"],
+    }
+    const stats = {
+        "root/safe.html": { size: 12, isDirectory: () => false, isFile: () => true },
+        "root/nested": { size: 0, isDirectory: () => true, isFile: () => false },
+        "root/nested/secret-token-like-name.js": { size: 34, isDirectory: () => false, isFile: () => true },
+    }
+    const io = {
+        readdir: async (path) => names[path.replaceAll("\\", "/")],
+        lstat: async (path) => stats[path.replaceAll("\\", "/")],
+    }
+    assert.deepEqual(await measureLocalArtifact("root", io), { fileCount: 2, totalBytes: 46, largestFileBytes: 34 })
+    stats["root/nested/secret-token-like-name.js"] = { size: 34, isDirectory: () => false, isFile: () => false }
+    await assert.rejects(measureLocalArtifact("root", io), (error) =>
+        !error.message.includes("secret-token-like-name") && /unsafe/.test(error.message))
+})
 
 test("Preview settings reject unsafe origins and configuration without exposing tokens", () => {
     for (const origin of [
@@ -199,6 +237,18 @@ test("Deployment progress names each phase and reports elapsed waits without exp
     assert.ok(messages.some((message) => /Uploading.*Wrangler/i.test(message)))
     assert.ok(messages.some((message) => /acknowledged.*verifying/i.test(message)))
     assert.ok(messages.some((message) => /Waiting.*\(0s elapsed\)/i.test(message)))
+    assert.ok(messages.every((message) => !message.includes(env.CLOUDFLARE_API_TOKEN)))
+})
+
+test("Deployment progress separates local bytes and phase timings from network transfer", async () => {
+    const { io } = fixture({ localMs: 2_000, targetMs: 3_000, wranglerMs: 105_000, readbackMs: 6_000 })
+    const messages = []
+    io.progress = (message) => messages.push(message)
+    await deployPreview(env, io)
+    assert.ok(messages.some((message) => /4 files, 180 bytes.*largest file 100 bytes.*local preflight 2s/i.test(message)))
+    assert.ok(messages.some((message) => /target verified in 3s/i.test(message)))
+    assert.ok(messages.some((message) => /Wrangler completed in 105s.*not a network transfer measurement/i.test(message)))
+    assert.ok(messages.some((message) => /Preview readback verified in 6s/i.test(message)))
     assert.ok(messages.every((message) => !message.includes(env.CLOUDFLARE_API_TOKEN)))
 })
 
@@ -442,8 +492,13 @@ test("Unknown upload acknowledgement does not retry, and excessive read delay ex
     await assert.rejects(deployPreview(env, failure.io), /identity is unknown.*reconcile/)
     assert.equal(failure.calls.filter(([kind]) => kind === "upload").length, 1)
     assert.equal(failure.reads(), 0)
-    const lost = fixture({ uploadError: new Error("Upload outcome is unknown; reconcile before another upload") })
-    await assert.rejects(deployPreview(env, lost.io), /outcome is unknown/)
+    const providerBody = `provider body ${env.CLOUDFLARE_API_TOKEN}`
+    const lost = fixture({ uploadError: new Error(providerBody) })
+    const messages = []
+    lost.io.progress = (message) => messages.push(message)
+    await assert.rejects(deployPreview(env, lost.io), (error) =>
+        /outcome is unknown/.test(error.message) && !error.message.includes(providerBody))
+    assert.ok(messages.every((message) => !message.includes(providerBody)))
     assert.equal(lost.calls.filter(([kind]) => kind === "upload").length, 1)
     assert.equal(lost.reads(), 0)
     const slow = fixture({ readStatus: 429, readHeaders: { "retry-after": "600" } })

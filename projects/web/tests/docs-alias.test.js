@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { latestAliasFiles, rebaseLatestMarkdown } from "../scripts/latest-alias.js"
+import { docsAliasFiles, rebaseAliasMarkdown } from "../scripts/docs-alias.js"
 import { defaultVersion } from "../scripts/versions.js"
 
 test("Latest source selection respects readiness before numerical version order", () => {
@@ -28,7 +28,7 @@ title: "Alias fixture"
 [Also code](/docs/1000.1.0/guide/)
 \`\`\`
 `
-    const rebased = rebaseLatestMarkdown(source, "1000.1.0")
+    const rebased = rebaseAliasMarkdown(source, "1000.1.0", "latest")
     assert.match(rebased, /\[Root\]\(\/docs\/latest\)/)
     assert.match(rebased, /\[Guide\]\(\/docs\/latest\/guide\/#start\)/)
     assert.match(rebased, /\[Relative\]\(other\/\)/)
@@ -56,7 +56,7 @@ test("Latest alias clones the selected content and leaves the exact source untou
         },
     ]
     const original = structuredClone(files)
-    const alias = latestAliasFiles(files, "1000.1.0")
+    const alias = docsAliasFiles(files, "1000.1.0", "latest")
 
     assert.deepEqual(files, original)
     assert.deepEqual(alias.map((file) => file.path), files.map((file) => file.path))
@@ -67,4 +67,36 @@ test("Latest alias clones the selected content and leaves the exact source untou
         root: "version",
         pages: ["index", "guide"],
     })
+})
+
+for (const channel of ["canary", "rc"]) {
+    test(`The ${channel} alias changes link destinations, not package versions or code examples`, () => {
+        const version = `1000.1.0-${channel}.2`
+        const files = [
+            { path: "index.md", content: `[Guide](/docs/${version}/quick-start/?from=home#install)\n` +
+                `<a href="/docs/${version}/api/">API</a>\n` +
+                `[ref]: /docs/${version}/changelog/\n` +
+                `SDK ${version}\n\n\`/docs/${version}/example/\`\n\n` +
+                `\`\`\`command\n{"version":"${version}","example":"/docs/${version}/"}\n\`\`\`\n` },
+            { path: "meta.json", content: JSON.stringify({ title: version, root: "version", pages: ["index"] }) },
+        ]
+        const original = structuredClone(files)
+        const alias = docsAliasFiles(files, version, channel)
+        assert.deepEqual(files, original)
+        assert.ok(alias[0].content.includes(`[Guide](/docs/${channel}/quick-start/?from=home#install)`))
+        assert.ok(alias[0].content.includes(`href="/docs/${channel}/api/"`))
+        assert.ok(alias[0].content.includes(`[ref]: /docs/${channel}/changelog/`))
+        assert.ok(alias[0].content.includes(`SDK ${version}`))
+        assert.ok(alias[0].content.includes(`\`/docs/${version}/example/\``))
+        assert.ok(alias[0].content.includes(`{"version":"${version}","example":"/docs/${version}/"}`))
+        assert.equal(JSON.parse(alias[1].content).title, channel === "rc" ? "RC" : "Canary")
+    })
+}
+
+test("Alias generation rejects unknown destinations and non-exact source versions", () => {
+    const files = [{ path: "meta.json", content: "{}" }]
+    for (const alias of ["../escape", "stable", "constructor"])
+        assert.throws(() => docsAliasFiles(files, "1000.0.0", alias), /Unknown documentation alias/)
+    for (const version of ["latest", "canary", "../escape"])
+        assert.throws(() => docsAliasFiles(files, version, "rc"))
 })

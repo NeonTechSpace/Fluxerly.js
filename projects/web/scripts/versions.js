@@ -5,12 +5,16 @@ export function channelTargets(versions) {
     const sorted = [...versions].sort(compareVersions).reverse()
     const targets = Object.entries(labels).flatMap(([channel, label]) => {
         const version = sorted.find((v) => parseVersion(v).channel === channel)
-        return version ? [{ version, label }] : []
+        return version ? [{ version, label, path: channel === "stable" ? version : channel }] : []
     })
     return targets
 }
 export function defaultVersion(versions) {
     return channelTargets(versions)[0]?.version ?? null
+}
+export function retainedVersions(versions) {
+    const targets = new Set(channelTargets(versions).map((target) => target.version))
+    return versions.filter((version) => parseVersion(version).channel === "stable" || targets.has(version))
 }
 export function validateSnapshot(snapshot) {
     if (snapshot?.schemaVersion !== 1 || !/^[a-f0-9]{40}$/.test(snapshot.sourceCommit))

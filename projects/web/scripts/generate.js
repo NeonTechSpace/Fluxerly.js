@@ -2,8 +2,8 @@ import { Application } from "typedoc"
 import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { dirname, join, resolve } from "node:path"
-import { channelTargets, defaultVersion, parseVersion, validateSnapshot } from "./versions.js"
-import { latestAliasFiles } from "./latest-alias.js"
+import { channelTargets, defaultVersion, parseVersion, retainedVersions, validateSnapshot } from "./versions.js"
+import { docsAliasFiles } from "./docs-alias.js"
 import { expandStarterExamples } from "./starter-examples.js"
 import { readSourcePlan } from "../../release/source.js"
 
@@ -206,14 +206,16 @@ export async function generate({ releasesDirectory = join(webRoot, "released"), 
     if (generatedRoot !== resolve(webRoot, "content/docs")) throw new Error("Unsafe generated docs path")
     await mkdir(releasesDirectory, { recursive: true })
     const snapshots = []
-    const versions = []
+    const importedVersions = []
     for (const name of await readdir(releasesDirectory)) {
         if (!name.endsWith(".json")) continue
         const snapshot = validateSnapshot(JSON.parse(await readFile(join(releasesDirectory, name), "utf8")))
-        if (versions.includes(snapshot.version)) throw new Error("Duplicate docs version")
-        versions.push(snapshot.version)
+        if (importedVersions.includes(snapshot.version)) throw new Error("Duplicate docs version")
+        importedVersions.push(snapshot.version)
         snapshots.push(snapshot)
     }
+    const versions = retainedVersions(importedVersions)
+    const targets = channelTargets(versions)
     const selectedVersion = defaultVersion(versions)
     if (publicBuild && !selectedVersion) throw new Error("Public documentation requires an imported published snapshot")
     if (!publicBuild && plannedVersion === undefined) {
@@ -225,16 +227,18 @@ export async function generate({ releasesDirectory = join(webRoot, "released"), 
     }
     await rm(generatedRoot, { recursive: true, force: true })
     if (!publicBuild) await generateVersion("preview", join(generatedRoot, "preview"), { plannedVersion })
-    for (const snapshot of snapshots) {
-        for (const file of snapshot.files) {
-            const target = join(generatedRoot, snapshot.version, file.path)
+    for (const snapshot of snapshots.filter((snapshot) => versions.includes(snapshot.version))) {
+        const channel = parseVersion(snapshot.version).channel
+        const path = channel === "stable" ? snapshot.version : channel
+        const files = channel === "stable" ? snapshot.files : docsAliasFiles(snapshot.files, snapshot.version, channel)
+        for (const file of files) {
+            const target = join(generatedRoot, path, file.path)
             await mkdir(dirname(target), { recursive: true })
             await writeFile(target, file.content)
         }
     }
-    const targets = channelTargets(versions)
-    for (const { version, label } of targets) {
-        const target = join(generatedRoot, version, "meta.json")
+    for (const { version, label, path } of targets) {
+        const target = join(generatedRoot, path, "meta.json")
         const metadata = JSON.parse(await readFile(target, "utf8"))
         await writeFile(
             target,
@@ -246,7 +250,8 @@ export async function generate({ releasesDirectory = join(webRoot, "released"), 
         )
     }
     if (selectedVersion) {
-        for (const file of latestAliasFiles(await filesIn(join(generatedRoot, selectedVersion)), selectedVersion)) {
+        const snapshot = snapshots.find((snapshot) => snapshot.version === selectedVersion)
+        for (const file of docsAliasFiles(snapshot.files, selectedVersion, "latest")) {
             const target = join(generatedRoot, "latest", file.path)
             await mkdir(dirname(target), { recursive: true })
             await writeFile(target, file.content)
@@ -256,7 +261,7 @@ export async function generate({ releasesDirectory = join(webRoot, "released"), 
     await writeFile(
         join(generatedRoot, "meta.json"),
         JSON.stringify({
-            pages: [...(selectedVersion ? ["latest"] : []), ...(!publicBuild ? ["preview"] : []), ...targets.map((target) => target.version), ...versions.filter((v) => !selected.has(v))],
+            pages: [...(selectedVersion ? ["latest"] : []), ...(!publicBuild ? ["preview"] : []), ...targets.map((target) => target.path), ...versions.filter((v) => !selected.has(v))],
         }),
     )
     await writeFile(
