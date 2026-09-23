@@ -101,6 +101,8 @@ Changing channels keeps the same page when it exists in the destination channel,
 
 Retain every immutable release `docs.json` asset. Do not automatically delete Stable pages or introduce separate archive hosting. Use deployment file and byte counts, together with build and deployment timing, to decide whether Stable retention needs reconsideration later
 
+Explicitly withdrawn editorial guides are excluded from the generated site, navigation and search through `publishedSnapshotFiles`. Saved release assets stay unchanged, unrelated historical pages remain available, and withdrawn guide URLs return 404
+
 No channel or version should imply that a prepared version was actually published
 
 ### Latest alias and missing pages

@@ -1,8 +1,0 @@
-{
-    "name": "fluxerly-core-migration-fixture",
-    "private": true,
-    "type": "module",
-    "dependencies": {
-        "@fluxerjs/core": "3.1.0"
-    }
-}

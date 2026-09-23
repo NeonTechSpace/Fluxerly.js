@@ -16,6 +16,15 @@ export function retainedVersions(versions) {
     const targets = new Set(channelTargets(versions).map((target) => target.version))
     return versions.filter((version) => parseVersion(version).channel === "stable" || targets.has(version))
 }
+export function publishedSnapshotFiles(snapshot) {
+    // Withdraw editorial content from the site without altering retained release assets
+    return snapshot.files.filter((file) => file.path !== "migration.md").map((file) => {
+        if (file.path !== "meta.json") return file
+        const metadata = JSON.parse(file.content)
+        if (!metadata.pages?.includes("migration")) return file
+        return { ...file, content: JSON.stringify({ ...metadata, pages: metadata.pages.filter((page) => page !== "migration") }) }
+    })
+}
 export function validateSnapshot(snapshot) {
     if (snapshot?.schemaVersion !== 1 || !/^[a-f0-9]{40}$/.test(snapshot.sourceCommit))
         throw new Error("Invalid docs provenance")

@@ -650,10 +650,13 @@ try {
         process.stdout.write(run(process.execPath, ["gateway-conformance.js", kind], consumer, 15_000))
 
         if (kind === "default") {
-            copyFileSync(join(fixtureDirectory, "migration-fluxerly.js"), join(consumer, "migration-fluxerly.js"))
-            copyFileSync(join(fixtureDirectory, "migration-fluxerly.ts"), join(consumer, "migration-fluxerly.ts"))
-            copyFileSync(join(sdk, "tests/migration/nonvoice-contract.js"), join(consumer, "nonvoice-contract.js"))
-            process.stdout.write(run(process.execPath, ["migration-fluxerly.js"], consumer, 15_000))
+            copyFileSync(join(fixtureDirectory, "client-workflows.js"), join(consumer, "client-workflows.js"))
+            copyFileSync(join(fixtureDirectory, "client-workflows.ts"), join(consumer, "client-workflows.ts"))
+            copyFileSync(
+                join(fixtureDirectory, "client-workflow-contract.js"),
+                join(consumer, "client-workflow-contract.js"),
+            )
+            process.stdout.write(run(process.execPath, ["client-workflows.js"], consumer, 15_000))
         }
 
         copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))

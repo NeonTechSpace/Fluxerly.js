@@ -2,7 +2,7 @@ import { Application } from "typedoc"
 import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { dirname, join, resolve } from "node:path"
-import { channelTargets, defaultVersion, parseVersion, retainedVersions, validateSnapshot } from "./versions.js"
+import { channelTargets, defaultVersion, parseVersion, publishedSnapshotFiles, retainedVersions, validateSnapshot } from "./versions.js"
 import { docsAliasFiles } from "./docs-alias.js"
 import { expandStarterExamples } from "./starter-examples.js"
 import { readSourcePlan } from "../../release/source.js"
@@ -230,7 +230,8 @@ export async function generate({ releasesDirectory = join(webRoot, "released"), 
     for (const snapshot of snapshots.filter((snapshot) => versions.includes(snapshot.version))) {
         const channel = parseVersion(snapshot.version).channel
         const path = channel === "stable" ? snapshot.version : channel
-        const files = channel === "stable" ? snapshot.files : docsAliasFiles(snapshot.files, snapshot.version, channel)
+        const published = publishedSnapshotFiles(snapshot)
+        const files = channel === "stable" ? published : docsAliasFiles(published, snapshot.version, channel)
         for (const file of files) {
             const target = join(generatedRoot, path, file.path)
             await mkdir(dirname(target), { recursive: true })
@@ -251,7 +252,7 @@ export async function generate({ releasesDirectory = join(webRoot, "released"), 
     }
     if (selectedVersion) {
         const snapshot = snapshots.find((snapshot) => snapshot.version === selectedVersion)
-        for (const file of docsAliasFiles(snapshot.files, selectedVersion, "latest")) {
+        for (const file of docsAliasFiles(publishedSnapshotFiles(snapshot), selectedVersion, "latest")) {
             const target = join(generatedRoot, "latest", file.path)
             await mkdir(dirname(target), { recursive: true })
             await writeFile(target, file.content)

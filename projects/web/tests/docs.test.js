@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { readFile, readdir } from "node:fs/promises"
 import { resolve, join, relative } from "node:path"
-import { channelTargets, defaultVersion, retainedVersions, validateSnapshot } from "../scripts/versions.js"
+import { channelTargets, defaultVersion, publishedSnapshotFiles, retainedVersions, validateSnapshot } from "../scripts/versions.js"
 import { previewSettings } from "../scripts/preview-deploy.js"
 import { pageUrl } from "../scripts/reference-theme.js"
 import { remarkReferenceAnchors } from "../scripts/reference-anchors.js"
@@ -29,6 +29,20 @@ test("Retention keeps all Stable versions and only the newest of each prerelease
     assert.deepEqual(versions, original)
     assert.deepEqual(retainedVersions([]), [])
     assert.deepEqual(retainedVersions(["1000.1.0-canary.9", "1000.2.0-canary.0"]), ["1000.2.0-canary.0"])
+})
+
+test("Published content excludes a withdrawn guide without changing saved snapshots or other history", () => {
+    const snapshot = { files: [
+        { path: "migration.md", content: "Withdrawncontentmarker" },
+        { path: "old-guide.md", content: "Preserved historical guide" },
+        { path: "meta.json", content: JSON.stringify({ title: "Fixture", pages: ["index", "migration", "old-guide"] }) },
+    ] }
+    const original = structuredClone(snapshot)
+    const files = publishedSnapshotFiles(snapshot)
+    assert.deepEqual(snapshot, original)
+    assert.deepEqual(files.map((file) => file.path), ["old-guide.md", "meta.json"])
+    assert.deepEqual(files[0], original.files[1])
+    assert.deepEqual(JSON.parse(files[1].content).pages, ["index", "old-guide"])
 })
 
 test("Snapshots reject traversal, duplicates, missing guides and invalid provenance", () => {

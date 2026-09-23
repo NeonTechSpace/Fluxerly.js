@@ -1,6 +1,6 @@
 import type { Client, Message } from "@neontechspace/fluxerly"
 
-export function installFluxerlyVariant(client: Client, greeting: (userId: string) => Promise<string>) {
+export function installCommandHandler(client: Client, greeting: (userId: string) => Promise<string>) {
     return client.on("messageCreate", async (message: Message, signal) => {
         if (message.content !== "!hello") return
         const replied = await client.messages.reply(message, { content: await greeting(message.author.id) }, { signal })
@@ -8,7 +8,7 @@ export function installFluxerlyVariant(client: Client, greeting: (userId: string
     })
 }
 
-export async function readFluxerlyHistory(client: Client, channelId: string, maxItems: number) {
+export async function readHistory(client: Client, channelId: string, maxItems: number) {
     const messages: Message[] = []
     for await (const item of client.messages.iterateHistory(channelId, { maxItems, pageSize: 100 })) {
         if (item.isErr()) throw item.error
@@ -17,12 +17,12 @@ export async function readFluxerlyHistory(client: Client, channelId: string, max
     return messages
 }
 
-export async function kickFluxerlyMember(client: Client, guildId: string, userId: string, reason: string) {
+export async function kickMember(client: Client, guildId: string, userId: string, reason: string) {
     const kicked = await client.members.kick({ guildId, userId }, { auditReason: reason })
     if (kicked.isErr()) throw kicked.error
 }
 
-export async function refreshFluxerlyAttachment(client: Client, url: string) {
+export async function refreshAttachment(client: Client, url: string) {
     const refreshed = await client.attachments.refreshUrls([url])
     if (refreshed.isErr()) throw refreshed.error
     const first = refreshed.value[0]
@@ -30,7 +30,7 @@ export async function refreshFluxerlyAttachment(client: Client, url: string) {
     return first.refreshed
 }
 
-export function fluxerlyHealth(client: Client) {
+export function readHealth(client: Client) {
     const diagnostics = client.diagnostics()
     return {
         gateway: diagnostics.state,
@@ -39,7 +39,7 @@ export function fluxerlyHealth(client: Client) {
     }
 }
 
-export async function closeFluxerly(client: Client) {
+export async function closeClient(client: Client) {
     const closed = await client.shutdown()
     if (closed.isErr()) throw closed.error
 }

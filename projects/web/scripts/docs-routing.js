@@ -26,6 +26,7 @@ export function docsRedirect(request, routes, root = "/docs/latest/") {
     }
     const canonical = decoded.replace(/\/$/, "")
     const parts = canonical.slice("/docs/".length).split("/")
+    if (parts[1] === "migration") return null
     const version = parts[0]
     // Numbered prerelease pages are not published and must not fall back to another version
     if (prereleaseVersion.test(version)) return null

@@ -1,5 +1,5 @@
 import { createClient } from "@neontechspace/fluxerly"
-import { runNonVoiceMigrationContract } from "./nonvoice-contract.js"
+import { runClientWorkflowContract } from "./client-workflow-contract.js"
 
 const originalFetch = globalThis.fetch
 const requests = []
@@ -9,7 +9,7 @@ const message = (id, content) => ({
     id,
     channel_id: "20",
     content,
-    author: { id: "90", username: "migration-bot", bot: true },
+    author: { id: "90", username: "fixture-bot", bot: true },
 })
 
 globalThis.fetch = async (input, init = {}) => {
@@ -20,12 +20,12 @@ globalThis.fetch = async (input, init = {}) => {
         return Response.json({
             api_code_version: 1,
             endpoints: {
-                api_public: "https://migration.example.test/api",
-                gateway: "wss://migration.example.test/gateway",
-                media: "https://migration.example.test/media",
-                static_cdn: "https://migration.example.test/static",
-                webapp: "https://migration.example.test/app",
-                invite: "https://migration.example.test/invite",
+                api_public: "https://consumer.example.test/api",
+                gateway: "wss://consumer.example.test/gateway",
+                media: "https://consumer.example.test/media",
+                static_cdn: "https://consumer.example.test/static",
+                webapp: "https://consumer.example.test/app",
+                invite: "https://consumer.example.test/invite",
             },
             features: { presigned_attachment_uploads: false },
         })
@@ -56,12 +56,12 @@ globalThis.fetch = async (input, init = {}) => {
             })),
         })
     }
-    throw new Error(`Unexpected migration fixture request: ${method} ${url.pathname}${url.search}`)
+    throw new Error(`Unexpected consumer fixture request: ${method} ${url.pathname}${url.search}`)
 }
 
 const created = createClient({
     token: "fixture-only-not-a-credential",
-    instance: { url: "https://migration.example.test" },
+    instance: { url: "https://consumer.example.test" },
     cache: { messages: { maxEntries: 10 } },
 })
 if (created.isErr()) throw created.error
@@ -75,8 +75,6 @@ const unwrap = async (operation) => {
 }
 
 const adapter = {
-    name: "fluxerly",
-    capabilities: { attachmentRefresh: true },
     message: { id: "1", channelId: "20", content: "!hello", authorId: "30" },
     async reply(target, content) {
         await unwrap(client.messages.reply(target, { content, allowedMentions: {} }))
@@ -113,7 +111,6 @@ const adapter = {
     health() {
         const diagnostics = client.diagnostics()
         return {
-            sdk: "fluxerly",
             gateway: client.state === "Connected" ? "ready" : "notStarted",
             cachedMessages: diagnostics.caches.messages.retainedEntries,
         }
@@ -128,8 +125,8 @@ const adapter = {
 }
 
 try {
-    await runNonVoiceMigrationContract(adapter)
-    console.log("Fluxerly migration contract passed")
+    await runClientWorkflowContract(adapter)
+    console.log("Packed client workflows passed")
 } finally {
     globalThis.fetch = originalFetch
     if (client.state !== "Closed") await client.shutdown()

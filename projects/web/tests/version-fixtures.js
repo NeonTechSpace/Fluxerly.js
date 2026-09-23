@@ -31,6 +31,7 @@ try {
             { path: "index.md", content: markdown("Documentation", `Immutable ${version} fixture`) },
             { path: "quick-start.md", content: markdown("Send your first message", `Guide for ${version}\n\n\`\`\`command\n${JSON.stringify({ kind: "install", package: "@neontechspace/fluxerly", version })}\n\`\`\``) },
             { path: "changelog.md", content: markdown("Changelog", `Changes for ${version}`) },
+            { path: "migration.md", content: markdown("Withdrawn guide", "Withdrawncontentmarker") },
             {
                 path: "api/index.md",
                 content: markdown("API reference", `[Signature](/docs/${version}/api/signature/)`),
@@ -48,7 +49,7 @@ try {
                 content: JSON.stringify({
                     title: version,
                     root: "version",
-                    pages: ["index", "quick-start", "api", "changelog"],
+                    pages: ["index", "quick-start", "migration", "api", "changelog"],
                 }),
             },
         ]

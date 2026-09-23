@@ -12,7 +12,7 @@ function ok(value, label) {
     if (!value) fail(label)
 }
 
-export async function runNonVoiceMigrationContract(adapter) {
+export async function runClientWorkflowContract(adapter) {
     const replies = []
     const database = {
         fail: false,
@@ -47,10 +47,10 @@ export async function runNonVoiceMigrationContract(adapter) {
     equal(await adapter.history("20", 3), ["30", "20", "10"], "bounded history")
     equal(adapter.historyRequests(), [null, "20"], "history cursors")
 
-    equal(await adapter.kick({ guildId: "10", userId: "30" }, "migration fixture"), { kind: "succeeded" }, "kick")
+    equal(await adapter.kick({ guildId: "10", userId: "30" }, "consumer fixture"), { kind: "succeeded" }, "kick")
     adapter.failNextKick()
     equal(
-        await adapter.kick({ guildId: "10", userId: "30" }, "migration fixture"),
+        await adapter.kick({ guildId: "10", userId: "30" }, "consumer fixture"),
         { kind: "failed", outcome: "unknown" },
         "uncertain kick",
     )
@@ -60,19 +60,13 @@ export async function runNonVoiceMigrationContract(adapter) {
         url: "https://cdn.example.test/attachments/old?expires=1",
         expired: true,
     }
-    const prepared = await adapter.prepareAttachment(attachment)
-    if (adapter.capabilities.attachmentRefresh) {
-        equal(
-            prepared,
-            { kind: "ready", url: "https://cdn.example.test/attachments/fresh?expires=2" },
-            "attachment refresh",
-        )
-    } else {
-        equal(prepared, { kind: "unsupported", reason: "attachmentRefresh" }, "attachment refresh gap")
-    }
+    equal(
+        await adapter.prepareAttachment(attachment),
+        { kind: "ready", url: "https://cdn.example.test/attachments/fresh?expires=2" },
+        "attachment refresh",
+    )
 
     const health = adapter.health()
-    equal(health.sdk, adapter.name, "health SDK name")
     ok(health.gateway === "notStarted" || health.gateway === "ready", "health gateway state")
     ok(Number.isSafeInteger(health.cachedMessages) && health.cachedMessages >= 0, "health cache count")
 

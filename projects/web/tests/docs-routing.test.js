@@ -68,6 +68,14 @@ test("Missing rolling-channel pages stay in their channel and unavailable channe
     }
 })
 
+test("Withdrawn guide routes stay missing instead of redirecting to another page", async () => {
+    for (const version of ["latest", "rc", "canary", "preview", "1000.0.0"]) {
+        const response = await handler.fetch(request(`/docs/${version}/migration/`), assets)
+        assert.equal(response.status, 404)
+        assert.equal(response.headers.get("location"), null)
+    }
+})
+
 test("Local-only preview is the root only when no published snapshot exists", async () => {
     const local = createDocsHandler(["/docs/preview", "/docs/preview/quick-start"])
     assert.equal((await local.fetch(request("/"), assets)).headers.get("location"), "/docs/preview/")

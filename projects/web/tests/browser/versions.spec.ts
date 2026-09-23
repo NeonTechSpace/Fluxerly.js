@@ -159,6 +159,20 @@ test("Numbered prerelease pages and search indexes return 404 without redirects"
     }
 })
 
+test("Withdrawn content is absent from published pages, navigation and search", async ({ request }) => {
+    for (const version of ["latest", "rc", "canary", "1000.0.0", "1000.0.1"]) {
+        const removed = await request.get(`/docs/${version}/migration/`, { maxRedirects: 0 })
+        expect(removed.status()).toBe(404)
+        expect(removed.headers().location).toBeUndefined()
+        const page = await request.get(`/docs/${version}/`)
+        expect(page.status()).toBe(200)
+        expect(await page.text()).not.toContain(`/docs/${version}/migration`)
+        const index = await request.get(`/api/search/${version}.json`)
+        expect(index.status()).toBe(200)
+        expect(await index.text()).not.toContain("Withdrawncontentmarker")
+    }
+})
+
 test("Canary navigation, search and serialized tree stay within the rolling channel", async ({ page, request }) => {
     await page.goto("/docs/canary/api/")
     await page.locator(".docs-content").getByRole("link", { name: "Signature", exact: true }).click()
