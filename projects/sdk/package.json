@@ -21,7 +21,7 @@
         "effect",
         "effect-ts"
     ],
-    "version": "1000.0.0-canary.1",
+    "version": "1000.0.0-rc.0",
     "private": true,
     "type": "module",
     "license": "Apache-2.0",
