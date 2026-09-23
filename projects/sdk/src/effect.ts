@@ -756,7 +756,7 @@ import {
     webhookMessageDelete,
 } from "#sdk/internal/webhooks"
 import { Deferred, Effect, Scope, Stream } from "effect"
-import { runBotCore } from "#sdk/internal/bot-runner"
+import { runBotCore, snapshotBotEvents } from "#sdk/internal/bot-runner"
 import { CriticalWorkerStoppedError, type RunBotOptions } from "./bot-runner.js"
 export { CriticalWorkerStoppedError } from "./bot-runner.js"
 export type { RunBotOptions } from "./bot-runner.js"
@@ -4767,6 +4767,109 @@ function nativeReactionCollector(source: ReactionCollection): ReactionCollector 
 }
 
 /**
+ * Give a simple bot handler its event payload and client. The messageCreate context also provides
+ * `message` as an alias for the payload and `reply`, which uses the client's native messages.reply operation.
+ * The reply Effect sends only when executed and retains its normal SendError and interruption behavior
+ */
+export type BotEventContext<K extends EventName, M extends MessageCore = Message> = {
+    /** The payload delivered by the named gateway event */
+    readonly event: EventMap<M>[K]
+    /** The client owned by this bot run. Do not retain it after the run stops */
+    readonly client: Client<M>
+} & (K extends "messageCreate"
+    ? {
+          /** The messageCreate payload, identical to event */
+          readonly message: M
+          /** Build a native reply Effect targeting this message. Executing it can fail with SendError */
+          readonly reply: (input: ReplyInput, options?: SendOptions) => Effect.Effect<M, SendError>
+      }
+    : {})
+
+/**
+ * Map event names to Effect-returning handlers for the single-object bot runner.
+ * Omitted or undefined entries register nothing. Each handler receives the selected message shape,
+ * runs in the caller's Effect context and has its failures isolated and reported by client.on.
+ * This shortcut uses client.on's default queue and concurrency settings. Use the installer overload
+ * when per-subscription options or custom error reporting are needed
+ */
+export type BotEvents<E = never, R = never, M extends MessageCore = Message> = {
+    readonly [K in EventName]?: ((context: BotEventContext<K, M>) => Effect.Effect<unknown, E, R>) | undefined
+}
+
+/**
+ * Configure one Effect-native bot with client settings, optional stop signals and event handlers.
+ * The token accepts an unvalidated environment value. Missing or blank values fail with
+ * ConfigurationError when the Effect executes, before connecting to the gateway.
+ * Client settings, including messageFields and cache callbacks, retain their native semantics.
+ * Handler functions are read once when the Effect runs, then registered before the gateway starts
+ */
+export type BotOptions<
+    EventError = never,
+    EventServices = never,
+    OptionsError = never,
+    OptionsServices = never,
+    F extends MessageFields | undefined = undefined,
+> = Omit<ClientOptions<OptionsError, OptionsServices, F>, "token"> &
+    RunBotOptions & {
+        /** Bot token to validate at execution. Undefined or blank fails with ConfigurationError */
+        readonly token: string | undefined
+        /** Event handlers registered before the gateway starts, with default client.on delivery settings */
+        readonly events: BotEvents<EventError, EventServices, SelectedMessage<F>>
+    }
+
+type BotEventServices<Events> = {
+    [K in keyof Events]-?: NonNullable<Events[K]> extends (...args: never[]) => Effect.Effect<unknown, unknown, infer R>
+        ? R
+        : never
+}[keyof Events]
+
+/**
+ * Run a bot from one configuration object in the application's Effect context and scope.
+ * Event handlers are read once and registered before connecting. A malformed events object, non-function
+ * handler or unsupported event name fails in the error channel as ConfigurationError. Registration can also
+ * fail with ClientClosedError. Handler failures are isolated and reported by client.on, not bot failures.
+ * A required subscription that stops or overflows still fails the bot, and cleanup is awaited.
+ * Aborting signal or enabled SIGINT/SIGTERM stops successfully. Fiber interruption remains interruption.
+ * No separate runtime is created and the process is not exited
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { runBot } from "@neontechspace/fluxerly/effect"
+ *
+ * export function pingBot(token: string | undefined) {
+ *     return runBot({
+ *         token,
+ *         events: {
+ *             messageCreate: ({ message, reply }) =>
+ *                 !message.author.isBot && message.content === "ping" ? reply({ content: "pong" }) : Effect.void,
+ *         },
+ *         processSignals: true,
+ *     })
+ * }
+ * await Effect.runPromise(pingBot("YOUR_BOT_TOKEN"))
+ * ```
+ */
+export function runBot<
+    const F extends MessageFields | undefined = undefined,
+    const Events extends BotEvents<unknown, unknown, SelectedMessage<F>> = BotEvents<
+        unknown,
+        unknown,
+        SelectedMessage<F>
+    >,
+    OptionsError = never,
+    OptionsServices = never,
+>(
+    options: Omit<BotOptions<unknown, unknown, OptionsError, OptionsServices, F>, "events"> & {
+        readonly events: Events & Record<Exclude<keyof Events, EventName>, never>
+    },
+): Effect.Effect<
+    void,
+    ConfigurationError | ConnectError | EventOverflowError | CriticalWorkerStoppedError | RegistrationError,
+    Exclude<BotEventServices<Events> | OptionsServices, Scope.Scope>
+>
+
+/**
  * Build an Effect that runs a bot in the application's context. Execute it once to create the client,
  * install subscriptions and start the gateway, in that order. The runner's Scope keeps subscriptions open
  * and cleans them up. Subscriptions returned by install must stay running. The runner does not restart them
@@ -4803,15 +4906,52 @@ export function runBot<
     install: (
         client: Client<SelectedMessage<F>>,
     ) => Effect.Effect<readonly Subscription[], InstallError, InstallServices | Scope.Scope>,
-    runOptions: RunBotOptions = {},
+    runOptions?: RunBotOptions,
 ): Effect.Effect<
     void,
     ConfigurationError | ConnectError | EventOverflowError | CriticalWorkerStoppedError | InstallError,
     OptionsServices | Exclude<InstallServices, Scope.Scope>
-> {
-    return runBotCore(createClient(options), install, runOptions) as Effect.Effect<
-        void,
-        ConfigurationError | ConnectError | EventOverflowError | CriticalWorkerStoppedError | InstallError,
-        OptionsServices | Exclude<InstallServices, Scope.Scope>
-    >
+>
+export function runBot(
+    options: unknown,
+    install?: (client: Client) => Effect.Effect<readonly Subscription[], unknown, Scope.Scope>,
+    runOptions: RunBotOptions = {},
+): Effect.Effect<void, unknown, unknown> {
+    if (install !== undefined)
+        return runBotCore(createClient(options as ClientOptions), install, runOptions) as Effect.Effect<
+            void,
+            unknown,
+            unknown
+        >
+
+    const botOptions = options as BotOptions<unknown, unknown, unknown, unknown>
+    return runBotCore(
+        Effect.suspend(() => createClient({ ...botOptions, token: botOptions.token ?? "" })),
+        (client) =>
+            Effect.gen(function* () {
+                const entries = yield* snapshotBotEvents(botOptions.events)
+                return yield* Effect.all(
+                    entries.map(({ event, handler }) =>
+                        client.on(event, (payload) => {
+                            const context =
+                                event === "messageCreate"
+                                    ? Object.freeze({
+                                          event: payload,
+                                          client,
+                                          message: payload,
+                                          reply: (input: ReplyInput, options?: SendOptions) =>
+                                              client.messages.reply(payload as Message, input, options),
+                                      })
+                                    : Object.freeze({ event: payload, client })
+                            return (
+                                handler as (
+                                    context: BotEventContext<EventName>,
+                                ) => Effect.Effect<unknown, unknown, unknown>
+                            )(context as BotEventContext<EventName>)
+                        }),
+                    ),
+                )
+            }),
+        botOptions,
+    ) as Effect.Effect<void, unknown, unknown>
 }

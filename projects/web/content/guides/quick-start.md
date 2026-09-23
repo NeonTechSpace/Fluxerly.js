@@ -41,7 +41,7 @@ It should answer **Pong!**
 
 The bot ignores messages from bots. It replies only when a person sends exactly `!ping`
 
-Press Ctrl+C to stop the bot. The SDK stops the message subscription, closes the connection and waits for SDK cleanup. No companion file is required
+Press Ctrl+C to stop the bot. The `processSignals` setting lets the SDK stop the message subscription, close the connection and wait for SDK cleanup. No companion file is required
 
 ## Keep going
 
@@ -59,7 +59,7 @@ The [client's message methods](/docs/{{version}}/api/interfaces/js-ts.Client/#me
 <details>
 <summary>If the bot does not reply</summary>
 
-Check that `FLUXER_BOT_TOKEN` is set and that the bot can view the channel and send messages.
+Check that `FLUXER_BOT_TOKEN` is set and that the bot can view the channel and send messages. A missing token produces a configuration failure rather than connecting.
 Keep the terminal running when trying `!ping`.
 The starter checks the reply Result with `isErr()` and logs its safe failure kind. A lost response can leave a reply posted, so a failed Result is not a reason to send it again blindly
 
@@ -72,11 +72,11 @@ The [troubleshooting guide](/docs/{{version}}/troubleshooting/) separates comman
 
 The SDK returns a result that distinguishes a failed request from a successful one.
 The `isErr()` method checks for failure, and `error` describes that failure.
-Otherwise, `value` holds the successful result, such as the client
+Otherwise, `value` holds the successful result, such as the sent message
 
-The startup and registration checks stop the script on a visible failure.
+The runner reports startup and subscription failures through its outer Result.
 The reply handler reports the typed failure kind without exposing message contents or credentials.
-On Ctrl+C, the runner asks handlers to stop, closes the connection and waits for SDK cleanup. If a handler starts other Promises, the application must track and wait for them separately
+On Ctrl+C, the runner asks handlers to stop, closes the connection and waits for SDK cleanup. The `reply` helper uses the handler's cancellation signal. If a handler starts other Promises, the application must track and wait for them separately
 
 </details>
 

@@ -1,17 +1,24 @@
 import { once } from "node:events"
 import { createServer } from "node:http"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Context, Effect, Exit } from "effect"
 import { ok } from "neverthrow"
 import { WebSocket, WebSocketServer } from "ws"
 import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest"
-import { CriticalWorkerStoppedError, runBot, type Client, type Subscription } from "../src/index.js"
+import {
+    CriticalWorkerStoppedError,
+    ConfigurationError,
+    fromStructuredLogger,
+    runBot,
+    type Client,
+    type Subscription,
+} from "../src/index.js"
 import {
     CriticalWorkerStoppedError as NativeCriticalWorkerStoppedError,
     runBot as runNativeBot,
     type Client as NativeClient,
 } from "../src/effect.js"
 import { runBotCore } from "../src/internal/bot-runner.js"
-import { hostedDiscoveryDocument } from "./hosted-discovery.js"
+import { hostedDiscoveryDocument, stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 const transport = vi.hoisted(() => ({ url: "" }))
 vi.mock("ws", async (original) => {
@@ -44,6 +51,7 @@ async function gateway(holdReady = false) {
     const gateway = new WebSocketServer({ server })
     const sockets: WebSocket[] = []
     const identified = deferred<void>()
+    let sequence = 1
     gateway.on("connection", (socket) => {
         sockets.push(socket)
         socket.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } }))
@@ -52,7 +60,7 @@ async function gateway(holdReady = false) {
             if (command.op !== 2) return
             identified.resolve()
             if (!holdReady)
-                socket.send(JSON.stringify({ op: 0, s: 1, t: "READY", d: { session_id: "fixture-session" } }))
+                socket.send(JSON.stringify({ op: 0, s: sequence++, t: "READY", d: { session_id: "fixture-session" } }))
         })
     })
     server.listen(0, "127.0.0.1")
@@ -70,12 +78,244 @@ async function gateway(holdReady = false) {
         server.closeAllConnections()
         await new Promise<void>((resolve) => server.close(() => resolve()))
     })
-    return { identified: identified.promise }
+    return {
+        identified: identified.promise,
+        dispatch(event: string, data: unknown) {
+            const frame = JSON.stringify({ op: 0, s: sequence++, t: event, d: data })
+            for (const socket of sockets) socket.send(frame)
+        },
+    }
 }
 
 const token = "fixture-only-not-a-credential"
+const messageWire = { id: "10", channel_id: "20", content: "!ping", author: { id: "30", username: "fixture" } }
 
 describe("public runBot", () => {
+    test("simple default events receive the client and bind replies to the delivered message", async () => {
+        const fixture = await gateway()
+        const abort = new AbortController()
+        onTestFinished(() => abort.abort())
+        const handled = deferred<void>()
+        const requests: { url: string; body: unknown }[] = []
+        stubFetchWithHostedDiscovery(async (url, init) => {
+            requests.push({ url, body: JSON.parse(String(init.body)) })
+            return Response.json({ ...messageWire, id: "11", content: "Pong!" })
+        })
+        const running = runBot({
+            token,
+            signal: abort.signal,
+            events: {
+                messageCreate: async (ctx) => {
+                    expect(ctx.client.state).not.toBe("Closed")
+                    expect(ctx.event.id).toBe("10")
+                    expect(ctx.message).toBe(ctx.event)
+                    expect(ctx.signal).toBeDefined()
+                    const result = await ctx.reply({ content: "Pong!" })
+                    expect(result.isOk()).toBe(true)
+                    handled.resolve()
+                },
+            },
+        })
+        await fixture.identified
+        fixture.dispatch("MESSAGE_CREATE", messageWire)
+        await handled.promise
+        expect(requests).toEqual([
+            {
+                url: "https://api.fluxer.app/v1/channels/20/messages",
+                body: expect.objectContaining({
+                    content: "Pong!",
+                    message_reference: expect.objectContaining({ message_id: "10", channel_id: "20" }),
+                }),
+            },
+        ])
+        abort.abort()
+        expect((await running).isOk()).toBe(true)
+    })
+
+    test("simple default reply is cancelled when its run stops", async () => {
+        const fixture = await gateway()
+        const abort = new AbortController()
+        onTestFinished(() => abort.abort())
+        const entered = deferred<AbortSignal>()
+        let handlerSignal: import("../src/index.js").OperationSignal | undefined
+        stubFetchWithHostedDiscovery((_url, init) => {
+            entered.resolve(init.signal!)
+            return new Promise<Response>((_resolve, reject) => {
+                init.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+                    once: true,
+                })
+            })
+        })
+        const running = runBot({
+            token,
+            signal: abort.signal,
+            events: {
+                messageCreate: async (ctx) => {
+                    handlerSignal = ctx.signal
+                    await ctx.reply({ content: "Pong!" })
+                },
+            },
+        })
+        await fixture.identified
+        fixture.dispatch("MESSAGE_CREATE", messageWire)
+        const requestSignal = await entered.promise
+        abort.abort()
+        expect((await running).isOk()).toBe(true)
+        expect(handlerSignal?.aborted).toBe(true)
+        expect(requestSignal.aborted).toBe(true)
+    })
+
+    test("simple non-message events retain their typed payload and full client", async () => {
+        const fixture = await gateway()
+        const abort = new AbortController()
+        onTestFinished(() => abort.abort())
+        const handled = deferred<void>()
+        const running = runBot({
+            token,
+            signal: abort.signal,
+            events: {
+                channelPinsUpdate: (ctx) => {
+                    expect(ctx.event.channelId).toBe("20")
+                    expect(ctx.event.lastPinTimestamp).toBeNull()
+                    expect(ctx.client.messages).toBeDefined()
+                    handled.resolve()
+                },
+                messageCreate: undefined,
+            },
+        })
+        await fixture.identified
+        fixture.dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: null })
+        await handled.promise
+        abort.abort()
+        expect((await running).isOk()).toBe(true)
+    })
+
+    test("simple event maps reject invalid runtime values through configuration failures", async () => {
+        for (const events of [null, [], { unknownEvent: () => undefined }, { messageCreate: true }]) {
+            const result = await runBot({ token, events } as never)
+            expect(result.isErr() && result.error._tag).toBe("ConfigurationError")
+            const native = await Effect.runPromiseExit(
+                runNativeBot({ token, events } as never) as Effect.Effect<void, unknown>,
+            )
+            expect(Exit.isFailure(native)).toBe(true)
+            if (Exit.isFailure(native))
+                expect(
+                    native.cause.reasons.some(
+                        (reason) => reason._tag === "Fail" && reason.error instanceof ConfigurationError,
+                    ),
+                ).toBe(true)
+        }
+        expect((await runBot({ token: undefined, events: {} })).isErr()).toBe(true)
+        const native = await Effect.runPromiseExit(runNativeBot({ token: undefined, events: {} }))
+        expect(Exit.isFailure(native)).toBe(true)
+    })
+
+    test("failed later registration releases the partially installed run before connecting", async () => {
+        const before = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")]
+        const fetch = vi.fn(async () => Response.json(hostedDiscoveryDocument))
+        vi.stubGlobal("fetch", fetch)
+        const events = { messageCreate: () => undefined, unsupportedEvent: () => undefined }
+        const result = await runBot({ token, events, processSignals: true } as never)
+        expect(result.isErr() && result.error._tag).toBe("ConfigurationError")
+        const native = await Effect.runPromiseExit(
+            runNativeBot({ token, events, processSignals: true } as never) as Effect.Effect<void, unknown>,
+        )
+        expect(Exit.isFailure(native)).toBe(true)
+        if (Exit.isFailure(native))
+            expect(
+                native.cause.reasons.some(
+                    (reason) => reason._tag === "Fail" && reason.error instanceof ConfigurationError,
+                ),
+            ).toBe(true)
+        expect(fetch).not.toHaveBeenCalled()
+        expect([process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")]).toEqual(before)
+    })
+
+    test("simple handler failures are reported once and do not stop later delivery", async () => {
+        const fixture = await gateway()
+        const abort = new AbortController()
+        onTestFinished(() => abort.abort())
+        const handled = deferred<void>()
+        const calls: string[] = []
+        const reports: unknown[] = []
+        const running = runBot({
+            token,
+            signal: abort.signal,
+            logging: { logger: fromStructuredLogger((record) => reports.push(record)) },
+            events: {
+                messageCreate: ({ message }) => {
+                    calls.push(message.id)
+                    if (message.id === "10") throw new Error("private handler detail")
+                    handled.resolve()
+                },
+            },
+        })
+        await fixture.identified
+        fixture.dispatch("MESSAGE_CREATE", messageWire)
+        await vi.waitFor(() =>
+            expect(reports).toContainEqual(
+                expect.objectContaining({
+                    event: "eventSubscriptionFailed",
+                    subscriptionEvent: "messageCreate",
+                    failureKind: "handler",
+                }),
+            ),
+        )
+        fixture.dispatch("MESSAGE_CREATE", { ...messageWire, id: "11" })
+        await handled.promise
+        abort.abort()
+        expect((await running).isOk()).toBe(true)
+        expect(calls).toEqual(["10", "11"])
+        expect(
+            reports.filter((report) => (report as { event?: string }).event === "eventSubscriptionFailed"),
+        ).toHaveLength(1)
+        expect(JSON.stringify(reports)).not.toContain("private handler detail")
+    })
+
+    test("simple native events use the caller's services and interrupt in-flight handlers on stop", async () => {
+        const fixture = await gateway()
+        const abort = new AbortController()
+        onTestFinished(() => abort.abort())
+        const entered = deferred<void>()
+        const interrupted = deferred<void>()
+        const requests: unknown[] = []
+        stubFetchWithHostedDiscovery(async (_url, init) => {
+            requests.push(JSON.parse(String(init.body)))
+            return Response.json({ ...messageWire, id: "11", content: "Pong!" })
+        })
+        const Service = Context.Service<{ label: string }>("run-bot-test-service")
+        const program = runNativeBot({
+            token,
+            signal: abort.signal,
+            events: {
+                messageCreate: (ctx) =>
+                    Effect.gen(function* () {
+                        const service = yield* Service
+                        expect(service.label).toBe("fixture")
+                        expect(ctx.event.id).toBe("10")
+                        expect(ctx.message).toBe(ctx.event)
+                        expect(ctx.client.messages).toBeDefined()
+                        yield* ctx.reply({ content: `${service.label}: Pong!` })
+                        entered.resolve()
+                        yield* Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => interrupted.resolve())))
+                    }),
+            },
+        })
+        const running = Effect.runPromiseExit(program.pipe(Effect.provideService(Service, { label: "fixture" })))
+        await fixture.identified
+        fixture.dispatch("MESSAGE_CREATE", messageWire)
+        await entered.promise
+        expect(requests).toEqual([
+            expect.objectContaining({
+                content: "fixture: Pong!",
+                message_reference: expect.objectContaining({ message_id: "10", channel_id: "20" }),
+            }),
+        ])
+        abort.abort()
+        expect(Exit.isSuccess(await running)).toBe(true)
+        await interrupted.promise
+    })
+
     test("pre-aborted runs do not create clients or install handlers", async () => {
         const install = vi.fn(() => [])
         expect((await runBot({ token: "" }, install, { signal: AbortSignal.abort() })).isOk()).toBe(true)

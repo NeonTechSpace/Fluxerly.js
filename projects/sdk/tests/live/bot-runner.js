@@ -188,6 +188,51 @@ async function checkEffect(token, userId) {
     }
 }
 
+async function checkSimple(token, userId, guildId) {
+    const { Effect, Exit } = await import("effect")
+    const { runBot } = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
+    const listeners = { SIGINT: process.listenerCount("SIGINT"), SIGTERM: process.listenerCount("SIGTERM") }
+    const controller = new AbortController()
+    let client
+    const capture = (context) => {
+        if (context.event.id === guildId) client = context.client
+    }
+    const run = runBot({
+        token,
+        signal: controller.signal,
+        processSignals: true,
+        events: {
+            guildCreate: mode === "default" ? capture : (context) => Effect.sync(() => capture(context)),
+        },
+    })
+    const running = mode === "default" ? Promise.resolve(run) : Effect.runPromiseExit(run)
+    active = { controller, running }
+    try {
+        stage = "simple_sandbox_event"
+        await until(() => client?.state === "Connected", 35_000)
+        report(stage, { passed: true, remoteMutations: false })
+        stage = "simple_fresh_self_read"
+        const fetched =
+            mode === "default"
+                ? await client.users.fetchSelf({ timeoutMs: 10_000 })
+                : await Effect.runPromise(client.users.fetchSelf({ timeoutMs: 10_000 }))
+        if (mode === "default") assert.ok(fetched.isOk())
+        assert.equal((mode === "default" ? fetched.value : fetched).id, userId)
+        report(stage, { passed: true, remoteMutations: false })
+        stage = "simple_cancel_recovery"
+        await probe.interrupt(client)
+        controller.abort()
+        const result = await running
+        assert.ok(mode === "default" ? result.isOk() : Exit.isSuccess(result))
+        assertReleased(client, listeners)
+        report(stage, { passed: true })
+    } finally {
+        controller.abort()
+        await running.catch(() => undefined)
+        active = undefined
+    }
+}
+
 // Failure containment only. Natural process exit, not the watchdog, proves cleanup
 setTimeout(() => {
     report("process_timeout", { passed: false, cleanExitVerified: false })
@@ -220,6 +265,7 @@ try {
     probe = observeSockets()
     if (mode === "default") await checkDefault(token, user.id)
     else await checkEffect(token, user.id)
+    await checkSimple(token, user.id, guildId)
     stage = "socket_cleanup"
     await probe.verifyClosed()
     report(stage, { passed: true })

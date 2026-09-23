@@ -543,7 +543,7 @@ export type {
 } from "./reactions.js"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
 import { CriticalWorkerStoppedError, type RunBotOptions } from "./bot-runner.js"
-import { runBotCore } from "#sdk/internal/bot-runner"
+import { runBotCore, snapshotBotEvents } from "#sdk/internal/bot-runner"
 export { CriticalWorkerStoppedError } from "./bot-runner.js"
 export type { RunBotOptions } from "./bot-runner.js"
 import {
@@ -1014,6 +1014,7 @@ import type {
     MessageReference,
     MessageInput,
     ReplyInput,
+    SendOptions,
     DefaultMessageOperationOptions,
     DefaultSendOptions,
 } from "./messages.js"
@@ -6686,6 +6687,107 @@ function botOperation<A, E extends BotFailure>(
     )
 }
 
+/** Data and operations available to one configured bot event handler */
+export type BotEventContext<K extends EventName, M extends MessageCore = Message> = {
+    /** Frozen event payload, using this client's selected message fields where applicable */
+    readonly event: EventMap<M>[K]
+    /** Full client for operations beyond the event's convenience methods. The runner owns its lifetime */
+    readonly client: Client<M>
+    /** Cancels SDK operations passed this signal when the handler is stopped. It cannot stop arbitrary application Promises */
+    readonly signal: NonNullable<OperationOptions["signal"]>
+} & (K extends "messageCreate"
+    ? {
+          /** The same incoming message as event */
+          readonly message: M
+          /** Reply to this message with the handler's cancellation signal already applied.
+           * Uses client.messages.reply without extra retries or error reporting. Check the returned Result.
+           * An uncertain failure can leave a reply posted. Retaining this function does not extend the handler's lifetime
+           */
+          readonly reply: (input: ReplyInput, options?: SendOptions) => ReturnType<Client<M>["messages"]["reply"]>
+      }
+    : {})
+
+/** One optional handler per event. Handlers use client.on's default queue limits and failure reporting.
+ * A thrown or rejected handler is reported without stopping the bot or retrying that handler.
+ * Reading an Err from an SDK operation remains the handler's responsibility
+ */
+export type BotEvents<M extends MessageCore = Message> = {
+    readonly [K in EventName]?: ((context: BotEventContext<K, M>) => void | Promise<void>) | undefined
+}
+
+/** Configure a bot with event handlers instead of an explicit subscription installer */
+export interface BotOptions<F extends MessageFields | undefined = undefined>
+    extends Omit<ClientOptions<F>, "token">, RunBotOptions {
+    /** Bot token, commonly read from the process environment. Missing or invalid values return ConfigurationError */
+    readonly token: string | undefined
+    /** Handlers registered before connecting and closed when the bot stops.
+     * Own enumerable entries are read once when the run starts. Undefined handlers are skipped.
+     * Use the installer overload for multiple handlers for one event or custom subscription options
+     */
+    readonly events: BotEvents<SelectedMessage<F>>
+}
+
+function installBotEvents<M extends MessageCore>(
+    client: Client<M>,
+    events: unknown,
+): Effect.Effect<readonly Subscription[], ConfigurationError | import("./errors.js").ClientClosedError> {
+    return Effect.gen(function* () {
+        const entries = yield* snapshotBotEvents(events)
+        const subscriptions: Subscription[] = []
+        for (const { event, handler } of entries) {
+            // The snapshot validates functions and client.on validates event names before invoking this adapter
+            const callback = handler as (context: BotEventContext<EventName, M>) => void | Promise<void>
+            const registered = client.on(event, (payload, signal) => {
+                const context = {
+                    event: payload,
+                    client,
+                    signal,
+                    ...(event === "messageCreate"
+                        ? {
+                              message: payload as M,
+                              reply: (input: ReplyInput, options?: SendOptions) =>
+                                  client.messages.reply(payload as M, input, { ...options, signal }),
+                          }
+                        : {}),
+                }
+                return callback(Object.freeze(context))
+            })
+            if (registered.isErr()) return yield* Effect.fail(registered.error)
+            subscriptions.push(registered.value)
+        }
+        return subscriptions
+    })
+}
+
+/**
+ * Start a bot from event handlers and watch its connection and subscriptions. The returned ResultAsync starts immediately.
+ * Handler contexts expose the full client. Message-create contexts also expose message and a cancellation-aware reply.
+ * Registration errors return Err. Handler failures follow client.on's isolated reporting policy, without restarting
+ * the handler or stopping the bot. Use the installer overload for custom subscription options and manual registration.
+ * Process signals are opt-in. Stopping waits for SDK cleanup, not unrelated application Promises.
+ * Expected runner failures return Err and defects reject with sanitized SdkDefect information, as in the installer form
+ *
+ * @example
+ * ```ts
+ * import { runBot } from "@neontechspace/fluxerly"
+ *
+ * export function pingBot(token: string | undefined) {
+ *     return runBot({ token, processSignals: true, events: {
+ *         messageCreate: async ({ message, reply }) => {
+ *             if (message.author.isBot || message.content !== "!ping") return
+ *             const sent = await reply({ content: "Pong!" })
+ *             if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
+ *         },
+ *     } })
+ * }
+ * ```
+ */
+export function runBot<const F extends MessageFields | undefined = undefined>(
+    options: BotOptions<F>,
+): ResultAsync<
+    void,
+    ConfigurationError | ConnectError | CancelledError | EventOverflowError | CriticalWorkerStoppedError
+>
 /**
  * Start a bot and watch its connection and required subscriptions. The returned ResultAsync starts immediately.
  * The install callback runs before the gateway starts. Its returned subscriptions must stay open.
@@ -6714,13 +6816,24 @@ function botOperation<A, E extends BotFailure>(
 export function runBot<const F extends MessageFields | undefined = undefined>(
     options: ClientOptions<F>,
     install: (client: Client<SelectedMessage<F>>) => readonly Subscription[],
+    runOptions?: RunBotOptions,
+): ResultAsync<
+    void,
+    ConfigurationError | ConnectError | CancelledError | EventOverflowError | CriticalWorkerStoppedError
+>
+export function runBot<const F extends MessageFields | undefined = undefined>(
+    options: ClientOptions<F> | BotOptions<F>,
+    install?: (client: Client<SelectedMessage<F>>) => readonly Subscription[],
     runOptions: RunBotOptions = {},
 ): ResultAsync<
     void,
     ConfigurationError | ConnectError | CancelledError | EventOverflowError | CriticalWorkerStoppedError
 > {
+    const simple = install === undefined
     const program = runBotCore(
-        Effect.sync(() => createClient(options)).pipe(
+        Effect.sync(() =>
+            createClient(simple ? { ...options, token: options?.token ?? "" } : (options as ClientOptions<F>)),
+        ).pipe(
             Effect.flatMap((created) =>
                 created.isErr()
                     ? Effect.fail(created.error)
@@ -6738,15 +6851,19 @@ export function runBot<const F extends MessageFields | undefined = undefined>(
             ),
         ),
         (client) =>
-            Effect.sync(() => {
-                const workers = install(client.source)
-                if (!Array.isArray(workers))
-                    throw new TypeError("Bot installation must return an array of subscriptions")
-                return workers.map((worker) => ({
-                    waitForClose: () => botOperation((signal) => worker.waitForClose({ signal })),
-                }))
-            }),
-        runOptions,
+            (simple
+                ? installBotEvents(client.source, (options as BotOptions<F>)?.events)
+                : Effect.sync(() => install!(client.source))
+            ).pipe(
+                Effect.map((workers) => {
+                    if (!Array.isArray(workers))
+                        throw new TypeError("Bot installation must return an array of subscriptions")
+                    return workers.map((worker) => ({
+                        waitForClose: () => botOperation((signal) => worker.waitForClose({ signal })),
+                    }))
+                }),
+            ),
+        simple ? (options as BotOptions<F>) : runOptions,
     )
     return new ResultAsync(
         Effect.runPromiseExit(program as Effect.Effect<void, BotFailure>).then((exit) =>

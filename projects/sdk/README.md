@@ -31,28 +31,23 @@ After installing the SDK:
 2. Save the following as `bot.js`, or `bot.ts` for TypeScript
 3. Set the `FLUXER_BOT_TOKEN` environment variable. Keep the token and any files containing it private
 
-The `runBot` function starts the client and watches the connection and returned subscriptions. It closes the client before finishing. No extra helper files are needed
+The `runBot` function installs the event handler, connects the client and waits for SDK cleanup before finishing. No extra helper files are needed
 
 ```js
 import { runBot } from "@neontechspace/fluxerly"
 
-const token = process.env.FLUXER_BOT_TOKEN
-if (!token) throw new Error("FLUXER_BOT_TOKEN is required")
-
 try {
-    const result = await runBot(
-        { token },
-        (client) => {
-            const subscription = client.on("messageCreate", async (message, signal) => {
+    const result = await runBot({
+        token: process.env.FLUXER_BOT_TOKEN,
+        processSignals: true,
+        events: {
+            messageCreate: async ({ message, reply }) => {
                 if (message.author.isBot || message.content !== "!ping") return
-                const sent = await client.messages.reply(message, { content: "Pong!" }, { signal })
+                const sent = await reply({ content: "Pong!" })
                 if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
-            })
-            if (subscription.isErr()) throw subscription.error
-            return [subscription.value]
+            },
         },
-        { processSignals: true },
-    )
+    })
     if (result.isErr()) throw result.error
 } catch {
     console.error("Bot stopped because an operation or cleanup failed")
@@ -64,12 +59,15 @@ The same code works in JavaScript and TypeScript.
 Run `node bot.js` or `node bot.ts`, then send **!ping** in a channel where the bot can read and reply
 
 Press Ctrl+C to stop the bot and wait for SDK cleanup.
-An unexpected failure in the connection or a required subscription stops the bot and reports failure to the operating system.
+An unexpected failure in the connection or required message subscription stops the bot and reports failure to the operating system.
 The bot must still stop or finish work it starts outside the SDK, such as database writes
+
+For custom subscription settings, use `runBot(options, install, runOptions)` to register handlers explicitly.
+For direct control over connection and shutdown, use `createClient`. Both forms are available in JavaScript and TypeScript without using Effect
 
 ## Start an Effect-native bot
 
-The Effect API also provides `runBot`. Its setup function returns an Effect containing the subscriptions that must stay running. The runner uses the application's Effect runtime and services, and waits for cleanup before finishing. The file `examples/starter/bot-effect.ts` shows the complete bot
+The Effect API also provides the one-object `runBot` configuration. Its handlers return Effects instead of Promises and Results. The runner uses the application's Effect runtime and services, and waits for cleanup before finishing. The file `examples/starter/bot-effect.ts` shows the complete bot
 
 Before running the Effect example, add Effect to the bot project's dependencies. Use the exact version listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`.
 For example, run `pnpm add effect@VERSION` or `npm install effect@VERSION`, replacing `VERSION` with that value

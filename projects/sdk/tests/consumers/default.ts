@@ -2,6 +2,9 @@ import {
     type GuildCreate,
     createClient,
     runBot,
+    type BotOptions,
+    type BotEvents,
+    type BotEventContext,
     oauth,
     OAuthScopes,
     colors,
@@ -89,6 +92,59 @@ export function packedRunBot(signal: import("@neontechspace/fluxerly").Operation
         },
         { signal, processSignals: false },
     )
+}
+
+/** Packed declarations expose the simple runner without hiding the advanced installer form above. */
+export function packedSimpleRunBot(signal: import("@neontechspace/fluxerly").OperationSignal) {
+    const events: BotEvents = {
+        messageCreate: async (ctx) => {
+            const message: Message = ctx.message
+            const client: Client = ctx.client
+            const operationSignal: import("@neontechspace/fluxerly").OperationSignal = ctx.signal
+            const response = await ctx.reply({ content: `Received ${message.id}` }, { timeoutMs: 5_000 })
+            void client
+            void operationSignal
+            void response
+        },
+        channelPinsUpdate: (ctx) => {
+            const event: BotEventContext<"channelPinsUpdate"> = ctx
+            const channelId: string = event.event.channelId
+            void channelId
+            // @ts-expect-error The message shortcut belongs only to messageCreate
+            void ctx.message
+        },
+    }
+    const options: BotOptions = { token: "fixture-only", signal, events, processSignals: false }
+    return runBot(options)
+}
+
+export function packedSimpleSelectedMessages() {
+    return runBot({
+        token: "fixture-only",
+        messageFields: ["attachments"],
+        events: {
+            messageCreate: async (ctx) => {
+                void ctx.message.attachments
+                // @ts-expect-error Unselected message fields are absent
+                void ctx.message.embeds
+                const fetched = await ctx.client.messages.fetch({
+                    id: ctx.message.id,
+                    channelId: ctx.message.channelId,
+                })
+                if (fetched.isOk()) {
+                    void fetched.value.attachments
+                    // @ts-expect-error Client operations keep the selected message shape
+                    void fetched.value.embeds
+                }
+                const replied = await ctx.reply({ content: "Pong!" })
+                if (replied.isOk()) {
+                    void replied.value.attachments
+                    // @ts-expect-error Reply results keep the selected message shape
+                    void replied.value.embeds
+                }
+            },
+        },
+    })
 }
 
 export function watchGuildJoins(client: Client) {

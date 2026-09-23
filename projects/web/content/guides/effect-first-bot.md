@@ -54,7 +54,7 @@ Each `yield*` provides the successful value directly, while failures remain part
 
 ## Add a message handler
 
-Native handlers must return an Effect. This installer returns a scoped subscription for an existing native client
+Native handlers must return an Effect. For an existing native client, `client.on` provides a subscription
 
 ```ts
 import { Effect } from "effect"
@@ -72,7 +72,7 @@ export function installPing(client: Client) {
 
 ## Run the complete bot
 
-Save this as `bot.ts`, set `FLUXER_BOT_TOKEN` in the process environment and run `node bot.ts`. The SDK provides the runner, with no companion file required
+Save this as `bot.ts`, set `FLUXER_BOT_TOKEN` in the process environment and run `node bot.ts`. The runner installs handlers from the `events` object, with no companion file required
 
 ```ts
 {{starter:bot-effect.ts}}
@@ -80,7 +80,7 @@ Save this as `bot.ts`, set `FLUXER_BOT_TOKEN` in the process environment and run
 
 Send `!ping` and expect `Pong!`. Press Ctrl+C to request interruption and wait for SDK-owned cleanup. Keep the environment and any process-manager configuration containing the token private
 
-The SDK runner installs the handler before gateway startup and observes both the connection and returned subscription. Failure or unexpected subscription closure stops the bot and awaits cleanup. Individual handler failures remain isolated and are not automatically retried
+The SDK runner installs the handler before gateway startup and observes both the connection and required subscription. Failure or unexpected subscription closure stops the bot and awaits cleanup. Individual handler failures remain isolated and are not automatically retried. Returning the `reply` Effect lets the SDK interrupt it when the handler stops
 
 The bot's top-level code treats interruption alone as a normal stop. Any other failure, including a cleanup defect during interruption, sets a failing process exit code without printing a raw Cause, token or event data. Setting `process.exitCode` lets Node finish cleanup naturally
 

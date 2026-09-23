@@ -3,6 +3,10 @@ import {
     type GuildCreate,
     createClient,
     runBot,
+    type BotOptions,
+    type BotEvents,
+    type BotEventContext,
+    type SendError,
     oauth,
     OAuthScopes,
     colors,
@@ -85,6 +89,123 @@ export const packedRunBot = runBot(
         }),
     { processSignals: false },
 )
+
+const BotService = Context.Service<{ readonly name: string }>("packed-bot-service")
+
+/** The handler requirement stays in the caller's Effect environment. */
+export function packedSimpleRunBot() {
+    const events: BotEvents<SendError, Context.Service.Identifier<typeof BotService>> = {
+        messageCreate: (ctx) =>
+            Effect.gen(function* () {
+                const service = yield* BotService
+                const message: Message = ctx.message
+                const client: Client = ctx.client
+                const response = yield* ctx.reply({ content: `${service.name}: ${message.id}` }, { timeoutMs: 5_000 })
+                void client
+                void response
+            }),
+        channelPinsUpdate: (ctx) =>
+            Effect.sync(() => {
+                const event: BotEventContext<"channelPinsUpdate"> = ctx
+                const channelId: string = event.event.channelId
+                void channelId
+                // @ts-expect-error The message shortcut belongs only to messageCreate
+                void ctx.message
+            }),
+    }
+    const options: BotOptions<SendError, Context.Service.Identifier<typeof BotService>> = {
+        token: "fixture-only",
+        events,
+        processSignals: false,
+    }
+    const program = runBot(options)
+    // @ts-expect-error Running the bot requires the handler's service
+    Effect.runPromise(program)
+    const complete = program.pipe(Effect.provideService(BotService, { name: "fixture" }))
+    Effect.runPromise(complete)
+    return complete
+}
+
+export function packedInferredBotService() {
+    const program = runBot({
+        token: "fixture-only",
+        events: { channelPinsUpdate: () => Effect.as(BotService, undefined) },
+    })
+    // @ts-expect-error The handler's service is inferred without annotating BotOptions
+    Effect.runPromise(program)
+    return program.pipe(Effect.provideService(BotService, { name: "fixture" }))
+}
+
+export function packedSimpleSelectedMessages() {
+    return runBot({
+        token: "fixture-only",
+        messageFields: ["attachments"],
+        events: {
+            messageCreate: (ctx) =>
+                Effect.gen(function* () {
+                    void ctx.message.attachments
+                    // @ts-expect-error Unselected message fields are absent
+                    void ctx.message.embeds
+                    const fetched = yield* ctx.client.messages.fetch({
+                        id: ctx.message.id,
+                        channelId: ctx.message.channelId,
+                    })
+                    void fetched.attachments
+                    // @ts-expect-error Client operations keep the selected message shape
+                    void fetched.embeds
+                    const replied = yield* ctx.reply({ content: "Pong!" })
+                    void replied.attachments
+                    // @ts-expect-error Reply results keep the selected message shape
+                    void replied.embeds
+                }),
+        },
+    })
+}
+
+const FirstBotService = Context.Service<{ readonly first: true }>("packed-first-bot-service")
+const SecondBotService = Context.Service<{ readonly second: true }>("packed-second-bot-service")
+const BotCacheService = Context.Service<{ readonly cache: true }>("packed-bot-cache-service")
+
+export function packedMultipleBotServices() {
+    const program = runBot({
+        token: "fixture-only",
+        messageFields: ["attachments"],
+        cache: { messages: { onError: () => Effect.as(BotCacheService, undefined) } },
+        events: {
+            messageCreate: (ctx) => {
+                void ctx.message.attachments
+                // @ts-expect-error A selected message has no unselected embeds
+                void ctx.message.embeds
+                return Effect.as(FirstBotService, undefined)
+            },
+            channelPinsUpdate: (ctx) => {
+                void ctx.event.channelId
+                return Effect.as(SecondBotService, undefined)
+            },
+        },
+    })
+    // @ts-expect-error Both event services and the cache service are required
+    Effect.runPromise(program)
+    const first = program.pipe(Effect.provideService(FirstBotService, { first: true }))
+    // @ts-expect-error A second event service and cache service are still required
+    Effect.runPromise(first)
+    const second = first.pipe(Effect.provideService(SecondBotService, { second: true }))
+    // @ts-expect-error The cache error reporter service is still required
+    Effect.runPromise(second)
+    const complete = second.pipe(Effect.provideService(BotCacheService, { cache: true }))
+    Effect.runPromise(complete)
+    return complete
+}
+
+export function packedRejectUnsupportedBotEvent() {
+    return runBot({
+        token: "fixture-only",
+        events: {
+            // @ts-expect-error Simple bot events only accept supported event names
+            notAFluxerEvent: () => Effect.void,
+        },
+    })
+}
 
 export function watchGuildJoins(client: Client) {
     return client.on("guildCreate", (event) =>

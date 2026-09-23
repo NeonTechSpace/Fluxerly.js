@@ -1,7 +1,26 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Scope } from "effect"
 import { CriticalWorkerStoppedError, type RunBotOptions } from "#sdk/bot-runner"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
+import type { EventName } from "#sdk/events"
 import { operationSignalError } from "./operation-signal.js"
+
+/** Read each configured handler once before subscribing. Event-name validation belongs to the event bus */
+export function snapshotBotEvents(
+    events: unknown,
+): Effect.Effect<readonly { event: EventName; handler: unknown }[], ConfigurationError> {
+    return Effect.suspend(() => {
+        if (typeof events !== "object" || events === null || Array.isArray(events))
+            return Effect.fail(new ConfigurationError("configuration", "Bot events must be an object"))
+        const entries: { event: EventName; handler: unknown }[] = []
+        for (const [event, handler] of Object.entries(events)) {
+            if (handler === undefined) continue
+            if (typeof handler !== "function")
+                return Effect.fail(new ConfigurationError("handler", "Bot event handlers must be functions"))
+            entries.push({ event: event as EventName, handler })
+        }
+        return Effect.succeed(entries)
+    })
+}
 
 interface RunnerClient<E> {
     readonly state: string
