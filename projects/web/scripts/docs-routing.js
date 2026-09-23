@@ -1,10 +1,17 @@
 // This module is also emitted into the Cloudflare Pages worker
 const prereleaseVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(?:canary|rc)\.(?:0|[1-9]\d*)$/
+function unpublishedDocsPath(path) {
+    let decoded
+    try { decoded = decodeURIComponent(path) } catch { decoded = path }
+    const parts = /^\/docs\/([^/]+)(?:\/([^/]+))?/.exec(decoded)
+    return parts !== null && (prereleaseVersion.test(parts[1]) || parts[2] === "migration")
+}
 export function docsRedirect(request, routes, root = "/docs/latest/") {
     if (request.method !== "GET" && request.method !== "HEAD") return null
     const url = new URL(request.url)
     const path = url.pathname
     if (path !== "/" && path !== "/docs" && !path.startsWith("/docs/")) return null
+    if (unpublishedDocsPath(path)) return null
     const destination = request.headers.get("sec-fetch-dest")
     if (destination && destination !== "document" && destination !== "iframe" && destination !== "empty") return null
     const accept = request.headers.get("accept")
@@ -19,17 +26,13 @@ export function docsRedirect(request, routes, root = "/docs/latest/") {
     // Reject ambiguous encodings rather than interpreting them as another page
     if (!decoded || /[%\\\x00-\x1f\x7f]/.test(decoded) || /%2f|%5c/i.test(path) || decoded.includes("//")) {
         const rawVersion = /^\/docs\/([^/]+)(?:\/|$)/.exec(path)?.[1]
-        if (prereleaseVersion.test(rawVersion)) return null
         const channel = rawVersion === "canary" || rawVersion === "rc" ? rawVersion : null
         if (channel) return routes.has(`/docs/${channel}`) ? `/docs/${channel}/` + url.search : null
         return root + url.search
     }
     const canonical = decoded.replace(/\/$/, "")
     const parts = canonical.slice("/docs/".length).split("/")
-    if (parts[1] === "migration") return null
     const version = parts[0]
-    // Numbered prerelease pages are not published and must not fall back to another version
-    if (prereleaseVersion.test(version)) return null
     const channel = version === "canary" || version === "rc" ? version : null
     if (channel) {
         const channelRoot = `/docs/${channel}`
@@ -54,6 +57,16 @@ export function createDocsHandler(pages) {
     if (!routes.has(root.slice(0, -1))) throw new Error("Documentation root is missing")
     return {
         async fetch(request, env) {
+            // Asset storage can still return cached files removed by a newer deployment
+            if (unpublishedDocsPath(new URL(request.url).pathname)) return new Response("Not found", {
+                status: 404,
+                headers: {
+                    "cache-control": "no-store",
+                    "content-type": "text/plain; charset=utf-8",
+                    "x-robots-tag": "noindex, nofollow",
+                    "x-content-type-options": "nosniff",
+                },
+            })
             const target = docsRedirect(request, routes, root)
             if (target) return new Response(null, {
                 status: 302,

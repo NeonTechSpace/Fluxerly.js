@@ -44,7 +44,6 @@ test("Numbered prerelease paths return 404 without channel or latest fallback", 
         const response = await handler.fetch(incoming, assets)
         assert.equal(response.status, 404, incoming.url)
         assert.equal(response.headers.get("location"), null, incoming.url)
-        assert.equal(calls.at(-1), incoming)
     }
     assert.equal((await handler.fetch(request("/docs/%31.2.3-rc.4/quick-start"), assets)).status, 404)
 })
@@ -60,7 +59,7 @@ test("Missing rolling-channel pages stay in their channel and unavailable channe
         assert.equal((await handler.fetch(request(path), assets)).headers.get("location"), target, path)
     }
     const withoutRc = createDocsHandler(["/docs/latest", "/docs/latest/quick-start", "/docs/canary"])
-    for (const path of ["/docs/rc", "/docs/rc/quick-start", "/docs/1.2.3-rc.2/quick-start", "/docs/rc/%ZZ"]) {
+    for (const path of ["/docs/rc", "/docs/rc/quick-start", "/docs/rc/%ZZ"]) {
         const incoming = request(path)
         const response = await withoutRc.fetch(incoming, assets)
         assert.equal(response.status, 404, path)
@@ -74,6 +73,22 @@ test("Withdrawn guide routes stay missing instead of redirecting to another page
         assert.equal(response.status, 404)
         assert.equal(response.headers.get("location"), null)
     }
+})
+
+test("Unpublished routes return 404 even when asset storage still has the deleted content", async () => {
+    let reads = 0
+    const staleAssets = { ASSETS: { fetch() { reads++; return new Response("Stale withdrawn content", { status: 200 }) } } }
+    for (const path of ["/docs/latest/migration/", "/docs/rc/migration", "/docs/canary/migration/",
+        "/docs/1000.0.0/migration/", "/docs/1.2.3-canary.4/quick-start/", "/docs/1.2.3-rc.4/quick-start/",
+        "/docs/latest/%6Digration/", "/docs/1.2.3-rc.4/%ZZ"]) {
+        const response = await handler.fetch(request(path), staleAssets)
+        assert.equal(response.status, 404, path)
+        assert.equal(response.headers.get("location"), null, path)
+        assert.equal(response.headers.get("cache-control"), "no-store", path)
+        assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow", path)
+        assert.ok(!(await response.text()).includes("Stale withdrawn content"), path)
+    }
+    assert.equal(reads, 0)
 })
 
 test("Local-only preview is the root only when no published snapshot exists", async () => {
