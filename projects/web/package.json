@@ -9,7 +9,7 @@
         "build": "pnpm run generate && astro build",
         "build:public": "node scripts/generate.js --public && astro build",
         "preview": "astro preview",
-        "lint": "oxlint -c ../.oxlintrc.json scripts src tests",
+        "lint": "astro sync && oxlint -c ../.oxlintrc.json scripts src tests",
         "check": "pnpm run lint && pnpm run build && astro check && node --test tests/*.test.js",
         "check:public": "pnpm run lint && pnpm run build:public && astro check && node --test tests/*.test.js",
         "test:browser": "playwright test",

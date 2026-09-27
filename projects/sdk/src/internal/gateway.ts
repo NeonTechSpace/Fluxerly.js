@@ -14,10 +14,14 @@ export {
     AttemptFailure,
     classifyClose,
     runGatewaySession,
-    type GatewaySessionOptions,
     type Session,
 } from "./gateway/session.js"
 
-/** Full-message gateway entry for independent internal protocol checks */
+/**
+ * Full-message gateway entry for independent internal protocol checks.
+ * The supervisor test worker imports it from the built SDK, which lint cannot see before the build
+ *
+ * @public
+ */
 export const runGateway = (options: Omit<GatewaySessionOptions<Message>, "messageDecoder">) =>
     runGatewaySession({ ...options, messageDecoder: decodeMessage })
