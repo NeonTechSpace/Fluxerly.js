@@ -115,8 +115,12 @@ test("Checkouts drop credentials, scripts avoid expression interpolation and ris
     for (const [file, workflow] of Object.entries(workflows)) {
         for (const trigger of ["pull_request_target", "workflow_run"])
             assert.equal(workflow.on[trigger], undefined, `${file} must not use ${trigger}`)
-        for (const job of Object.values(workflow.jobs)) assert.notEqual(job.secrets, "inherit", `${file} inherits secrets`)
+        for (const [id, job] of Object.entries(workflow.jobs))
+            if (`${file}/${id}` !== "release-publish.yml/docs-preview")
+                assert.notEqual(job.secrets, "inherit", `${file}/${id} inherits secrets`)
     }
+    // A called workflow receives no website environment secret unless its caller inherits secrets
+    assert.equal(workflows["release-publish.yml"].jobs["docs-preview"].secrets, "inherit")
 })
 
 test("Release and Preview work is serialized with read-only caches and never cancelled mid-run", () => {

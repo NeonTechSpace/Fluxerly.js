@@ -234,3 +234,5 @@ jobs:
       contents: read
       actions: read
     uses: $/.github/workflows/docs-preview.yml
+    # Without inherited secrets the called job receives an empty website environment token
+    secrets: inherit # zizmor: ignore[secrets-inherit]
