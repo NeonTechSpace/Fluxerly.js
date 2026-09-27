@@ -1,7 +1,18 @@
+// Bot membership pages and bounded traversal through both APIs, compared with raw membership reads. The `--leave`
+// mode makes the bot leave the process-supplied FLUXER_TEST_LEAVE_GUILD_ID server, which requires a re-add afterward.
+// Creates no journal and no remote resources
 import assert from "node:assert/strict"
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { Effect, Exit, Scope, Stream } from "effect"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    processValue,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { createSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 const leave = process.argv.includes("--leave")
@@ -9,37 +20,20 @@ const loseResponse = process.argv.includes("--lose-response")
 assert.ok(mode === "default" || mode === "effect")
 assert.ok(!loseResponse || leave)
 // A stored target is not current leave authorization; this value must be supplied for this invocation
-const targetId = process.env.FLUXER_TEST_LEAVE_GUILD_ID
-if (leave) assert.match(targetId ?? "", /^[1-9][0-9]{0,19}$/)
+const targetId = leave ? processValue("FLUXER_TEST_LEAVE_GUILD_ID") : undefined
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 let lock
 let client
 let scope
 let token
 let stage = "configuration"
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...details }))
+const report = createReporter({ mode }, { passed: true })
 
-async function value(operation) {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
+// Cache lookups return the entry or undefined directly in the default API and as an Effect in the native API
+const cached = (lookup) => (Effect.isEffect(lookup) ? Effect.runPromise(lookup) : lookup)
 
-async function api(path) {
-    const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-        headers: { Authorization: `Bot ${token}` },
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-    })
-    assert.ok(response.ok, `Sandbox HTTP ${response.status}`)
-    return response.json()
-}
+const sandboxApi = createSandboxApi({ fetch: rawFetch, token: () => token, timeoutMs: 10_000 })
+const api = async (path) => (await sandboxApi("GET", path)).data
 
 async function rawMemberships() {
     const ids = []
@@ -74,26 +68,18 @@ const watchdog = setTimeout(() => {
 }, 90_000).unref()
 
 try {
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    const env = { ...parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8")), ...process.env }
-    token = env.FLUXER_TEST_BOT_TOKEN
-    assert.ok(token && token === token.trim())
-    assert.match(env.FLUXER_TEST_GUILD_ID ?? "", /^[1-9][0-9]*$/)
-    assert.match(env.FLUXER_TEST_APPLICATION_ID ?? "", /^[1-9][0-9]*$/)
+    lock = acquireLock()
+    const sandboxEnvironment = loadSandboxEnvironment({ processOverrides: true })
+    token = sandboxEnvironment.token
     stage = "sandbox_identity"
-    const [application, self, sandbox] = await Promise.all([
-        api("/applications/@me"),
-        api("/users/@me"),
-        api(`/guilds/${env.FLUXER_TEST_GUILD_ID}`),
-    ])
-    assert.equal(application.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(application.bot?.id, self.id)
-    assert.equal(self.bot, true)
-    assert.equal(sandbox.id, env.FLUXER_TEST_GUILD_ID)
+    const { user: self, guild: sandbox } = await verifySandboxIdentity(api, {
+        applicationId: sandboxEnvironment.applicationId,
+        guildId: sandboxEnvironment.guildId,
+        concurrent: true,
+    })
     report(stage)
     const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
-    if (mode === "default") client = sdk.createClient({ token, cache: { guilds: true } })._unsafeUnwrap()
+    if (mode === "default") client = sdk.createClient({ token, cache: { guilds: true } })
     else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(
@@ -109,7 +95,7 @@ try {
         page.map((guild) => guild.id),
         expected.slice(0, 200),
     )
-    assert.equal(await value(client.guilds.get(sandbox.id)), undefined)
+    assert.equal(await cached(client.guilds.get(sandbox.id)), undefined)
     const traversal = client.guilds.iterate({ maxItems: 4000, maxPages: 20 })
     const actual = []
     if (mode === "effect") {
@@ -127,7 +113,7 @@ try {
         let deleted
         const listen = async (event, receive) =>
             mode === "default"
-                ? value(client.on(event, receive))
+                ? client.on(event, receive)
                 : value(client.on(event, (item) => Effect.sync(() => receive(item))).pipe(Scope.provide(scope)))
         await listen("guildCreate", (guild) => {
             if (guild.id === targetId) available = guild
@@ -140,7 +126,7 @@ try {
         assert.equal((await waitForObservation(() => available)).id, targetId)
         assert.equal(deleted, undefined)
         await value(client.guilds.fetch(targetId))
-        assert.ok(await value(client.guilds.get(targetId)))
+        assert.ok(await cached(client.guilds.get(targetId)))
         report(stage, { targetId, readdRequiredAfterward: true })
         let dispatched = 0
         globalThis.fetch = async (url, init) => {
@@ -172,7 +158,7 @@ try {
         const departure = await waitForObservation(() => deleted)
         assert.deepEqual(departure, { id: targetId, unavailable: false, unavailableHidden: false })
         assert.ok(Object.isFrozen(departure))
-        assert.equal(await value(client.guilds.get(targetId)), undefined)
+        assert.equal(await cached(client.guilds.get(targetId)), undefined)
         const after = await rawMemberships()
         assert.ok(!after.includes(targetId))
         assert.deepEqual(
@@ -198,39 +184,34 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({ mode, stage: "sdk_cleanup", passed: false, finalizer, lockRetained: lock !== undefined }),
-        )
-        process.exitCode = 1
-    }
-    if (client)
-        try {
-            await value(client.shutdown())
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            if (client) assert.equal(client.state, "Closed")
-            report("sdk_closed")
-        } catch {
-            retainEvidence("client_state")
-        }
-    if (quiescent && lock !== undefined)
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            retainEvidence("sandbox_lock_cleanup")
-        }
-    if (quiescent) clearTimeout(watchdog)
+    // Keep the lock and deadline if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            client && ["client_shutdown", () => value(client.shutdown())],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        checks: [
+            [
+                "client_state",
+                () => {
+                    if (client) assert.equal(client.state, "Closed")
+                    report("sdk_closed")
+                },
+            ],
+        ],
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            console.error(
+                JSON.stringify({
+                    mode,
+                    stage: "sdk_cleanup",
+                    passed: false,
+                    finalizer: finalizer === "sandbox_lock" ? "sandbox_lock_cleanup" : finalizer,
+                    lockRetained: lock !== undefined,
+                }),
+            )
+            process.exitCode = 1
+        },
+    })
 }

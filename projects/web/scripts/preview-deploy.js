@@ -139,6 +139,7 @@ async function upload(settings, source, progress) {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
     const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin.wrangler
     const temporary = await mkdtemp(join(tmpdir(), "fluxerly-preview-"))
+    if (dirname(temporary) !== resolve(tmpdir())) throw new Error("Unexpected temporary preview directory")
     const output = join(temporary, "output.ndjson")
     try {
         // Keep provider output and exception details out of CI logs, including on failure
@@ -188,7 +189,6 @@ async function upload(settings, source, progress) {
         }
         return record.deployment_id
     } finally {
-        if (dirname(temporary) !== resolve(tmpdir())) throw new Error("Unexpected temporary preview directory")
         await rm(temporary, { recursive: true, force: true })
     }
 }
@@ -226,19 +226,20 @@ export async function deployPreview(env = process.env, io = {}) {
     } catch {
         throw new Error("The built public documentation inventory is unavailable")
     }
-    if (!Array.isArray(docsEntries) || !docsEntries.includes("latest") || docsEntries.includes("preview") || docsEntries.includes("dev"))
+    // Latest is served by the worker redirect, so the artifact contains only published version paths
+    if (!Array.isArray(docsEntries) || docsEntries.length === 0 || docsEntries.includes("latest") || docsEntries.includes("preview") || docsEntries.includes("dev"))
         throw new Error("Preview upload requires published-only documentation without local source routes")
     const artifact = await measureLocalArtifact(join(webRoot, "dist"), { readdir: list, lstat: inspect })
     progress(`Local Preview artifact: ${artifact.fileCount} files, ${artifact.totalBytes} bytes ` +
         `(largest file ${artifact.largestFileBytes} bytes); local preflight ${elapsed(now() - localStarted)}`)
     const base = `https://api.cloudflare.com/client/v4/accounts/${settings.account}/pages/projects/${settings.project}`
-    async function get(url, authenticated, timeout) {
+    async function get(url, authenticated, timeout, redirect = "error") {
         let response
         try {
             response = await request(url, {
                 headers: authenticated ? { Authorization: `Bearer ${settings.token}` } : {},
                 signal: AbortSignal.timeout(timeout),
-                redirect: "error",
+                redirect,
                 cache: "no-store",
             })
         } catch {
@@ -281,7 +282,19 @@ export async function deployPreview(env = process.env, io = {}) {
         return data.result
     }
     async function verifyContent(origin, timeout, allowChallenge) {
-        const route = await get(`${origin}/docs/latest/`, false, timeout())
+        // Latest is an edge redirect. Check that response, then the published page it selects
+        const entrance = await get(`${origin}/docs/latest/`, false, timeout(), "manual")
+        if (entrance.headers.get("cf-mitigated") === "challenge") {
+            await discard(entrance)
+            if (allowChallenge) return "challenged"
+            throw new Error("The documentation readback is not publicly accessible")
+        }
+        const location = entrance.headers.get("location")
+        await discard(entrance)
+        if ([401, 403].includes(entrance.status)) throw new Error("The documentation readback is not publicly accessible")
+        if (entrance.status !== 302 || !noindex(entrance.headers.get("x-robots-tag")) ||
+            !/^\/docs\/(?!latest\/)[a-z0-9][a-z0-9.-]*\/$/.test(location ?? "")) return null
+        const route = await get(`${origin}${location}`, false, timeout())
         const challenged = route.headers.get("cf-mitigated") === "challenge"
         await discard(route)
         if (challenged && allowChallenge) return "challenged"

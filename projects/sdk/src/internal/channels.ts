@@ -1,14 +1,21 @@
-import type {
-    ChannelCreate,
-    ChannelEdit,
-    ChannelPosition,
-    GuildChannel,
-    GuildChannelUpdateBulk,
-    PermissionOverwrite,
+/**
+ * Guild channel operations: Request validation and projection of REST and gateway channel data.
+ * Invariant: Guild and channel routes use separate rate-limit groups while sharing global limits and cleanup, omitted permission
+ * overwrites stay distinct from an explicit empty list through input encoding, and channel deletion or visibility loss evicts
+ * related cached messages without synthesizing message events or changing collector completion. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
+import {
+    ChannelType,
+    type ChannelCreate,
+    type ChannelEdit,
+    type ChannelPosition,
+    type GuildChannel,
+    type GuildChannelUpdateBulk,
+    type PermissionOverwrite,
 } from "#sdk/channels"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
-import { identifier, record } from "./message.js"
-import { validCalendarTimestamp } from "./timestamp.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import { count as nonNegativeInt32, identifier, int32, record } from "./decode/primitives.js"
+import { timestamp } from "./decode/timestamp.js"
 import { channelName, normalizedText, rawText } from "./field-text.js"
 
 /** Validated request description, with the shared REST owner retaining admission, cleanup and rate state */
@@ -40,17 +47,12 @@ const maxUnsignedPermission = 18_446_744_073_709_551_615n
 const maxWritablePermission = 9_223_372_036_854_775_807n
 const maxRequestBytes = 4_194_304
 
-const int32 = (value: unknown): value is number =>
-    typeof value === "number" && Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
-const nonNegativeInt32 = (value: unknown): value is number => int32(value) && value >= 0
 const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
 const unsignedPermission = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= maxUnsignedPermission
 const writablePermission = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= maxWritablePermission
-const timestamp = (value: unknown): value is string =>
-    typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && validCalendarTimestamp(value)
 
 export const channelEvents = {
     CHANNEL_CREATE: "guildChannelCreate",
@@ -89,8 +91,11 @@ function decodeOverwrites(value: unknown): readonly PermissionOverwrite[] | unde
     return Object.freeze(overwrites)
 }
 
+/** ChannelType numbers this SDK version decodes into a type-specific shape, and any other number becomes "unknown" */
+const knownChannelTypes: ReadonlySet<number> = new Set(Object.values(ChannelType))
+
 /** Decode a complete guild-channel response, with private channels and malformed payloads returning undefined */
-export function decodeGuildChannel(value: unknown): GuildChannel | undefined {
+function decodeGuildChannel(value: unknown): GuildChannel | undefined {
     if (
         !record(value) ||
         !identifier(value.id) ||
@@ -130,7 +135,10 @@ export function decodeGuildChannel(value: unknown): GuildChannel | undefined {
     return Object.freeze({
         id: value.id,
         guildId: value.guild_id,
-        type: value.type,
+        // An unknown number keeps its value in rawType, so a ChannelType comparison can never match this shape
+        ...(knownChannelTypes.has(value.type)
+            ? { type: value.type as (typeof ChannelType)[keyof typeof ChannelType] }
+            : { type: "unknown" as const, rawType: value.type }),
         ...(value.name === undefined ? {} : { name: value.name }),
         ...(value.topic === undefined ? {} : { topic: value.topic as string | null }),
         ...(value.url === undefined ? {} : { url: value.url as string | null }),
@@ -157,7 +165,7 @@ export function decodeGuildChannel(value: unknown): GuildChannel | undefined {
     })
 }
 
-function decodeGuildChannels(value: unknown, guildId: string): readonly GuildChannel[] | undefined {
+export function decodeGuildChannels(value: unknown, guildId: string): readonly GuildChannel[] | undefined {
     if (!Array.isArray(value)) return undefined
     const channels: GuildChannel[] = []
     const ids = new Set<string>()
@@ -181,6 +189,7 @@ export function decodeChannelEvent(event: keyof typeof channelEvents, value: unk
 }
 
 function text(value: unknown, minimum: number, maximum: number): value is string {
+    // oxlint-disable-next-line typescript/no-misused-spread -- length limits count Unicode code points
     return typeof value === "string" && [...value].length >= minimum && [...value].length <= maximum
 }
 
@@ -190,6 +199,7 @@ function url(value: unknown): value is string {
         new URL(value)
         return true
     } catch {
+        // allow-silent: An unparsable URL is reported as invalid input by the caller
         return false
     }
 }
@@ -231,23 +241,32 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
               "permissionOverwrites",
               "rtcRegion",
           ]
-    if (Object.keys(input).some((key) => !allowed.includes(key)))
-        return inputValidationFailure("input", "allowedFields", "Channel input contains an unsupported field")
+    const unsupported = unsupportedKeyFailure(
+        input,
+        allowed,
+        "input",
+        create ? "the channel create input" : "the channel edit input",
+    )
+    if (unsupported) return unsupported
     if (create && input.type !== 0 && input.type !== 2 && input.type !== 4 && input.type !== 998)
-        return inputValidationFailure("type", "allowedValue", "Channel type must be 0, 2, 4, or 998")
+        return inputValidationFailure(
+            "type",
+            "allowedValue",
+            "Channel type must be 0 (Text), 2 (Voice), 4 (Category), or 998 (Link)",
+        )
     if (create && input.name === undefined)
         return inputValidationFailure("name", "required", "Channel name is required")
     if (input.name !== undefined && !channelName(input.name))
         return inputValidationFailure(
             "name",
             "length",
-            "Channel name must fit 10,000 raw UTF-16 code units and 1 through 100 after provider normalization",
+            "Channel name must contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
         )
     if (input.topic !== undefined && !nullableValue(input.topic, (candidate) => normalizedText(candidate, 1, 1024)))
         return inputValidationFailure(
             "topic",
             "length",
-            "Channel topic must be null or contain 1 through 1,024 UTF-16 code units after provider normalization",
+            "Channel topic must be null or contain 1 through 1,024 UTF-16 code units after Fluxer's normalization",
         )
     if (input.url !== undefined && !nullableValue(input.url, url))
         return inputValidationFailure("url", "format", "Channel URL must be null or a valid absolute URL")
@@ -260,7 +279,7 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
         return inputValidationFailure(
             "bitrate",
             "range",
-            "Channel bitrate must be null or an integer from 8,000 through 384,000",
+            "Channel bitrate must be null or an integer from 8,000 through 384,000 bits per second",
         )
     if (
         input.userLimit !== undefined &&
@@ -309,7 +328,7 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
         return inputValidationFailure(
             "rateLimitPerUser",
             "range",
-            "Channel rateLimitPerUser must be null or an integer from 0 through 21,600",
+            "Channel rateLimitPerUser must be null or an integer from 0 through 21,600 seconds",
         )
     if (
         input.rtcRegion !== undefined &&
@@ -318,7 +337,7 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
         return inputValidationFailure(
             "rtcRegion",
             "length",
-            "Channel rtcRegion must be null or contain 1 through 64 UTF-16 code units after provider normalization",
+            "Channel rtcRegion must be null or contain 1 through 64 UTF-16 code units after Fluxer's normalization",
         )
     return true
 }
@@ -331,12 +350,13 @@ function encodeOverwrites(value: unknown): readonly Record<string, string | numb
     for (const item of value) {
         if (!record(item))
             return inputValidationFailure("permissionOverwrites[]", "type", "Permission overwrites must be objects")
-        if (Object.keys(item).some((key) => key !== "id" && key !== "type" && key !== "allow" && key !== "deny"))
-            return inputValidationFailure(
-                "permissionOverwrites[]",
-                "allowedFields",
-                "Permission overwrites may contain only id, type, allow, and deny",
-            )
+        const unsupported = unsupportedKeyFailure(
+            item,
+            ["id", "type", "allow", "deny"],
+            "permissionOverwrites[]",
+            "A permission overwrite",
+        )
+        if (unsupported) return unsupported
         if (!identifier(item.id))
             return inputValidationFailure(
                 "permissionOverwrites[].id",
@@ -506,16 +526,17 @@ function channelPositionBody(positions: readonly ChannelPosition[]): string | In
     const updates: Array<Record<string, string | number | boolean | null>> = []
     let bytes = 2
     for (const item of positions) {
+        const unsupported = record(item)
+            ? unsupportedKeyFailure(
+                  item,
+                  ["id", "position", "parentId", "precedingSiblingId", "syncPermissionsOnMove"],
+                  "positions[]",
+                  "a channel position entry",
+              )
+            : undefined
+        if (unsupported) return unsupported
         if (
             !record(item) ||
-            Object.keys(item).some(
-                (key) =>
-                    key !== "id" &&
-                    key !== "position" &&
-                    key !== "parentId" &&
-                    key !== "precedingSiblingId" &&
-                    key !== "syncPermissionsOnMove",
-            ) ||
             !identifier(item.id) ||
             ids.has(item.id) ||
             (item.position !== undefined &&
@@ -527,7 +548,7 @@ function channelPositionBody(positions: readonly ChannelPosition[]): string | In
             return inputValidationFailure(
                 "positions[]",
                 "format",
-                "Channel positions require a unique decimal ID and documented position, parent, sibling, and permission fields",
+                "Each channel position entry must be an object with a unique decimal id, and may also contain only position (a nonnegative integer), parentId and precedingSiblingId (decimal IDs or null), and syncPermissionsOnMove (a boolean)",
             )
         const update = {
             id: item.id,
@@ -567,9 +588,17 @@ export function channelReorder(guildId: string, positions: readonly ChannelPosit
 }
 
 function permissionSetBody(input: PermissionOverwrite): string | InputValidationFailure {
+    const unsupported = record(input)
+        ? unsupportedKeyFailure(
+              input,
+              ["id", "type", "allow", "deny"],
+              "permissionOverwrite",
+              "the permission overwrite",
+          )
+        : undefined
+    if (unsupported) return unsupported
     if (
         !record(input) ||
-        Object.keys(input).some((key) => key !== "id" && key !== "type" && key !== "allow" && key !== "deny") ||
         !identifier(input.id) ||
         (input.type !== "role" && input.type !== "member") ||
         !writablePermission(input.allow) ||

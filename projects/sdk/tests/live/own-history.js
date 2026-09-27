@@ -1,9 +1,22 @@
+// Deletion of the designated bot's own message history in one test-owned channel, or with `--guild` in the whole
+// sandbox guild, covering success, a lost response and post-dispatch cancellation, each reconciled by unique markers.
+// Journal `.env.test.own-history.local` records sandbox and bot identity, a unique marker, the test-owned channels and
+// messages, deletion phases and an optional other-author control sample. An existing journal is recovered instead of
+// running the checks: only journaled channels are removed, without repeating any history deletion
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
-import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import { Cause, Effect, Exit, Scope } from "effect"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    processValue,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { createDeadlineSandboxApi } from "./support/sandbox-api.js"
 
 // Guild mode requires current authorization to erase the designated bot's entire sandbox guild history
 const mode = process.argv[2]
@@ -12,8 +25,7 @@ assert.ok(mode === "default" || mode === "effect")
 assert.ok(process.argv.length === (guildMode ? 4 : 3))
 
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.own-history.local", import.meta.url)
+const journalFile = openJournal("own-history")
 const operationDeadline = new AbortController()
 const reportsScope = guildMode ? "guild" : "channel"
 
@@ -28,9 +40,8 @@ let verified = false
 let stage = "configuration"
 let requestDeadline = operationDeadline.signal
 
-const report = (check, details = {}) =>
-    console.log(JSON.stringify({ mode, scope: reportsScope, check, passed: true, ...details }))
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+const report = createReporter({ mode, scope: reportsScope }, { passed: true })
+const save = () => journalFile.save(journal)
 const deadlineTimer = setTimeout(() => operationDeadline.abort(), 150_000).unref()
 // This is failure containment, not cleanup evidence. The journal remains for a later verified recovery
 const watchdog = setTimeout(() => {
@@ -47,44 +58,7 @@ const watchdog = setTimeout(() => {
     process.exit(1)
 }, 180_000).unref()
 
-async function value(operation, signal) {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation), signal ? { signal } : undefined)
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
-
-async function api(method, path, body) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-            method,
-            redirect: "error",
-            signal: AbortSignal.any([requestDeadline, AbortSignal.timeout(15_000)]),
-            headers: {
-                Authorization: `Bot ${token}`,
-                ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-            },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        })
-        const data = response.status === 204 || response.status === 202 ? null : await response.json().catch(() => null)
-        if (response.status === 429 && attempt < 2) {
-            const retryAfter = Math.max(
-                Number(response.headers.get("retry-after")) || 0,
-                Number(data?.retry_after) || 0,
-            )
-            assert.ok(Number.isFinite(retryAfter) && retryAfter > 0 && retryAfter <= 10)
-            await sleep(retryAfter * 1_000, undefined, { signal: requestDeadline })
-            continue
-        }
-        assert.ok(response.ok || response.status === 404, `Sandbox HTTP ${response.status}`)
-        return { status: response.status, data }
-    }
-    throw new Error("Sandbox request budget exhausted")
-}
+const api = createDeadlineSandboxApi({ fetch: rawFetch, token: () => token, deadline: () => requestDeadline })
 
 function assertJournal() {
     assert.equal(journal?.guildId, guildId)
@@ -190,9 +164,7 @@ async function cache(entry) {
     )
     assert.equal(fetched.id, entry.id)
     const retained =
-        mode === "default"
-            ? client.messages.get(reference)._unsafeUnwrap()
-            : await Effect.runPromise(client.messages.get(reference))
+        mode === "default" ? client.messages.get(reference) : await Effect.runPromise(client.messages.get(reference))
     assert.equal(retained?.id, entry.id)
 }
 
@@ -201,7 +173,7 @@ async function assertCacheCleared(entries) {
         const reference = { id: entry.id, channelId: entry.channelId }
         const retained =
             mode === "default"
-                ? client.messages.get(reference)._unsafeUnwrap()
+                ? client.messages.get(reference)
                 : await Effect.runPromise(client.messages.get(reference))
         assert.equal(retained, undefined)
     }
@@ -239,11 +211,14 @@ async function assertBotMembership() {
 
 function deleteOperation(primary, signal = operationDeadline.signal) {
     return guildMode
-        ? client.guilds.deleteMine(guildId, mode === "default" ? { signal } : undefined)
-        : client.messages.deleteMine(primary.id, mode === "default" ? { signal } : undefined)
+        ? client.guilds.deleteOwnMessages(guildId, mode === "default" ? { confirm: true, signal } : { confirm: true })
+        : client.messages.deleteOwnMessages(
+              primary.id,
+              mode === "default" ? { confirm: true, signal } : { confirm: true },
+          )
 }
 
-async function deleteMine(primary, kind) {
+async function deleteOwnMessages(primary, kind) {
     const cancellation = new AbortController()
     const signal = AbortSignal.any([operationDeadline.signal, cancellation.signal])
     const deletion = { kind, phase: "dispatching" }
@@ -349,7 +324,7 @@ async function cleanup() {
         const remaining = await api("GET", `/guilds/${guildId}/channels`)
         assert.ok(Array.isArray(remaining.data))
         assert.ok(journal.channels.every((entry) => !remaining.data.some((channel) => channel?.name === entry.name)))
-        unlinkSync(journalPath)
+        journalFile.remove()
         journal = undefined
         report("test_owned_channels_removed")
     } finally {
@@ -359,36 +334,28 @@ async function cleanup() {
 
 try {
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
 
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^\d+$/)
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
     if (guildMode)
         assert.equal(
-            process.env.FLUXER_TEST_DELETE_MINE_GUILD_ID,
+            processValue("FLUXER_TEST_DELETE_MINE_GUILD_ID"),
             guildId,
             "Guild mode requires a matching process-only deletion confirmation",
         )
 
     stage = "sandbox_identity"
-    const application = (await api("GET", "/applications/@me")).data
-    const self = (await api("GET", "/users/@me")).data
-    assert.equal(application?.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(application?.bot?.id, self?.id)
-    assert.equal(self?.bot, true)
-    assert.equal((await api("GET", `/guilds/${guildId}`)).data?.id, guildId)
-    botId = self.id
+    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)
+    botId = identity.botId
     await assertBotMembership()
     verified = true
     report(stage)
 
     stage = "recover_prior_test_channels"
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
         report("recovery_only_no_history_deletion")
     } else {
@@ -400,7 +367,7 @@ try {
             messages: [],
             deletions: [],
         }
-        writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+        journalFile.create(journal)
         if (guildMode) await captureNonBotControl()
 
         stage = "create_test_owned_channels"
@@ -417,7 +384,7 @@ try {
 
         const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
         const clientOptions = { token, cache: { messages: { maxEntries: 8, maxBytes: 131_072 } } }
-        if (mode === "default") client = sdk.createClient(clientOptions)._unsafeUnwrap()
+        if (mode === "default") client = sdk.createClient(clientOptions)
         else {
             scope = Scope.makeUnsafe()
             client = await Effect.runPromise(sdk.createClient(clientOptions).pipe(Scope.provide(scope)))
@@ -429,7 +396,7 @@ try {
         report(stage)
 
         stage = "whole_history_success"
-        await deleteMine(primary, "success")
+        await deleteOwnMessages(primary, "success")
         await assertMarkerAbsent(primaryMarker)
         if (guildMode) await assertMarkerAbsent(controlMarker)
         else await assertMarkerPresent(controlMarker)
@@ -449,7 +416,7 @@ try {
         report(stage)
 
         stage = "whole_history_lost_response_reconciliation"
-        await deleteMine(primary, "lost_response")
+        await deleteOwnMessages(primary, "lost_response")
         await assertMarkerAbsent(lossMarker)
         await assertCacheCleared([lossMarker])
         await assertBotMembership()
@@ -459,7 +426,7 @@ try {
         stage = "whole_history_post_dispatch_cancellation"
         const cancellationMarker = await createOwnedMessage(primary, "cancelled")
         await cache(cancellationMarker)
-        await deleteMine(primary, "cancelled")
+        await deleteOwnMessages(primary, "cancelled")
         await assertMarkerAbsent(cancellationMarker)
         await assertCacheCleared([cancellationMarker])
         await assertBotMembership()
@@ -493,43 +460,33 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    try {
-        if (client) await value(client.shutdown())
-    } catch {
-        quiescent = false
-        console.error(JSON.stringify({ mode, scope: reportsScope, stage: "client_cleanup", passed: false }))
-        process.exitCode = 1
+    const failedStages = {
+        client_shutdown: "client_cleanup",
+        scope_close: "scope_cleanup",
+        cleanup: "resource_cleanup",
+        sandbox_lock: "lock_cleanup",
     }
-    try {
-        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-    } catch {
-        quiescent = false
-        console.error(JSON.stringify({ mode, scope: reportsScope, stage: "scope_cleanup", passed: false }))
-        process.exitCode = 1
-    }
-    if (quiescent) {
-        try {
-            await cleanup()
-        } catch {
+    // Keep the journal, lock and deadlines if a failed owned finalizer may have left a writer alive
+    const quiescent = await finalizeOwned({
+        writers: [
+            client && ["client_shutdown", () => value(client.shutdown())],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup,
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
             console.error(
                 JSON.stringify({
                     mode,
                     scope: reportsScope,
-                    stage: "resource_cleanup",
+                    stage: failedStages[finalizer],
                     passed: false,
-                    journalRetained: true,
+                    ...(finalizer === "cleanup" ? { journalRetained: true } : {}),
                 }),
             )
             process.exitCode = 1
-        }
-    }
-    if (quiescent) {
-        clearTimeout(deadlineTimer)
-        clearTimeout(watchdog)
-        if (lock !== undefined) {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        }
-    }
+        },
+    })
+    if (quiescent) clearTimeout(deadlineTimer)
 }

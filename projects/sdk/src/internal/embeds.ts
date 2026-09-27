@@ -1,10 +1,19 @@
+/**
+ * Embed encoding and projection.
+ * Invariant: Input tables validate every supported field, and response projection ignores unknown wire properties.
+ * Implements [SDK contracts: Validation requirements](/docs/SDK-CONTRACTS.md#validation-requirements)
+ */
 import type { Embed } from "#sdk/embeds"
-import { InputValidationFailure, inputValidationFailure, type InputValidationConstraint } from "#sdk/input-validation"
-import { validCalendarTimestamp } from "./timestamp.js"
+import {
+    InputValidationFailure,
+    inputValidationFailure,
+    unsupportedKeyFailure,
+    type InputValidationConstraint,
+} from "#sdk/input-validation"
+import { timestamp as isoTimestamp } from "./decode/timestamp.js"
 import { normalizedText } from "./field-text.js"
+import { count, record as object } from "./decode/primitives.js"
 
-const object = (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null && !Array.isArray(value)
 type Reader = (value: unknown, construct?: boolean) => unknown
 type Property = readonly [
     wire: string,
@@ -15,8 +24,7 @@ type Property = readonly [
 type Shape = Record<string, Property>
 const string: Reader = (value) => (typeof value === "string" ? value : undefined)
 const boolean: Reader = (value) => (typeof value === "boolean" ? value : undefined)
-const integer: Reader = (value) =>
-    typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 2147483647 ? value : undefined
+const integer: Reader = (value) => (count(value) ? value : undefined)
 const length =
     (min: number, max: number): Reader =>
     (value) =>
@@ -27,6 +35,7 @@ const url: Reader = (value) => {
         const parsed = new URL(value)
         return parsed.protocol === "http:" || parsed.protocol === "https:" ? value : undefined
     } catch {
+        // allow-silent: An unparsable URL is rejected as invalid embed input
         return undefined
     }
 }
@@ -43,10 +52,7 @@ const attachmentUrl = (value: unknown, uploadedFilenames: readonly string[] | un
         ? value
         : undefined
 }
-const isoTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
-const timestamp: Reader = (value) => {
-    return typeof value === "string" && isoTimestamp.test(value) && validCalendarTimestamp(value) ? value : undefined
-}
+const timestamp: Reader = (value) => (isoTimestamp(value) ? value : undefined)
 
 // The tables own only response projection, which ignores unknown wire properties
 function project(value: unknown, shape: Shape, construct = true): Record<string, unknown> | true | undefined {
@@ -65,10 +71,28 @@ function project(value: unknown, shape: Shape, construct = true): Record<string,
     return result ? Object.freeze(result) : true
 }
 
+// Names each input path in explanations, so a failure reads without knowing the path syntax
+const subjects: Readonly<Record<string, string>> = {
+    embeds: "Embeds",
+    "embeds[]": "Each embed",
+    "embeds[].author": "Embed author",
+    "embeds[].footer": "Embed footer",
+    "embeds[].image": "Embed image",
+    "embeds[].thumbnail": "Embed thumbnail",
+    "embeds[].fields": "Embed fields",
+    "embeds[].fields[]": "Each embed field",
+}
+
 function projectInput(value: unknown, shape: Shape, path: string): Record<string, unknown> | InputValidationFailure {
-    if (!object(value)) return inputValidationFailure(path, "type", "Embed components must be objects")
-    if (Object.keys(value).some((key) => !Object.hasOwn(shape, key)))
-        return inputValidationFailure(path, "allowedFields", "Embed component contains an unsupported field")
+    const subject = subjects[path] ?? "Embed input"
+    if (!object(value)) return inputValidationFailure(path, "type", `${subject} must be an object`)
+    const unsupported = unsupportedKeyFailure(
+        value,
+        Object.keys(shape),
+        path,
+        path.endsWith("[]") ? `an ${subject.slice("Each ".length).toLowerCase()}` : `the ${subject.toLowerCase()}`,
+    )
+    if (unsupported) return unsupported
     const result: Record<string, unknown> = {}
     for (const [key, [wire, read, required, validation]] of Object.entries(shape)) {
         const item = value[key]
@@ -114,10 +138,15 @@ function inputList(
     maximum: number,
     path: string,
 ): readonly unknown[] | InputValidationFailure {
-    if (!Array.isArray(value)) return inputValidationFailure(path, "type", "Embed collection must be an array")
+    if (!Array.isArray(value))
+        return inputValidationFailure(path, "type", `${subjects[path] ?? "Embed input"} must be an array`)
     const count = value.length
     if (count > maximum)
-        return inputValidationFailure(path, "length", `Embed collection may contain at most ${maximum} entries`)
+        return inputValidationFailure(
+            path,
+            "length",
+            `${subjects[path] ?? "Embed input"} may contain at most ${maximum} entries`,
+        )
     const result: unknown[] = []
     for (let index = 0; index < count; index += 1) {
         const item = value[index]
@@ -134,26 +163,39 @@ const inputAuthor: Shape = {
         "name",
         length(1, 256),
         true,
-        ["length", "Embed author name must contain 1 through 256 UTF-16 code units after provider normalization"],
+        ["length", "Embed author name must contain 1 through 256 UTF-16 code units after Fluxer's normalization"],
     ],
-    url: ["url", url, false, ["format", "Embed author URL must be an HTTP URL up to 2,048 characters"]],
-    iconUrl: ["icon_url", url, false, ["format", "Embed author iconUrl must be an HTTP URL up to 2,048 characters"]],
+    url: ["url", url, false, ["format", "Embed author URL must be an HTTP or HTTPS URL of at most 2,048 characters"]],
+    iconUrl: [
+        "icon_url",
+        url,
+        false,
+        ["format", "Embed author iconUrl must be an HTTP or HTTPS URL of at most 2,048 characters"],
+    ],
 }
 const inputFooter: Shape = {
     text: [
         "text",
         length(1, 2048),
         true,
-        ["length", "Embed footer text must contain 1 through 2,048 UTF-16 code units after provider normalization"],
+        ["length", "Embed footer text must contain 1 through 2,048 UTF-16 code units after Fluxer's normalization"],
     ],
-    iconUrl: ["icon_url", url, false, ["format", "Embed footer iconUrl must be an HTTP URL up to 2,048 characters"]],
+    iconUrl: [
+        "icon_url",
+        url,
+        false,
+        ["format", "Embed footer iconUrl must be an HTTP or HTTPS URL of at most 2,048 characters"],
+    ],
 }
 const inputMedia = (uploadedFilenames: readonly string[] | undefined): Shape => ({
     url: [
         "url",
         (value) => attachmentUrl(value, uploadedFilenames),
         true,
-        ["format", "Embed media URL must be HTTP or an unambiguous supported attachment URL"],
+        [
+            "format",
+            "Embed media URL must be an HTTP or HTTPS URL, or attachment://<filename> naming exactly one PNG, JPEG, WebP, or GIF file uploaded with this message",
+        ],
     ],
     description: [
         "description",
@@ -161,7 +203,7 @@ const inputMedia = (uploadedFilenames: readonly string[] | undefined): Shape => 
         false,
         [
             "length",
-            "Embed media description must contain 1 through 4,096 UTF-16 code units after provider normalization",
+            "Embed media description must contain 1 through 4,096 UTF-16 code units after Fluxer's normalization",
         ],
     ],
 })
@@ -170,13 +212,13 @@ const inputField: Shape = {
         "name",
         length(1, 256),
         true,
-        ["length", "Embed field name must contain 1 through 256 UTF-16 code units after provider normalization"],
+        ["length", "Embed field name must contain 1 through 256 UTF-16 code units after Fluxer's normalization"],
     ],
     value: [
         "value",
         length(0, 1024),
         true,
-        ["length", "Embed field value must contain at most 1,024 UTF-16 code units after provider normalization"],
+        ["length", "Embed field value must contain at most 1,024 UTF-16 code units after Fluxer's normalization"],
     ],
     inline: ["inline", boolean, false, ["type", "Embed field inline must be a boolean"]],
 }
@@ -185,7 +227,7 @@ const inputEmbed = (uploadedFilenames: readonly string[] | undefined): Shape => 
         "title",
         length(0, 256),
         false,
-        ["length", "Embed title must contain at most 256 UTF-16 code units after provider normalization"],
+        ["length", "Embed title must contain at most 256 UTF-16 code units after Fluxer's normalization"],
     ],
     description: [
         "description",
@@ -193,10 +235,10 @@ const inputEmbed = (uploadedFilenames: readonly string[] | undefined): Shape => 
         false,
         [
             "length",
-            "Embed description must be empty or contain 1 through 4,096 UTF-16 code units after provider normalization",
+            "Embed description must be empty or contain 1 through 4,096 UTF-16 code units after Fluxer's normalization",
         ],
     ],
-    url: ["url", url, false, ["format", "Embed URL must be an HTTP URL up to 2,048 characters"]],
+    url: ["url", url, false, ["format", "Embed URL must be an HTTP or HTTPS URL of at most 2,048 characters"]],
     color: [
         "color",
         (value) => (integer(value) !== undefined && (value as number) <= 0xffffff ? value : undefined),
@@ -279,7 +321,7 @@ const outputEmbed: Shape = {
     ],
 }
 
-/** attachment:// media targets need an unambiguous new upload in this request. Retained IDs never imply a filename lookup */
+/** Media targets using attachment:// need an unambiguous new upload in this request. Retained IDs never imply a filename lookup */
 export const encodeEmbeds = (value: unknown, uploadedFilenames?: readonly string[]) =>
     inputList(value, (embed) => projectInput(embed, inputEmbed(uploadedFilenames), "embeds[]"), Infinity, "embeds")
 

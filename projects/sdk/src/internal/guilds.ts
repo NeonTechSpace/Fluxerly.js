@@ -1,3 +1,9 @@
+/**
+ * Guild, member, role and voice-state operations and their gateway projections.
+ * Invariant: Operations validate requests and convert REST and gateway data without storing guild state, use separate rate-limit
+ * groups for guild and message routes, and never enter the message cache or synthesize gateway events after HTTP responses.
+ * Multi-step resource workflows are not transactions, and uncertain writes are never replayed as reads. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type {
     Guild,
     GuildDeletion,
@@ -8,6 +14,7 @@ import type {
     MemberProfileEdit,
     GuildSplashCardAlignment,
     GuildVerificationLevel,
+    GuildMfaLevel,
     GuildRole,
     RoleCreate,
     RoleEdit,
@@ -18,15 +25,15 @@ import type {
     RoleReference,
 } from "#sdk/guilds"
 import type { GuildCreate, VoiceState, VoiceStateSnapshot } from "#sdk/events"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
-import { identifier, record } from "./message.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import { count as nonNegativeInt32, identifier, int32, record } from "./decode/primitives.js"
 import type { ResourceRequest } from "./guild-cache.js"
 import type { ChannelCacheRequest } from "./channel-cache.js"
 import type { InstanceEndpointContext } from "./instance.js"
-import { validCalendarTimestamp } from "./timestamp.js"
+import { timestamp } from "./decode/timestamp.js"
 import { memberNickname, normalizedText as text } from "./field-text.js"
 
-/** Validated request description; the shared REST owner retains admission, cleanup and rate state */
+/** Validated request description. The shared REST owner retains admission, cleanup and rate state */
 export interface GuildRequest<A> {
     readonly guildId: string
     readonly bucket: string
@@ -58,15 +65,13 @@ const positiveIdentifier = (value: unknown): value is string =>
     identifier(value) &&
     value !== "0" &&
     (value.length < maximumSnowflake.length || (value.length === maximumSnowflake.length && value <= maximumSnowflake))
-const int32 = (value: unknown): value is number =>
-    typeof value === "number" && Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647
-const nonNegativeInt32 = (value: unknown): value is number => int32(value) && value >= 0
 const color = (value: unknown): value is number => nonNegativeInt32(value) && value <= 0xffffff
 const mentionPreference = (value: unknown): value is 0 | 1 | 2 => value === 0 || value === 1 || value === 2
 const guildDefaultMessageNotification = (value: unknown): value is GuildDefaultMessageNotification =>
     value === 0 || value === 1
 const guildVerificationLevel = (value: unknown): value is GuildVerificationLevel =>
     value === 0 || value === 1 || value === 2 || value === 3 || value === 4
+const guildMfaLevel = (value: unknown): value is GuildMfaLevel => value === 0 || value === 1
 const guildExplicitContentFilter = (value: unknown): value is GuildExplicitContentFilter =>
     value === 0 || value === 1 || value === 2
 const guildContentWarningLevel = (value: unknown): value is GuildContentWarningLevel => value === 0 || value === 1
@@ -74,10 +79,6 @@ const guildSplashCardAlignment = (value: unknown): value is GuildSplashCardAlign
     value === 0 || value === 1 || value === 2
 const imageDataUri = (value: unknown): value is string =>
     typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
-const timestamp = (value: unknown): value is string =>
-    typeof value === "string" &&
-    /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(value) &&
-    validCalendarTimestamp(value)
 
 export const guildEvents = {
     GUILD_MEMBER_ADD: "guildMemberAdd",
@@ -164,7 +165,9 @@ export function decodeVoiceState(value: unknown, expectedGuildId?: string): Voic
         (value.channel_id !== null && !identifier(value.channel_id)) ||
         !identifier(value.user_id) ||
         typeof value.connection_id !== "string" ||
+        // oxlint-disable-next-line typescript/no-misused-spread -- the length limit counts Unicode code points
         [...value.connection_id].length < 1 ||
+        // oxlint-disable-next-line typescript/no-misused-spread -- the length limit counts Unicode code points
         [...value.connection_id].length > 32 ||
         (value.session_id !== undefined &&
             value.session_id !== null &&
@@ -227,6 +230,7 @@ export function decodeGuild(value: unknown): Guild | undefined {
         (value.default_message_notifications !== undefined &&
             !guildDefaultMessageNotification(value.default_message_notifications)) ||
         (value.verification_level !== undefined && !guildVerificationLevel(value.verification_level)) ||
+        (value.mfa_level !== undefined && !guildMfaLevel(value.mfa_level)) ||
         (value.nsfw !== undefined && typeof value.nsfw !== "boolean") ||
         (value.content_warning_level !== undefined && !guildContentWarningLevel(value.content_warning_level)) ||
         !nullableText(value.content_warning_text) ||
@@ -260,6 +264,7 @@ export function decodeGuild(value: unknown): Guild | undefined {
         ...(value.verification_level === undefined
             ? {}
             : { verificationLevel: value.verification_level as GuildVerificationLevel }),
+        ...(value.mfa_level === undefined ? {} : { mfaLevel: value.mfa_level as GuildMfaLevel }),
         ...(value.nsfw === undefined ? {} : { nsfw: value.nsfw as boolean }),
         ...(value.content_warning_level === undefined
             ? {}
@@ -287,9 +292,7 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         value.roles.length > 250 ||
         !value.roles.every(identifier) ||
         new Set(value.roles).size !== value.roles.length ||
-        typeof value.joined_at !== "string" ||
-        !/^\d{4}-\d\d-\d\dT/.test(value.joined_at) ||
-        !validCalendarTimestamp(value.joined_at) ||
+        !timestamp(value.joined_at) ||
         !nullableText(value.nick) ||
         !nullableText(value.avatar) ||
         !nullableText(value.banner) ||
@@ -302,9 +305,7 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         (value.deaf !== undefined && typeof value.deaf !== "boolean") ||
         (value.communication_disabled_until !== undefined &&
             value.communication_disabled_until !== null &&
-            (typeof value.communication_disabled_until !== "string" ||
-                !/^\d{4}-\d\d-\d\dT/.test(value.communication_disabled_until) ||
-                !validCalendarTimestamp(value.communication_disabled_until)))
+            !timestamp(value.communication_disabled_until))
     )
         return undefined
     return Object.freeze({
@@ -383,31 +384,18 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
     if (!record(input)) return inputValidationFailure("input", "type", "Member profile input must be an object")
     if (Object.keys(input).length === 0)
         return inputValidationFailure("input", "required", "Member profile input must contain at least one field")
-    if (
-        Object.keys(input).some(
-            (key) =>
-                ![
-                    "nickname",
-                    "avatar",
-                    "banner",
-                    "bio",
-                    "pronouns",
-                    "accentColor",
-                    "profileFlags",
-                    "mentionFlags",
-                ].includes(key),
-        )
+    const unsupported = unsupportedKeyFailure(
+        input,
+        ["nickname", "avatar", "banner", "bio", "pronouns", "accentColor", "profileFlags", "mentionFlags"],
+        "input",
+        "the member profile input",
     )
-        return inputValidationFailure(
-            "input",
-            "allowedFields",
-            "Member profile input may contain only documented profile fields",
-        )
+    if (unsupported) return unsupported
     if (input.nickname !== undefined && input.nickname !== null && !memberNickname(input.nickname))
         return inputValidationFailure(
             "nickname",
             "length",
-            "Nickname must contain 1 through 32 UTF-16 code units after provider normalization, or be nonempty trim-blank text to clear",
+            "Nickname must contain 1 through 32 UTF-16 code units after Fluxer's normalization, or only whitespace to clear it",
         )
     if (input.avatar !== undefined && input.avatar !== null && !imageDataUri(input.avatar))
         return inputValidationFailure("avatar", "format", "Avatar must be null or a base64 image data URI")
@@ -417,13 +405,13 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
         return inputValidationFailure(
             "bio",
             "length",
-            "Bio must contain 1 through 320 UTF-16 code units after provider normalization",
+            "Bio must contain 1 through 320 UTF-16 code units after Fluxer's normalization",
         )
     if (input.pronouns !== undefined && input.pronouns !== null && !text(input.pronouns, 1, 40))
         return inputValidationFailure(
             "pronouns",
             "length",
-            "Pronouns must contain 1 through 40 UTF-16 code units after provider normalization",
+            "Pronouns must contain 1 through 40 UTF-16 code units after Fluxer's normalization",
         )
     if (input.accentColor !== undefined && input.accentColor !== null && !color(input.accentColor))
         return inputValidationFailure(
@@ -449,7 +437,12 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
         profile_flags: input.profileFlags,
         mention_flags: input.mentionFlags,
     })
-    if (json === "{}") return inputValidationFailure("input", "required", "Member profile input must encode a change")
+    if (json === "{}")
+        return inputValidationFailure(
+            "input",
+            "required",
+            "Member profile input must set at least one field to a defined value",
+        )
     if (Buffer.byteLength(json) > 4_194_304)
         return inputValidationFailure("input", "size", "Member profile input must not exceed 4,194,304 encoded bytes")
     return {
@@ -465,7 +458,7 @@ export function memberEditSelf(guildId: string, input: MemberProfileEdit): Guild
     }
 }
 
-/** Build the one-field member PATCH used for a moderator-controlled nickname change. */
+/** Build the one-field member PATCH used for a moderator-controlled nickname change */
 export function memberNicknameEdit(
     target: MemberReference,
     nickname: string | null,
@@ -479,7 +472,7 @@ export function memberNicknameEdit(
         return inputValidationFailure(
             "nickname",
             "length",
-            "Nickname must be null, contain 1 through 32 UTF-16 code units after provider normalization, or be nonempty trim-blank text to clear",
+            "Nickname must be null or only whitespace to clear it, or contain 1 through 32 UTF-16 code units after Fluxer's normalization",
         )
     const { guildId, userId } = target
     return {
@@ -508,25 +501,34 @@ export function memberRolesSet(
         return inputValidationFailure(
             "target.guildId",
             "format",
-            "Guild IDs must be positive signed-63-bit decimal strings",
+            "Guild IDs must be decimal strings from 1 through 9,223,372,036,854,775,807",
         )
     if (!positiveIdentifier(target.userId))
         return inputValidationFailure(
             "target.userId",
             "format",
-            "User IDs must be positive signed-63-bit decimal strings",
+            "User IDs must be decimal strings from 1 through 9,223,372,036,854,775,807",
         )
     if (!Array.isArray(roleIds)) return inputValidationFailure("roleIds", "type", "Role IDs must be an array")
     const count = roleIds.length
     if (count > 250) return inputValidationFailure("roleIds", "length", "A member role set may contain at most 250 IDs")
+    // oxlint-disable-next-line unicorn/no-new-array -- preallocates the counted length once, and the loop below assigns every index
     const roles = new Array<string>(count)
     for (let index = 0; index < count; index++) roles[index] = roleIds[index]
     if (!roles.every(positiveIdentifier))
-        return inputValidationFailure("roleIds[]", "format", "Role IDs must be positive signed-63-bit decimal strings")
+        return inputValidationFailure(
+            "roleIds[]",
+            "format",
+            "Role IDs must be decimal strings from 1 through 9,223,372,036,854,775,807",
+        )
     if (new Set(roles).size !== roles.length)
         return inputValidationFailure("roleIds", "unique", "Role IDs must be unique")
     if (roles.some((roleId) => roleId === target.guildId))
-        return inputValidationFailure("roleIds[]", "relationship", "The guild default role must be omitted")
+        return inputValidationFailure(
+            "roleIds[]",
+            "relationship",
+            "Role IDs must not include the community's default role, whose ID equals the guild ID",
+        )
     const { guildId, userId } = target
     return {
         guildId,
@@ -548,8 +550,8 @@ export function memberPage(guildId: string, query?: MemberQuery): GuildValidatio
     const input = query === undefined ? {} : query
     if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     if (!record(input)) return inputValidationFailure("query", "type", "Member query must be an object")
-    if (Object.keys(input).some((key) => key !== "limit" && key !== "after"))
-        return inputValidationFailure("query", "allowedFields", "Member query may contain only limit and after")
+    const unsupported = unsupportedKeyFailure(input, ["limit", "after"], "query", "the member query")
+    if (unsupported) return unsupported
     const limit = input.limit === undefined ? 100 : input.limit
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 1000)
         return inputValidationFailure("query.limit", "range", "Member limit must be an integer from 1 through 1,000")
@@ -588,7 +590,11 @@ export function memberRole(target: MemberReference, roleId: string, add: boolean
         return inputValidationFailure("target.userId", "format", "User IDs must be decimal strings")
     if (!identifier(roleId)) return inputValidationFailure("roleId", "format", "Role IDs must be decimal strings")
     if (roleId === target.guildId)
-        return inputValidationFailure("roleId", "relationship", "The guild default role cannot be assigned explicitly")
+        return inputValidationFailure(
+            "roleId",
+            "relationship",
+            "The community's default role, whose ID equals the guild ID, cannot be assigned explicitly",
+        )
     const { guildId, userId } = target
     return {
         guildId,
@@ -609,7 +615,7 @@ const unsignedPermission = (value: unknown): value is bigint =>
 const writablePermission = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= maxWritablePermission
 
-export function decodeRole(value: unknown, guildId: string): GuildRole | undefined {
+function decodeRole(value: unknown, guildId: string): GuildRole | undefined {
     if (
         !record(value) ||
         !identifier(value.id) ||
@@ -639,7 +645,7 @@ export function decodeRole(value: unknown, guildId: string): GuildRole | undefin
     })
 }
 
-function decodeRoles(value: unknown, guildId: string): readonly GuildRole[] | undefined {
+export function decodeRoles(value: unknown, guildId: string): readonly GuildRole[] | undefined {
     if (!Array.isArray(value)) return undefined
     const roles: GuildRole[] = []
     const ids = new Set<string>()
@@ -670,15 +676,15 @@ function roleBody(input: RoleCreate | RoleEdit, create: boolean): string | Input
     const keys = create
         ? ["name", "color", "permissions"]
         : ["name", "color", "permissions", "hoist", "hoistPosition", "mentionable"]
-    if (Object.keys(input).some((key) => !keys.includes(key)))
-        return inputValidationFailure("input", "allowedFields", "Role input may contain only documented role fields")
+    const unsupported = unsupportedKeyFailure(input, keys, "input", "the role input")
+    if (unsupported) return unsupported
     const { name, color, permissions, hoist, hoistPosition, mentionable } = input
     if (create && name === undefined) return inputValidationFailure("name", "required", "Role name is required")
     if (name !== undefined && !text(name, 1, 100))
         return inputValidationFailure(
             "name",
             "length",
-            "Role name must contain 1 through 100 UTF-16 code units after provider normalization",
+            "Role name must contain 1 through 100 UTF-16 code units after Fluxer's normalization",
         )
     if (color !== undefined && (!int32(color) || color < 0 || color > 0xffffff))
         return inputValidationFailure("color", "range", "Role color must be an integer from 0 through 16,777,215")
@@ -749,7 +755,7 @@ export function roleEdit(target: RoleReference, input: RoleEdit): GuildValidatio
         return inputValidationFailure(
             "input",
             "relationship",
-            "The guild default role supports only color and permissions edits",
+            "The community's default role supports only color and permissions edits",
         )
     return {
         guildId,
@@ -777,7 +783,7 @@ export function roleDelete(target: RoleReference): GuildValidationResult<void> {
         return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
     if (!identifier(target.id)) return inputValidationFailure("target.id", "format", "Role IDs must be decimal strings")
     if (target.id === target.guildId)
-        return inputValidationFailure("target.id", "relationship", "The guild default role cannot be deleted")
+        return inputValidationFailure("target.id", "relationship", "The community's default role cannot be deleted")
     return {
         guildId: target.guildId,
         bucket: "guild:role:delete",
@@ -800,19 +806,15 @@ export function roleReorder(guildId: string, positions: readonly RolePosition[])
     let bytes = 2
     for (const item of positions) {
         if (!record(item)) return inputValidationFailure("positions[]", "type", "Role position entries must be objects")
-        if (Object.keys(item).some((key) => key !== "id" && key !== "position"))
-            return inputValidationFailure(
-                "positions[]",
-                "allowedFields",
-                "Role position entries may contain only id and position",
-            )
+        const unsupported = unsupportedKeyFailure(item, ["id", "position"], "positions[]", "a role position entry")
+        if (unsupported) return unsupported
         if (!identifier(item.id))
             return inputValidationFailure("positions[].id", "format", "Role IDs must be decimal strings")
         if (item.id === guildId)
             return inputValidationFailure(
                 "positions[].id",
                 "relationship",
-                "The guild default role cannot be reordered",
+                "The community's default role cannot be reordered",
             )
         if (ids.has(item.id))
             return inputValidationFailure("positions[].id", "unique", "Role position IDs must be unique")
@@ -857,16 +859,21 @@ export function roleSetHoistPositions(
     for (const item of positions) {
         if (!record(item))
             return inputValidationFailure("positions[]", "type", "Role hoist position entries must be objects")
-        if (Object.keys(item).some((key) => key !== "id" && key !== "hoistPosition"))
-            return inputValidationFailure(
-                "positions[]",
-                "allowedFields",
-                "Role hoist position entries may contain only id and hoistPosition",
-            )
+        const unsupported = unsupportedKeyFailure(
+            item,
+            ["id", "hoistPosition"],
+            "positions[]",
+            "a role hoist position entry",
+        )
+        if (unsupported) return unsupported
         if (!identifier(item.id))
             return inputValidationFailure("positions[].id", "format", "Role IDs must be decimal strings")
         if (item.id === guildId)
-            return inputValidationFailure("positions[].id", "relationship", "The guild default role cannot be hoisted")
+            return inputValidationFailure(
+                "positions[].id",
+                "relationship",
+                "The community's default role cannot be hoisted",
+            )
         if (ids.has(item.id))
             return inputValidationFailure("positions[].id", "unique", "Role hoist position IDs must be unique")
         if (!int32(item.hoistPosition))

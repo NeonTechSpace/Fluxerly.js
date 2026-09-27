@@ -1,8 +1,13 @@
+/**
+ * Registry of pinned Fluxer route-template hashes and their declared resource parameters, not rate values.
+ * Invariant: Fluxer hashes unresolved templates but enforces resolved resources, so a hash alone never establishes cross-resource
+ * sharing. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import { createHash } from "node:crypto"
 
 // Pinned to fluxerapp/fluxer@242ed3a93414d61584fee4ad8449cb392a11ccec rate-limit configs.
 // Fluxer hashes the unresolved template for the response header, then resolves these parameters for storage,
-// so the hash alone does not distinguish independently limited resources.
+// so the hash alone does not distinguish independently limited resources
 const parameterizedTemplates = [
     "channel:attachment:upload::channel_id",
     "channel:call:get::channel_id",

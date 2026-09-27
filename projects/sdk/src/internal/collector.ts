@@ -1,4 +1,21 @@
-import { Cause, Deferred, Effect, Exit, type Fiber } from "effect"
+/**
+ * Message collector: Channel-scoped buffering, filters, optional progress work and terminal cleanup.
+ * Invariant: The channel is chosen before buffering, synchronous filters run apart from gateway decoding, and waiting messages and
+ * saved results have separate limits without REST or cache reads. Internal lifecycle transitions are observed rather than the
+ * coalescing state stream. A supplied guild ties the collector to that guild's shard and conflicting source events are discarded
+ * before buffering, while a channel-only collector handles gaps on every shard. Progress work runs in a collector-owned fiber under
+ * the client scope, client shutdown and registration-scope closure wait for it, and terminal cleanup releases listeners, timers,
+ * queued payloads and callbacks, although application-held results may outlive it. Collectors never change subscription recovery,
+ * and registration and remote sending are never atomic.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
+import type { ClientLogger } from "./logging.js"
+import { messageIds, primaryError, type FailureReporter } from "./failures.js"
+import * as Cause from "effect/Cause"
+import * as Deferred from "effect/Deferred"
+import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
+import type * as Fiber from "effect/Fiber"
 import type { ConnectionState, OperationOptions } from "#sdk/client"
 import {
     CollectorError,
@@ -10,8 +27,10 @@ import {
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import type { Message, MessageCore } from "#sdk/messages"
 import type { ClientOwner } from "./client.js"
-import { identifier, record } from "./message.js"
+import { identifier, record } from "./decode/primitives.js"
+import { readCaller, readInput, suspendMarked, thrownCause } from "./defects.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
+import { unsupportedKeyHint } from "./suggest.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
 type Settings<M extends MessageCore> = Required<Omit<CollectorOptions<M>, "filter" | "guildId" | "idleMs">> &
@@ -25,6 +44,11 @@ function guildId(value: unknown): value is string {
         /^[1-9][0-9]{0,19}$/.test(value) &&
         (value.length < maximumGuildId.length || value <= maximumGuildId)
     )
+}
+
+/** Why a collector limit option is invalid, naming the option and, for the timers, the largest accepted value */
+export function collectorBudgetMessage(key: string): string {
+    return `The collector option ${JSON.stringify(key)} must be a positive safe integer${key === "timeoutMs" || key === "idleMs" ? " of at most 2147483647 ms" : ""}`
 }
 
 function settings<M extends MessageCore>(
@@ -43,17 +67,16 @@ function settings<M extends MessageCore>(
         maxPendingMessages: 256,
         maxPendingBytes: 4_194_304,
     }
-    if (
-        Object.keys(input).some(
-            (key) =>
-                !Object.hasOwn(result, key) &&
-                key !== "guildId" &&
-                key !== "filter" &&
-                key !== "onMessage" &&
-                !(defaultApi && key === "signal"),
+    const supported = [...Object.keys(result), "guildId", "filter", "onMessage", ...(defaultApi ? ["signal"] : [])]
+    const unsupported = Object.keys(input).find((key) => !supported.includes(key))
+    if (unsupported !== undefined)
+        return new ConfigurationError(
+            "collectorOptions",
+            `Unsupported collector option ${JSON.stringify(unsupported)}`,
+            {
+                hint: unsupportedKeyHint(unsupported, supported),
+            },
         )
-    )
-        return new ConfigurationError("collectorOptions", "Unsupported collector option")
     for (const key of Object.keys(result) as (keyof typeof result)[]) {
         const value = input[key]
         if (value === undefined) continue
@@ -63,10 +86,7 @@ function settings<M extends MessageCore>(
             value <= 0 ||
             ((key === "timeoutMs" || key === "idleMs") && value > 2_147_483_647)
         )
-            return new ConfigurationError(
-                key,
-                "Collector budgets must be positive safe integers within the timer range",
-            )
+            return new ConfigurationError(key, collectorBudgetMessage(key))
         result[key] = value
     }
     if (input.filter !== undefined && typeof input.filter !== "function")
@@ -74,7 +94,7 @@ function settings<M extends MessageCore>(
     if (input.guildId !== undefined && !guildId(input.guildId))
         return new ConfigurationError("guildId", "Guild ID must be a positive uint64 decimal string")
     if (input.onMessage !== undefined && typeof input.onMessage !== "function")
-        return new ConfigurationError("onMessage", "Message handler must be a function")
+        return new ConfigurationError("onMessage", 'The collector option "onMessage" must be a function')
     const signal = input.signal
     if (
         signal !== undefined &&
@@ -112,6 +132,8 @@ export class MessageCollector<M extends MessageCore = Message> {
     #worker: Fiber.Fiber<void> | undefined
     #outcome: Exit.Exit<CollectorResult<M>, CollectorFailure> | undefined
     #untrack: (() => void) | undefined
+    #logger: ClientLogger | undefined
+    #failures: FailureReporter | undefined
 
     owns(fiberId: number) {
         return this.#worker?.id === fiberId
@@ -121,6 +143,8 @@ export class MessageCollector<M extends MessageCore = Message> {
         const collector = this
         return Effect.gen(function* () {
             collector.#untrack = owner.trackMessageCollector(collector)
+            collector.#logger = owner.logging
+            collector.#failures = owner.failures
             const work = Effect.gen(function* () {
                 while (collector.#active) {
                     const message = yield* Deferred.await(collector.#next)
@@ -133,7 +157,9 @@ export class MessageCollector<M extends MessageCore = Message> {
                                           cause.reasons.filter((reason) => reason._tag !== "Fail"),
                                       ),
                                   )
-                                : Effect.sync(() => collector.fail(collector.#handlerFailure())),
+                                : Effect.sync(() =>
+                                      collector.fail(collector.#handlerFailure(cause), { cause, item: message }),
+                                  ),
                         ),
                     )
                     collector.#busy = false
@@ -150,12 +176,8 @@ export class MessageCollector<M extends MessageCore = Message> {
         })
     }
 
-    #handlerFailure() {
-        const error = new CollectorError("handler")
-        // Materialize the retained safe stack without keeping its callback frame alive
-        const stack = error.stack
-        if (stack !== undefined) error.stack = stack
-        return error
+    #handlerFailure(cause: Cause.Cause<unknown>) {
+        return new CollectorError("handler", null, null, { cause: primaryError(cause) })
     }
 
     #workerFinished(exit: Exit.Exit<void, unknown>) {
@@ -190,6 +212,9 @@ export class MessageCollector<M extends MessageCore = Message> {
     }
 
     start(owner: ClientOwner<M>, channelId: string) {
+        // Filter failures need these even when no callback worker runs
+        this.#logger = owner.logging
+        this.#failures = owner.failures
         const settings = this.#settings!
         const signal = settings.signal
         const abort = () => this.#finish(Exit.interrupt())
@@ -199,7 +224,7 @@ export class MessageCollector<M extends MessageCore = Message> {
         this.#release = () => {
             intake()
             state?.()
-            signal?.removeEventListener("abort", abort)
+            readCaller(() => signal?.removeEventListener("abort", abort))
         }
         try {
             state =
@@ -207,11 +232,11 @@ export class MessageCollector<M extends MessageCore = Message> {
                     ? owner.subscribe(this.#stateChanged.bind(this))
                     : owner.subscribeGateway(settings.guildId, this.#stateChanged.bind(this))
             if (!this.#active) state()
-            signal?.addEventListener("abort", abort, { once: true })
-            if (signal?.aborted) abort()
+            readCaller(() => signal?.addEventListener("abort", abort, { once: true }))
+            if (readCaller(() => signal?.aborted)) abort()
             if (this.#active) this.#scheduleDeadline()
         } catch (error) {
-            this.#finish(Exit.die(error))
+            this.#finish(Exit.failCause(thrownCause(error)))
             throw error
         }
     }
@@ -251,7 +276,19 @@ export class MessageCollector<M extends MessageCore = Message> {
 
     #offer(message: M, bytes: number) {
         if (!this.#active) return
-        if (this.#busy && this.#messages.length === this.#settings!.maxMessages) return
+        if (this.#busy && this.#messages.length === this.#settings!.maxMessages) {
+            // The collector is full and finishing its last callback, so later events cannot join the result
+            this.#logger?.drop(
+                { event: "collector" },
+                {
+                    level: "debug",
+                    category: "collectors",
+                    code: "collectors.dropped",
+                    message: "A full message collector ignored an event while its last callback finished",
+                },
+            )
+            return
+        }
         try {
             if (this.#expired()) return
             const settings = this.#settings!
@@ -290,13 +327,13 @@ export class MessageCollector<M extends MessageCore = Message> {
             let accepted: unknown
             try {
                 accepted = this.#settings!.filter ? this.#settings!.filter(message) : true
-            } catch {
-                return this.fail(new CollectorError("filter"))
+            } catch (error) {
+                return this.fail(new CollectorError("filter", null, null, { cause: error }), { item: message })
             }
             discardInvalidCallbackReturn(accepted)
             if (!this.#active) return
             if (this.#expired()) return
-            if (typeof accepted !== "boolean") return this.fail(new CollectorError("filter"))
+            if (typeof accepted !== "boolean") return this.fail(new CollectorError("filter"), { item: message })
             if (!accepted) continue
             const size = Buffer.byteLength(JSON.stringify(message))
             if (this.#expired()) return
@@ -319,7 +356,32 @@ export class MessageCollector<M extends MessageCore = Message> {
     stop() {
         this.#succeed("stopped")
     }
-    fail(error: CollectorFailure) {
+    /** End the collector with a failure. A failed application filter or callback is also reported with its original
+     * value through the client's onError, or logged at Error, while waitForClose still returns the CollectorError
+     */
+    fail(error: CollectorFailure, source?: { readonly cause?: Cause.Cause<unknown>; readonly item?: M }) {
+        if (this.#active && error instanceof CollectorError && error.reason !== "connectionLost") {
+            if ((error.reason === "handler" || error.reason === "filter") && this.#failures) {
+                // The result keeps this error. Serializing its stack now releases the frames V8 captured with it, whose
+                // closures would otherwise keep the failed item and callbacks alive for as long as the result is held
+                void error.stack
+                this.#failures.report({
+                    kind: error.reason === "filter" ? "filter" : "collector",
+                    error: error.cause ?? error,
+                    cause: source?.cause,
+                    message: source?.item === undefined ? undefined : messageIds(source.item),
+                })
+            } else
+                this.#logger?.log({
+                    level: "warn",
+                    category: "collectors",
+                    code: "collectors.failed",
+                    message: `A message collector failed: ${error.message}`,
+                    fields: { reason: error.reason },
+                    error,
+                    origin: error.reason === "handler" || error.reason === "filter" ? "application" : "sdk",
+                })
+        }
         this.#finish(Exit.fail(error))
     }
     #succeed(reason: CollectorResult<M>["reason"]) {
@@ -343,7 +405,7 @@ export class MessageCollector<M extends MessageCore = Message> {
             release?.()
         } catch (error) {
             outcome = Exit.failCause(
-                Cause.combine(Exit.isFailure(outcome) ? outcome.cause : Cause.empty, Cause.die(error)),
+                Cause.combine(Exit.isFailure(outcome) ? outcome.cause : Cause.empty, thrownCause(error)),
             )
         }
         this.#outcome = outcome
@@ -366,10 +428,11 @@ export function collect<E = never, R = never, M extends MessageCore = Message>(
     handler?: (message: M) => Effect.Effect<unknown, E, R>,
 ): Effect.Effect<MessageCollector<M>, CollectorRegistrationError, R> {
     return Effect.gen(function* () {
-        if (owner.state === "Closing" || owner.state === "Closed") return yield* Effect.fail(new ClientClosedError())
-        const config = settings<M>(channelId, options, defaultApi)
+        const config = yield* readInput(() => settings<M>(channelId, options, defaultApi))
         if (config instanceof ConfigurationError) return yield* Effect.fail(config)
-        if (config.signal?.aborted) return yield* Effect.interrupt
+        // Misuse is checked first. A closing client is a shutdown race, which the bindings return as a failed handle
+        if (owner.state === "Closing" || owner.state === "Closed") return yield* Effect.fail(new ClientClosedError())
+        if (yield* readInput(() => config.signal?.aborted)) return yield* Effect.interrupt
         if (config.guildId === undefined) {
             if (owner.state !== "Connected") return yield* Effect.fail(new CollectorError("notConnected"))
         } else if (
@@ -379,7 +442,11 @@ export function collect<E = never, R = never, M extends MessageCore = Message>(
             return yield* Effect.fail(new CollectorError("notConnected"))
         const collector = new MessageCollector<M>(config, owner.logical)
         if (handler) yield* collector.run(owner, handler)
-        collector.start(owner, channelId)
+        // The caller signal methods are marked reads, so their throws are application faults
+        yield* suspendMarked(() => {
+            collector.start(owner, channelId)
+            return Effect.void
+        })
         return collector
     })
 }

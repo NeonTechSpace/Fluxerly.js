@@ -1,17 +1,23 @@
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { appendFile } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
+import { redact } from "../../release/redact.js"
 
 const repository = "NeonTechSpace/Fluxerly.js"
 const workflowPath = ".github/workflows/ci.yml"
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0
 
-function readGitHub(path, timeout) {
+// gh diagnostics are surfaced with token-like values redacted, so an unavailable gate remains diagnosable
+export function readGitHub(path, timeout, run = spawnSync, log = (text) => process.stderr.write(text)) {
+    const result = run("gh", ["api", "--hostname", "github.com", path], {
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true,
+    })
+    const diagnostics = redact(String(result.stderr ?? "")).trim()
+    if (diagnostics) log(`${diagnostics}\n`)
+    if (result.error || result.status !== 0) throw new Error("Exact-source Check evidence is unavailable")
     try {
-        return JSON.parse(execFileSync("gh", ["api", "--hostname", "github.com", path], {
-            encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-            timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true,
-        }))
+        return JSON.parse(result.stdout)
     } catch {
         throw new Error("Exact-source Check evidence is unavailable")
     }

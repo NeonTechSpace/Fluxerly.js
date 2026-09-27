@@ -1,3 +1,8 @@
+/**
+ * Guild discovery operations: Application, eligibility, categories and search.
+ * Invariant: Requests are validated locally and responses decoded completely, with timestamps checked by the shared grammar.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type {
     DiscoveryApplication,
     DiscoveryApplicationInput,
@@ -10,20 +15,14 @@ import type {
     DiscoverySearchQuery,
 } from "#sdk/discovery"
 import type { GuildRequest } from "./guilds.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
-import { identifier, record } from "./message.js"
-import { validCalendarTimestamp } from "./timestamp.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import { identifier, record } from "./decode/primitives.js"
+import { nonNegativeInteger as integer } from "./decode/primitives.js"
+import { nullableTimestamp as nullableTime, timestamp } from "./decode/timestamp.js"
 
-const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
-    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max
 const text = (value: unknown, min: number, max: number): value is string =>
     typeof value === "string" && value.length >= min && value.length <= max
 const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
-const timestamp = (value: unknown): value is string =>
-    typeof value === "string" &&
-    /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(value) &&
-    validCalendarTimestamp(value)
-const nullableTime = (value: unknown): value is string | null => value === null || timestamp(value)
 
 function application(value: unknown, guildId: string): DiscoveryApplication | undefined {
     if (
@@ -142,17 +141,16 @@ export function discoverySearch(
     if (query !== undefined && !record(query))
         return inputValidationFailure("query", "type", "Discovery search query must be an object")
     const input = query as DiscoverySearchQuery | undefined
-    if (
-        input !== undefined &&
-        Object.keys(input).some(
-            (key) => !["query", "categoryId", "primaryLanguage", "tag", "sortBy", "limit", "offset"].includes(key),
-        )
-    )
-        return inputValidationFailure(
-            "query",
-            "allowedFields",
-            "Discovery search query may contain only documented search fields",
-        )
+    const unsupported =
+        input === undefined
+            ? undefined
+            : unsupportedKeyFailure(
+                  input,
+                  ["query", "categoryId", "primaryLanguage", "tag", "sortBy", "limit", "offset"],
+                  "query",
+                  "the discovery search query",
+              )
+    if (unsupported) return unsupported
     if (input?.query !== undefined && !text(input.query, 0, 100))
         return inputValidationFailure(
             "query.query",
@@ -243,12 +241,13 @@ export function discoverySearch(
 
 function body(input: DiscoveryApplicationInput | DiscoveryApplicationEdit, patch: boolean) {
     if (!record(input)) return inputValidationFailure("input", "type", "Discovery application input must be an object")
-    if (Object.keys(input).some((key) => !["description", "categoryId", "primaryLanguage", "tags"].includes(key)))
-        return inputValidationFailure(
-            "input",
-            "allowedFields",
-            "Discovery application input may contain only description, categoryId, primaryLanguage, and tags",
-        )
+    const unsupported = unsupportedKeyFailure(
+        input,
+        ["description", "categoryId", "primaryLanguage", "tags"],
+        "input",
+        "the discovery application input",
+    )
+    if (unsupported) return unsupported
     if ((!patch || input.description !== undefined) && !text(input.description, 10, 300))
         return inputValidationFailure(
             "description",
@@ -261,7 +260,11 @@ function body(input: DiscoveryApplicationInput | DiscoveryApplicationEdit, patch
         input.primaryLanguage !== undefined &&
         (!text(input.primaryLanguage, 2, 35) || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(input.primaryLanguage))
     )
-        return inputValidationFailure("primaryLanguage", "format", "Primary language must be a valid language tag")
+        return inputValidationFailure(
+            "primaryLanguage",
+            "format",
+            "Discovery primary language must be a valid language tag",
+        )
     const rawTags = input.tags
     let tags: string[] | undefined
     if (rawTags !== undefined) {

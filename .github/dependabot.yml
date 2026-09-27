@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ['*']
+  - package-ecosystem: npm
+    directory: /projects
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    # Effect is an exact public peer and changes only by decision. TypeScript and
+    # @types/node majors are separate decisions (web TypeScript 6, Node 24 floor)
+    ignore:
+      - dependency-name: effect
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+    groups:
+      # Published SDK dependencies get their own pull request so a Changeset can be added
+      sdk-runtime:
+        patterns: [neverthrow, ws]
+      npm:
+        patterns: ['*']

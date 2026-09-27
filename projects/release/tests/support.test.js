@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
+import fs from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
 import { assertReleaseSupport, validateReleaseSupport } from "../support.js"
@@ -19,13 +21,13 @@ const sentinel = `
 `
 
 test("Release support succeeds locally and malformed release commands still stop before effects", () => {
-    for (const [args, status, error] of [
-        [["check-support"], 0, ""],
-        [["version", "--epoch", "bogus", "--channel", "canary"], 1, "Epoch must be a number"],
-        [["prepare"], 1, "Prepare needs --output NEW_ABSOLUTE_DIRECTORY"],
-        [["status", "nonexistent-candidate"], 1, "Status, verify and publish require --checksum"],
-        [["verify", "nonexistent-candidate"], 1, "Status, verify and publish require --checksum"],
-        [["publish", "nonexistent-candidate"], 1, "Status, verify and publish require --checksum"],
+    for (const [args, status, reason] of [
+        [["check-support"], 0, undefined],
+        [["version", "--epoch", "bogus", "--channel", "canary"], 1, /Epoch/],
+        [["prepare"], 1, /--output/],
+        [["status", "nonexistent-candidate"], 1, /--checksum/],
+        [["verify", "nonexistent-candidate"], 1, /--checksum/],
+        [["publish", "nonexistent-candidate"], 1, /--checksum/],
     ]) {
         const result = spawnSync(
             process.execPath,
@@ -43,14 +45,15 @@ test("Release support succeeds locally and malformed release commands still stop
             },
         )
         assert.ifError(result.error)
-        assert.equal(result.status, status, args[0])
-        if (status === 0)
-            assert.equal(
-                result.stdout,
-                "Release prerequisite passed: Exact required Effect peer matches the SDK development dependency\n",
-            )
-        else assert.equal(result.stdout, "", args[0])
-        assert.ok(result.stderr.trim().startsWith(error), result.stderr)
+        assert.equal(result.status, status, `${args[0]}: ${result.stderr}`)
+        assert.doesNotMatch(result.stderr, /Unexpected release boundary access/, args[0])
+        if (reason) {
+            assert.equal(result.stdout, "", args[0])
+            assert.match(result.stderr, reason, args[0])
+        } else {
+            assert.notEqual(result.stdout.trim(), "", args[0])
+            assert.equal(result.stderr, "", args[0])
+        }
     }
 })
 
@@ -65,6 +68,20 @@ test("Release support retains the exact required npm Effect peer", () => {
     ]) assert.throws(() => validateReleaseSupport(changed), /exact Effect/)
 })
 
-test("The support gate leaves local planning, fragment authoring and candidate inspection available", () => {
-    for (const action of ["plan", "changeset", "inspect"]) assert.doesNotThrow(() => assertReleaseSupport(action))
+test("The support gate leaves local planning, fragment authoring and candidate inspection available", (t) => {
+    // An unsupported SDK manifest makes every gated command fail, so only ungated commands can pass
+    const readFileSync = fs.readFileSync
+    t.mock.method(fs, "readFileSync", (path, ...rest) =>
+        String(path).replaceAll("\\", "/").endsWith("/sdk/package.json")
+            ? JSON.stringify({ peerDependencies: {} })
+            : readFileSync(path, ...rest),
+    )
+    syncBuiltinESMExports()
+    t.after(() => {
+        t.mock.restoreAll()
+        syncBuiltinESMExports()
+    })
+    for (const action of ["plan", "changeset", "inspect"]) assert.doesNotThrow(() => assertReleaseSupport(action), action)
+    for (const action of ["check-support", "version", "prepare", "verify", "publish", "status"])
+        assert.throws(() => assertReleaseSupport(action), /exact Effect/, action)
 })

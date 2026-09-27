@@ -1,20 +1,32 @@
+// Consumer operations: profile banner URLs, attachment deletion, member role replacement with the designated bot and
+// gateway guild and channel member counts, including lost responses, cancellation and connection loss.
+// Journal `.env.test.consumer-operations.local` records the designated bot's original roles and the test role and
+// channel markers with their returned IDs. An existing journal is recovered before a new run: only the recorded roles
+// plus the unchanged zero-permission test role are restored, then restoration and removal of the role and channel are
+// verified. An unexpected assignment or altered resource keeps the journal
 import assert from "node:assert/strict"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import { Cause, Effect, Exit, Fiber, Scope } from "effect"
 import WebSocket from "ws"
 import { createGuildChannelFixture, cleanupGuildChannelFixtures } from "./channel-fixture.mjs"
 import { cleanupGuildTestRole, createGuildTestRole } from "./guild-fixture.mjs"
 import { restoreConsumerBotRoles } from "./consumer-role-fixture.js"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createFailureClassifier, createOutcomeReporter } from "./support/reporting.js"
+import { createRetryingSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.consumer-operations.local", import.meta.url)
+const journalFile = openJournal("consumer-operations")
 const idPattern = /^[1-9][0-9]*$/
 const knownAbsentId = "18446744073709551615"
-const report = (check, passed = true, details = {}) => console.log(JSON.stringify({ mode, check, passed, ...details }))
+const report = createOutcomeReporter({ mode })
 let stage = "configuration"
 let lock
 let token
@@ -64,33 +76,7 @@ async function failure(operation) {
     assert.fail("Expected an operation failure")
 }
 
-async function api(method, path, body, allowNotFound = false) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-            method,
-            redirect: "error",
-            signal: AbortSignal.timeout(15_000),
-            headers: {
-                Authorization: `Bot ${token}`,
-                ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-            },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        })
-        const data =
-            response.status === 204 ? (await response.body?.cancel(), null) : await response.json().catch(() => null)
-        if (response.status === 429 && attempt < 2) {
-            const retryAfterMs =
-                Math.max(Number(response.headers.get("retry-after")) || 0, Number(data?.retry_after) || 0) * 1_000
-            assert.ok(Number.isFinite(retryAfterMs) && retryAfterMs > 0 && retryAfterMs <= 10_000)
-            await sleep(retryAfterMs)
-            continue
-        }
-        if (!response.ok && !(allowNotFound && response.status === 404))
-            throw Object.assign(new Error("Sandbox HTTP request failed"), { status: response.status })
-        return { status: response.status, data }
-    }
-    throw new Error("Sandbox HTTP request budget exhausted")
-}
+const api = createRetryingSandboxApi({ fetch: rawFetch, token: () => token })
 
 const cleanupApi = (method, path, body) => api(method, path, body, true)
 
@@ -135,7 +121,7 @@ function journalBaseline() {
     return sortedIds(journal.baselineRoleIds)
 }
 
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+const save = () => journalFile.save(journal)
 
 async function cleanup() {
     if (!journal) return
@@ -145,13 +131,13 @@ async function cleanup() {
     await restoreConsumerBotRoles(cleanupApi, journal, guildId, botId)
     if (journal.roleName !== undefined) await cleanupGuildTestRole(cleanupApi, journal, save)
     if (journal.channelFixtures !== undefined) await cleanupGuildChannelFixtures(cleanupApi, journal, save)
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("test_resources_removed")
 }
 
-function safeFailure(error) {
-    const tags = new Set([
+const safeFailure = createFailureClassifier({
+    tags: [
         "AuthenticationError",
         "CancelledError",
         "ClientBusyError",
@@ -163,8 +149,8 @@ function safeFailure(error) {
         "GuildOperationError",
         "MessageOperationError",
         "RateLimitError",
-    ])
-    const reasons = new Set([
+    ],
+    reasons: [
         "busy",
         "closed",
         "connectionLost",
@@ -177,13 +163,9 @@ function safeFailure(error) {
         "rejected",
         "response",
         "timeout",
-    ])
-    return {
-        category: tags.has(error?._tag) ? error._tag : error?.code === "ERR_ASSERTION" ? "assertion" : "unexpected",
-        ...(reasons.has(error?.reason) ? { reason: error.reason } : {}),
-        ...(Number.isSafeInteger(error?.status) ? { httpStatus: error.status } : {}),
-    }
-}
+    ],
+    httpStatus: true,
+})
 
 function observeGateway() {
     const emitDescriptor = Object.getOwnPropertyDescriptor(WebSocket.prototype, "emit")
@@ -310,7 +292,7 @@ async function verifyBanner(sdk) {
     stage = "bot_profile_banner_url"
     const profile = await value(client.users.fetchProfile(botId))
     assert.equal(profile.user.id, botId)
-    const banner = await value(sdk.assets.userBanner(profile))
+    const banner = sdk.assets.userBanner(profile)
     if (typeof profile.profile.banner === "string")
         assert.equal(banner, `https://fluxerusercontent.com/banners/${botId}/${profile.profile.banner}.webp`)
     else {
@@ -603,43 +585,30 @@ try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
 
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", idPattern)
-    assert.match(applicationId ?? "", idPattern)
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
 
     stage = "sandbox_identity"
-    const [application, bot, guild] = await Promise.all([
-        api("GET", "/oauth2/applications/@me"),
-        api("GET", "/users/@me"),
-        api("GET", `/guilds/${guildId}`),
-    ])
-    assert.equal(application.status, 200)
-    assert.equal(application.data?.id, applicationId)
-    assert.equal(bot.status, 200)
-    assert.equal(bot.data?.bot, true)
-    assert.match(bot.data?.id ?? "", idPattern)
-    assert.equal(application.data?.bot?.id, bot.data.id)
-    assert.equal(guild.status, 200)
-    assert.equal(guild.data?.id, guildId)
-    botId = bot.data.id
+    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, {
+        ...sandbox,
+        applicationPath: "/oauth2/applications/@me",
+        concurrent: true,
+    })
+    botId = identity.botId
     verified = true
     report(stage, true, { clientSecretUsed: false })
 
     stage = "recover_prior_test"
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
     }
 
     journal = { kind: "consumer-operations", guildId, botId }
-    writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+    journalFile.create(journal)
     journal.baselineRoleIds = memberRoleIds(await readBotMember())
     save()
     const roleId = await createGuildTestRole(api, journal, save)
@@ -659,7 +628,7 @@ try {
     report("journaled_test_role_and_channel_created")
 
     const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
-    if (mode === "default") client = await value(sdk.createClient({ token }))
+    if (mode === "default") client = sdk.createClient({ token })
     else {
         scope = Scope.makeUnsafe()
         client = await value(sdk.createClient({ token }).pipe(Scope.provide(scope)))
@@ -680,44 +649,30 @@ try {
 } finally {
     globalThis.fetch = rawFetch
     gateway?.restore()
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        report("client_cleanup", false, {
-            code: "cleanup_failed",
-            finalizer,
-            journalRetained: journal !== undefined,
-            lockRetained: lock !== undefined,
-        })
-        process.exitCode = 1
-    }
-    if (client && client.state !== "Closed")
-        try {
-            await value(client.shutdown())
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
+    // Keep the journal, lock and deadline if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            client && client.state !== "Closed" && ["client_shutdown", () => value(client.shutdown())],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup: async () => {
             if (verified && journal) await cleanup()
-        } catch {
-            report("resource_cleanup", false, { code: "cleanup_failed", journalRetained: journal !== undefined })
+        },
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            if (finalizer === "cleanup")
+                report("resource_cleanup", false, { code: "cleanup_failed", journalRetained: journal !== undefined })
+            else if (finalizer === "sandbox_lock")
+                report("lock_cleanup", false, { code: "cleanup_failed", lockRetained: true })
+            else
+                report("client_cleanup", false, {
+                    code: "cleanup_failed",
+                    finalizer,
+                    journalRetained: journal !== undefined,
+                    lockRetained: lock !== undefined,
+                })
             process.exitCode = 1
-        }
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            report("lock_cleanup", false, { code: "cleanup_failed", lockRetained: true })
-            process.exitCode = 1
-        }
-    }
-    if (quiescent) clearTimeout(watchdog)
+        },
+    })
 }

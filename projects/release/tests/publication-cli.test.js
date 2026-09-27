@@ -12,6 +12,7 @@ import { fixture, stageFixture, write } from "./helpers.js"
 const cli = fileURLToPath(new URL("../cli.js", import.meta.url))
 const name = "@neontechspace/fluxerly"
 const version = "1000.0.0-canary.1"
+const npmToken = `npm_${"a".repeat(36)}`
 
 async function candidateFixture() {
     const root = await fixture(version)
@@ -28,39 +29,43 @@ async function candidateFixture() {
         workspace: root,
         output: directory,
         docs,
-        bootstrap: true,
         registries: { inventory: async () => ({ npmVersions: [] }) },
         stage: stageFixture(),
     })
     return { root, directory, checksum: candidate.checksum }
 }
 
-function preload({ trace, published, lockDirectory }) {
+// The preload replaces npm registry access and the publisher subprocess inside the CLI process
+function preload({ trace, published, different, tarball }) {
     return `
         import { EventEmitter } from "node:events"
+        import { createHash } from "node:crypto"
         import fs from "node:fs"
         import childProcess from "node:child_process"
         import { syncBuiltinESMExports } from "node:module"
-        import { join } from "node:path"
+        import { PassThrough } from "node:stream"
 
         const name = ${JSON.stringify(name)}
         const version = ${JSON.stringify(version)}
         const trace = ${JSON.stringify(trace)}
-        const lockDirectory = ${JSON.stringify(lockDirectory)}
+        const served = ${JSON.stringify(Boolean(different))} ? Buffer.from("Unreviewed bytes") : fs.readFileSync(${JSON.stringify(tarball)})
+        const tarballUrl = "https://registry.npmjs.org/@neontechspace/fluxerly/-/fluxerly-" + version + ".tgz"
+        const integrity = "sha512-" + createHash("sha512").update(served).digest("base64")
         const state = {
             published: ${JSON.stringify(Boolean(published))},
+            tags: ${JSON.stringify(published ? { canary: version } : {})},
             requests: [],
             spawns: [],
         }
         globalThis.fetch = async (input) => {
             const url = new URL(String(input))
             state.requests.push(url.href)
+            if (url.href === tarballUrl) return new Response(served)
             if (url.origin === "https://registry.npmjs.org" && decodeURIComponent(url.pathname.slice(1)) === name) {
-                const versions = state.published ? { [version]: {} } : {}
-                const tags = state.published ? { canary: version } : {}
-                return new Response(JSON.stringify({ name, versions, "dist-tags": tags }))
+                const versions = state.published ? { [version]: { dist: { tarball: tarballUrl, integrity } } } : {}
+                return new Response(JSON.stringify({ name, versions, "dist-tags": state.tags }))
             }
-            throw new Error("Published file download is not allowed in this CLI test")
+            throw new Error("Unexpected registry request")
         }
         childProcess.spawn = (executable, arguments_, options) => {
             if (!arguments_.includes("--provenance")) throw new Error("Unexpected subprocess")
@@ -75,11 +80,17 @@ function preload({ trace, published, lockDirectory }) {
                 hasInheritedConfig: config === "inherited-npmrc",
                 isolatedConfigExists: typeof config === "string" && fs.existsSync(config),
                 config,
-                lockExists: fs.existsSync(join(lockDirectory, ".release-publish-npm.lock")),
             })
             state.published = true
+            state.tags[arguments_[arguments_.indexOf("--tag") + 1]] = version
             const child = new EventEmitter()
-            queueMicrotask(() => child.emit("close", 0))
+            child.stdout = new PassThrough()
+            child.stderr = new PassThrough()
+            queueMicrotask(() => {
+                child.stdout.end("npm notice publishing " + name + "\\n")
+                child.stderr.end("npm notice using ${npmToken} and authorization: Bearer test-oidc-token\\n")
+                setImmediate(() => child.emit("close", 0))
+            })
             return child
         }
         process.once("exit", () => fs.writeFileSync(trace, JSON.stringify(state)))
@@ -87,7 +98,7 @@ function preload({ trace, published, lockDirectory }) {
     `
 }
 
-function runCli(candidate, args, { published = false, oidc = true, trace = join(candidate.root, "trace.json") } = {}) {
+function runCli(candidate, args, { published = false, different = false, oidc = true, trace = join(candidate.root, "trace.json") } = {}) {
     const environment = {
         ...process.env,
         RUNNER_TEMP: tmpdir(),
@@ -109,7 +120,7 @@ function runCli(candidate, args, { published = false, oidc = true, trace = join(
     const result = spawnSync(
         process.execPath,
         ["--import", `data:text/javascript,${encodeURIComponent(preload({
-            trace, published, lockDirectory: join(import.meta.dirname, "..", ".."),
+            trace, published, different, tarball: join(candidate.directory, "sdk.tgz"),
         }))}`, cli, ...args],
         { encoding: "utf8", timeout: 10_000, windowsHide: true, env: environment },
     )
@@ -122,22 +133,15 @@ function assertNpmOnly(trace) {
     assert.ok(trace.requests.every(request => new URL(request).origin === "https://registry.npmjs.org"), trace.requests.join("\n"))
 }
 
-function assertLockRemoved() {
-    assert.equal(existsSync(join(import.meta.dirname, "..", "..", ".release-publish-npm.lock")), false)
-}
-
-test("npm publication passes only OIDC authentication to its publisher", async () => {
+test("npm publication passes only OIDC authentication to its publisher and surfaces redacted output", async () => {
     const candidate = await candidateFixture()
     try {
-        assertLockRemoved()
         const result = runCli(candidate, ["publish", candidate.directory, "--checksum", candidate.checksum])
         assert.equal(result.status, 0, result.stderr)
         const output = JSON.parse(result.stdout)
         assert.equal(output.directory, candidate.directory)
         assert.equal(output.checksum, candidate.checksum)
-        assert.equal(output.npm, "published")
-        assert.equal(output.complete, true)
-        assert.equal(output.tag, "canary")
+        assert.deepEqual([output.npm, output.complete, output.tag, output.published], ["published", true, "canary", "now"])
         assert.deepEqual(result.trace.spawns.length, 1)
         assertNpmOnly(result.trace)
         const [spawn] = result.trace.spawns
@@ -145,46 +149,55 @@ test("npm publication passes only OIDC authentication to its publisher", async (
         assert.equal(spawn.hasNodeAuthToken, false)
         assert.equal(spawn.hasInheritedConfig, false)
         assert.equal(spawn.isolatedConfigExists, true)
-        assert.equal(spawn.lockExists, true)
         assert.equal(existsSync(spawn.config), false)
         assert.equal(spawn.arguments[1], join(candidate.directory, "sdk.tgz"))
-        assertLockRemoved()
+        assert.match(result.stderr, /npm notice publishing/)
+        assert.match(result.stderr, /npm notice using \[redacted\]/)
+        assert.doesNotMatch(result.stderr, new RegExp(`${npmToken}|test-oidc-token`))
     } finally {
         await rm(candidate.root, { recursive: true })
     }
 })
 
-test("npm verification and status use metadata only and never publish", async () => {
+test("npm verification, status and publication reruns compare served bytes and never publish again", async () => {
     const candidate = await candidateFixture()
     try {
-        for (const action of ["verify", "status"]) {
+        for (const action of ["verify", "status", "publish"]) {
             const result = runCli(candidate, [action, candidate.directory, "--checksum", candidate.checksum], {
                 published: true,
                 trace: join(candidate.root, `${action}-trace.json`),
             })
             assert.equal(result.status, 0, result.stderr)
-            assert.deepEqual(JSON.parse(result.stdout).npm, "published")
+            const output = JSON.parse(result.stdout)
+            assert.equal(output.npm, "published")
+            if (action === "publish") assert.equal(output.published, "already")
+            assert.deepEqual(output.distTags, { canary: version })
             assert.deepEqual(result.trace.spawns, [])
             assertNpmOnly(result.trace)
+            assert.ok(result.trace.requests.some((request) => request.endsWith(".tgz")))
         }
+        const status = runCli(candidate, ["status", candidate.directory, "--checksum", candidate.checksum], {
+            published: true,
+            different: true,
+            trace: join(candidate.root, "different-status-trace.json"),
+        })
+        assert.equal(status.status, 0, status.stderr)
+        assert.deepEqual([JSON.parse(status.stdout).npm, JSON.parse(status.stdout).complete], ["different", false])
+        const verify = runCli(candidate, ["verify", candidate.directory, "--checksum", candidate.checksum], {
+            published: true,
+            different: true,
+            trace: join(candidate.root, "different-verify-trace.json"),
+        })
+        assert.equal(verify.status, 1)
+        assert.match(verify.stderr, /different bytes/)
     } finally {
         await rm(candidate.root, { recursive: true })
     }
 })
 
-test("Publication failures stop before publishing and release the npm lock", async () => {
+test("Publication input and authentication failures stop before registry effects", async () => {
     const candidate = await candidateFixture()
     try {
-        const existing = runCli(candidate, ["publish", candidate.directory, "--checksum", candidate.checksum], {
-            published: true,
-            trace: join(candidate.root, "existing-trace.json"),
-        })
-        assert.equal(existing.status, 1)
-        assert.match(existing.stderr, /already published/)
-        assert.deepEqual(existing.trace.spawns, [])
-        assertNpmOnly(existing.trace)
-        assertLockRemoved()
-
         const missingOidc = runCli(candidate, ["publish", candidate.directory, "--checksum", candidate.checksum], {
             oidc: false,
             trace: join(candidate.root, "missing-oidc-trace.json"),

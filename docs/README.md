@@ -27,14 +27,11 @@
 > [!NOTE]
 > Fluxerly is a prerelease SDK. Start with the [temporary docs](https://preview.fluxerly.neontechspace.com/) and review the changelog before upgrading
 >
-> Pull requests and issues open with the first stable release, alongside contribution guides and templates
+> Issues and pull requests are maintainer-only until the first stable release. Contribution guides and templates arrive with that release
 
 ## Install
 
-Use Node.js 24.11 or newer. JavaScript needs no compiler. If you typecheck or compile TypeScript, use TypeScript 7
-
-> [!NOTE]
-> Older Node.js versions may work, but they are not tested or officially supported
+Fluxerly is tested against Node.js 24.11 or newer. JavaScript needs no compiler, and TypeScript typechecking or compilation requires TypeScript 7 and `@types/node` as a development dependency
 
 **npm**
 
@@ -48,15 +45,40 @@ npm install @neontechspace/fluxerly
 pnpm add @neontechspace/fluxerly
 ```
 
-Keep your package manager's lockfile for reproducible installs. The SDK does not require the `--save-exact` option. Modern npm and pnpm normally install the required Effect peer automatically, even when you only use the default API
+A committed lockfile records the exact installed version and keeps installs reproducible. During prerelease, add `--save-exact` so a fresh install without a lockfile cannot pick up a newer prerelease with API changes.
 
-## Choose your API
+## Getting started
+
+A bot needs a Fluxer application, its bot token and an invite to a community
+
+1. Create a folder for the bot containing a `package.json` file with `{ "type": "module" }`, then install the SDK in that folder as shown above
+2. Save the token in a file named `.env` as `FLUXER_BOT_TOKEN=paste-the-token-here`, and add `.env` to `.gitignore`
+3. Save this bot as `bot.js`. It replies **Pong!** to **!ping**
+
+```js
+import { runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    processSignals: true,
+    events: {
+        messageCreate: ({ message, reply }) => {
+            if (message.author.isBot || message.content !== "!ping") return
+            return reply("Pong!")
+        },
+    },
+})
+```
+
+4. Run `node --env-file=.env bot.js` and send **!ping** in a channel the bot can read
+
+## Choosing an API
 
 ### JavaScript & TypeScript
 
 Import `@neontechspace/fluxerly` and use `async` / `await`. Check Results for expected failures, and control shutdown with explicit methods and cancellation signals. The default API works with new bots and existing Promise-based applications. JavaScript users do not need TypeScript or Effect setup
 
-### Effect-native
+### Effect
 
 Import `@neontechspace/fluxerly/effect` and compose work with `Effect.gen` and `yield*`. Expected failures stay in the typed error channel. Scopes and interruption control cleanup. Choose this API for an Effect application, or to learn structured concurrency with a real bot
 
@@ -64,7 +86,7 @@ Both entry points provide typed events, prefix commands, embeds, attachments, re
 
 ### Why learn Effect?
 
-Bots often grow from one handler into several jobs, listeners and requests that must stop together. Effect lets you describe that work as one program, share its dependencies and wait for scoped cleanup when it succeeds, fails or is interrupted
+Bots often grow from one handler into several jobs, listeners and requests that must stop together. Effect describes that work as one program, shares its dependencies and waits for scoped cleanup when it succeeds, fails or is interrupted
 
 For example, a scoped conversation can register a collector, send a question and wait for an answer. If sending fails, the scope releases the collector. Concurrent reads can cancel their unfinished siblings on failure without leaving cleanup to scattered callbacks
 
@@ -73,7 +95,7 @@ Learn the core concepts in the [Effect v4 introduction](https://effect.website/d
 <details>
 <summary>Installing Effect for a native application</summary>
 
-If your code imports Effect directly, declare it as a direct dependency using the exact version in your installed SDK's `peerDependencies.effect`. Read `node_modules/@neontechspace/fluxerly/package.json`, or the [SDK manifest](/projects/sdk/package.json) for this checkout
+Applications that import Effect directly must declare it as a direct dependency, using the exact version in the installed SDK's `peerDependencies.effect`. Read `node_modules/@neontechspace/fluxerly/package.json`, or the [SDK manifest](/projects/sdk/package.json) for this checkout
 
 Fluxerly currently uses the Effect 4 RC line. Do not install an arbitrary newer RC or stable Effect 3. The versioned documentation gives the matching install command
 
@@ -83,7 +105,7 @@ Fluxerly currently uses the Effect 4 RC line. Do not install an arbitrary newer 
 
 Bot voice connections and audio/media transport are deferred until after Fluxer's voice update, with SDK implementation and verification still required. Fluxerly does not currently join voice channels or send and receive audio or video
 
-Guild voice-state observations and member move, disconnect, server-mute and server-deafen controls are supported for existing participants
+Voice-state observations in communities and member move, disconnect, community mute and community deafen controls are supported for existing participants
 
 ## Repository activity
 

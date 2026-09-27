@@ -47,7 +47,7 @@ export function setupExamplePreferences() {
         updateExamples()
     })
 
-    document.addEventListener("click", async (event) => {
+    async function copyExample(event: MouseEvent) {
         if (!(event.target instanceof Element)) return
         const button = event.target.closest<HTMLButtonElement>("[data-example-copy]")
         const block = button?.closest<HTMLElement>("[data-example-block]")
@@ -62,6 +62,10 @@ export function setupExamplePreferences() {
             status.textContent = variant.hidden ? "Previous example copied" : "Copied"
         } catch { status.textContent = "Copy failed. Select and copy the example manually" }
         finally { button.disabled = false }
+    }
+
+    document.addEventListener("click", (event) => {
+        copyExample(event).catch((error: unknown) => console.error("Example copy failed", error))
     })
 
     window.addEventListener("storage", (event) => {

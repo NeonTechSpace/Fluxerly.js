@@ -1,5 +1,12 @@
+/**
+ * Presigned attachment upload plans.
+ * Invariant: A plan authorizes individual destinations without sending bot credentials to them. Inline fallback is limited to a
+ * disabled presigned-upload feature or its explicit planning rejection, not a failed PUT or an uncertain message request.
+ * Failed operations may leave provider-owned temporary uploads, and cancellation cannot roll back a dispatched message.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type { FilePart } from "./attachments.js"
-import { record } from "./message.js"
+import { record } from "./decode/primitives.js"
 
 export type UploadPlan = {
     id: number
@@ -25,11 +32,12 @@ function destination(value: unknown, allowInsecure: boolean): value is string {
             url.hash === ""
         )
     } catch {
+        // allow-silent: An unparsable upload URL is rejected by the caller
         return false
     }
 }
 
-/** Validate the complete plan before dispatching any file bytes; unknown response properties are discarded */
+/** Validate the complete plan before dispatching any file bytes. Unknown response properties are discarded */
 export function decodeUploadPlans(
     value: unknown,
     files: readonly FilePart[],
@@ -48,6 +56,7 @@ export function decodeUploadPlans(
             !record(item) ||
             item.file_size !== file.size ||
             !text(item.filename, 255) ||
+            // oxlint-disable-next-line no-control-regex -- rejects control characters in provider filenames
             /[\x00-\x1f\x7f/\\]/.test(item.filename) ||
             !text(item.content_type, 255) ||
             !/^[\x20-\x7e]+$/.test(item.content_type) ||

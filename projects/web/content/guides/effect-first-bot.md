@@ -12,15 +12,23 @@ The examples introduce each Effect concept before combining them into a bot
 
 ## Install the matching version
 
-First install the SDK using [the start guide](/docs/{{version}}/quick-start/). Use Node.js 24.11 or newer, an ESM project with `"type": "module"`, and TypeScript 7 for typechecking. Native examples use TypeScript
+First install the SDK with [the quick start](/docs/{{version}}/quick-start/). Fluxerly is tested against Node.js 24.11 or newer. Use such a version, an ESM project with `"type": "module"`, and TypeScript 7 for typechecking with the Node.js types from the [TypeScript setup](/docs/{{version}}/create-a-bot/#typescript-setup). Native examples use TypeScript
 
-Because this application imports Effect directly, declare it as a direct dependency too:
+Use the Effect version that the installed SDK requires, not Effect's latest release. Open `node_modules/@neontechspace/fluxerly/package.json` and read `peerDependencies.effect`. Fluxerly currently requires one exact Effect 4 RC, and other RCs and Effect 3 are incompatible
+
+These examples import Effect directly, so declare it as a direct dependency. For this documentation version, the command is:
 
 ```command
 {"kind":"add","package":"effect","version":"{{effect-version}}"}
 ```
 
-Fluxerly currently requires an exact Effect 4 RC peer. Check `peerDependencies.effect` in the installed SDK when upgrading, because other RCs and Effect 3 are incompatible. Use the matching [Effect v4 learning material](https://effect.website/docs/v4/getting-started/why-effect)
+Check which Effect version the application has installed:
+
+```command
+{"kind":"list","package":"effect"}
+```
+
+Recheck the required version when upgrading the SDK. The [Effect v4 learning material](https://effect.website/docs/v4/getting-started/why-effect) matches this major version
 
 ## Start with one request
 
@@ -34,7 +42,7 @@ export function sendHello(token: string, channelId: string) {
     const program = Effect.scoped(
         Effect.gen(function* () {
             const client = yield* createClient({ token })
-            return yield* client.messages.send(channelId, { content: "Hello from Effect" })
+            return yield* client.messages.send(channelId, "Hello from Effect")
         }),
     )
     return Effect.runPromise(program)
@@ -63,7 +71,7 @@ import type { Client } from "@neontechspace/fluxerly/effect"
 export function installPing(client: Client) {
     return client.on("messageCreate", message => {
         if (message.author.isBot || message.content !== "!ping") return Effect.void
-        return client.messages.reply(message, { content: "Pong!" })
+        return client.messages.reply(message, "Pong!")
     })
 }
 ```
@@ -72,17 +80,50 @@ export function installPing(client: Client) {
 
 ## Run the complete bot
 
-Save this as `bot.ts`, set `FLUXER_BOT_TOKEN` in the process environment and run `node bot.ts`. The runner installs handlers from the `events` object, with no companion file required
+Save this as `bot.ts` and start it with `node --env-file=.env bot.ts`, using the `.env` file from [Create a bot](/docs/{{version}}/create-a-bot/). The runner registers the handlers in the `events` object before it connects
 
 ```ts
 {{starter:bot-effect.ts}}
 ```
 
-Send `!ping` and expect `Pong!`. Press Ctrl+C to request interruption and wait for SDK-owned cleanup. Keep the environment and any process-manager configuration containing the token private
+Send `!ping` and expect `Pong!`. Press Ctrl+C to stop the bot. The SDK interrupts it and waits for its cleanup
 
-The SDK runner installs the handler before gateway startup and observes both the connection and required subscription. Failure or unexpected subscription closure stops the bot and awaits cleanup. Individual handler failures remain isolated and are not automatically retried. Returning the `reply` Effect lets the SDK interrupt it when the handler stops
+The last line runs the program with `Effect.runPromiseExit`, which resolves with the program's outcome, called an Exit, instead of rejecting. The `runBot` program reports its own failure: A failure that stops the bot, such as a rejected token, is logged once and sets `process.exitCode` to 1, so the Exit needs no further handling. Setting the exit code instead of calling `process.exit()` lets Node.js finish cleanup before the process ends
 
-The bot's top-level code treats interruption alone as a normal stop. Any other failure, including a cleanup defect during interruption, sets a failing process exit code without printing a raw Cause, token or event data. Setting `process.exitCode` lets Node finish cleanup naturally
+<details>
+<summary>What the runner watches while the bot runs</summary>
+
+The runner registers the handler before the gateway connects and then watches both the connection and the handler's subscription. A connection failure, or a subscription that closes unexpectedly, stops the bot and waits for cleanup.
+A failed handler is reported and not retried, and the bot keeps running. Returning the `reply` Effect lets the SDK interrupt it when the handler stops.
+Keep the token private, including in the environment and in process-manager settings
+
+</details>
+
+The [small bot](/docs/{{version}}/small-bot/) guide shows a larger native bot with commands, a permission guard, a cooldown and a welcome message
+
+## Report failures outside runBot
+
+Application code outside `runBot`, such as a one-off job, reports its own failure. A failed Exit holds a Cause, Effect's full record of why the program failed. Pass `exit.cause` to `describeError`, which prints each error's code, hint and details with credentials masked
+
+```ts
+import { Effect, Exit } from "effect"
+import { createClient, describeError } from "@neontechspace/fluxerly/effect"
+
+export async function announce(token: string, channelId: string) {
+    const exit = await Effect.runPromiseExit(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createClient({ token })
+                yield* client.messages.send(channelId, "Maintenance starts in ten minutes")
+            }),
+        ),
+    )
+    if (Exit.isFailure(exit)) {
+        console.error(describeError(exit.cause))
+        process.exitCode = 1
+    }
+}
+```
 
 ## Read the Effect types
 

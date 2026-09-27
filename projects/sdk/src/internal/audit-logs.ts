@@ -1,3 +1,8 @@
+/**
+ * Audit-log reads: Page queries and the projection of audit entries, including gateway audit entries.
+ * Invariant: Reasons, options and changes are projected as provider data and never used as safe diagnostic text.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type {
     AuditLogActionType,
     AuditLogChange,
@@ -10,9 +15,9 @@ import type {
 } from "#sdk/audit-logs"
 import { AuditLogActions } from "#sdk/audit-logs"
 import { decodeUser } from "./users.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, record } from "./message.js"
+import { identifier, record } from "./decode/primitives.js"
 
 const actionTypes = new Set<number>(Object.values(AuditLogActions))
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value)
@@ -88,7 +93,10 @@ function options(value: unknown): AuditLogOptions | undefined {
         ...(value.channel_id === undefined ? {} : { channelId: value.channel_id }),
         ...(value.count === undefined ? {} : { count: value.count }),
         ...(value.delete_member_days === undefined ? {} : { deleteMemberDays: value.delete_member_days }),
-        ...(value.delete_message_seconds === undefined ? {} : { deleteMessageSeconds: value.delete_message_seconds }),
+        // Fluxer records seconds, and the SDK reports milliseconds like the ban input
+        ...(value.delete_message_seconds === undefined
+            ? {}
+            : { deleteMessagesMs: (value.delete_message_seconds as number) * 1000 }),
         ...(value.id === undefined ? {} : { id: value.id }),
         ...(value.integration_type === undefined ? {} : { integrationType: value.integration_type }),
         ...(value.message_id === undefined ? {} : { messageId: value.message_id }),
@@ -188,17 +196,14 @@ interface EncodedAuditLogQuery {
 
 function encodeQuery(query?: unknown): EncodedAuditLogQuery | InputValidationFailure {
     const input = query === undefined ? {} : query
-    if (
-        !record(input) ||
-        Object.keys(input).some((key) => !["limit", "before", "after", "userId", "actionType"].includes(key))
+    if (!record(input)) return inputValidationFailure("query", "type", "Audit log query must be an object")
+    const unsupported = unsupportedKeyFailure(
+        input,
+        ["limit", "before", "after", "userId", "actionType"],
+        "query",
+        "an audit log query",
     )
-        return !record(input)
-            ? inputValidationFailure("query", "type", "Audit log query must be an object")
-            : inputValidationFailure(
-                  "query",
-                  "allowedFields",
-                  "Audit log query may contain only limit, before, after, userId, and actionType",
-              )
+    if (unsupported) return unsupported
     const limit = input.limit === undefined ? 50 : input.limit
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)
         return inputValidationFailure("query.limit", "range", "Audit log limit must be an integer from 1 through 100")
@@ -245,7 +250,7 @@ function encodeQuery(query?: unknown): EncodedAuditLogQuery | InputValidationFai
     }
 }
 
-export function decodeAuditLogPage(value: unknown, query: EncodedAuditLogQuery): AuditLogPage | undefined {
+function decodeAuditLogPage(value: unknown, query: EncodedAuditLogQuery): AuditLogPage | undefined {
     if (!record(value) || !Array.isArray(value.audit_log_entries) || value.audit_log_entries.length > query.limit)
         return undefined
     if (!Array.isArray(value.users) || !Array.isArray(value.webhooks)) return undefined

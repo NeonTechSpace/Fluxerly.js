@@ -1,6 +1,11 @@
+/**
+ * Vanity URL operations.
+ * Invariant: Codes are validated locally, and URLs are built from the instance's discovered invite base.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type { GuildVanityUrl, GuildVanityUrlUsage, ModerationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, record } from "./message.js"
+import { identifier, record } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
 

@@ -1,34 +1,29 @@
+// Interactive presence selection for one currently authorized member: selected-member transitions,
+// selection restoration after a socket resume and selection clearing. Creates no journal and no remote resources
 import assert from "node:assert/strict"
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
+import {
+    acquireLock,
+    checkSandboxIdentity,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    processValue,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { readSandbox } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
-// A stored participant is not current authorization for an interactive check
-const targetId = process.env.FLUXER_TEST_PRESENCE_USER_ID
 const restoreStatus = process.env.FLUXER_TEST_PRESENCE_RESTORE_STATUS
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 let stage = "configuration"
 let lock
 let driver
 let probe
 let selectedGuildId
+let targetId
 let handlerFailed = false
-let quiescent = true
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...details }))
+const report = createReporter({ mode }, { passed: true })
 
-async function api(path, token) {
-    const response = await fetch(`https://api.fluxer.app/v1${path}`, {
-        headers: { Authorization: `Bot ${token}` },
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-    })
-    if (!response.ok) {
-        await response.body?.cancel()
-        throw new Error("Sandbox identity request failed")
-    }
-    return response.json()
-}
+const api = (path, token) => readSandbox(path, token, { timeout: 10_000 })
 
 async function waitFor(read, timeoutMs, recovering = false) {
     const deadline = performance.now() + timeoutMs
@@ -49,18 +44,16 @@ async function createDriver(token) {
             if (result.isErr()) throw result.error
             return result.value
         }
-        const client = value(createClient({ token }))
+        const client = createClient({ token })
         return {
             client,
             on: (event, receive) =>
-                value(
-                    client.on(event, receive, {
-                        ...options,
-                        onError: () => {
-                            handlerFailed = true
-                        },
-                    }),
-                ),
+                client.on(event, receive, {
+                    ...options,
+                    onError: () => {
+                        handlerFailed = true
+                    },
+                }),
             set: (guildId, ids) => value(client.presence.setMembers(guildId, ids)),
             connect: async () => value(await client.connect()),
             close: async () => value(await client.shutdown()),
@@ -206,17 +199,12 @@ const watchdog = setTimeout(() => {
 try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
-    assert.match(targetId ?? "", /^[1-9][0-9]{0,19}$/)
+    // A stored participant is not current authorization for an interactive check
+    targetId = processValue("FLUXER_TEST_PRESENCE_USER_ID")
     assert.ok(restoreStatus === undefined || ["online", "idle", "dnd", "offline"].includes(restoreStatus))
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    const token = env.FLUXER_TEST_BOT_TOKEN
-    const guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^[1-9][0-9]{0,19}$/)
-    assert.match(env.FLUXER_TEST_APPLICATION_ID ?? "", /^[1-9][0-9]{0,19}$/)
+    const { token, guildId, applicationId } = loadSandboxEnvironment()
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
     stage = "sandbox_identity"
     const [application, bot, guild, member] = await Promise.all([
         api("/oauth2/applications/@me", token),
@@ -224,12 +212,9 @@ try {
         api(`/guilds/${guildId}`, token),
         api(`/guilds/${guildId}/members/${targetId}`, token),
     ])
-    assert.equal(application.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(application.bot?.id, bot.id)
-    assert.equal(bot.bot, true)
-    assert.equal(guild.id, guildId)
+    const botId = checkSandboxIdentity({ application, user: bot, guild }, { applicationId, guildId })
     assert.equal(member.user.id, targetId)
-    assert.notEqual(member.user.id, bot.id)
+    assert.notEqual(member.user.id, botId)
     assert.notEqual(member.user.bot, true)
     report(stage, { guildId, targetId })
     probe = await observeGateway(guildId)
@@ -307,27 +292,30 @@ try {
     } catch {
         console.error(JSON.stringify({ mode, check: "clear_selection", passed: false }))
         process.exitCode = 1
+    }
+    try {
+        // Keep the lock and deadline unless the SDK client and every observed socket are proven closed
+        await finalizeOwned({
+            writers: [driver && ["sdk_cleanup", () => driver.close()]],
+            checks: [
+                driver && [
+                    "sdk_cleanup",
+                    () => {
+                        assert.equal(driver.client.state, "Closed")
+                        probe.verifyClosed()
+                        report("sdk_and_sockets_closed")
+                    },
+                ],
+            ],
+            lock,
+            watchdog,
+            onFailure: (finalizer) => {
+                const check = finalizer === "sandbox_lock" ? "sandbox_lock_cleanup" : finalizer
+                console.error(JSON.stringify({ mode, check, passed: false }))
+                process.exitCode = 1
+            },
+        })
     } finally {
-        try {
-            if (driver) {
-                await driver.close()
-                assert.equal(driver.client.state, "Closed")
-                probe.verifyClosed()
-                report("sdk_and_sockets_closed")
-            }
-        } catch {
-            quiescent = false
-            console.error(JSON.stringify({ mode, check: "sdk_cleanup", passed: false }))
-            process.exitCode = 1
-        } finally {
-            probe?.restore()
-            if (quiescent) {
-                clearTimeout(watchdog)
-                if (lock !== undefined) {
-                    closeSync(lock)
-                    unlinkSync(lockPath)
-                }
-            }
-        }
+        probe?.restore()
     }
 }

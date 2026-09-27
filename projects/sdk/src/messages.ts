@@ -1,11 +1,14 @@
 import type { OperationOptions } from "./client.js"
 import type { Embed, EmbedInput } from "./embeds.js"
+import type { EmbedBuilder } from "./builders.js"
 import type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
 
 /** Identify a message by its channel ID and message ID.
  * Pass this plain object to message operations without fetching the message first.
  * The SDK captures and validates both IDs once when an operation starts.
  * It holds no client and makes no request by itself
+ *
+ * @category Messages
  */
 export interface MessageReference {
     /** Message ID as a decimal string. Keep it as a string to avoid losing integer precision */
@@ -30,6 +33,8 @@ export interface MessageReference {
  *     return { createdAt: message.createdAt, forwardedFrom, totals }
  * }
  * ```
+ *
+ * @category Messages
  */
 export interface Message extends MessageReference {
     /** Correlation nonce returned by Fluxer, null when explicitly reported, or absent when not supplied */
@@ -38,15 +43,21 @@ export interface Message extends MessageReference {
     readonly webhookId?: string
     /** Pin status at observation time. Absence means unknown, not unpinned */
     readonly pinned?: boolean
+    /** Whether the message was sent as text-to-speech. Absence means unknown, not false.
+     * Fluxer does not store this value, so it is meaningful only on the message returned by a send and on messageCreate events.
+     * Every other read, including fetches, history pages and later message events, reports false.
+     * In a community, Fluxer creates a normal message and reports false when the sender lacks the Send TTS Messages permission
+     */
+    readonly tts?: boolean
     /** Creation timestamp as an ISO 8601 string with a timezone, when supplied */
     readonly createdAt?: string
     /** Latest edit timestamp as an ISO 8601 string with a timezone. Null means no edit was reported, absence means unknown */
     readonly editedAt?: string | null
-    /** Fluxer's integer message type, when supplied. Values added by Fluxer in the future are retained */
+    /** Fluxer's integer message type, when supplied, such as MessageType.Reply. Values added by Fluxer in the future are retained */
     readonly type?: number
     /** Fluxer's integer flag set, when supplied. Unrecognized bits are retained, and absence does not mean zero */
     readonly flags?: number
-    /** Server containing the message, when supplied. Absence alone does not establish that the channel is private */
+    /** Community containing the message, when supplied. Absence alone does not establish that the channel is private */
     readonly guildId?: string
     /** Whether Fluxer reports an @everyone or @here mention. Absence means unknown */
     readonly mentionedEveryone?: boolean
@@ -90,20 +101,26 @@ export interface Message extends MessageReference {
 
 /** Message fields available even when messageFields is an empty array.
  * IDs, text and author remain available for message operations, commands and collectors.
- * guildId is retained when supplied, but remains optional
+ * The guildId is retained when supplied, but remains optional
+ *
+ * @category Messages
  */
 export type MessageCore = Pick<Message, "id" | "channelId" | "content" | "author" | "guildId">
 
 /** Name of a Message property accepted by the client's messageFields option.
  * Selecting a MessageCore property, which is always kept, does not change the result
+ *
+ * @category Messages
  */
 export type MessageField = keyof Message
 
 /** Message property names to retain in this client's request results, events, cache and collectors.
  * Omit messageFields to keep the full Message shape, or use [] to keep only MessageCore.
- * The client copies the list at creation, so later edits to your array do not change its selection.
+ * The client copies the list at creation, so later edits to the supplied array do not change its selection.
  * A selected property includes its complete nested value, including media metadata inside messageSnapshots.
  * Excluded data is still validated when received, so selection does not hide malformed responses
+ *
+ * @category Messages
  */
 export type MessageFields = readonly MessageField[]
 
@@ -112,6 +129,8 @@ export type MessageFields = readonly MessageField[]
  * Properties optional in Message remain optional, even when selected.
  * If the list is built dynamically, TypeScript cannot know which fields it contains, so selectable fields remain optional.
  * Alternative fixed lists produce alternative message shapes, not a shape promising properties from both lists
+ *
+ * @category Messages
  */
 export type SelectedMessage<F extends MessageFields | undefined = undefined> = F extends undefined
     ? Message
@@ -123,9 +142,11 @@ export type SelectedMessage<F extends MessageFields | undefined = undefined> = F
 
 /** Partial account identity embedded in a message response.
  * This deeply frozen observation can describe an author, active mention or non-notifying referenced account.
- * It is not a complete User, server member or live cached object. Optional fields remain absent when Fluxer omitted
+ * It is not a complete User, community member or live cached object. Optional fields remain absent when Fluxer omitted
  * them, including for webhook and deleted-user placeholders. The mentionFlags value is descriptive only and never
  * enables a notification or overrides AllowedMentions
+ *
+ * @category Messages
  */
 export interface MessageUser {
     /** Account or webhook identity as a decimal string */
@@ -152,16 +173,17 @@ export interface MessageUser {
     readonly mentionFlags?: 0 | 1 | 2
 }
 
-/** @deprecated Use MessageUser. Message mentions and non-notifying references share the same partial-user shape */
-export type MessageMention = MessageUser
-
 /** One resolved reply supplied inline with a message.
  * This is a frozen Message snapshot without another resolved reply, keeping nesting finite and avoiding hidden fetches
+ *
+ * @category Messages
  */
 export type ReferencedMessage = Omit<Message, "referencedMessage">
 
 /** Channel identity supplied in message or forward-snapshot mention data.
  * It contains only an ID, name and type, not cached channel settings or a decision that the bot may access it
+ *
+ * @category Messages
  */
 export interface MessageChannelMention {
     /** Mentioned channel ID as a decimal string */
@@ -174,6 +196,8 @@ export interface MessageChannelMention {
 
 /** Emoji information supplied beside a message's reaction count.
  * Optional values preserve both null and absence when Fluxer distinguishes them
+ *
+ * @category Messages
  */
 export interface MessageReactionEmoji {
     /** Literal Unicode emoji text or the custom emoji's name */
@@ -186,6 +210,8 @@ export interface MessageReactionEmoji {
 
 /** Count of reactions using one emoji when Fluxer supplied this message.
  * This is not a user list or a count that updates after delivery
+ *
+ * @category Messages
  */
 export interface MessageReactionSummary {
     /** Emoji to which this count belongs */
@@ -197,10 +223,12 @@ export interface MessageReactionSummary {
 }
 
 /** Source address supplied for a reply or forward, without the source message's contents.
- * type 0 identifies a reply and type 1 identifies a forward. Future numeric types are retained
+ * Type 0 identifies a reply and type 1 identifies a forward. Future numeric types are retained
+ *
+ * @category Messages
  */
 export interface MessageContextReference extends MessageReference {
-    /** Source server ID, or null when Fluxer explicitly supplied no server. Absence means unknown */
+    /** Source community ID, or null when Fluxer explicitly supplied no community. Absence means unknown */
     readonly guildId?: string | null
     /** Reference kind, when supplied. A partial gateway observation can omit it */
     readonly type?: number
@@ -209,6 +237,8 @@ export interface MessageContextReference extends MessageReference {
 /** Copy of source content captured by Fluxer when a message was forwarded.
  * The snapshot is deeply frozen and contains no source message or author ID.
  * Later source edits and deletions do not change this copy. Optional null and absent values remain distinct
+ *
+ * @category Messages
  */
 export interface MessageSnapshot {
     /** Source text at capture time, including null when explicitly supplied */
@@ -236,7 +266,9 @@ export interface MessageSnapshot {
 }
 
 /** Sticker metadata supplied with a message or forward snapshot.
- * This frozen observation is not the editable server sticker resource
+ * This frozen observation is not the editable community sticker resource
+ *
+ * @category Messages
  */
 export interface MessageSticker {
     /** Sticker ID as a decimal string */
@@ -249,9 +281,11 @@ export interface MessageSticker {
 
 /** Notice identifying one deleted message, not its full contents or a recoverable copy.
  * The SDK does not fetch or reconstruct missing details from its cache
+ *
+ * @category Events and collectors
  */
 export interface MessageDeletion extends MessageReference {
-    /** Guild ID when Fluxer supplies it. Omission means no guild context was supplied, not a confirmed private channel.
+    /** Community ID when Fluxer supplies it. Omission means no community context was supplied, not a confirmed private channel.
      * No channel lookup or cache inference supplies this field
      */
     readonly guildId?: string
@@ -263,11 +297,13 @@ export interface MessageDeletion extends MessageReference {
 
 /** Message IDs deleted together in one channel.
  * The frozen batch produces one messageDeleteBulk event, without additional messageDelete events
+ *
+ * @category Events and collectors
  */
 export interface MessageBulkDeletion {
     /** Channel ID shared by the deleted messages */
     readonly channelId: string
-    /** Guild ID when Fluxer supplies it. Omission means no guild context was supplied, not a confirmed private channel.
+    /** Community ID when Fluxer supplies it. Omission means no community context was supplied, not a confirmed private channel.
      * No channel lookup or cache inference supplies this field
      */
     readonly guildId?: string
@@ -278,11 +314,13 @@ export interface MessageBulkDeletion {
 /** Choose which existing mentions may notify users when sending, replying or editing.
  * All notification categories are disabled unless explicitly enabled. ID arrays are copied by index when the operation starts.
  * These settings allow notifications but do not add mention text or bypass Fluxer's permissions
+ *
+ * @category Messages
  */
 export interface AllowedMentions {
     /** Permit notifications for textual mentions of these account IDs, at most 100. Omit to permit none */
     readonly users?: readonly string[]
-    /** Permit notifications for textual mentions of these role IDs, at most 100. Fluxer's server permissions still apply */
+    /** Permit notifications for textual mentions of these role IDs, at most 100. Fluxer's community permissions still apply */
     readonly roles?: readonly string[]
     /** Permit @everyone and @here notifications, default false */
     readonly everyone?: boolean
@@ -293,6 +331,8 @@ export interface AllowedMentions {
 /** Flags accepted when sending or editing a non-voice message.
  * Combine flags with bitwise OR, for example MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications.
  * Other flag bits are rejected locally
+ *
+ * @category Messages
  */
 export const MessageFlags: Readonly<{
     /** Hide embeds on this message */
@@ -304,12 +344,54 @@ export const MessageFlags: Readonly<{
     SuppressNotifications: 4096,
 } as const)
 
-/** One value from MessageFlags. To set multiple flags, combine the values with bitwise OR */
+/** Fluxer's message types, the values of Message.type, such as `message.type === MessageType.UserJoin`.
+ * Every type shares the one Message shape. A value missing here, added by Fluxer later, is still kept in Message.type
+ *
+ * @category Messages
+ */
+export const MessageType: Readonly<{
+    /** A regular message */
+    readonly Default: 0
+    /** A notice that a user was added to a group conversation */
+    readonly RecipientAdd: 1
+    /** A notice that a user was removed from a group conversation */
+    readonly RecipientRemove: 2
+    /** A call in a private conversation */
+    readonly Call: 3
+    /** A notice that the conversation's name changed */
+    readonly ChannelNameChange: 4
+    /** A notice that the conversation's icon changed */
+    readonly ChannelIconChange: 5
+    /** A notice that a message was pinned */
+    readonly ChannelPinnedMessage: 6
+    /** A notice that a user joined the community */
+    readonly UserJoin: 7
+    /** A reply to another message, whose messageReference names the target */
+    readonly Reply: 19
+}> = Object.freeze({
+    Default: 0,
+    RecipientAdd: 1,
+    RecipientRemove: 2,
+    Call: 3,
+    ChannelNameChange: 4,
+    ChannelIconChange: 5,
+    ChannelPinnedMessage: 6,
+    UserJoin: 7,
+    Reply: 19,
+} as const)
+
+/**
+ * One value from MessageFlags. To set multiple flags, combine the values with bitwise OR
+ *
+ * @category Messages
+ */
 export type MessageFlag = (typeof MessageFlags)[keyof typeof MessageFlags]
 
 /** Correlation identifier attached to a send, reply or forward.
  * Use a string of 1 through 32 UTF-16 code units, or a nonnegative safe integer encoded as a decimal string.
  * This is not the message ID returned after creation
+ *
+ * @category Messages
  */
 export type MessageNonce = string | number
 
@@ -323,14 +405,16 @@ export type MessageNonce = string | number
  *     return client.messages.send(channelId, { stickerIds: [stickerId] })
  * }
  * ```
+ *
+ * @category Messages
  */
 export type MessageBody = (
-    | Body<AttachmentInput>
+    | MessageContent<AttachmentInput>
     | {
           /** Text to send alongside stickers, without trimming */
           readonly content?: string
-          /** Embeds to display alongside stickers */
-          readonly embeds?: readonly EmbedInput[]
+          /** Embeds to display alongside stickers, as plain objects or EmbedBuilder instances */
+          readonly embeds?: readonly (EmbedInput | EmbedBuilder)[]
           /** New files to upload alongside stickers */
           readonly attachments?: readonly AttachmentInput[]
           /** Stickers that supply the message body when text, embeds and files are absent */
@@ -344,28 +428,33 @@ export type MessageBody = (
     readonly stickerIds?: readonly string[]
 }
 
-type Body<A> =
+/** Text, embeds and files of a message body, where at least one of content, embeds or attachments is required.
+ * A is the accepted attachment type: New uploads when sending, or uploads and references to kept files when editing
+ *
+ * @category Messages
+ */
+export type MessageContent<A> =
     | {
           /** Message text without trimming. Fluxer checks its applicable content-length limit */
           readonly content: string
-          /** Embeds in display order, subject to Fluxer's applicable count limit */
-          readonly embeds?: readonly EmbedInput[]
+          /** Embeds in display order, subject to Fluxer's applicable count limit. An EmbedBuilder is built when the operation reads its input */
+          readonly embeds?: readonly (EmbedInput | EmbedBuilder)[]
           /** New uploads when sending or replying, or the complete replacement file list when editing */
           readonly attachments?: readonly A[]
       }
     | {
           /** Optional text. Omit for an embed-only send or to leave existing text unchanged in an edit */
           readonly content?: string
-          /** Embeds to send in display order, or the replacement embed collection in an edit */
-          readonly embeds: readonly EmbedInput[]
+          /** Embeds to send in display order, or the replacement embed collection in an edit. An EmbedBuilder is built when the operation reads its input */
+          readonly embeds: readonly (EmbedInput | EmbedBuilder)[]
           /** New uploads when sending or replying, or the complete replacement file list when editing */
           readonly attachments?: readonly A[]
       }
     | {
           /** Optional text. Omit for a file-only send or to leave existing text unchanged in an edit */
           readonly content?: string
-          /** Optional embeds. Omit to leave existing embeds unchanged in an edit */
-          readonly embeds?: readonly EmbedInput[]
+          /** Optional embeds, as plain objects or EmbedBuilder instances. Omit to leave existing embeds unchanged in an edit */
+          readonly embeds?: readonly (EmbedInput | EmbedBuilder)[]
           /** Files to send, or the complete replacement file list in an edit, including IDs of existing files to keep */
           readonly attachments: readonly A[]
       }
@@ -374,10 +463,13 @@ type Body<A> =
  * Supply nonempty text, embeds, new files or sticker IDs. Unknown properties are rejected locally.
  * Notifications are off by default. Use allowedMentions to permit specific existing mentions to notify.
  * An attachment:// embed image or thumbnail must name one matching new image upload in this request.
+ * Each field, including an attachment or allowedMentions field, is read at most once, so the value validated is the value sent.
  * Use messages.forward to copy a source message into an immutable forward
+ *
+ * @category Messages
  */
 export type MessageInput = MessageBody & {
-    /** Correlation nonce chosen by your application, or omit for one SDK-generated nonce per send execution.
+    /** Correlation nonce chosen by the application, or omit for one SDK-generated nonce per send execution.
      * For five minutes after saving a message, Fluxer tries to suppress another send with the same nonce. This does not guarantee exactly-once delivery
      */
     readonly nonce?: MessageNonce
@@ -387,18 +479,28 @@ export type MessageInput = MessageBody & {
     readonly messageReference?: MessageReference
     /** Flag set containing only MessageFlags bits. Omit to use Fluxer's default for a new message */
     readonly flags?: number
+    /** Ask Fluxer to send the message as text-to-speech. Omit or use false for a normal message.
+     * The SDK sends the value unchanged. In a community, a bot without the Send TTS Messages permission gets a normal message and no error, and the returned message's tts field reports false.
+     * Fluxer does not store the value: Only the returned message and the messageCreate event report it, and every later read reports false.
+     * A non-boolean value fails with reason input before dispatch
+     */
+    readonly tts?: boolean
 }
 
 /** Content and delivery settings for messages.reply.
  * The target argument supplies the reply reference, so do not add messageReference here
+ *
+ * @category Messages
  */
-export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions" | "flags" | "nonce">
+export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions" | "flags" | "nonce" | "tts">
 
 /** Input for copying a source message into a new forward.
  * Fluxer captures the source. The SDK does not fetch it, check access beforehand or upload new content.
  * Omit both media selectors to copy source text and media.
  * A nonempty selector copies only selected media and omits source text.
  * Empty selectors behave like omitted selectors. Selector arrays are copied by index when the operation starts
+ *
+ * @category Messages
  */
 export interface ForwardMessageInput {
     /** Application-chosen correlation nonce, or omit for one SDK-generated nonce per forward execution.
@@ -413,7 +515,12 @@ export interface ForwardMessageInput {
     readonly embedIndices?: readonly number[]
 }
 
-type EditMessageOptions = {
+/**
+ * Delivery settings that an edit can change alongside or instead of its body
+ *
+ * @category Messages
+ */
+export type EditMessageOptions = {
     /** Mentions permitted to notify during this edit, defaulting to none, including the reply author */
     readonly allowedMentions?: AllowedMentions
     /** Replacement flag set using only MessageFlags bits. Omit to leave flags unchanged, or use 0 to clear both writable flags */
@@ -427,15 +534,21 @@ type EditMessageOptions = {
  * To clear embeds, supply embeds: [] together with nonempty text.
  * Empty content asks Fluxer to clear text. Fluxer may regenerate link previews when text changes.
  * A flags-only edit is accepted. An empty edit and unknown properties are rejected.
+ * Each field is read at most once, so the value validated is the value sent.
  * Mention notifications default off for this edit, including notification of the reply author
+ *
+ * @category Messages
  */
 export type EditMessageInput =
-    | (Body<AttachmentInput | AttachmentReference> & EditMessageOptions)
+    | (MessageContent<AttachmentInput | AttachmentReference> & EditMessageOptions)
     | (EditMessageOptions & {
           /** Replacement flags when editing flags alone, without any content, embeds or attachments property */
           readonly flags: number
+          /** Omitted in a flags-only edit, which leaves the text unchanged */
           readonly content?: never
+          /** Omitted in a flags-only edit, which leaves the embeds unchanged */
           readonly embeds?: never
+          /** Omitted in a flags-only edit, which leaves the files unchanged */
           readonly attachments?: never
       })
 
@@ -443,6 +556,8 @@ export type EditMessageInput =
  * Omit cursors for the latest visible messages, or choose exactly one of before, after and around.
  * Results are returned newest first, including pages selected with after.
  * Combined cursor modes and unknown properties are rejected locally
+ *
+ * @category Messages
  */
 export type MessageHistoryQuery = {
     /** Maximum messages requested in this page, an integer from 1 through 100, default 50, not a total-history cap */
@@ -451,17 +566,23 @@ export type MessageHistoryQuery = {
     | {
           /** Fetch the nearest messages older than this decimal ID, excluding the cursor message */
           readonly before?: string
+          /** Not accepted with before. Choose one cursor */
           readonly after?: never
+          /** Not accepted with before. Choose one cursor */
           readonly around?: never
       }
     | {
+          /** Not accepted with after. Choose one cursor */
           readonly before?: never
           /** Fetch the nearest messages newer than this decimal ID, excluding it. Results still arrive newest first */
           readonly after?: string
+          /** Not accepted with after. Choose one cursor */
           readonly around?: never
       }
     | {
+          /** Not accepted with around. Choose one cursor */
           readonly before?: never
+          /** Not accepted with around. Choose one cursor */
           readonly after?: never
           /** Center the page on this decimal message ID, including it only when present and visible.
            * Fluxer does not guarantee a full page or equal numbers of messages on either side
@@ -474,33 +595,58 @@ export type MessageHistoryQuery = {
  * The budget includes local queueing, retry delays, rate-limit waits and HTTP work.
  * Cleanup is awaited after the deadline, so completion can take longer than timeoutMs.
  * It does not control gateway connection startup
+ *
+ * @category Options
  */
 export interface MessageOperationOptions {
-    /** Total request budget in milliseconds, an integer from 1 through 2,147,483,647, default 30,000 */
+    /** Total request budget in milliseconds, an integer from 1 through 2,147,483,647, default the bot client's rest.defaultTimeoutMs (30,000 unless configured) or 30,000 for standalone webhook clients */
     readonly timeoutMs?: number
 }
 
 /** Remote operation settings for the Promise and Result API.
- * signal cancels this operation only. Cancelling after dispatch cannot undo an edit or deletion.
+ * The signal cancels this operation only. Cancelling after dispatch cannot undo an edit or deletion.
  * The Effect entry point uses interruption instead of an AbortSignal option
+ *
+ * @category Options
  */
 export interface DefaultMessageOperationOptions extends MessageOperationOptions, OperationOptions {}
 
+/** Required confirmation and deadline for deleting this bot's entire authored history in a channel or community.
+ * The confirm field must be the literal true, so an accidental call without it fails before any request with reason input
+ * and inputValidation path options.confirm
+ *
+ * @category Options
+ */
+export interface OwnMessageDeletionOptions extends MessageOperationOptions {
+    /** Must be true to acknowledge that the deletion is irreversible and cannot be rolled back */
+    readonly confirm: true
+}
+
+/** Default API settings for own-history deletion. Aborting the signal cannot undo a dispatched deletion
+ *
+ * @category Options
+ */
+export interface DefaultOwnMessageDeletionOptions extends OwnMessageDeletionOptions, OperationOptions {}
+
 /** Deadline settings for sending, replying or forwarding.
- * timeoutMs covers local queueing, rate-limit waits and HTTP work. Cleanup is awaited after that budget.
+ * The timeoutMs option covers local queueing, rate-limit waits and HTTP work. Cleanup is awaited after that budget.
  * If message creation was dispatched, failure can leave delivery unknown even when no message result was returned.
- * The SDK does not automatically retry an uncertain send. Check MessageError.delivery before deciding what to do.
+ * The SDK does not automatically retry an uncertain send. Check MessageError.outcome before deciding what to do.
  * Advanced response limits: Created-message JSON is limited to 16 MiB of body bytes before parsing.
  * Upload-plan and completion responses use a separate 1 MiB limit. Neither limit caps total memory use.
  * An oversized or malformed successful response fails with reason response
+ *
+ * @category Options
  */
 export interface SendOptions {
-    /** Total send budget in milliseconds, an integer from 1 through 2,147,483,647, default 30,000 */
+    /** Total send budget in milliseconds, an integer from 1 through 2,147,483,647, default the client's rest.defaultTimeoutMs, 30,000 unless configured */
     readonly timeoutMs?: number
 }
 
 /** Send settings for the Promise and Result API.
- * signal cancels this send only, without proving whether a dispatched request created a message.
+ * The signal cancels this send only, without proving whether a dispatched request created a message.
  * The Effect entry point uses interruption instead of an AbortSignal option
+ *
+ * @category Options
  */
 export interface DefaultSendOptions extends SendOptions, OperationOptions {}

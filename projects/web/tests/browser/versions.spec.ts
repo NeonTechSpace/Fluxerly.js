@@ -1,16 +1,28 @@
-import { test, expect } from "@playwright/test"
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test"
+
+// Search index names carry a content hash, so read the address each page was built with
+async function searchIndexUrl(request: APIRequestContext, path: string) {
+    const html = await (await request.get(path)).text()
+    const match = /\/api\/search\/[^"&\s]+\.json/.exec(html)
+    if (!match) throw new Error(`No search index address on ${path}`)
+    return match[0]
+}
+const islandTree = async (page: Page) =>
+    JSON.stringify(JSON.parse((await page.locator('astro-island[component-export="Docs"]').getAttribute("props"))!).tree)
 
 test("Release channels preserve Stable history and select rolling prerelease pages", async ({ page }) => {
     await page.goto("/")
-    await expect(page).toHaveURL(/\/docs\/latest\/$/)
+    await expect(page).toHaveURL(/\/docs\/1000\.0\.1\/$/)
     await expect(page.locator(".version-label")).toHaveText("SDK 1000.0.1")
     await page.goto("/docs/1000.0.0/api/signature/")
     await expect(page.locator(".docs-content")).toContainText("sendOnce(): Promise<void>")
     await expect(page.locator(".docs-content")).toContainText("Stableonlymarker")
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
-    const exactTree = JSON.stringify(JSON.parse((await page.locator('astro-island[component-export="Docs"]').getAttribute("props"))!).tree)
-    expect(exactTree).toContain("/docs/1000.0.0/api/signature")
-    expect(exactTree).toContain("/docs/1000.0.0/api/removed")
+    const exactTree = await islandTree(page)
+    expect(exactTree).toContain("/docs/1000.0.0/quick-start")
+    expect(exactTree).toContain("/docs/1000.0.0/api")
+    // Reference symbols are omitted from the browser tree, and other versions never appear
+    expect(exactTree).not.toContain("/docs/1000.0.0/api/signature")
     expect(exactTree).not.toContain("/docs/latest/")
     expect(exactTree).not.toContain("/docs/1000.0.1/")
     await page.getByRole("button", { name: "Stable", exact: true }).click()
@@ -39,7 +51,7 @@ test("Release channels preserve Stable history and select rolling prerelease pag
     await expect(page).toHaveURL(/\/docs\/rc\/?$/)
 })
 
-test("Latest aliases the newest stable release across navigation and search", async ({ page, request }) => {
+test("Latest redirects to the newest stable release while navigation and search stay on its exact path", async ({ page, request }) => {
     const errors: string[] = []
     const indexes: string[] = []
     page.on("pageerror", (error) => errors.push(error.message))
@@ -50,35 +62,39 @@ test("Latest aliases the newest stable release across navigation and search", as
         if (request.url().includes("/api/search/")) indexes.push(new URL(request.url()).pathname)
     })
 
-    await page.goto("/docs/latest/")
-    await expect(page).toHaveURL(/\/docs\/latest\/$/)
-    await expect(page.locator(".version-label")).toHaveText("SDK 1000.0.1")
-    await expect(page.locator(".docs-content")).toContainText("Immutable 1000.0.1 fixture")
-    for (const oldLocalPath of ["/docs/dev/quick-start/", "/docs/preview/quick-start/"]) {
-        const response = await request.get(oldLocalPath, { maxRedirects: 0 })
-        expect(response.status()).toBe(302)
-        expect(response.headers().location).toBe("/docs/latest/quick-start/")
+    for (const [from, to] of [
+        ["/docs/latest/", "/docs/1000.0.1/"],
+        ["/docs/latest", "/docs/1000.0.1/"],
+        ["/docs/latest/api/signature/?from=link", "/docs/1000.0.1/api/signature/?from=link"],
+        ["/docs/latest/quick-start.md", "/docs/1000.0.1/quick-start.md"],
+        ["/docs/dev/quick-start/", "/docs/1000.0.1/quick-start/"],
+        ["/docs/preview/quick-start/", "/docs/1000.0.1/quick-start/"],
+    ]) {
+        const response = await request.get(from, { maxRedirects: 0 })
+        expect(response.status(), from).toBe(302)
+        expect(response.headers().location, from).toBe(to)
+        expect(response.headers()["x-robots-tag"], from).toBe("noindex, nofollow")
     }
-    await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
-    const tree = JSON.stringify(JSON.parse((await page.locator('astro-island[component-export="Docs"]').getAttribute("props"))!).tree)
-    expect(tree).toContain("/docs/latest/api/signature")
-    for (const version of ["1000.0.0", "1000.0.1", "1000.1.0-rc.0", "1000.2.0-canary.0", "1000.2.0-canary.1"])
-        expect(tree).not.toContain(`/docs/${version}/`)
+    expect((await request.get("/docs/latest/migration/", { maxRedirects: 0 })).status()).toBe(404)
 
-    await page.getByRole("link", { name: "API reference", exact: true }).first().click()
-    await expect(page).toHaveURL(/\/docs\/latest\/api\/?$/)
-    await page.getByRole("link", { name: "Versioned signature", exact: true }).first().click()
-    await expect(page).toHaveURL(/\/docs\/latest\/api\/signature\/?$/)
+    await page.goto("/docs/latest/api/signature/?from=link#sendonce")
+    await expect(page).toHaveURL(/\/docs\/1000\.0\.1\/api\/signature\/\?from=link#sendonce$/)
+    await expect(page.locator(".version-label")).toHaveText("SDK 1000.0.1")
     await expect(page.locator(".docs-content")).toContainText("Lateststablemarker")
+    await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+    const tree = await islandTree(page)
+    expect(tree).toContain("/docs/1000.0.1/api")
+    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-canary.0", "1000.2.0-canary.1", "rc", "canary"])
+        expect(tree).not.toContain(`/docs/${version}/`)
 
     await page.getByRole("button", { name: "Stable", exact: true }).click()
     await expect(page.getByRole("dialog").getByRole("link", { name: "Stable", exact: true }))
-        .toHaveAttribute("href", "/docs/latest/api/signature")
+        .toHaveAttribute("href", "/docs/1000.0.1/api/signature")
     await page.keyboard.press("Escape")
     await page.keyboard.press("Control+k")
     const input = page.getByRole("textbox", { name: /Search .* documentation/ })
     await input.fill("Lateststablemarker")
-    const result = page.getByRole("dialog").getByRole("button", { name: /Lateststablemarker/ })
+    const result = page.getByRole("dialog").getByRole("button", { name: /Lateststablemarker/ }).first()
     await expect(result).toBeVisible()
     for (const marker of ["Stableonlymarker", "Rconlymarker", "Canaryonlymarker", "Latestcanarymarker"]) {
         await input.fill(marker)
@@ -86,12 +102,16 @@ test("Latest aliases the newest stable release across navigation and search", as
     }
     await input.fill("Lateststablemarker")
     await result.click()
-    await expect(page).toHaveURL(/\/docs\/latest\/api\/signature\/?$/)
-    const searchIndex = JSON.stringify(await (await request.get("/api/search/latest.json")).json())
-    expect(searchIndex).toContain("/docs/latest/api/signature")
-    for (const version of ["1000.0.0", "1000.0.1", "1000.1.0-rc.0", "1000.2.0-canary.1"])
+    await expect(page).toHaveURL(/\/docs\/1000\.0\.1\/api\/signature\/?(?:#sendonce)?$/)
+    const indexUrl = await searchIndexUrl(request, "/docs/1000.0.1/")
+    expect(indexUrl).toMatch(/^\/api\/search\/1000\.0\.1\.[0-9a-f]{16}\.json$/)
+    const index = await request.get(indexUrl)
+    expect(index.headers()["cache-control"]).toBe("public, max-age=31536000, immutable")
+    const searchIndex = JSON.stringify(await index.json())
+    expect(searchIndex).toContain("/docs/1000.0.1/api/signature")
+    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-canary.1"])
         expect(searchIndex).not.toContain(`/docs/${version}/`)
-    expect(new Set(indexes)).toEqual(new Set(["/api/search/latest.json"]))
+    expect(new Set(indexes)).toEqual(new Set([indexUrl]))
     expect(errors).toEqual([])
 })
 
@@ -105,7 +125,7 @@ test("Version search never returns another release or unpublished index", async 
     await page.keyboard.press("Control+k")
     const input = page.getByRole("textbox", { name: "Search RC documentation" })
     await input.fill("Rconlymarker")
-    await expect(page.getByRole("dialog").getByRole("button", { name: /Rconlymarker/ })).toBeVisible()
+    await expect(page.getByRole("dialog").getByRole("button", { name: /Rconlymarker/ }).first()).toBeVisible()
     await input.fill("Stableonlymarker")
     await expect(page.getByRole("dialog").getByText("No results found")).toBeVisible()
     await input.fill("Canaryonlymarker")
@@ -113,9 +133,10 @@ test("Version search never returns another release or unpublished index", async 
     await input.fill("Previousrcmarker")
     await expect(page.getByRole("dialog").getByText("No results found")).toBeVisible()
     await input.fill("Rconlymarker")
-    await page.getByRole("dialog").getByRole("button", { name: /Rconlymarker/ }).click()
+    await page.getByRole("dialog").getByRole("button", { name: /Rconlymarker/ }).first().click()
     await expect(page).toHaveURL(/\/docs\/rc\/api\/signature\/?#sendonce$/)
-    expect(new Set(indexes)).toEqual(new Set(["/api/search/rc.json"]))
+    expect(indexes.length).toBeGreaterThan(0)
+    expect(indexes.every((path) => /^\/api\/search\/rc\.[0-9a-f]{16}\.json$/.test(path))).toBe(true)
 })
 
 test("Only channel labels appear and Canary opens the newest published snapshot", async ({ page }) => {
@@ -143,15 +164,15 @@ test("Command preferences persist across exact releases without retaining the pr
     await page.getByRole("dialog").getByRole("link", { name: "RC", exact: true }).click()
     await expect(page).toHaveURL(/\/docs\/rc\/quick-start\/?$/)
     await expect(block.getByLabel("Package manager", { exact: true })).toHaveValue("pnpm")
-    await expect(block.locator("[data-command-code]")).toHaveText("pnpm add @neontechspace/fluxerly@1000.1.0-rc.1")
+    await expect(block.locator("[data-command-code]")).toHaveText("pnpm add --save-exact @neontechspace/fluxerly@1000.1.0-rc.1")
     await block.getByLabel("Package manager", { exact: true }).selectOption("npm")
-    await expect(block.locator("[data-command-code]")).toHaveText("npm install @neontechspace/fluxerly@1000.1.0-rc.1")
+    await expect(block.locator("[data-command-code]")).toHaveText("npm install --save-exact @neontechspace/fluxerly@1000.1.0-rc.1")
 })
 
 test("Numbered prerelease pages and search indexes return 404 without redirects", async ({ request }) => {
     for (const version of ["1000.1.0-rc.0", "1000.1.0-rc.1", "1000.2.0-canary.0", "1000.2.0-canary.1"]) {
         for (const path of [`/docs/${version}/`, `/docs/${version}/api/signature/?from=link`,
-            `/docs/${version}/api/removed/`, `/api/search/${version}.json`]) {
+            `/docs/${version}/api/removed/`, `/docs/${version}/llms.txt`, `/api/search/${version}.json`]) {
             const response = await request.get(path, { maxRedirects: 0 })
             expect(response.status(), path).toBe(404)
             expect(response.headers().location, path).toBeUndefined()
@@ -159,37 +180,49 @@ test("Numbered prerelease pages and search indexes return 404 without redirects"
     }
 })
 
-test("Withdrawn content is absent from published pages, navigation and search", async ({ request }) => {
+test("Withdrawn content is absent from published pages, navigation, search and assistant files", async ({ request }) => {
     for (const version of ["latest", "rc", "canary", "1000.0.0", "1000.0.1"]) {
         const removed = await request.get(`/docs/${version}/migration/`, { maxRedirects: 0 })
         expect(removed.status()).toBe(404)
         expect(removed.headers().location).toBeUndefined()
         const page = await request.get(`/docs/${version}/`)
         expect(page.status()).toBe(200)
-        expect(await page.text()).not.toContain(`/docs/${version}/migration`)
-        const index = await request.get(`/api/search/${version}.json`)
+        const served = new URL(page.url()).pathname
+        expect(await page.text()).not.toContain(`${served}migration`)
+        const index = await request.get(await searchIndexUrl(request, served))
         expect(index.status()).toBe(200)
         expect(await index.text()).not.toContain("Withdrawncontentmarker")
+        for (const file of ["llms.txt", "llms-full.txt"]) {
+            const assistant = await request.get(`${served}${file}`)
+            expect(assistant.status()).toBe(200)
+            expect(await assistant.text()).not.toContain("Withdrawncontentmarker")
+        }
     }
 })
 
-test("Canary navigation, search and serialized tree stay within the rolling channel", async ({ page, request }) => {
+test("Canary navigation, search, serialized tree and assistant files stay within the rolling channel", async ({ page, request }) => {
     await page.goto("/docs/canary/api/")
     await page.locator(".docs-content").getByRole("link", { name: "Signature", exact: true }).click()
     await expect(page).toHaveURL(/\/docs\/canary\/api\/signature\/?$/)
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
-    const tree = JSON.stringify(JSON.parse((await page.locator('astro-island[component-export="Docs"]').getAttribute("props"))!).tree)
-    expect(tree).toContain("/docs/canary/api/signature")
+    const tree = await islandTree(page)
+    expect(tree).toContain("/docs/canary/api")
     for (const path of ["1000.0.0", "1000.0.1", "1000.2.0-canary.0", "1000.2.0-canary.1", "rc", "latest"])
         expect(tree).not.toContain(`/docs/${path}/`)
-    const searchIndex = JSON.stringify(await (await request.get("/api/search/canary.json")).json())
+    const searchIndex = JSON.stringify(await (await request.get(await searchIndexUrl(request, "/docs/canary/"))).json())
     expect(searchIndex).toContain("Latestcanarymarker")
     expect(searchIndex).not.toContain("Canaryonlymarker")
     expect(searchIndex).toContain("/docs/canary/api/signature")
     expect(searchIndex).not.toContain("/docs/1000.2.0-canary.1/")
+    const assistant = await (await request.get("/docs/canary/llms.txt")).text()
+    expect(assistant).toContain("/docs/canary/quick-start.md")
+    expect(assistant).not.toContain("/docs/1000.2.0-canary.1/")
+    const twin = await (await request.get("/docs/canary/quick-start.md")).text()
+    expect(twin).toContain("npm install --save-exact @neontechspace/fluxerly@1000.2.0-canary.1")
+    expect(twin).toContain("(/docs/canary/api/signature/)")
     await page.keyboard.press("Control+k")
     const input = page.getByRole("textbox", { name: "Search Canary documentation" })
     await input.fill("Latestcanarymarker")
-    await page.getByRole("dialog").getByRole("button", { name: /Latestcanarymarker/ }).click()
-    await expect(page).toHaveURL(/\/docs\/canary\/api\/signature\/?$/)
+    await page.getByRole("dialog").getByRole("button", { name: /Latestcanarymarker/ }).first().click()
+    await expect(page).toHaveURL(/\/docs\/canary\/api\/signature\/?(?:#sendonce)?$/)
 })

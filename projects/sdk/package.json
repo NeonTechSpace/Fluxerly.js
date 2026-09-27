@@ -42,16 +42,29 @@
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.js"
+            "import": "./dist/index.js",
+            "require": "./esm-only.cjs"
         },
         "./effect": {
             "types": "./dist/effect.d.ts",
-            "import": "./dist/effect.js"
+            "import": "./dist/effect.js",
+            "require": "./esm-only.cjs"
+        },
+        "./testing": {
+            "types": "./dist/testing.d.ts",
+            "import": "./dist/testing.js",
+            "require": "./esm-only.cjs"
+        },
+        "./effect/testing": {
+            "types": "./dist/effect-testing.d.ts",
+            "import": "./dist/effect-testing.js",
+            "require": "./esm-only.cjs"
         }
     },
     "files": [
         "dist",
         "src",
+        "esm-only.cjs",
         "examples/starter",
         "consumer/AGENTS.md",
         "LICENSE",
@@ -60,17 +73,23 @@
     "scripts": {
         "format": "prettier --write .",
         "format:check": "prettier --check .",
+        "lint": "pnpm run lint:code && pnpm run lint:discards && pnpm run lint:tests && pnpm run lint:unused && pnpm run lint:spelling",
+        "lint:discards": "node scripts/silent-discards.js",
+        "lint:code": "oxlint -c ../.oxlintrc.json src scripts examples",
+        "lint:unused": "knip --directory .. --workspace sdk --no-progress",
+        "lint:spelling": "cspell --no-progress -c ../cspell.json",
+        "lint:tests": "oxlint -c ../.oxlintrc.json tests",
         "build": "node scripts/build.js",
         "packages:prepare": "node scripts/packages.js",
-        "test:packaging": "node --test tests/packaging-check.js",
+        "test:packaging": "node --test tests/packaging/packaging-check.js",
         "test": "vitest run",
         "test:types": "tsc -p tsconfig.test.json",
-        "test:public-contract": "node tests/public-client-contract.js",
-        "test:upstream:guild-features": "pnpm run build && node tests/upstream-guild-features.js",
-        "test:experiment:effect-transport": "tsc -p tsconfig.experiment.json && vitest run --config vitest.experiments.config.ts tests/experiments/effect-transport",
-        "test:package": "node tests/package-check.js",
-        "test:npm": "node tests/npm-package-check.js",
+        "test:public-contract": "node tests/contract/public-client-contract.js",
+        "test:upstream:guild-features": "pnpm run build && node tests/contract/upstream-guild-features.js",
+        "test:package": "node tests/packaging/package-check.js",
+        "test:npm": "node tests/packaging/npm-package-check.js",
         "test:live": "node tests/live/sandbox.js",
+        "test:live:all": "node tests/live/run-all.js",
         "test:live:sdk": "pnpm run build && node tests/live/sdk.js default && node tests/live/sdk.js effect",
         "test:live:application": "pnpm run build && node tests/live/sdk.js default --application && node tests/live/sdk.js effect --application",
         "test:live:oauth:default": "pnpm run build && node tests/live/oauth.js default",
@@ -137,10 +156,8 @@
         "test:live:embeds": "pnpm run build && node tests/live/messages.js default --embeds && node tests/live/messages.js effect --embeds",
         "test:live:attachments": "pnpm run build && node tests/live/messages.js default --attachments && node tests/live/messages.js effect --attachments",
         "test:live:attachment-sources": "pnpm run build && node tests/live/messages.js default --attachment-sources && node tests/live/messages.js effect --attachment-sources",
-        "test:cache:memory": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/cache-memory.js",
-        "test:cache:workload": "pnpm run build && node tests/cache-workload.js default && node tests/cache-workload.js effect",
-        "test:rest:queue": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/rest-queue-workload.js default && node --expose-gc --max-old-space-size=512 tests/rest-queue-workload.js effect",
-        "check": "pnpm run format:check && pnpm run build && pnpm run test:public-contract && pnpm run test:types && pnpm run test && pnpm run test:packaging && pnpm run test:package"
+        "test:rest:queue": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/perf/rest-queue-workload.js default && node --expose-gc --max-old-space-size=512 tests/perf/rest-queue-workload.js effect",
+        "check": "pnpm run format:check && pnpm run lint && pnpm run build && pnpm run test:public-contract && pnpm run test:types && pnpm run test && pnpm run test:packaging && pnpm run test:package"
     },
     "dependencies": {
         "neverthrow": "8.2.0",

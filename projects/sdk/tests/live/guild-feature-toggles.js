@@ -1,14 +1,26 @@
+// Guild feature toggles: emoji and sticker clone opt-ins and owner-crown visibility through SDK edits, independent
+// feature readback and a lost edit response.
+// Journal `.env.test.guild-features.local` records sandbox and bot identity, a marker, the original feature set, the
+// expected set and any pending write. An existing journal is recovered before a new run: the original toggles are
+// restored only when the current set matches the original, expected or pending set, refusing unexpected feature
+// changes. Disabling cloning cannot revoke copies made during the temporary opt-in
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { Effect, Exit, Scope } from "effect"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { createSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.guild-features.local", import.meta.url)
+const journalFile = openJournal("guild-features")
 const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
 const toggles = new Set(Object.values(sdk.GuildFeatureToggles))
 const emoji = sdk.GuildFeatureToggles.CloneEmojiEnabled
@@ -19,34 +31,24 @@ assert.equal(sticker, "CLONE_STICKER_ENABLED")
 let lock, journal, client, scope, token, guildId, botId
 let verified = false
 let stage = "configuration"
-const report = (check) => console.log(JSON.stringify({ mode, check, passed: true }))
+const report = createReporter({ mode }, { passed: true })
 const ordered = (features) => [...features].sort()
 const same = (a, b) => JSON.stringify(ordered(a)) === JSON.stringify(ordered(b))
 const validFeatures = (features) =>
     Array.isArray(features) &&
     features.every((feature) => typeof feature === "string") &&
     new Set(features).size === features.length
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+const save = () => journalFile.save(journal)
 async function value(operation) {
     if (Effect.isEffect(operation)) return Effect.runPromise(operation)
     const result = await operation
     if (result.isErr()) throw result.error
     return result.value
 }
-async function api(method, path, body) {
-    const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-        method,
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: {
-            Authorization: `Bot ${token}`,
-            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    })
-    assert.ok(response.ok, `Sandbox HTTP ${response.status}`)
-    return response.json()
-}
+// Cache lookups return the entry or undefined directly in the default API and as an Effect in the native API
+const cached = (lookup) => (Effect.isEffect(lookup) ? Effect.runPromise(lookup) : lookup)
+const sandboxApi = createSandboxApi({ fetch: rawFetch, token: () => token })
+const api = async (method, path, body) => (await sandboxApi(method, path, body)).data
 async function observedFeatures() {
     const guild = await api("GET", `/guilds/${guildId}`)
     assert.equal(guild.id, guildId)
@@ -84,7 +86,7 @@ async function cleanup() {
         })
     }
     assert.ok(same(await observedFeatures(), journal.original), "Original guild features were not restored")
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("original_guild_features_restored")
 }
@@ -118,7 +120,7 @@ async function edit(selected, check, loseResponse = false) {
         if (loseResponse) {
             await assert.rejects(operation, (error) => error.reason === "network" && error.outcome === "unknown")
             assert.equal(attempts, 1)
-            assert.equal(await value(client.guilds.get(guildId)), undefined)
+            assert.equal(await cached(client.guilds.get(guildId)), undefined)
         } else {
             const result = await operation
             assert.ok(same(result.features, expected))
@@ -139,29 +141,22 @@ const watchdog = setTimeout(() => {
     process.exit(1)
 }, 180_000).unref()
 try {
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token)
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
+    lock = acquireLock()
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
     stage = "sandbox_identity"
-    const application = await api("GET", "/applications/@me")
-    const self = await api("GET", "/users/@me")
-    assert.equal(application.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(application.bot?.id, self.id)
-    assert.equal(self.bot, true)
-    botId = self.id
-    await observedFeatures()
+    const identity = await verifySandboxIdentity((path) => api("GET", path), sandbox)
+    botId = identity.botId
+    assert.ok(validFeatures(identity.guild.features))
     verified = true
     report(stage)
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
     }
     const options = { token, cache: { guilds: true } }
-    if (mode === "default") client = sdk.createClient(options)._unsafeUnwrap()
+    if (mode === "default") client = sdk.createClient(options)
     else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(sdk.createClient(options).pipe(Scope.provide(scope)))
@@ -197,55 +192,39 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({
-                mode,
-                stage: "client_cleanup",
-                passed: false,
-                finalizer,
-                journalRetained: journal !== undefined,
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exitCode = 1
-    }
-    if (client)
-        try {
-            await value(client.shutdown())
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            await cleanup()
-        } catch {
-            console.error(
-                JSON.stringify({
-                    mode,
-                    stage: "feature_cleanup",
-                    passed: false,
-                    journalRetained: journal !== undefined,
-                }),
-            )
+    // Keep the journal, lock and deadline if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            client && ["client_shutdown", () => value(client.shutdown())],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup,
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            if (finalizer === "cleanup")
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "feature_cleanup",
+                        passed: false,
+                        journalRetained: journal !== undefined,
+                    }),
+                )
+            else if (finalizer === "sandbox_lock")
+                console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
+            else
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "client_cleanup",
+                        passed: false,
+                        finalizer,
+                        journalRetained: journal !== undefined,
+                        lockRetained: lock !== undefined,
+                    }),
+                )
             process.exitCode = 1
-        }
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
-            process.exitCode = 1
-        }
-    }
-    if (quiescent) clearTimeout(watchdog)
+        },
+    })
 }

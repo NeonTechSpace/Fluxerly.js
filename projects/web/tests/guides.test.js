@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { authoredGuideNavigation, authoredGuides, guidesRoot } from "../scripts/generate.js"
 
-const generatedPages = new Set(["index", "api", "changelog"])
+const generatedPages = new Set(["index", "api", "changelog", "error-and-log-codes"])
 const separator = /^---/
 
 async function guideFixture(t, metadata, files) {
@@ -29,15 +29,17 @@ test("Authored guide inventory follows grouped navigation without fixing a guide
         guides.map((guide) => guide.slug),
         navigation.filter((page) => !separator.test(page) && !generatedPages.has(page)),
     )
-    assert.deepEqual([...guides.map((guide) => guide.slug)].sort(), guideFiles.sort())
+    const byName = (a, b) => a.localeCompare(b)
+    assert.deepEqual(guides.map((guide) => guide.slug).sort(byName), guideFiles.sort(byName))
     assert.ok(guides.every((guide) => guide.content.length > 0))
-    assert.deepEqual(navigation.filter((page) => separator.test(page)), [
-        "---Getting started---",
-        "---Bot guides---",
-        "---Operations---",
-        "---Effect---",
-        "---Reference---",
-    ])
+    // Section labels are editorial. Each separator is well-formed, unique and introduces at least one page
+    const separators = navigation.filter((page) => separator.test(page))
+    assert.ok(separators.length > 0)
+    for (const label of separators) assert.match(label, /^---\S.*\S---$/)
+    assert.equal(new Set(separators).size, separators.length)
+    navigation.forEach((page, index) => {
+        if (separator.test(page)) assert.ok(index + 1 < navigation.length && !separator.test(navigation[index + 1]), page)
+    })
 })
 
 test("Guide inventory rejects unsafe, duplicate, missing and unlisted Markdown pages", async (t) => {

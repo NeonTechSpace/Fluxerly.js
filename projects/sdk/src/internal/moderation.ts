@@ -1,3 +1,8 @@
+/**
+ * Moderation operations: Timeouts, kicks, bans and ban pages.
+ * Invariant: A dispatched moderation request invalidates its guarded resources, not only an uncertain one.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type {
     BanInput,
     GuildBan,
@@ -7,17 +12,12 @@ import type {
     TimeoutOptions,
     VoiceConnectionReference,
 } from "#sdk/guilds"
-import { identifier, record } from "./message.js"
+import { identifier, integerInRange as integer, record } from "./decode/primitives.js"
 import { decodeMember, memberFetch, type GuildRequest } from "./guilds.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
-import { validCalendarTimestamp } from "./timestamp.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import { timestamp } from "./decode/timestamp.js"
 import { normalizedText as text } from "./field-text.js"
 import { auditSettings as validateAuditSettings } from "./audit.js"
-
-const integer = (value: unknown, min: number, max: number): value is number =>
-    typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
-const timestamp = (value: unknown): value is string =>
-    typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && validCalendarTimestamp(value)
 
 export function auditSettings(
     options?: ModerationOptions,
@@ -36,7 +36,7 @@ function timeoutSettings(
         return inputValidationFailure(
             "options.timeoutReason",
             "length",
-            "Timeout reason must contain 1 through 512 UTF-16 code units after provider normalization",
+            "Timeout reason must contain 1 through 512 UTF-16 code units after Fluxer's normalization",
         )
     return settings
 }
@@ -55,7 +55,7 @@ export function memberTimeout(
         return inputValidationFailure(
             "durationMs",
             "range",
-            "Timeout duration must be an integer from 1 through 31,536,000,000 milliseconds",
+            "Timeout duration must be an integer from 1 through 31,536,000,000 ms (365 days)",
         )
     const { guildId, userId } = target
     return {
@@ -100,7 +100,7 @@ function voiceConnectionId(target: VoiceConnectionReference): string | undefined
         return inputValidationFailure(
             "target.connectionId",
             "length",
-            "Voice connection IDs must contain 1 through 32 UTF-16 code units after provider normalization",
+            "Voice connection IDs must contain 1 through 32 UTF-16 code units after Fluxer's normalization",
         )
     return connectionId
 }
@@ -138,15 +138,20 @@ export function memberVoiceMove(
 export function memberVoiceFlag(
     target: MemberReference,
     field: "mute" | "deaf",
-    enabled: boolean,
+    input: unknown,
     options?: ModerationOptions,
 ): GuildRequest<GuildMember> | InputValidationFailure {
     const request = memberFetch(target)
     const extra = auditSettings(options)
     if (request instanceof InputValidationFailure) return request
     if (extra instanceof InputValidationFailure) return extra
+    const key = field === "mute" ? "muted" : "deafened"
+    if (!record(input)) return inputValidationFailure("input", "type", "Voice flag input must be an object")
+    const unsupported = unsupportedKeyFailure(input, [key], "input", "the voice flag input")
+    if (unsupported) return unsupported
+    const enabled = input[key]
     if (typeof enabled !== "boolean")
-        return inputValidationFailure(field === "mute" ? "muted" : "deafened", "type", "Voice flags must be boolean")
+        return inputValidationFailure(`input.${key}`, "type", "Voice flags must be boolean")
     const decode = request.decode
     return {
         ...request,
@@ -169,6 +174,13 @@ export function memberVoiceFlag(
     }
 }
 
+/** Whole seconds for a millisecond count that is a multiple of 1,000, otherwise a value every range check rejects */
+function wholeSeconds(milliseconds: unknown): unknown {
+    return typeof milliseconds === "number" && Number.isSafeInteger(milliseconds) && milliseconds % 1_000 === 0
+        ? milliseconds / 1_000
+        : Number.NaN
+}
+
 export function guildBan(
     target: MemberReference,
     input?: BanInput,
@@ -178,23 +190,34 @@ export function guildBan(
     const value = input === undefined ? {} : input
     if (request instanceof InputValidationFailure) return request
     if (!record(value)) return inputValidationFailure("input", "type", "Ban input must be an object")
-    if (Object.keys(value).some((key) => !["reason", "durationSeconds", "deleteMessageSeconds"].includes(key)))
-        return inputValidationFailure(
-            "input",
-            "allowedFields",
-            "Ban input may contain only reason, durationSeconds, and deleteMessageSeconds",
-        )
-    const duration = value.durationSeconds === undefined ? 0 : value.durationSeconds
-    const removal = value.deleteMessageSeconds === undefined ? 0 : value.deleteMessageSeconds
-    if (
-        (duration !== 0 && !integer(duration, 60, 63_072_000)) ||
-        !integer(removal, 0, 604_800) ||
-        (value.reason !== undefined && !text(value.reason, 0, 512))
+    const unsupported = unsupportedKeyFailure(
+        value,
+        ["reason", "durationMs", "deleteMessagesMs"],
+        "input",
+        "the ban input",
     )
+    if (unsupported) return unsupported
+    // Callers supply milliseconds, like timeouts, command cooldowns and the duration command argument, and Fluxer
+    // takes whole seconds
+    const duration = wholeSeconds(value.durationMs === undefined ? 0 : value.durationMs)
+    const removal = wholeSeconds(value.deleteMessagesMs === undefined ? 0 : value.deleteMessagesMs)
+    if (duration !== 0 && !integer(duration, 60, 63_072_000))
         return inputValidationFailure(
-            "input",
+            "input.durationMs",
             "range",
-            "Ban fields must satisfy their documented duration, message deletion, and reason limits",
+            "Ban duration must be 0 (permanent) or 60,000 through 63,072,000,000 ms (1 minute through 2 years), in whole seconds",
+        )
+    if (!integer(removal, 0, 604_800))
+        return inputValidationFailure(
+            "input.deleteMessagesMs",
+            "range",
+            "Ban message deletion window must be 0 through 604,800,000 ms (7 days), in whole seconds",
+        )
+    if (value.reason !== undefined && !text(value.reason, 0, 512))
+        return inputValidationFailure(
+            "input.reason",
+            "range",
+            "Ban reason must be a string of at most 512 UTF-16 code units after Fluxer's normalization",
         )
     return {
         ...request,

@@ -1,18 +1,22 @@
 import type { PaginationQuery } from "./pagination.js"
 
-/** Fluxer's known sources for a guild membership recorded by the indexed member-search service */
+/**
+ * Fluxer's known sources for a community membership recorded by the indexed member-search service
+ *
+ * @category Guilds and members
+ */
 export const GuildMemberJoinSourceTypes: Readonly<{
-    /** The member created the guild */
+    /** The member created the community */
     Creator: 0
     /** The member joined through a regular invitation code */
     InstantInvite: 1
-    /** The member joined through the guild's custom invitation code */
+    /** The member joined through the community's custom invitation code */
     VanityUrl: 2
     /** The bot was added through a bot installation invitation */
     BotInvite: 3
     /** The member was added by an administrator */
     AdminForceAdd: 4
-    /** The member joined through the public server directory */
+    /** The member joined through the public community directory */
     Discovery: 6
 }> = Object.freeze({
     Creator: 0,
@@ -23,11 +27,15 @@ export const GuildMemberJoinSourceTypes: Readonly<{
     Discovery: 6,
 })
 
-/** One known Fluxer guild-member join source */
+/**
+ * One known Fluxer community-member join source
+ *
+ * @category Guilds and members
+ */
 export type GuildMemberJoinSourceType = (typeof GuildMemberJoinSourceTypes)[keyof typeof GuildMemberJoinSourceTypes]
 
 /**
- * Search Fluxer's guild member index by text, roles, join dates or how members joined.
+ * Search Fluxer's community member index by text, roles, join dates or how members joined.
  * Search results may lag behind current membership and profile changes. They contain only search fields, not complete GuildMember objects, and do not come from the SDK cache.
  * Fluxer requires a member-management permission for every search.
  * Join-source and source-invite filters require ManageGuild. The SDK checks for ManageGuild before sending those filters because Fluxer would otherwise ignore them without an error. Filter arrays are copied by index when the operation starts.
@@ -45,6 +53,8 @@ export type GuildMemberJoinSourceType = (typeof GuildMemberJoinSourceTypes)[keyo
  *     return { page, hits }
  * }
  * ```
+ *
+ * @category Guilds and members
  */
 export interface MemberSearchQuery {
     /** Text matched by Fluxer against indexed usernames, display names, nicknames, discriminators and user IDs. At most 100 UTF-16 code units */
@@ -55,9 +65,9 @@ export interface MemberSearchQuery {
     readonly offset?: number
     /** Require every supplied role ID. At most 10 distinct decimal role IDs. An empty list has no filtering effect */
     readonly roleIds?: readonly string[]
-    /** Include members whose indexed guild-join time is at or after this nonnegative whole Unix-second value */
+    /** Include members whose indexed community-join time is at or after this nonnegative whole Unix-second value */
     readonly joinedAtAfterSeconds?: number
-    /** Include members whose indexed guild-join time is at or before this nonnegative whole Unix-second value */
+    /** Include members whose indexed community-join time is at or before this nonnegative whole Unix-second value */
     readonly joinedAtBeforeSeconds?: number
     /** Include members whose indexed account-creation time is at or after this nonnegative whole Unix-second value */
     readonly userCreatedAtAfterSeconds?: number
@@ -78,6 +88,8 @@ export interface MemberSearchQuery {
 /** A member matched by the search index, with indexed identity, roles and available membership-source details.
  * Call members.fetch with guildId and userId when current member details are needed. This frozen hit does not populate
  * the member cache and cannot establish current membership or permissions
+ *
+ * @category Guilds and members
  */
 export interface MemberSearchHit {
     /** Decimal guild ID, equal to the requested guild */
@@ -88,13 +100,13 @@ export interface MemberSearchHit {
     readonly username: string
     /** Indexed four-digit account discriminator */
     readonly discriminator: string
-    /** Indexed global display name, null when absent */
-    readonly globalName: string | null
-    /** Indexed guild nickname, null when absent */
+    /** Indexed account-wide display name, null when absent. The display.name helper reads it */
+    readonly displayName: string | null
+    /** Indexed community nickname, null when absent */
     readonly nickname: string | null
     /** Explicit indexed role IDs, not effective permissions or the implicit everyone role */
     readonly roleIds: readonly string[]
-    /** Indexed guild-join time as a nonnegative whole Unix-second value */
+    /** Indexed community-join time as a nonnegative whole Unix-second value */
     readonly joinedAtSeconds: number
     /** Indexed bot classification */
     readonly isBot: boolean
@@ -109,8 +121,10 @@ export interface MemberSearchHit {
 /**
  * Matching indexed members and counts from one search request.
  * Counts and order describe a changing index, not a complete membership snapshot.
- * When indexing is true, Fluxer accepted the request but is building the guild index.
+ * When indexing is true, Fluxer accepted the request but is building the community index.
  * Wait and issue a new page request rather than treating that empty page as completion
+ *
+ * @category Guilds and members
  */
 export interface MemberSearchPage {
     /** Decimal guild ID, equal to the requested guild */
@@ -121,14 +135,16 @@ export interface MemberSearchPage {
     readonly pageResultCount: number
     /** Indexed matches observed for this request, which can change before a later offset page */
     readonly totalResultCount: number
-    /** Whether Fluxer reported that it is currently building this guild's member index */
+    /** Whether Fluxer reported that it is currently building this community's member index */
     readonly indexing: boolean
 }
 
 /** Limit how much work members.iterateSearch may perform while reading matching indexed members.
- * maxItems is required through PaginationQuery. Each consumption requests pages only as needed and yields each user
+ * The maxItems option is required through PaginationQuery. Each consumption requests pages only as needed and yields each user
  * at most once, but concurrent index changes can skip members. Index-building pages fail with PaginationError/indexing,
  * and an empty page that cannot advance fails with cursorStalled rather than silently reporting completion
+ *
+ * @category Guilds and members
  */
 export interface MemberSearchIterationLimits extends PaginationQuery {
     /** Indexed hits requested per POST, 1–100 and default 100 */

@@ -1,17 +1,21 @@
+// Gateway recovery over an observation window of at least 165 seconds: three interruptions of this process's own
+// authenticated socket, one with a locally delayed Hello frame, each followed by fresh self and member-stream reads.
+// Creates no journal and no remote resources, and changes no server content
 import assert from "node:assert/strict"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
-import { Cause, Effect, Exit, Scope, Stream } from "effect"
+import { Effect, Exit, Scope, Stream } from "effect"
 import WebSocket from "ws"
+import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createFailureClassifier, createReporter } from "./support/reporting.js"
+import { fromExit, settleExit as value } from "./support/results.js"
+import { readSandbox } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 const cycleOffsetsMs = [0, 55_000, 110_000]
 const observationWindowMs = 165_000
 const recoveryTimeoutMs = 50_000
 const delayedHelloMs = 750
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...details }))
+const report = createReporter({ mode }, { passed: true })
 let stage = "configuration"
 let lock
 let client
@@ -21,50 +25,18 @@ let token
 let guildId
 let botId
 
-function fromExit(exit) {
-    if (Exit.isSuccess(exit)) return exit.value
-    if (Cause.hasDies(exit.cause)) throw Error("Unexpected SDK defect")
-    if (Cause.hasInterruptsOnly(exit.cause)) throw { _tag: "TestInterrupted" }
-    const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-    if (failure?._tag === "Fail") throw failure.error
-    throw Error("Unexpected operation outcome")
-}
+const api = (path) => readSandbox(path, token, { exact: true })
 
-async function value(operation) {
-    if (Effect.isEffect(operation))
-        return fromExit(await Effect.runPromiseExit(/** @type {Effect.Effect<any, any, never>} */ (operation)))
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
-
-async function api(path) {
-    const response = await fetch(`https://api.fluxer.app/v1${path}`, {
-        method: "GET",
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: { Authorization: `Bot ${token}` },
-    })
-    if (response.status !== 200) {
-        await response.body?.cancel()
-        throw Error("Sandbox identity request failed")
-    }
-    return response.json()
-}
-
-function safeFailure(error) {
-    const known = new Set([
+const safeFailure = createFailureClassifier({
+    tags: [
         "ConfigurationError",
         "ConnectionError",
         "ConnectionTimeoutError",
         "MemberChunkError",
         "ClientClosedError",
         "TestInterrupted",
-    ])
-    return {
-        category: known.has(error?._tag) ? error._tag : error?.code === "ERR_ASSERTION" ? "assertion" : "unexpected",
-    }
-}
+    ],
+})
 
 async function waitUntil(target, observationStarted) {
     while (performance.now() - observationStarted < target) {
@@ -276,9 +248,7 @@ async function verifyPostRecovery(cycle) {
 
 async function createDriver(sdk) {
     if (mode === "default") {
-        client = await value(
-            sdk.createClient({ token, connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 } }),
-        )
+        client = sdk.createClient({ token, connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 } })
         return {
             connect: () => value(client.connect()),
             close: () => value(client.shutdown()),
@@ -325,27 +295,19 @@ try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
 
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
-    assert.match(applicationId ?? "", /^[1-9][0-9]*$/)
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
 
     stage = "sandbox_identity"
-    const [application, bot, guild] = await Promise.all([
-        api("/oauth2/applications/@me"),
-        api("/users/@me"),
-        api(`/guilds/${guildId}`),
-    ])
-    assert.equal(application.id, applicationId)
-    assert.equal(bot.bot, true)
-    assert.equal(application.bot?.id, bot.id)
-    assert.equal(guild.id, guildId)
+    const { user: bot } = await verifySandboxIdentity(api, {
+        applicationId: sandbox.applicationId,
+        guildId,
+        applicationPath: "/oauth2/applications/@me",
+        concurrent: true,
+    })
     assert.match(bot.id, /^[1-9][0-9]*$/)
     botId = bot.id
     const botMember = await api(`/guilds/${guildId}/members/${botId}`)
@@ -434,14 +396,8 @@ try {
         probe?.restore()
         if (cleanupVerified) clearTimeout(watchdog)
         if (lock !== undefined && cleanupVerified) {
-            try {
-                assert.equal(readFileSync(lockPath, "utf8"), String(process.pid))
-                closeSync(lock)
-                lock = undefined
-                unlinkSync(lockPath)
-                assert.equal(existsSync(lockPath), false)
-                report("sandbox_lock_released", { lockVerified: true })
-            } catch {
+            if (lock.release()) report("sandbox_lock_released", { lockVerified: true })
+            else {
                 console.log(JSON.stringify({ mode, check: "sandbox_lock_cleanup", passed: false }))
                 process.exitCode = 1
             }

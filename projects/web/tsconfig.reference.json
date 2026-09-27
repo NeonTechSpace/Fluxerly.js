@@ -7,5 +7,5 @@
         "lib": ["ES2024", "DOM", "ESNext.Disposable"],
         "noEmit": true
     },
-    "include": ["../sdk/dist/index.d.ts", "../sdk/dist/effect.d.ts"]
+    "include": ["../sdk/dist/index.d.ts", "../sdk/dist/effect.d.ts", "../sdk/dist/testing.d.ts", "../sdk/dist/effect-testing.d.ts"]
 }

@@ -1,0 +1,8 @@
+# actionlint 1.7.12 predates these GitHub Actions features. Ignore only their unknown-syntax reports
+paths:
+  .github/workflows/*.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+      - 'unexpected key "cache-mode" for "workflow" section'
+      - 'specifying action "\$/\.github/actions/[a-z-]+" in invalid format'
+      - 'reusable workflow call "\$/\.github/workflows/[a-z-]+\.yml"'

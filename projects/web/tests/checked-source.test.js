@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { requireCheckedSource } from "../scripts/checked-source.js"
+import { readGitHub, requireCheckedSource } from "../scripts/checked-source.js"
 
 const source = "a".repeat(40)
 const workflow = { id: 123, path: ".github/workflows/ci.yml", state: "active" }
@@ -35,8 +35,13 @@ test("Exact-source CI reuse verifies workflow, repository, branch, source and cu
         runUrl: "https://github.com/NeonTechSpace/Fluxerly.js/actions/runs/456",
     })
     assert.equal(f.reads.length, 2)
-    assert.match(f.reads[1].path, new RegExp(`head_sha=${source}&branch=main&event=push&per_page=100$`))
-    assert.doesNotMatch(f.reads[1].path, /status=success/)
+    const query = new URL(f.reads[1].path, "https://api.github.test/").searchParams
+    assert.equal(query.get("head_sha"), source)
+    assert.equal(query.get("branch"), "main")
+    assert.equal(query.get("event"), "push")
+    assert.equal(query.get("per_page"), "100")
+    // Filtering by status would let an older passing run hide a newer failed one
+    assert.equal(query.has("status"), false)
     assert.deepEqual(f.sleeps, [])
 })
 
@@ -108,12 +113,30 @@ test("Preparation fallback requires a verified empty inventory, never failed or 
     const missing = fixture([inventory([])])
     assert.equal(await requireCheckedSource(source, missing.io, { allowMissing: true }), null)
     assert.deepEqual(missing.sleeps, [])
-    for (const data of [inventory([{ ...run, conclusion: "failure" }]), {},
-        inventory([run, { ...run, id: 789, conclusion: "cancelled" }])])
-        await assert.rejects(requireCheckedSource(source, fixture([data]).io, { allowMissing: true }))
+    for (const [data, reason] of [
+        [inventory([{ ...run, conclusion: "failure" }]), /456 did not pass/],
+        [{}, /inventory is incomplete or invalid/],
+        [inventory([run, { ...run, id: 789, conclusion: "cancelled" }]), /789 did not pass/],
+    ]) await assert.rejects(requireCheckedSource(source, fixture([data]).io, { allowMissing: true }), reason)
     await assert.rejects(requireCheckedSource(source, { read: async () => { throw new Error("Unavailable") } },
         { allowMissing: true }), /Unavailable/)
     const queued = fixture([inventory([{ ...run, status: "queued", conclusion: null }]), inventory([run])])
     assert.equal((await requireCheckedSource(source, queued.io, { allowMissing: true })).runId, run.id)
     assert.deepEqual(queued.sleeps, [20_000])
+})
+
+test("Unavailable gh evidence surfaces redacted diagnostics instead of discarding them", () => {
+    const token = `ghs_${"a".repeat(36)}`
+    const logs = []
+    const spawned = []
+    const run = (command, args, options) => {
+        spawned.push({ command, stdio: options.stdio })
+        return { status: 1, stdout: "", stderr: `gh: Bad credentials (HTTP 401) for ${token}` }
+    }
+    assert.throws(() => readGitHub("repos/example", 1000, run, (text) => logs.push(text)), /evidence is unavailable/)
+    assert.deepEqual(spawned, [{ command: "gh", stdio: ["ignore", "pipe", "pipe"] }])
+    assert.match(logs.join(""), /Bad credentials \(HTTP 401\)/)
+    assert.ok(!logs.join("").includes(token))
+    const parsed = readGitHub("repos/example", 1000, () => ({ status: 0, stdout: '{"id":1}', stderr: "" }), (text) => logs.push(text))
+    assert.deepEqual(parsed, { id: 1 })
 })

@@ -1,16 +1,20 @@
+// Text validation of role names at the 100-unit boundary: local rejection without dispatch, normalization of the
+// accepted wire value and reconciliation of a lost edit response, using one test-owned zero-permission role.
+// Journal `.env.test.text-validation.local` records sandbox and bot identity, a unique marker and the test role's two
+// candidate names and returned ID. An existing journal is recovered before a new run: the matching zero-permission
+// role is deleted and its absence verified
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
-import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
+import { acquireLock, loadSandboxEnvironment, openJournal, verifySandboxIdentity } from "./support/harness.js"
+import { createOutcomeReporter } from "./support/reporting.js"
+import { createRetryingSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.text-validation.local", import.meta.url)
+const journalFile = openJournal("text-validation")
 const idPattern = /^[1-9][0-9]*$/
 const markerPattern = /^fluxerly-tv-[a-f0-9]{32}$/
-const report = (check, passed = true, details = {}) => console.log(JSON.stringify({ mode, check, passed, ...details }))
+const report = createOutcomeReporter({ mode })
 let stage = "configuration"
 let lock, token, guildId, botId, journal, client, scope, Effect, Exit, Scope
 let identityVerified = false
@@ -25,33 +29,7 @@ function boundaryName(marker, resource, finalAscii) {
     return name
 }
 
-async function api(method, path, body, allowNotFound = false) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-            method,
-            redirect: "error",
-            signal: AbortSignal.timeout(15_000),
-            headers: {
-                Authorization: `Bot ${token}`,
-                ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-            },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        })
-        const data =
-            response.status === 204 ? (await response.body?.cancel(), null) : await response.json().catch(() => null)
-        if (response.status === 429 && attempt < 2) {
-            const retryAfterMs =
-                Math.max(Number(response.headers.get("retry-after")) || 0, Number(data?.retry_after) || 0) * 1_000
-            assert.ok(Number.isFinite(retryAfterMs) && retryAfterMs > 0 && retryAfterMs <= 10_000)
-            await sleep(retryAfterMs)
-            continue
-        }
-        if (!response.ok && !(allowNotFound && response.status === 404))
-            throw Object.assign(new Error("Sandbox HTTP request failed"), { status: response.status })
-        return { status: response.status, data }
-    }
-    throw new Error("Sandbox HTTP request budget exhausted")
-}
+const api = createRetryingSandboxApi({ fetch: rawFetch, token: () => token })
 
 async function value(operation) {
     if (mode === "default") {
@@ -109,7 +87,7 @@ async function observeWrite(method, path, expectedName, operation, loseSuccessfu
     }
 }
 
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+const save = () => journalFile.save(journal)
 
 function validateJournalRole(resource) {
     assert.ok(resource && typeof resource === "object")
@@ -151,7 +129,7 @@ async function cleanup() {
     assert.ok(
         !remainingRoles.data.some((role) => role.id === journal.role.id || journal.role.names.includes(role.name)),
     )
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("test_role_removed", true, { roleAbsent: true })
 }
@@ -165,35 +143,25 @@ try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
 
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", idPattern)
-    assert.match(applicationId ?? "", idPattern)
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
 
     stage = "sandbox_identity"
-    const [application, bot, guild] = await Promise.all([
-        api("GET", "/oauth2/applications/@me"),
-        api("GET", "/users/@me"),
-        api("GET", `/guilds/${guildId}`),
-    ])
-    assert.equal(application.data?.id, applicationId)
-    assert.equal(application.data?.bot?.id, bot.data?.id)
-    assert.equal(bot.data?.bot, true)
-    assert.match(bot.data?.id ?? "", idPattern)
-    assert.equal(guild.data?.id, guildId)
-    botId = bot.data.id
+    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, {
+        ...sandbox,
+        applicationPath: "/oauth2/applications/@me",
+        concurrent: true,
+    })
+    botId = identity.botId
     identityVerified = true
     report(stage, true, { clientSecretUsed: false })
 
     stage = "recover_prior_test"
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
     }
 
@@ -207,14 +175,14 @@ try {
         marker,
         role: { kind: "role", createAttempted: true, names: roleNames },
     }
-    writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+    journalFile.create(journal)
 
     const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
     if (mode === "effect") {
         ;({ Effect, Exit, Scope } = await import("effect"))
         scope = Scope.makeUnsafe()
         client = await value(sdk.createClient({ token }).pipe(Scope.provide(scope)))
-    } else client = await value(sdk.createClient({ token }))
+    } else client = sdk.createClient({ token })
 
     stage = "role_local_rejection_and_recovery"
     let unexpectedDispatches = 0
@@ -300,14 +268,11 @@ try {
             report("resource_cleanup", false, { journalRetained: true })
             process.exitCode = 1
         }
-    if (quiescent && lock !== undefined)
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            quiescent = false
-            report("lock_cleanup", false, { lockRetained: true })
-            process.exitCode = 1
-        }
+    // A failed remote cleanup above also retains the lock and deadline, unlike the shared owned finalizer
+    if (quiescent && lock !== undefined && !lock.release()) {
+        quiescent = false
+        report("lock_cleanup", false, { lockRetained: true })
+        process.exitCode = 1
+    }
     if (quiescent) clearTimeout(watchdog)
 }

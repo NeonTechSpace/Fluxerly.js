@@ -1,18 +1,25 @@
+import { FluxerlyError, operationDetails } from "./errors.js"
+import { operationErrorMessage } from "./api-errors.js"
 import { err, ok, type Result } from "neverthrow"
 import { Permissions } from "./guilds.js"
 import type { GuildMember } from "./guilds.js"
 import type { GuildChannel } from "./channels.js"
 import type { DirectMessageChannel, User } from "./users.js"
 import type { MessageReference } from "./messages.js"
+import { guildShardId, maximumShardCount } from "./internal/sharding.js"
 
 const snowflakeEpochMs = 1_420_070_400_000n
 const snowflakeTimestampShift = 22n
 const largestSnowflake = (1n << 63n) - 1n
 const largestPermissionBits = (1n << 64n) - 1n
 const largestTimestampSeconds = 8_640_000_000_000
-const markdownEscapable = /[\[\]()\\*_~`@#\-|:<>]/gu
+const markdownEscapable = /[[\]()\\*_~`@#\-|:<>]/gu
 
-/** Choose how Fluxer displays a timestamp in a message. The viewer's locale and timezone control its rendered text */
+/**
+ * Choose how Fluxer displays a timestamp in a message. The viewer's locale and timezone control its rendered text
+ *
+ * @category Builders and formatting
+ */
 export const TimestampStyles: Readonly<{
     /** Time without seconds */
     ShortTime: "t"
@@ -44,10 +51,18 @@ export const TimestampStyles: Readonly<{
     RelativeTime: "R",
 })
 
-/** One Fluxer timestamp-markup display style */
+/**
+ * One Fluxer timestamp-markup display style
+ *
+ * @category Builders and formatting
+ */
 export type TimestampStyle = (typeof TimestampStyles)[keyof typeof TimestampStyles]
 
-/** The result of `format.parseMention`. Read `kind` to identify what was mentioned and `id` to get its decimal ID */
+/**
+ * The result of `format.parseMention`. Read `kind` to identify what was mentioned and `id` to get its decimal ID
+ *
+ * @category Builders and formatting
+ */
 export type Mention =
     | {
           /** This mention names a user, including the `<@!id>` spelling */
@@ -68,7 +83,11 @@ export type Mention =
           readonly id: string
       }
 
-/** Custom-emoji fields used by Fluxer's explicit `<:name:id>` or `<a:name:id>` markup */
+/**
+ * Custom-emoji fields used by Fluxer's explicit `<:name:id>` or `<a:name:id>` markup
+ *
+ * @category Builders and formatting
+ */
 export interface CustomEmojiMarkup {
     /** ASCII letters, digits, underscores, or hyphens as accepted by Fluxer's message parser */
     readonly name: string
@@ -78,7 +97,11 @@ export interface CustomEmojiMarkup {
     readonly animated?: boolean
 }
 
-/** One parsed timestamp markup value. `date` has whole-second precision because Fluxer markup has no milliseconds */
+/**
+ * One parsed timestamp markup value. The `date` field has whole-second precision because Fluxer markup has no milliseconds
+ *
+ * @category Builders and formatting
+ */
 export interface TimestampMarkup {
     /** UTC instant represented by the markup */
     readonly date: Date
@@ -86,21 +109,32 @@ export interface TimestampMarkup {
     readonly style: TimestampStyle
 }
 
-/** The channel information needed to make a web link: Its `id` and, for a server channel, its `guildId`.
+/** The channel information needed to make a web link: Its `id` and, for a community channel, its `guildId`.
  * Supply a direct-message channel without `guildId`. Passing `guildId: null` is not the direct-message form
+ *
+ * @category Builders and formatting
  */
 export type ChannelLinkTarget = Pick<GuildChannel, "id" | "guildId"> | Pick<DirectMessageChannel, "id">
 
-/** Optional raw permission bitfield requested by a hosted bot-installation page */
+/**
+ * Optional raw permission bitfield requested by a hosted bot-installation page
+ *
+ * @category Builders and formatting
+ */
 export interface InstallationLinkOptions {
     /** Unsigned 64-bit Fluxer permission bitfield. Omit it to leave the provider's requested permissions unspecified */
     readonly permissions?: bigint
 }
 
-/** A helper could not use its input. Default-API helpers return this in a Result, while native helpers fail with it when run.
+/** A helper could not use its input.
+ * Helpers such as `format.userMention` throw this for invalid input, because passing it is a programming mistake.
+ * The try-prefixed helpers, such as `format.tryParseMention`, report the same error without throwing.
+ * The default API returns it in a Result, while the native API fails with it in the Effect error channel.
  * Read `operation` and `reason` to identify the problem. The error does not store the rejected value
+ *
+ * @category Errors
  */
-export class HelperError extends Error {
+export class HelperError extends FluxerlyError {
     /** Fixed name that identifies this error type */
     readonly _tag = "HelperError"
 
@@ -118,6 +152,7 @@ export class HelperError extends Error {
             | "snowflakes.parse"
             | "snowflakes.createdAt"
             | "snowflakes.boundary"
+            | "snowflakes.shardFor"
             | "permissionBits.has"
             | "permissionBits.from"
             | "permissionBits.hasAll"
@@ -131,20 +166,86 @@ export class HelperError extends Error {
             | "text.split"
             | "links.channel"
             | "links.message"
-            | "links.installation",
+            | "links.installation"
+            | "embed.color"
+            | "embed.timestamp",
         /** Invalid input category, without retaining the rejected value */
-        readonly reason: "id" | "markup" | "time" | "permissionBits" | "link" | "color" | "text" | "limit",
+        readonly reason:
+            "id" | "markup" | "time" | "permissionBits" | "link" | "color" | "text" | "limit" | "shardCount",
+        /** Optional underlying failure retained as the error's cause */
+        options?: { readonly cause?: unknown },
     ) {
-        super(`Invalid input for ${operation}`)
+        super(
+            operationErrorMessage({
+                subject: "Helper",
+                operation,
+                reason: "input",
+                outcome: "notDispatched",
+                inputExplanation: helperExplanation(operation, reason),
+            }),
+            {
+                code: `helper.${reason}`,
+                cause: options?.cause,
+                details: operationDetails({ operation, reason }),
+            },
+        )
         this.name = this._tag
     }
 }
 
-/** A key of Permissions, such as `"ManageMessages"`, accepted by the named permissionBits helpers */
+/** What the helper accepts, for the HelperError message. It never includes the rejected value */
+function helperExplanation(operation: HelperError["operation"], reason: HelperError["reason"]): string {
+    switch (reason) {
+        case "id":
+            return "IDs must be decimal strings from 0 through 9,223,372,036,854,775,807"
+        case "markup":
+            if (operation === "format.parseMention")
+                return "Text must be a user, role, or channel mention such as <@123>"
+            if (operation === "format.parseTimestamp") return "Text must be timestamp markup such as <t:1700000000:R>"
+            if (operation === "format.parseCustomEmoji") return "Text must be custom emoji markup such as <:name:123>"
+            if (operation === "format.timestamp") return "Timestamp style must be one of the TimestampStyles values"
+            return "Custom emoji must have a name of letters, digits, underscores, or hyphens, a decimal id, and an optional boolean animated"
+        case "time":
+            if (operation === "format.parseTimestamp")
+                return "Timestamp markup must hold a time after the Unix epoch that a Date can represent"
+            if (operation === "snowflakes.boundary")
+                return "The Date must be valid, from 2015-01-01T00:00:00Z (the Fluxer ID epoch) through the largest ID time"
+            if (operation === "embed.timestamp")
+                return "Timestamp must be a valid Date, or Unix epoch milliseconds within the Date range"
+            if (operation === "format.timestamp") return "The Date must be valid and after the Unix epoch"
+            return "The Date must be valid"
+        case "permissionBits":
+            return "Permission bits must be a bigint from 0 through 18,446,744,073,709,551,615, and permission names must be keys of Permissions"
+        case "link":
+            if (operation === "links.installation")
+                return "Installation link options must be an object that may contain only permissions"
+            if (operation === "links.message")
+                return "The message must have a decimal id and belong to the given channel, and the channel must have a decimal id and, for a community channel, a decimal guildId"
+            return "The channel must be an object with a decimal id and, for a community channel, a decimal guildId"
+        case "color":
+            return operation === "colors.parse" || operation === "embed.color"
+                ? "Colors must be integers from 0 through 16,777,215, 6-digit hex strings such as #ff8800, or [red, green, blue] arrays of integers from 0 through 255"
+                : "Colors must be integers from 0 through 16,777,215"
+        case "text":
+            return "Text must be a well-formed string without unpaired surrogates"
+        case "limit":
+            return "Split options must be an object with only maxLength, a positive safe integer of at least 2 when the text contains surrogate pairs"
+        case "shardCount":
+            return "The total shard count must be an integer from 1 through 16,384"
+    }
+}
+
+/**
+ * A key of Permissions, such as `"ManageMessages"`, accepted by the named permissionBits helpers
+ *
+ * @category Roles and permissions
+ */
 export type PermissionName = keyof typeof Permissions
 
 /** Known permission names and any unnamed bits found by permissionBits.inspect.
  * This object and its names array are frozen. They do not decide what a user may do
+ *
+ * @category Roles and permissions
  */
 export interface PermissionBitInspection {
     /** Present known names in Permissions declaration order, not sorted by display label */
@@ -185,6 +286,7 @@ function isSnowflake(value: unknown): value is string {
     try {
         return BigInt(value) <= largestSnowflake
     } catch {
+        // allow-silent: a value BigInt cannot parse is not a snowflake
         return false
     }
 }
@@ -241,13 +343,176 @@ function installationPermissions(value: unknown): Result<string | undefined, Hel
     if (Object.keys(input).some((key) => key !== "permissions")) return err(helperError("links.installation", "link"))
     if (input.permissions === undefined) return ok(undefined)
     if (typeof input.permissions !== "bigint") return err(helperError("links.installation", "permissionBits"))
-    const permissions = permissionBits.toDecimal(input.permissions)
-    return permissions.isOk() ? ok(permissions.value) : err(helperError("links.installation", "permissionBits"))
+    return validPermissionBits(input.permissions)
+        ? ok(input.permissions.toString())
+        : err(helperError("links.installation", "permissionBits"))
 }
 
 /**
+ * Return a successful helper value, or throw the helper's expected error for invalid input.
+ * Plain public helpers use this over their Result-returning cores, so both keep identical validation
+ */
+export function valueOrThrow<A, E>(result: Result<A, E>): A {
+    if (result.isErr()) throw result.error
+    return result.value
+}
+
+function userMention(id: string): Result<string, HelperError> {
+    return markupId(id, "format.userMention").map((value) => `<@${value}>`)
+}
+
+function roleMention(id: string): Result<string, HelperError> {
+    return markupId(id, "format.roleMention").map((value) => `<@&${value}>`)
+}
+
+function channelMention(id: string): Result<string, HelperError> {
+    return markupId(id, "format.channelMention").map((value) => `<#${value}>`)
+}
+
+function parseMention(value: string): Result<Mention, HelperError> {
+    if (typeof value !== "string") return err(helperError("format.parseMention", "markup"))
+    const user = /^<@!?([0-9]+)>$/u.exec(value)
+    const role = /^<@&([0-9]+)>$/u.exec(value)
+    const channel = /^<#([0-9]+)>$/u.exec(value)
+    if (user && isSnowflake(user[1])) return ok(Object.freeze({ kind: "user" as const, id: user[1] }))
+    if (role && isSnowflake(role[1])) return ok(Object.freeze({ kind: "role" as const, id: role[1] }))
+    if (channel && isSnowflake(channel[1])) return ok(Object.freeze({ kind: "channel" as const, id: channel[1] }))
+    return err(helperError("format.parseMention", "markup"))
+}
+
+function timestamp(value: Date, style: TimestampStyle = TimestampStyles.ShortDateTime): Result<string, HelperError> {
+    const date = timestampDate(value, "format.timestamp")
+    if (date.isErr()) return err(date.error)
+    const resolvedStyle = timestampStyle(style, "format.timestamp")
+    if (resolvedStyle.isErr()) return err(resolvedStyle.error)
+    const seconds = Math.floor(date.value.getTime() / 1_000)
+    if (seconds <= 0 || seconds > largestTimestampSeconds) return err(helperError("format.timestamp", "time"))
+    return ok(`<t:${seconds}:${resolvedStyle.value}>`)
+}
+
+function parseTimestamp(value: string): Result<TimestampMarkup, HelperError> {
+    if (typeof value !== "string") return err(helperError("format.parseTimestamp", "markup"))
+    const match = /^<t:([0-9]+)(?::([tTdDfFsSR]))?>$/u.exec(value)
+    if (!match) return err(helperError("format.parseTimestamp", "markup"))
+    const seconds = Number(match[1])
+    if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > largestTimestampSeconds)
+        return err(helperError("format.parseTimestamp", "time"))
+    const style = (match[2] ?? TimestampStyles.ShortDateTime) as TimestampStyle
+    return ok(Object.freeze({ date: new Date(seconds * 1_000), style }))
+}
+
+function customEmojiMarkup(input: CustomEmojiMarkup): Result<string, HelperError> {
+    return customEmoji(input, "format.customEmoji").map(
+        (value) => `<${value.animated === true ? "a" : ""}:${value.name}:${value.id}>`,
+    )
+}
+
+function parseCustomEmoji(value: string): Result<CustomEmojiMarkup, HelperError> {
+    if (typeof value !== "string") return err(helperError("format.parseCustomEmoji", "markup"))
+    const match = /^<(a?):([A-Za-z0-9_-]+):([0-9]+)>$/u.exec(value)
+    if (!match) return err(helperError("format.parseCustomEmoji", "markup"))
+    return customEmoji(
+        { name: match[2]!, id: match[3]!, ...(match[1] === "a" ? { animated: true } : {}) },
+        "format.parseCustomEmoji",
+    )
+}
+
+/**
+ * Methods of the format helper, which creates and reads mention, timestamp and custom-emoji markup and escapes Markdown.
+ * Most methods return plain values and throw HelperError for invalid input.
+ * The try-prefixed parsers accept untrusted text and return a Result instead of throwing
+ *
+ * @category Builders and formatting
+ */
+export type FormatHelpers = Readonly<{
+    /**
+     * Add backslashes so text is treated literally by Fluxer's markup parser, for example escaping `**bold**`.
+     * Returns the escaped string immediately and never throws for string input.
+     * It does not change a message's `allowedMentions` or enable notifications
+     */
+    escapeMarkdown(value: string): string
+    /**
+     * Create `<@id>` text for a decimal user ID, such as `<@123>`, and return it directly.
+     * Throws HelperError when the ID is not a valid decimal-string snowflake.
+     * This does not look up the user, and allowedMentions must be set separately to request a notification
+     */
+    userMention(id: string): string
+    /**
+     * Create `<@&id>` text for a decimal role ID, such as `<@&123>`, and return it directly.
+     * Throws HelperError for an invalid ID.
+     * Role members are not notified merely because this text appears in a message, and allowedMentions must be set separately
+     */
+    roleMention(id: string): string
+    /**
+     * Create `<#id>` text linking to a channel, such as `<#123>`, and return it directly.
+     * Throws HelperError for an invalid decimal-string ID, and no channel lookup occurs
+     */
+    channelMention(id: string): string
+    /**
+     * Read a string containing exactly one user, role or channel mention into a frozen `{ kind, id }` object.
+     * Both `<@id>` and `<@!id>` produce kind `"user"`.
+     * Throws HelperError for surrounding text, malformed markup or an invalid decimal ID.
+     * For text received from users, use tryParseMention, which reports the same HelperError without throwing
+     */
+    parseMention(value: string): Mention
+    /**
+     * Read a mention with the same rules as parseMention, but report invalid text without throwing.
+     * The default API returns a Result holding the frozen `{ kind, id }` object or HelperError.
+     * The native API returns an Effect that reads the text when run and fails with HelperError.
+     * Use it for text received from users or other untrusted sources
+     */
+    tryParseMention(value: string): Result<Mention, HelperError>
+    /**
+     * Create `<t:seconds:style>` message text from a Date, which Fluxer displays in the reader's local time.
+     * The style defaults to ShortDateTime, and milliseconds are dropped.
+     * The whole Unix second must be from 1 through 8_640_000_000_000.
+     * Throws HelperError for an invalid Date, a time outside that range or an unsupported style.
+     * The input Date is not changed
+     */
+    timestamp(value: Date, style?: TimestampStyle): string
+    /**
+     * Read exactly one `<t:seconds:style>` or `<t:seconds>` string into a frozen object with a new Date and style.
+     * A missing style becomes ShortDateTime.
+     * The Date has whole-second precision.
+     * Throws HelperError for malformed markup, nonpositive seconds or dates outside JavaScript's range.
+     * For text received from users, use tryParseTimestamp, which reports the same HelperError without throwing
+     */
+    parseTimestamp(value: string): TimestampMarkup
+    /**
+     * Read timestamp markup with the same rules as parseTimestamp, but report invalid text without throwing.
+     * The default API returns a Result holding the frozen date and style or HelperError.
+     * The native API returns an Effect that reads the text when run and fails with HelperError.
+     * Use it for text received from users or other untrusted sources
+     */
+    tryParseTimestamp(value: string): Result<TimestampMarkup, HelperError>
+    /**
+     * Create `<:name:id>` text, or `<a:name:id>` when animated is true.
+     * A GuildEmoji can be passed directly.
+     * Throws HelperError for invalid names, IDs or animation values.
+     * This does not upload or look up an emoji
+     */
+    customEmoji(input: CustomEmojiMarkup): string
+    /**
+     * Read exactly one `<:name:id>` or `<a:name:id>` string into frozen name, ID and animated fields.
+     * Throws HelperError for malformed markup.
+     * This does not resolve shortcodes such as `:smile:` or parse Unicode emoji.
+     * For text received from users, use tryParseCustomEmoji, which reports the same HelperError without throwing
+     */
+    parseCustomEmoji(value: string): CustomEmojiMarkup
+    /**
+     * Read custom-emoji markup with the same rules as parseCustomEmoji, but report invalid text without throwing.
+     * The default API returns a Result holding the frozen name, ID and animated fields or HelperError.
+     * The native API returns an Effect that reads the text when run and fails with HelperError.
+     * Use it for text received from users or other untrusted sources
+     */
+    tryParseCustomEmoji(value: string): Result<CustomEmojiMarkup, HelperError>
+}>
+
+/**
  * Create or read Fluxer's special message text, such as mentions, timestamps and custom emoji.
- * Fallible methods return a Result immediately. Use `isOk()` before reading `value`, or `isErr()` before reading `error`.
+ * Most methods return plain values and throw HelperError for invalid input, which indicates a programming mistake.
+ * For text received from users, the try-prefixed parsers return a Result instead.
+ * Use `isOk()` before reading `value`, or `isErr()` before reading `error`.
  * Formatting a mention only creates text, it cannot enable notifications.
  * Keep message notification intent explicit with `allowedMentions` when sending that text
  *
@@ -264,267 +529,284 @@ function installationPermissions(value: unknown): Result<string | undefined, Hel
  * }
  * ```
  */
-export const format: Readonly<{
-    /** Add backslashes so text is treated literally by Fluxer's markup parser, for example escaping `**bold**`.
-     * Returns a string directly, not a Result. It does not change a message's `allowedMentions`
-     */
-    escapeMarkdown(value: string): string
-    /** Create `<@id>` text for a user ID. Returns HelperError if the ID is not a valid decimal-string snowflake.
-     * This does not look up the user or enable notifications when the text is sent
-     */
-    userMention(id: string): Result<string, HelperError>
-    /** Create `<@&id>` text for a role ID. Invalid decimal-string IDs return HelperError.
-     * Role members are not notified merely because this text appears in a message
-     */
-    roleMention(id: string): Result<string, HelperError>
-    /** Create `<#id>` text linking to a channel. Invalid decimal-string IDs return HelperError, no channel lookup occurs */
-    channelMention(id: string): Result<string, HelperError>
-    /** Read a string containing exactly one user, role or channel mention into a frozen `{ kind, id }` object.
-     * Both `<@id>` and `<@!id>` produce kind `"user"`. Surrounding text or malformed markup returns HelperError
-     */
-    parseMention(value: string): Result<Mention, HelperError>
-    /** Create `<t:seconds:style>` message text from a Date, using ShortDateTime when style is omitted.
-     * Milliseconds are dropped. The whole Unix second must be from 1 through 8_640_000_000_000.
-     * Invalid Dates, earlier times or unsupported styles return HelperError. The input Date is not changed
-     */
-    timestamp(value: Date, style?: TimestampStyle): Result<string, HelperError>
-    /** Read exactly one `<t:seconds:style>` or `<t:seconds>` string into a frozen object with a new Date and style.
-     * A missing style becomes ShortDateTime. The Date has whole-second precision.
-     * Malformed markup, nonpositive seconds or dates outside JavaScript's range return HelperError
-     */
-    parseTimestamp(value: string): Result<TimestampMarkup, HelperError>
-    /** Create `<:name:id>` text, or `<a:name:id>` when animated is true. A GuildEmoji can be passed directly.
-     * Invalid names, IDs or animation values return HelperError. This does not upload or look up an emoji
-     */
-    customEmoji(input: CustomEmojiMarkup): Result<string, HelperError>
-    /** Read exactly one `<:name:id>` or `<a:name:id>` string into frozen emoji fields.
-     * Malformed markup returns HelperError. This does not resolve shortcodes such as `:smile:` or Unicode emoji
-     */
-    parseCustomEmoji(value: string): Result<CustomEmojiMarkup, HelperError>
-}> = Object.freeze({
+export const format: FormatHelpers = Object.freeze({
     escapeMarkdown(value: string): string {
         return value.replace(markdownEscapable, "\\$&")
     },
-    userMention(id: string): Result<string, HelperError> {
-        return markupId(id, "format.userMention").map((value) => `<@${value}>`)
-    },
-    roleMention(id: string): Result<string, HelperError> {
-        return markupId(id, "format.roleMention").map((value) => `<@&${value}>`)
-    },
-    channelMention(id: string): Result<string, HelperError> {
-        return markupId(id, "format.channelMention").map((value) => `<#${value}>`)
-    },
-    parseMention(value: string): Result<Mention, HelperError> {
-        if (typeof value !== "string") return err(helperError("format.parseMention", "markup"))
-        const user = /^<@!?([0-9]+)>$/u.exec(value)
-        const role = /^<@&([0-9]+)>$/u.exec(value)
-        const channel = /^<#([0-9]+)>$/u.exec(value)
-        if (user && isSnowflake(user[1])) return ok(Object.freeze({ kind: "user" as const, id: user[1] }))
-        if (role && isSnowflake(role[1])) return ok(Object.freeze({ kind: "role" as const, id: role[1] }))
-        if (channel && isSnowflake(channel[1])) return ok(Object.freeze({ kind: "channel" as const, id: channel[1] }))
-        return err(helperError("format.parseMention", "markup"))
-    },
-    timestamp(value: Date, style: TimestampStyle = TimestampStyles.ShortDateTime): Result<string, HelperError> {
-        const date = timestampDate(value, "format.timestamp")
-        if (date.isErr()) return err(date.error)
-        const resolvedStyle = timestampStyle(style, "format.timestamp")
-        if (resolvedStyle.isErr()) return err(resolvedStyle.error)
-        const seconds = Math.floor(date.value.getTime() / 1_000)
-        if (seconds <= 0 || seconds > largestTimestampSeconds) return err(helperError("format.timestamp", "time"))
-        return ok(`<t:${seconds}:${resolvedStyle.value}>`)
-    },
-    parseTimestamp(value: string): Result<TimestampMarkup, HelperError> {
-        if (typeof value !== "string") return err(helperError("format.parseTimestamp", "markup"))
-        const match = /^<t:([0-9]+)(?::([tTdDfFsSR]))?>$/u.exec(value)
-        if (!match) return err(helperError("format.parseTimestamp", "markup"))
-        const seconds = Number(match[1])
-        if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > largestTimestampSeconds)
-            return err(helperError("format.parseTimestamp", "time"))
-        const style = (match[2] ?? TimestampStyles.ShortDateTime) as TimestampStyle
-        return ok(Object.freeze({ date: new Date(seconds * 1_000), style }))
-    },
-    customEmoji(input: CustomEmojiMarkup): Result<string, HelperError> {
-        return customEmoji(input, "format.customEmoji").map(
-            (value) => `<${value.animated === true ? "a" : ""}:${value.name}:${value.id}>`,
-        )
-    },
-    parseCustomEmoji(value: string): Result<CustomEmojiMarkup, HelperError> {
-        if (typeof value !== "string") return err(helperError("format.parseCustomEmoji", "markup"))
-        const match = /^<(a?):([A-Za-z0-9_-]+):([0-9]+)>$/u.exec(value)
-        if (!match) return err(helperError("format.parseCustomEmoji", "markup"))
-        return customEmoji(
-            { name: match[2]!, id: match[3]!, ...(match[1] === "a" ? { animated: true } : {}) },
-            "format.parseCustomEmoji",
-        )
-    },
+    userMention: (id: string): string => valueOrThrow(userMention(id)),
+    roleMention: (id: string): string => valueOrThrow(roleMention(id)),
+    channelMention: (id: string): string => valueOrThrow(channelMention(id)),
+    parseMention: (value: string): Mention => valueOrThrow(parseMention(value)),
+    tryParseMention: parseMention,
+    timestamp: (value: Date, style?: TimestampStyle): string => valueOrThrow(timestamp(value, style)),
+    parseTimestamp: (value: string): TimestampMarkup => valueOrThrow(parseTimestamp(value)),
+    tryParseTimestamp: parseTimestamp,
+    customEmoji: (input: CustomEmojiMarkup): string => valueOrThrow(customEmojiMarkup(input)),
+    parseCustomEmoji: (value: string): CustomEmojiMarkup => valueOrThrow(parseCustomEmoji(value)),
+    tryParseCustomEmoji: parseCustomEmoji,
 })
 
-/** Inspect Fluxer IDs, called snowflakes, or make time-based pagination boundaries.
- * IDs stay decimal strings or bigint because JavaScript numbers cannot represent every 64-bit ID exactly
+/**
+ * Methods of the snowflakes helper, which reads and converts decimal Fluxer IDs without losing precision
+ *
+ * @category Builders and formatting
  */
-export const snowflakes: Readonly<{
-    /** Return true for a decimal string from `"0"` through `"9223372036854775807"`, with no extra leading zeroes.
-     * Returns false for numbers, whitespace and invalid strings rather than returning an error
+export type SnowflakeHelpers = Readonly<{
+    /**
+     * Return true for a decimal string from `"0"` through `"9223372036854775807"`, with no extra leading zeroes.
+     * Returns false immediately for numbers, whitespace and invalid strings, without converting through Number or failing
      */
     isValid(value: unknown): value is string
-    /** Convert a valid decimal-string ID to bigint without losing precision. An invalid ID returns HelperError */
-    parse(value: string): Result<bigint, HelperError>
-    /** Return a new Date for the creation time encoded in an ID. An invalid ID returns HelperError.
-     * This decodes the ID's high timestamp bits relative to 2015-01-01 UTC, it does not fetch the resource or prove it is visible
+    /**
+     * Convert a valid decimal-string ID to bigint without losing precision.
+     * Throws HelperError for an invalid ID.
+     * For IDs received from users, use tryParse, which reports the same HelperError without throwing
      */
-    createdAt(value: string): Result<Date, HelperError>
-    /** Make the smallest ID for a Date's exact millisecond, useful as a time-based pagination boundary.
-     * Returns HelperError for an invalid Date, a date before 2015-01-01 UTC or a result outside the ID range.
-     * This does not create a resource. Whether the boundary is included depends on the endpoint using it
+    parse(value: string): bigint
+    /**
+     * Convert a decimal-string ID with the same rules as parse, but report an invalid ID without throwing.
+     * The default API returns a Result holding the bigint or HelperError.
+     * The native API returns an Effect that reads the ID when run and fails with HelperError.
+     * Use it for IDs received from users or other untrusted sources
      */
-    boundary(value: Date): Result<string, HelperError>
-}> = Object.freeze({
+    tryParse(value: string): Result<bigint, HelperError>
+    /**
+     * Return a new UTC Date for the creation time encoded in an ID.
+     * Throws HelperError for an invalid ID.
+     * This decodes the ID's high 41 timestamp bits relative to 2015-01-01 UTC, and does not fetch the resource or prove it is visible
+     */
+    createdAt(value: string): Date
+    /**
+     * Make the smallest ID for a Date's exact UTC millisecond, useful as a time-based pagination boundary.
+     * Throws HelperError for an invalid Date, a date before 2015-01-01 UTC or a result outside the ID range.
+     * This does not create a resource.
+     * Whether the boundary is included depends on the endpoint using it
+     */
+    boundary(value: Date): string
+    /**
+     * Return the shard that receives a community's gateway events when the bot runs totalShards shards.
+     * Fluxer calls a community a guild, so the first argument is a guild ID.
+     * Fluxer routes each community with (guildId >> 22) % totalShards, and this helper applies the same formula.
+     * Use it to find which process owns a community when shards run in several processes.
+     * Throws HelperError for an invalid ID or a totalShards outside 1 through 16,384.
+     * It does not check whether the bot belongs to that community
+     */
+    shardFor(guildId: string, totalShards: number): number
+}>
+
+function parseSnowflake(value: string): Result<bigint, HelperError> {
+    return snowflake(value, "snowflakes.parse")
+}
+
+function snowflakeBoundary(value: Date): Result<string, HelperError> {
+    const date = timestampDate(value, "snowflakes.boundary")
+    if (date.isErr()) return err(date.error)
+    const unixMs = BigInt(date.value.getTime())
+    if (unixMs < snowflakeEpochMs) return err(helperError("snowflakes.boundary", "time"))
+    const boundary = (unixMs - snowflakeEpochMs) << snowflakeTimestampShift
+    return boundary <= largestSnowflake ? ok(boundary.toString()) : err(helperError("snowflakes.boundary", "time"))
+}
+
+/** Inspect Fluxer IDs, called snowflakes, or make time-based pagination boundaries.
+ * IDs stay decimal strings or bigint because JavaScript numbers cannot represent every 64-bit ID exactly.
+ * Conversions return plain values and throw HelperError for invalid input, while tryParse returns a Result
+ */
+export const snowflakes: SnowflakeHelpers = Object.freeze({
     isValid(value: unknown): value is string {
         return isSnowflake(value)
     },
-    parse(value: string): Result<bigint, HelperError> {
-        return snowflake(value, "snowflakes.parse")
-    },
-    createdAt(value: string): Result<Date, HelperError> {
-        return snowflake(value, "snowflakes.createdAt").map(
-            (id) => new Date(Number((id >> snowflakeTimestampShift) + snowflakeEpochMs)),
+    parse: (value: string): bigint => valueOrThrow(parseSnowflake(value)),
+    tryParse: parseSnowflake,
+    createdAt: (value: string): Date =>
+        valueOrThrow(
+            snowflake(value, "snowflakes.createdAt").map(
+                (id) => new Date(Number((id >> snowflakeTimestampShift) + snowflakeEpochMs)),
+            ),
+        ),
+    boundary: (value: Date): string => valueOrThrow(snowflakeBoundary(value)),
+    shardFor: (guildId: string, totalShards: number): number => {
+        valueOrThrow(snowflake(guildId, "snowflakes.shardFor"))
+        if (
+            typeof totalShards !== "number" ||
+            !Number.isSafeInteger(totalShards) ||
+            totalShards < 1 ||
+            totalShards > maximumShardCount
         )
-    },
-    boundary(value: Date): Result<string, HelperError> {
-        const date = timestampDate(value, "snowflakes.boundary")
-        if (date.isErr()) return err(date.error)
-        const unixMs = BigInt(date.value.getTime())
-        if (unixMs < snowflakeEpochMs) return err(helperError("snowflakes.boundary", "time"))
-        const boundary = (unixMs - snowflakeEpochMs) << snowflakeTimestampShift
-        return boundary <= largestSnowflake ? ok(boundary.toString()) : err(helperError("snowflakes.boundary", "time"))
+            throw helperError("snowflakes.shardFor", "shardCount")
+        return guildShardId(guildId, totalShards)
     },
 })
 
-/** Choose a name to show from user and optional server-member information already held by the application */
-export const display: Readonly<{
+/**
+ * Methods of the display helper, which chooses a display name from supplied user or member data
+ *
+ * @category Builders and formatting
+ */
+export type DisplayHelpers = Readonly<{
     /** Return the member's nickname, otherwise the user's displayName, otherwise username.
      * Only null or undefined trigger a fallback. Supply a member for the same user, this helper does not check identity or fetch data
      */
-    name(user: Pick<User, "username" | "displayName">, member?: Pick<GuildMember, "nickname">): string
-}> = Object.freeze({
-    name(user: Pick<User, "username" | "displayName">, member?: Pick<GuildMember, "nickname">): string {
+    name(
+        user: Pick<User, "username"> & { readonly displayName?: string | null },
+        member?: Pick<GuildMember, "nickname">,
+    ): string
+}>
+
+/** Choose a name to show from user and optional community member information already held by the application */
+export const display: DisplayHelpers = Object.freeze({
+    name(
+        user: Pick<User, "username"> & { readonly displayName?: string | null },
+        member?: Pick<GuildMember, "nickname">,
+    ): string {
         return member?.nickname ?? user.displayName ?? user.username
     },
 })
 
-/** Work with sets of named permissions stored in a bigint bitfield, without writing bitwise expressions yourself.
- * Each method returns a Result. Invalid names or values outside unsigned 64-bit bigint range return HelperError.
+/**
+ * Methods of the permissionBits helper, which builds and inspects raw bigint permission flags.
+ * Each method returns a plain value and throws HelperError for invalid input
+ *
+ * @category Roles and permissions
+ */
+export type PermissionBitHelpers = Readonly<{
+    /**
+     * Combine names such as `["ManageMessages", "ManageRoles"]` into one bigint permission set for role or overwrite inputs.
+     * An empty array gives 0n, and duplicates have no extra effect.
+     * Administrator remains one flag rather than expanding to all permissions.
+     * Throws HelperError for an unknown name
+     */
+    from(names: readonly PermissionName[]): bigint
+    /**
+     * Return whether bits contains one named permission.
+     * Throws HelperError for bits outside the unsigned 64-bit bigint range or an unknown permission name.
+     * This does not calculate inherited permissions or authorize an action
+     */
+    has(bits: bigint, permission: PermissionName): boolean
+    /**
+     * Return true if bits contains every requested permission, including true for an empty names array.
+     * Every name is validated even if a permission is missing, and unknown bits are unchanged.
+     * Throws HelperError for invalid bits or unknown names
+     */
+    hasAll(bits: bigint, names: readonly PermissionName[]): boolean
+    /**
+     * Return true if bits contains at least one requested permission, or false for an empty names array.
+     * Every name is validated even after finding a match.
+     * Throws HelperError for invalid bits or unknown names
+     */
+    hasAny(bits: bigint, names: readonly PermissionName[]): boolean
+    /**
+     * List requested permissions absent from bits, in the order first requested and without duplicates.
+     * Returns a frozen array, empty if nothing is missing, and input arrays are not changed.
+     * Throws HelperError for invalid bits or unknown names
+     */
+    missing(bits: bigint, names: readonly PermissionName[]): readonly PermissionName[]
+    /**
+     * Return a frozen object listing present known names and any remaining flags as unknownBits.
+     * Names follow Permissions declaration order.
+     * Unknown flags are preserved, and Administrator does not add other names.
+     * Throws HelperError for bits outside the unsigned 64-bit range
+     */
+    inspect(bits: bigint): PermissionBitInspection
+    /**
+     * Convert unsigned 64-bit bigint permission bits to the decimal string used in Fluxer JSON requests and URLs.
+     * Throws HelperError for values outside that range
+     */
+    toDecimal(bits: bigint): string
+}>
+
+/** Work with sets of named permissions stored in a bigint bitfield, without writing bitwise expressions by hand.
+ * Each method returns a plain value. Invalid names or values outside unsigned 64-bit bigint range throw HelperError.
  * These inspect stored flags only, they do not expand Administrator, apply channel overrides or decide whether an action is allowed
  */
-export const permissionBits: Readonly<{
-    /** Combine names such as `["ManageMessages", "ManageRoles"]` into one bigint permission set.
-     * An empty array gives 0n, duplicates have no extra effect. An unknown name returns HelperError
-     */
-    from(names: readonly PermissionName[]): Result<bigint, HelperError>
-    /** Return whether bits contains one named permission. Invalid bigint values or an unknown permission name return HelperError */
-    has(bits: bigint, permission: PermissionName): Result<boolean, HelperError>
-    /** Return true if bits contains every requested permission, including true for an empty names array.
-     * Validates every name even if a permission is missing. Invalid bits or unknown names return HelperError
-     */
-    hasAll(bits: bigint, names: readonly PermissionName[]): Result<boolean, HelperError>
-    /** Return true if bits contains at least one requested permission, or false for an empty names array.
-     * Validates every name even after finding a match. Invalid bits or unknown names return HelperError
-     */
-    hasAny(bits: bigint, names: readonly PermissionName[]): Result<boolean, HelperError>
-    /** List requested permissions absent from bits, in the order first requested and without duplicates.
-     * Returns a frozen array, empty if nothing is missing. Invalid bits or unknown names return HelperError, input arrays are not changed
-     */
-    missing(bits: bigint, names: readonly PermissionName[]): Result<readonly PermissionName[], HelperError>
-    /** Return a frozen object listing present known names and any remaining flags as unknownBits.
-     * Names follow Permissions declaration order. Unknown flags are preserved, Administrator does not add other names.
-     * Invalid bits return HelperError
-     */
-    inspect(bits: bigint): Result<PermissionBitInspection, HelperError>
-    /** Convert bigint permission bits to a decimal string for JSON or a URL. Invalid unsigned-64-bit bigint values return HelperError */
-    toDecimal(bits: bigint): Result<string, HelperError>
-}> = Object.freeze({
-    from(names: readonly PermissionName[]): Result<bigint, HelperError> {
-        return namedPermissions(names, "permissionBits.from")
-    },
-    has(bits: bigint, permission: PermissionName): Result<boolean, HelperError> {
+export const permissionBits: PermissionBitHelpers = Object.freeze({
+    from: (names: readonly PermissionName[]): bigint => valueOrThrow(namedPermissions(names, "permissionBits.from")),
+    has(bits: bigint, permission: PermissionName): boolean {
         if (typeof bits !== "bigint" || bits < 0n || bits > largestPermissionBits)
-            return err(helperError("permissionBits.has", "permissionBits"))
+            throw helperError("permissionBits.has", "permissionBits")
         if (typeof permission !== "string" || !Object.hasOwn(Permissions, permission))
-            return err(helperError("permissionBits.has", "permissionBits"))
+            throw helperError("permissionBits.has", "permissionBits")
         const flag = Permissions[permission as PermissionName]
-        return ok((bits & flag) === flag)
+        return (bits & flag) === flag
     },
-    hasAll(bits: bigint, names: readonly PermissionName[]): Result<boolean, HelperError> {
-        if (!validPermissionBits(bits)) return err(helperError("permissionBits.hasAll", "permissionBits"))
-        return namedPermissions(names, "permissionBits.hasAll").map((required) => (bits & required) === required)
+    hasAll(bits: bigint, names: readonly PermissionName[]): boolean {
+        if (!validPermissionBits(bits)) throw helperError("permissionBits.hasAll", "permissionBits")
+        const required = valueOrThrow(namedPermissions(names, "permissionBits.hasAll"))
+        return (bits & required) === required
     },
-    hasAny(bits: bigint, names: readonly PermissionName[]): Result<boolean, HelperError> {
-        if (!validPermissionBits(bits)) return err(helperError("permissionBits.hasAny", "permissionBits"))
-        return namedPermissions(names, "permissionBits.hasAny").map((required) => (bits & required) !== 0n)
+    hasAny(bits: bigint, names: readonly PermissionName[]): boolean {
+        if (!validPermissionBits(bits)) throw helperError("permissionBits.hasAny", "permissionBits")
+        return (bits & valueOrThrow(namedPermissions(names, "permissionBits.hasAny"))) !== 0n
     },
-    missing(bits: bigint, names: readonly PermissionName[]): Result<readonly PermissionName[], HelperError> {
-        if (!validPermissionBits(bits)) return err(helperError("permissionBits.missing", "permissionBits"))
-        const required = namedPermissions(names, "permissionBits.missing")
-        if (required.isErr()) return err(required.error)
-        return ok(Object.freeze([...new Set(names)].filter((name) => (bits & Permissions[name]) !== Permissions[name])))
+    missing(bits: bigint, names: readonly PermissionName[]): readonly PermissionName[] {
+        if (!validPermissionBits(bits)) throw helperError("permissionBits.missing", "permissionBits")
+        valueOrThrow(namedPermissions(names, "permissionBits.missing"))
+        return Object.freeze([...new Set(names)].filter((name) => (bits & Permissions[name]) !== Permissions[name]))
     },
-    inspect(bits: bigint): Result<PermissionBitInspection, HelperError> {
-        if (!validPermissionBits(bits)) return err(helperError("permissionBits.inspect", "permissionBits"))
-        return ok(
-            Object.freeze({
-                names: Object.freeze(
-                    permissionNames.filter((name) => (bits & Permissions[name]) === Permissions[name]),
-                ),
-                unknownBits: bits & (largestPermissionBits ^ knownPermissionBits),
-            }),
-        )
+    inspect(bits: bigint): PermissionBitInspection {
+        if (!validPermissionBits(bits)) throw helperError("permissionBits.inspect", "permissionBits")
+        return Object.freeze({
+            names: Object.freeze(permissionNames.filter((name) => (bits & Permissions[name]) === Permissions[name])),
+            unknownBits: bits & (largestPermissionBits ^ knownPermissionBits),
+        })
     },
-    toDecimal(bits: bigint): Result<string, HelperError> {
-        return typeof bits === "bigint" && bits >= 0n && bits <= largestPermissionBits
-            ? ok(bits.toString())
-            : err(helperError("permissionBits.toDecimal", "permissionBits"))
+    toDecimal(bits: bigint): string {
+        if (!validPermissionBits(bits)) throw helperError("permissionBits.toDecimal", "permissionBits")
+        return bits.toString()
     },
 })
 
-/** Make URLs for opening channels, messages or bot installation in the hosted Fluxer app.
- * Each method returns a Result containing the URL or HelperError for invalid input. No browser is opened and no access or existence check is made
+/**
+ * Methods of the links helper, which builds Fluxer channel, message and installation URLs.
+ * Each method returns the URL directly and throws HelperError for invalid input
+ *
+ * @category Builders and formatting
  */
-export const links: Readonly<{
-    /** Build a hosted guild-channel or direct-message route. DirectMessageChannel inputs use Fluxer's `/channels/@me/:channelId` route */
-    channel(target: ChannelLinkTarget): Result<string, HelperError>
-    /** Build a hosted message route in the supplied actual guild-channel or direct-message context. It does not infer private versus guild context from the message alone */
-    message(message: MessageReference, channel: ChannelLinkTarget): Result<string, HelperError>
-    /** Build a URL for Fluxer's hosted bot-installation page with the fixed `bot` scope and optional unsigned-64-bit permissions.
-     * This does not open the page, authorize installation or check whether the application exists.
-     * An alternate origin or scope is not accepted
+export type LinkHelpers = Readonly<{
+    /**
+     * Build a hosted community-channel or direct-message URL from `{ id, guildId }` for a community channel or `{ id }` for a private conversation.
+     * DirectMessageChannel inputs use Fluxer's `/channels/@me/:channelId` route.
+     * Throws HelperError for invalid decimal IDs.
+     * A URL does not prove the channel exists or the reader can open it
      */
-    installation(applicationId: string, options?: InstallationLinkOptions): Result<string, HelperError>
-}> = Object.freeze({
-    channel(target: ChannelLinkTarget): Result<string, HelperError> {
-        return channelLink(target, "links.channel").map(({ id, guildId }) =>
-            guildId === null ? `https://fluxer.app/channels/@me/${id}` : `https://fluxer.app/channels/${guildId}/${id}`,
-        )
+    channel(target: ChannelLinkTarget): string
+    /**
+     * Build a hosted message URL in the supplied actual community-channel or direct-message context.
+     * Message and channel IDs must match, otherwise the call throws HelperError.
+     * Private versus community context is not inferred from the message alone, and access is not checked
+     */
+    message(message: MessageReference, channel: ChannelLinkTarget): string
+    /**
+     * Build a URL for Fluxer's hosted bot-installation page from an application ID, with the fixed `bot` scope and optional unsigned 64-bit permissions.
+     * Throws HelperError for invalid IDs or options, and an alternate origin or scope is not accepted.
+     * This does not open the page, install the bot, authorize permissions or check whether the application exists
+     */
+    installation(applicationId: string, options?: InstallationLinkOptions): string
+}>
+
+/** Make URLs for opening channels, messages or bot installation in the hosted Fluxer app.
+ * Each method returns the URL directly and throws HelperError for invalid input. No browser is opened and no access or existence check is made
+ */
+export const links: LinkHelpers = Object.freeze({
+    channel(target: ChannelLinkTarget): string {
+        const { id, guildId } = valueOrThrow(channelLink(target, "links.channel"))
+        return guildId === null
+            ? `https://fluxer.app/channels/@me/${id}`
+            : `https://fluxer.app/channels/${guildId}/${id}`
     },
-    message(message: MessageReference, channel: ChannelLinkTarget): Result<string, HelperError> {
-        const resolvedChannel = channelLink(channel, "links.message")
-        if (resolvedChannel.isErr()) return err(resolvedChannel.error)
+    message(message: MessageReference, channel: ChannelLinkTarget): string {
+        const resolvedChannel = valueOrThrow(channelLink(channel, "links.message"))
         const id = markupId(message?.id, "links.message")
-        if (id.isErr() || message?.channelId !== resolvedChannel.value.id)
-            return err(helperError("links.message", "link"))
-        return ok(
-            resolvedChannel.value.guildId === null
-                ? `https://fluxer.app/channels/@me/${resolvedChannel.value.id}/${id.value}`
-                : `https://fluxer.app/channels/${resolvedChannel.value.guildId}/${resolvedChannel.value.id}/${id.value}`,
-        )
+        if (id.isErr() || message?.channelId !== resolvedChannel.id) throw helperError("links.message", "link")
+        return resolvedChannel.guildId === null
+            ? `https://fluxer.app/channels/@me/${resolvedChannel.id}/${id.value}`
+            : `https://fluxer.app/channels/${resolvedChannel.guildId}/${resolvedChannel.id}/${id.value}`
     },
-    installation(applicationId: string, options?: InstallationLinkOptions): Result<string, HelperError> {
-        const id = markupId(applicationId, "links.installation")
-        if (id.isErr()) return err(id.error)
-        const permissions = installationPermissions(options)
-        if (permissions.isErr()) return err(permissions.error)
-        const query = new URLSearchParams({ client_id: id.value, scope: "bot" })
-        if (permissions.value !== undefined) query.set("permissions", permissions.value)
-        return ok(`https://fluxer.app/oauth2/authorize?${query}`)
+    installation(applicationId: string, options?: InstallationLinkOptions): string {
+        const id = valueOrThrow(markupId(applicationId, "links.installation"))
+        const permissions = valueOrThrow(installationPermissions(options))
+        const query = new URLSearchParams({ client_id: id, scope: "bot" })
+        if (permissions !== undefined) query.set("permissions", permissions)
+        return `https://fluxer.app/oauth2/authorize?${query}`
     },
 })
 
@@ -532,12 +814,11 @@ export const links: Readonly<{
  * Make channel, message and installation URLs for a validated instance web-app base
  *
  * The hosted `links` export is unchanged.
- * This factory keeps its local input checks and replaces only the hosted application base in successful URLs.
+ * This factory keeps its local input checks, including thrown HelperError, and replaces only the hosted application base in URLs.
  * No network request occurs
  */
-export function createInstanceLinks(webapp: string): typeof links {
-    const project = (value: Result<string, HelperError>): Result<string, HelperError> =>
-        value.map((url) => `${webapp}${url.slice("https://fluxer.app".length)}`)
+export function createInstanceLinks(webapp: string): LinkHelpers {
+    const project = (url: string): string => `${webapp}${url.slice("https://fluxer.app".length)}`
     return Object.freeze({
         channel: (...input: Parameters<typeof links.channel>) => project(links.channel(...input)),
         message: (...input: Parameters<typeof links.message>) => project(links.message(...input)),

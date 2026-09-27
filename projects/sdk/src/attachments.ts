@@ -1,12 +1,23 @@
+import { operationDetails } from "./errors.js"
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
-import { operationErrorMessage, type ApiErrorDetail } from "./api-errors.js"
+import {
+    operationErrorFields,
+    operationErrorMessage,
+    operationFailureHint,
+    operationErrorSettings,
+    operationErrorText,
+    type ApiErrorDetail,
+} from "./api-errors.js"
+import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 import type { MessageOperationOptions } from "./messages.js"
 
 /** The result of reading an attachment stream: A byte chunk, or done true when the stream ends.
  * This type accepts Node's native ReadableStream without requiring browser types.
  * When done is false or omitted, value must be a Uint8Array. When done is true, the SDK stops reading and value may be omitted
+ *
+ * @category Messages
  */
 export type AttachmentStreamReadResult =
     | {
@@ -30,6 +41,8 @@ export type AttachmentStreamReadResult =
 
 /** Reader owned by the SDK only after an upload begins consuming its AttachmentStreamSource.
  * The SDK releases it on normal completion and cancels then releases it after a read, transport or cancellation failure
+ *
+ * @category Messages
  */
 export interface AttachmentStreamReader {
     /** Resolve with the next Uint8Array chunk, or done true when no bytes remain. A rejected read stops the upload.
@@ -43,7 +56,11 @@ export interface AttachmentStreamReader {
     releaseLock(): void
 }
 
-/** Optional native stream-reader mode. Attachment uploads always acquire the default byte reader */
+/**
+ * Optional native stream-reader mode. Attachment uploads always acquire the default byte reader
+ *
+ * @category Messages
+ */
 export interface AttachmentStreamReaderOptions {
     /** Native bring-your-own-buffer mode, included for compatibility. The SDK does not request this mode */
     readonly mode?: "byob"
@@ -51,6 +68,8 @@ export interface AttachmentStreamReaderOptions {
 
 /** Finite byte stream accepted as an attachment source.
  * Its exact byte count must be supplied by AttachmentStreamInput. The SDK reads it once and cannot replay it
+ *
+ * @category Messages
  */
 export interface AttachmentStreamSource {
     /** Native bring-your-own-buffer reader form, included for compatibility. The SDK does not use it */
@@ -67,6 +86,8 @@ export interface AttachmentStreamSource {
 /** A file-like source the SDK can read in byte ranges for an attachment upload.
  * Node Blob and File values, including fs.openAsBlob results, fit this type without requiring Node or browser type declarations.
  * The SDK opens streams for individual upload parts only after planning. It does not close a caller's path or FileHandle and cannot protect against file changes during reading
+ *
+ * @category Messages
  */
 export interface AttachmentFileSource {
     /** Exact file length in bytes, a nonnegative safe integer no larger than 52,428,800 for an upload */
@@ -98,6 +119,8 @@ interface AttachmentMetadata {
 
 /** New caller-owned bytes supplied as an attachment.
  * Bytes are copied when the operation starts, before waiting. Later caller mutation cannot change an accepted upload
+ *
+ * @category Messages
  */
 export interface AttachmentBytesInput extends AttachmentMetadata {
     /** File bytes, including Node buffers and subarray views. Shared-memory buffers are rejected.
@@ -116,6 +139,8 @@ export interface AttachmentBytesInput extends AttachmentMetadata {
  * The SDK streams the file without copying or storing its bytes first. Empty files are accepted. The reported size must be a nonnegative safe integer no greater than 50 MiB.
  * Node openAsBlob files can fail during reading if the file changes. A caller may retry only with a stable source and a new message operation.
  * An inline multipart 429 reports rateLimit rather than reopening a mutable file source
+ *
+ * @category Messages
  */
 export interface AttachmentFileInput extends AttachmentMetadata {
     /** A Blob, File or compatible sized source, not a path string. Keep its underlying data stable while the operation reads it */
@@ -131,6 +156,8 @@ export interface AttachmentFileInput extends AttachmentMetadata {
 /** Attach a caller-owned stream that ends after a known number of bytes.
  * Size is the exact nonnegative byte count, not a maximum. The SDK streams without copying or storing bytes first and reads it at most once after planning succeeds.
  * It cannot limit chunks the source already allocated. An early end, extra bytes, source failure, cancellation or inline multipart 429 stops the operation without reading it again
+ *
+ * @category Messages
  */
 export interface AttachmentStreamInput extends AttachmentMetadata {
     /** A finite byte stream that can be consumed once, not a stream factory or an unbounded live feed */
@@ -183,6 +210,8 @@ export interface AttachmentStreamInput extends AttachmentMetadata {
  *     ]
  * }
  * ```
+ *
+ * @category Messages
  */
 export type AttachmentInput = AttachmentBytesInput | AttachmentFileInput | AttachmentStreamInput
 
@@ -191,6 +220,8 @@ export type AttachmentInput = AttachmentBytesInput | AttachmentFileInput | Attac
  * Non-null title and description limits are measured after U+000C and U+202E removal and surrounding-whitespace
  * trimming. This normalization is validation-only, and the original metadata strings are sent unchanged.
  * The SDK does not fetch the attachment, find it by position, rename it or change its flags
+ *
+ * @category Messages
  */
 export interface AttachmentReference {
     /** Decimal attachment ID from the message being edited, not its message ID */
@@ -217,6 +248,8 @@ export interface AttachmentReference {
 
 /** Information about a file attached to a received message. Use client.attachments to refresh its URL explicitly, then download or stream its bytes.
  * This object is frozen. Its URLs may expire, and the SDK never refreshes or downloads them automatically
+ *
+ * @category Messages
  */
 export interface Attachment {
     /** Decimal attachment ID */
@@ -259,6 +292,8 @@ export interface Attachment {
 
 /** One result from an explicit attachment URL refresh.
  * Fluxer returns these frozen entries in the same order as the requested URLs
+ *
+ * @category Messages
  */
 export interface RefreshedAttachmentUrl {
     /** Requested string exactly as supplied to attachments.refreshUrls */
@@ -267,116 +302,167 @@ export interface RefreshedAttachmentUrl {
     readonly refreshed: string
 }
 
-/** Per-call deadline for an attachment URL refresh, separate from attachment download limits */
+/**
+ * Per-call deadline for an attachment URL refresh, separate from attachment download limits
+ *
+ * @category Messages
+ */
 export interface AttachmentRefreshOptions extends MessageOperationOptions {}
 
-/** Add cancellation to an attachment URL refresh in the default API */
+/**
+ * Add cancellation to an attachment URL refresh in the default API
+ *
+ * @category Messages
+ */
 export interface DefaultAttachmentRefreshOptions extends AttachmentRefreshOptions, OperationOptions {}
 
-/** Attachment URL refresh operation identified by safe failure metadata */
+/**
+ * Attachment URL refresh operation identified by safe failure metadata
+ *
+ * @category Errors
+ */
 export type AttachmentRefreshOperation = "attachments.refreshUrls"
 
 /** The SDK could not refresh one ordered batch of attachment URL strings.
  * Failures contain no requested URL, refreshed URL, response body or credential.
  * HTTP 404 does not distinguish an older unsupported deployment from an unavailable route or denied access
+ *
+ * @category Errors
  */
-export class AttachmentRefreshError extends Error {
+export class AttachmentRefreshError extends FluxerlyError {
     /** Stable expected-failure discriminator */
     readonly _tag = "AttachmentRefreshError"
-    /** Safe local validation facts when the SDK can identify a failed input rule, otherwise null */
+    /** Requested operation */
+    readonly operation: AttachmentRefreshOperation
+    /** Input validation, local capacity, HTTP 404 or another rejection, transport, response decoding, deadline or rate limit */
+    readonly reason: OperationReason
+    /** Whether the request may have reached Fluxer, described by {@link OperationOutcome}.
+     * Refreshing does not create or change an attachment, but an unknown outcome cannot recover a lost response
+     */
+    readonly outcome: OperationOutcome
+    /** HTTP status when received, otherwise null */
+    readonly status: number | null
+    /** Fluxer's retry delay in milliseconds when usable, otherwise null */
+    readonly retryAfterMs: number | null
+    /** Reviewed Fluxer rejection detail, or null when no safe classification is available */
+    readonly apiError: ApiErrorDetail | null
+    /** Safe explanation of the locally invalid property, or null when no input problem could be identified */
     readonly inputValidation: InputValidationDetail | null
 
-    constructor(
-        /** Requested operation */
-        readonly operation: AttachmentRefreshOperation,
-        /** Input validation, local capacity, HTTP 404 or another rejection, transport, response decoding, deadline or rate limit */
-        readonly reason: "input" | "busy" | "notFound" | "rejected" | "network" | "response" | "timeout" | "rateLimit",
-        /** notDispatched means no API request started, rejected means an observed rejection, and unknown means no valid result was received.
-         * Refreshing does not create or change an attachment, but an unknown outcome cannot recover a lost response
-         */
-        readonly outcome: "notDispatched" | "rejected" | "unknown",
-        /** HTTP status when received, otherwise null */
-        readonly status: number | null = null,
-        /** Provider retry delay in milliseconds when usable, otherwise null */
-        readonly retryAfterMs: number | null = null,
-        /** Reviewed provider rejection detail, or null when no safe classification is available */
-        readonly apiError: ApiErrorDetail | null = null,
-        inputValidation: InputValidationDetail | null = null,
-    ) {
-        super(
-            operationErrorMessage(
-                "Attachment URL",
-                operation,
-                reason,
-                outcome,
-                status,
-                apiError,
-                inputValidation?.explanation ?? null,
-                retryAfterMs,
-            ),
-        )
+    /** Create the failure from its operation, reason and outcome, with optional status, retry wait, API detail, input detail and cause */
+    constructor(options: OperationErrorOptions<AttachmentRefreshOperation>) {
+        const fields = operationErrorFields(options)
+        super(operationErrorText("Attachment URL", fields), operationErrorSettings("attachment", fields, options.cause))
+        this.operation = fields.operation
+        this.reason = fields.reason
+        this.outcome = fields.outcome
+        this.status = fields.status
+        this.retryAfterMs = fields.retryAfterMs
+        this.apiError = fields.apiError
+        this.inputValidation = freezeInputValidationDetail(fields.inputValidation)
         this.name = this._tag
-        this.inputValidation = freezeInputValidationDetail(inputValidation)
     }
 }
 
 /** Expected attachment URL refresh failures shared by both entry points.
  * Native interruption remains in the Effect cause, while default API calls additionally return CancelledError
+ *
+ * @category Errors
  */
 export type AttachmentRefreshFailure = AttachmentRefreshError | ClientClosedError
 
 /** Limit the bytes and time used by an attachment download.
- * maxBytes is required, a positive safe integer no greater than 52,428,800.
+ * The maxBytes option is required, a positive safe integer no greater than 52,428,800.
  * This limits returned bytes, not the file size on Fluxer, total JavaScript memory or buffering while the SDK assembles the result.
- * timeoutMs covers endpoint discovery, URL validation and the full GET, and defaults to 30,000.
+ * The timeoutMs option covers endpoint discovery, URL validation and the full GET, and defaults to the client's rest.defaultTimeoutMs, 30,000 unless configured.
  * The SDK still waits for cleanup after the deadline.
- * Media discovery and GETs use four client-local slots, separate from the four REST/upload slots, for at most eight active HTTP requests.
+ * Media discovery and GETs use client-local media slots, separate from the REST/upload slots. The media slots default to four (rest.mediaConcurrency), and the REST slots to four per local shard (rest.concurrency).
  * Both pools share the pending-request budget. Media does not wait for bot API rate limits
+ *
+ * @category Messages
  */
 export interface AttachmentDownloadOptions {
     /** Maximum bytes to accept, required and from 1 through 52,428,800. Exceeding it fails with reason tooLarge rather than truncating */
     readonly maxBytes: number
     /** Total deadline in milliseconds, an integer from 1 through 2,147,483,647, including discovery and the GET.
-     * Defaults to 30,000, cleanup is still awaited after expiry
+     * Defaults to the client's rest.defaultTimeoutMs, 30,000 unless configured. Cleanup is still awaited after expiry
      */
     readonly timeoutMs?: number
 }
 
-/** Add an optional AbortSignal to the download limits. Aborting cancels this download, not the client or other operations */
+/**
+ * Add an optional AbortSignal to the download limits. Aborting cancels this download, not the client or other operations
+ *
+ * @category Messages
+ */
 export interface DefaultAttachmentDownloadOptions extends AttachmentDownloadOptions, OperationOptions {}
 
-/** Add an optional AbortSignal to the stream limits. Aborting stops this stream's consumption, not the client or other operations */
+/**
+ * Add an optional AbortSignal to the stream limits. Aborting stops this stream's consumption, not the client or other operations
+ *
+ * @category Messages
+ */
 export interface DefaultAttachmentStreamOptions extends AttachmentDownloadOptions, OperationOptions {}
 
-/** Expected bounded attachment-download failure, without a URL, response body or credential */
-export class AttachmentDownloadError extends Error {
+/**
+ * Expected bounded attachment-download failure, without a URL, response body or credential
+ *
+ * @category Errors
+ */
+export class AttachmentDownloadError extends FluxerlyError {
     /** Stable tag for identifying this expected failure */
     readonly _tag = "AttachmentDownloadError"
     /** SDK-owned local input detail, or null for non-input and unattributable failures */
     readonly inputValidation: InputValidationDetail | null
-    constructor(
-        /** Local validation, untrusted attachment URL, local scheduler saturation, transport, response decoding, output limit or deadline */
-        readonly reason: "input" | "untrustedUrl" | "busy" | "network" | "response" | "tooLarge" | "timeout",
-        /** HTTP status when a response was received, otherwise null */
-        readonly status: number | null = null,
-        /** Optional safe input explanation, copied and frozen on construction, not the rejected value */
-        inputValidation: InputValidationDetail | null = null,
-    ) {
+    /** Local validation, untrusted attachment URL, local scheduler saturation, transport, response decoding, output limit or deadline */
+    readonly reason: "input" | "untrustedUrl" | "busy" | "network" | "response" | "tooLarge" | "timeout"
+    /** HTTP status when a response was received, otherwise null */
+    readonly status: number | null
+    /** Describe a download failure. Construction performs no request and does not release or retry a download */
+    constructor(options: {
+        /** Failure category, as described on the reason field */
+        readonly reason: AttachmentDownloadError["reason"]
+        /** HTTP status when a response was received. Defaults to null */
+        readonly status?: number | null | undefined
+        /** Safe input explanation, not the rejected value. It is copied and frozen. Defaults to null */
+        readonly inputValidation?: InputValidationDetail | null | undefined
+        /** Underlying failure retained as the error's cause */
+        readonly cause?: unknown
+    }) {
+        const { reason, status = null, inputValidation = null } = options
         super(
-            operationErrorMessage(
-                "Attachment download",
-                "fetch",
+            operationErrorMessage({
+                subject: "Attachment",
+                operation: "download",
                 reason,
-                "unknown",
+                outcome: reason === "input" || reason === "untrustedUrl" ? "notDispatched" : "unknown",
                 status,
-                null,
-                inputValidation?.explanation ?? null,
-            ),
+                inputExplanation: inputValidation?.explanation ?? null,
+                facts: { read: true },
+            }),
+            {
+                code: `attachment.download.${reason}`,
+                hint: operationFailureHint({
+                    reason,
+                    outcome: reason === "input" || reason === "untrustedUrl" ? "notDispatched" : "unknown",
+                    status,
+                    read: true,
+                    inputPath: inputValidation?.path ?? null,
+                }),
+                cause: options.cause,
+                details: operationDetails({ reason, status }),
+            },
         )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
+        this.reason = reason
+        this.status = status
     }
 }
 
-/** Expected attachment-download failures shared by both entry points. Cancellation in the default API adds CancelledError */
+/**
+ * Expected attachment-download failures shared by both entry points. Cancellation in the default API adds CancelledError
+ *
+ * @category Errors
+ */
 export type AttachmentDownloadFailure = AttachmentDownloadError | ClientClosedError

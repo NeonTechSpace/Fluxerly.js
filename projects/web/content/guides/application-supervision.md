@@ -4,11 +4,13 @@ navTitle: Application supervision
 description: Keep gateway and worker health separate, then choose a fail or restart policy
 ---
 
-A connected bot can still have a stopped event subscription. A failed handler does not stop later events, but a full subscription queue closes that subscription. Check both the connection and any subscription the bot needs to keep running
+A bot started with `runBot` is already supervised: The runner watches the connection and every subscription it registered, and stops the bot with `CriticalWorkerStoppedError` if one closes. This page is for applications that create the client with `createClient` and need the same guarantee together with a health report
+
+A connected bot can still have a stopped event subscription, the registration that delivers one event to its handler. A failed handler does not stop later events, and a full queue drops the oldest waiting event by default. A subscription registered with `overflow: "stop"` closes when its queue fills instead. A subscription the bot cannot work without is called a critical worker here. Check both the connection and each critical worker
 
 ## Watch the connection and subscription
 
-This example stops the bot if its `messageCreate` subscription stops. Health reports contain error types and counts, never event bodies or raw exceptions
+This example answers `!ping` and stops the bot if its `messageCreate` subscription stops. It sets `overflow: "stop"`, so a burst the bot cannot keep up with counts as a failure instead of silently dropping messages. Health reports contain error types and counts, never event bodies or raw exceptions
 
 ```ts
 import {
@@ -33,9 +35,7 @@ export async function runSupervisedBot(
     signal: AbortSignal,
     reportHealth: (health: BotHealth, diagnostics: ClientDiagnostics) => void,
 ): Promise<SupervisedOutcome> {
-    const created = createClient({ token });
-    if (created.isErr()) throw created.error;
-    const client = created.value;
+    const client = createClient({ token });
     let criticalWorker: BotHealth["criticalWorker"] = "starting";
     let handlerFailures = 0;
     const lifetimes: PromiseLike<unknown>[] = [];
@@ -55,16 +55,15 @@ export async function runSupervisedBot(
             "messageCreate",
             async (message, handlerSignal) => {
                 if (message.author.isBot || message.content !== "!ping") return;
-                const reply = await client.messages.reply(
-                    message,
-                    { content: "Pong!" },
-                    { signal: handlerSignal },
-                );
+                const reply = await client.messages.reply(message, "Pong!", {
+                    signal: handlerSignal,
+                });
                 if (reply.isErr())
-                    console.warn("Reply failed", { kind: reply.error._tag });
+                    console.warn("Reply failed", { code: reply.error.code });
             },
             {
                 maxPendingMessages: 64,
+                overflow: "stop",
                 onError: (failure) => {
                     if (failure.kind === "handler") handlerFailures += 1;
                     if (failure.kind === "overflow") criticalWorker = "failed";
@@ -72,7 +71,6 @@ export async function runSupervisedBot(
                 },
             },
         );
-        if (registered.isErr()) throw registered.error;
 
         criticalWorker = "running";
         report();
@@ -89,7 +87,7 @@ export async function runSupervisedBot(
                 ),
         );
         lifetimes.push(observeConnection);
-        const worker = registered.value.waitForClose({ signal: lifetime });
+        const worker = registered.waitForClose({ signal: lifetime });
         const observeWorker = new Promise<{
             readonly source: "worker";
             readonly result: Awaited<typeof worker>;
@@ -189,13 +187,15 @@ export async function runSupervisedBot(
 }
 ```
 
-The health callback can feed a readiness endpoint or process supervisor. `diagnostics.state` describes gateway state, request pressure and local queues. It does not establish that a critical worker is alive, so the separate worker state remains necessary
+The health callback can feed a readiness endpoint or a process manager. The `diagnostics` snapshot describes gateway state, request pressure and local queues. It does not establish that a critical worker is alive, so the separate worker state remains necessary
 
-`onError` counts an isolated handler failure while the subscription continues. Overflow changes the worker state to failed and `waitForClose` retains `EventOverflowError`. The example then aborts `client.run()` and waits for the connection, worker and final cleanup
+The subscription's `onError` counts an isolated handler failure while the subscription continues. Because of `overflow: "stop"`, a full queue closes the subscription, changes the worker state to failed and makes `waitForClose` return `EventOverflowError`. The example then aborts `client.run()` and waits for the connection, worker and final cleanup
 
 ## Choose the application policy
 
 If a process manager runs the bot, exit with a failure status after `critical-worker-failed` so it can start a new process. To restart within the same process, call `runSupervisedBot` again with a new client and a limit on restart attempts
+
+A bot split across processes by the [supervisor](/docs/{{version}}/sharding/#run-shards-in-several-processes) gets the process-manager policy by default: When a child process exits unexpectedly, the parent starts a new one for the same shards, up to three times in a row. The parent's `workers.status()` also includes each child's latest `diagnostics` snapshot, so one place shows every child's gateway state and request pressure
 
 A restart subscribes only to future events. It does not rerun the failed handler or recover events missed while the subscription was stopped. For work that must survive a restart, the application needs a durable queue, rules to prevent duplicate work and a way to check what already completed
 
@@ -203,17 +203,24 @@ Noncritical subscriptions can keep their existing isolated-failure policy. Their
 
 ## Limit subscriptions created while the bot runs
 
-Each SDK subscription and collector limits its own queue. These limits do not cap how many subscriptions, stored event payloads or active handlers the client can have in total
+Each SDK subscription and collector limits its own queue, but nothing caps how many subscriptions the client can have in total. Register workers at startup where possible
+
+<details>
+<summary>Budget workers created at runtime</summary>
 
 Keep a reviewed list of workers registered at startup. If the application creates workers dynamically, route every such creation through one application-owned budget. Reserve capacity before registration and release it only after registration fails or the worker's `waitForClose()` and required cleanup finish. A wrapper cannot enforce the budget if other code can register directly, so restrict direct client access to code that applies the same budget
 
 The `diagnostics.events` snapshot reports this client's open event sources, message collectors, reaction collectors and currently executing subscription callbacks. Use those payload-free counters to monitor usage and alert near the budget's limits. They are not enforced caps, process-memory measurements or counts of collector filters and arbitrary application tasks. The application's reservations determine whether another worker can register
 
-Default handlers receive an `AbortSignal`, but the application must still track its own Promises, even when they respond to cancellation. Closing a subscription or client does not wait for those Promises to finish. Returning a Promise lets the SDK wait for that handler's work and report its failure while events are being handled, but does not make shutdown wait for that work
-
-Collector progress callbacks behave differently: Their completion waits for the returned callback work. Native Effect handlers use interruption and awaited scoped finalizers, as shown in the [Effect application testing guide](/docs/{{version}}/effect-application-testing/)
+</details>
 
 ## Drain application-owned work
+
+Default handlers receive an `AbortSignal`, but the application must still track its own Promises, even when they respond to cancellation. Returning a Promise lets the SDK wait for that handler's work and report its failure. Closing a subscription does not wait for it, and neither does a plain `client.shutdown()`, which cancels running handlers at once
+
+A shutdown can drain first. With `client.shutdown({ drainMs: 10_000 })`, the client stops accepting new events, lets running handlers, their waiting events and REST requests finish for up to that many milliseconds, then cancels what is left. The `runBot` runner drains this way when asked to stop, for up to its `drainMs` option, 5,000 ms by default. A child of the [supervisor](/docs/{{version}}/sharding/#run-shards-in-several-processes) drains when the parent stops it, for up to the supervisor's `shutdownTimeoutMs` minus one second, which is 4 seconds with the default of 5,000 ms. The drain covers only work that handlers return, not detached Promises
+
+Collector progress callbacks behave differently: Their completion waits for the returned callback work. Native Effect handlers use interruption and awaited scoped [finalizers](/docs/{{version}}/glossary/#finalizer), as shown in the [Effect application testing guide](/docs/{{version}}/effect-application-testing/)
 
 When an external operation must finish before process exit, retain its Promise in an application-owned set. Remove it on either settlement path without creating an unobserved rejected Promise. Stop intake first, then inspect the outcomes of the retained work
 
@@ -231,15 +238,14 @@ export function installTrackedHandler(
         void work.then(() => active.delete(work), () => active.delete(work));
         return work;
     });
-    if (registered.isErr()) throw registered.error;
 
     return {
-        subscription: registered.value,
+        subscription: registered,
         async stopAndDrain() {
-            registered.value.unsubscribe();
+            registered.close();
             const failures: unknown[] = [];
             try {
-                const closed = await registered.value.waitForClose();
+                const closed = await registered.waitForClose();
                 if (closed.isErr()) failures.push(closed.error);
             } catch (failure) {
                 failures.push(failure);

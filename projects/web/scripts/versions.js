@@ -1,5 +1,7 @@
 import { parseVersion, compareVersions } from "../../release/planning.js"
 export { parseVersion, compareVersions }
+// Every retained release asset must stay readable by the current generator
+export const snapshotSchemas = Object.freeze([1, 2])
 export function channelTargets(versions) {
     const labels = { stable: "Stable", rc: "RC", canary: "Canary" }
     const sorted = [...versions].sort(compareVersions).reverse()
@@ -26,7 +28,7 @@ export function publishedSnapshotFiles(snapshot) {
     })
 }
 export function validateSnapshot(snapshot) {
-    if (snapshot?.schemaVersion !== 1 || !/^[a-f0-9]{40}$/.test(snapshot.sourceCommit))
+    if (!snapshotSchemas.includes(snapshot?.schemaVersion) || !/^[a-f0-9]{40}$/.test(snapshot.sourceCommit))
         throw new Error("Invalid docs provenance")
     parseVersion(snapshot.version)
     if (!Array.isArray(snapshot.files) || snapshot.files.length === 0) throw new Error("Empty docs snapshot")

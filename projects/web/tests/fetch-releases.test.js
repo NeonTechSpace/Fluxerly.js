@@ -123,18 +123,18 @@ test("A broken newest prerelease fails instead of falling back to an older relea
 test("Malformed inventories and incomplete or duplicate docs assets are rejected without output", async (t) => {
     const item = release()
     const inventories = [
-        null,
-        {},
-        [item.metadata],
-        [[null]],
-        [[{ ...item.metadata, draft: undefined }]],
-        [[{ ...item.metadata, assets: [] }]],
-        [[{ ...item.metadata, assets: [...item.metadata.assets, ...item.metadata.assets] }]],
+        [null, /Invalid paginated GitHub release inventory/],
+        [{}, /Invalid paginated GitHub release inventory/],
+        [[item.metadata], /Invalid paginated GitHub release inventory/],
+        [[[null]], /Invalid published GitHub release metadata/],
+        [[[{ ...item.metadata, draft: undefined }]], /Invalid published GitHub release metadata/],
+        [[[{ ...item.metadata, assets: [] }]], /no unique docs snapshot/],
+        [[[{ ...item.metadata, assets: [...item.metadata.assets, ...item.metadata.assets] }]], /no unique docs snapshot/],
     ]
-    for (const pages of inventories) {
+    for (const [pages, reason] of inventories) {
         const f = await fixture(t, [item], { pages })
         if (pages === null) f.gh = async () => encode(null)
-        await assert.rejects(fetchReleases({ root: f.root, gh: f.gh }))
+        await assert.rejects(fetchReleases({ root: f.root, gh: f.gh }), reason)
         assert.deepEqual(await readdir(f.directory), [])
     }
 })
@@ -169,19 +169,12 @@ test("Invalid asset metadata and tampered or truncated bytes fail before any arc
     }
 })
 
-test("The production snapshot validator rejects traversal, duplicate files and missing provenance", async (t) => {
-    const invalid = [
-        { ...snapshot(), version: "../escape" },
-        { ...snapshot(), sourceCommit: "main" },
-        { ...snapshot(), files: [{ path: "../escape.md", content: "Private fixture body" }] },
-        { ...snapshot(), files: [...snapshot().files, snapshot().files[0]] },
-        { ...snapshot(), files: snapshot().files.slice(1) },
-    ]
-    for (const value of invalid) {
-        const f = await fixture(t, [release("1000.0.0", 1, value)])
-        await assert.rejects(f.run(), (error) => error.message === "Invalid docs snapshot")
-        assert.deepEqual(await readdir(f.directory), [])
-    }
+test("An invalid imported snapshot fails with a generic reason and writes nothing", async (t) => {
+    // The validator's rules are covered in docs.test.js. The import wraps its detail and writes no archive
+    const value = { ...snapshot(), files: [{ path: "../escape.md", content: "Private fixture body" }] }
+    const f = await fixture(t, [release("1000.0.0", 1, value)])
+    await assert.rejects(f.run(), (error) => error.message === "Invalid docs snapshot")
+    assert.deepEqual(await readdir(f.directory), [])
 })
 
 test("Release tag, source commit and repeated exact version must identify the same archive", async (t) => {
@@ -211,10 +204,9 @@ test("A partial remote read failure does not import a misleading partial release
             throw new Error("Private provider response body and test-only credential")
         },
     })
-    await assert.rejects(
-        f.run(),
-        (error) => error.message === "Authenticated GitHub release read failed; no automatic retry was attempted",
-    )
+    await assert.rejects(f.run(), (error) => /release read failed/.test(error.message) &&
+        !error.message.includes("Private provider response body") && !error.message.includes("credential"))
+    // The failed read is the last one: no retry and no further release is read
     assert.equal(f.calls.length, 4)
     assert.deepEqual(await readdir(f.directory), [])
 })

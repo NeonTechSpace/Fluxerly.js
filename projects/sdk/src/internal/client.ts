@@ -1,4 +1,22 @@
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Queue, Random, Redacted, Scope, Semaphore, Stream } from "effect"
+/**
+ * Client owner: Configuration, caches, REST, instance discovery, shard state and the one client lifetime, split into
+ * [shard loop](/projects/sdk/src/internal/client/shard-loop.ts), [intake](/projects/sdk/src/internal/client/intake.ts),
+ * [backoff](/projects/sdk/src/internal/client/backoff.ts) and [lifetime](/projects/sdk/src/internal/client/lifetime.ts).
+ * Invariant: The client manages its assigned sessions as one lifetime, spaces out Identify sends, coordinates initial state
+ * delivery with subscription setup and retains one lifetime outcome. Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
+ */
+import * as Cause from "effect/Cause"
+import * as Clock from "effect/Clock"
+import type * as Context from "effect/Context"
+import * as Deferred from "effect/Deferred"
+import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
+import * as Fiber from "effect/Fiber"
+import * as Queue from "effect/Queue"
+import * as Redacted from "effect/Redacted"
+import * as Scope from "effect/Scope"
+import * as Semaphore from "effect/Semaphore"
+import * as Stream from "effect/Stream"
 import type {
     CacheDiagnostic,
     CacheEntriesOptions,
@@ -7,14 +25,29 @@ import type {
     ClientDiagnostics,
     ConnectionState,
 } from "#sdk/client"
-import type { ShardState } from "#sdk/sharding"
-import { guildShardId, type ShardPlan } from "./sharding.js"
-import type { CachePolicyErrorReport } from "#sdk/cache"
+import type { SessionSnapshot, ShardState } from "#sdk/sharding"
+import {
+    admitReshard,
+    automaticShardPlan,
+    guildShardId,
+    guildsPerShard,
+    largerShardPlan,
+    type ShardPlan,
+} from "./sharding.js"
+import { guildList } from "./guild-lifecycle.js"
+import type { IdentifyFields } from "./gateway/commands.js"
+import { automaticIgnoredEvents, suppressedRegistrations } from "./gateway/event-dispatches.js"
+import { maxClientPayloadBytes, reservedClientOpcodes } from "./protocol/gateway.js"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
-import { identifier, record, replyInput, snapshotReference } from "./message.js"
+import { replyInput, snapshotReference } from "./message.js"
+import { identifier, record } from "./decode/primitives.js"
 import { MessageCache } from "./cache.js"
+import { unsupportedKeyHint } from "./suggest.js"
 import { GuildCache, type ResourceKind, type Resources } from "./guild-cache.js"
 import { ChannelCache } from "./channel-cache.js"
+import { CacheChangeHub } from "./cache-changes.js"
+import type { DefaultRestRequest, RestRequest, RestRequestFailure, RestResponse } from "#sdk/rest"
+import { GatewaySendError, type GatewaySendFailure } from "#sdk/gateway"
 import { UserCache, type UserResources } from "./user-cache.js"
 import { PresenceOwner } from "./presence.js"
 import { PresenceError, type PresenceInput, type PresenceFailure } from "#sdk/presence"
@@ -25,37 +58,53 @@ import {
     type User,
     type DirectMessageChannel,
 } from "#sdk/users"
-import { directMessageFetch, type UserRequest } from "./users.js"
+import { directMessageFetch, userFetch, type UserRequest } from "./users.js"
 import {
     ChannelOperationError,
     type ChannelOperation,
     type ChannelOperationOptions,
     type GuildChannel,
 } from "#sdk/channels"
-import type { ChannelRequest } from "./channels.js"
+import { channelList, type ChannelRequest } from "./channels.js"
 import type { WebhookRequest } from "./webhooks.js"
 import type { WebhookOperation, WebhookOperationOptions } from "#sdk/webhooks"
-import { makeCacheReports, type CacheReports } from "./cache-reports.js"
+import { FailureReporter, messageIds, primaryError, publicReport, throwIfErr, type InternalReport } from "./failures.js"
 import {
+    AuthenticationError,
     ClientBusyError,
     ClientClosedError,
     ConnectionError,
-    ConnectionTimeoutError,
     ConfigurationError,
+    ConnectionTimeoutError,
     RateLimitError,
-    ShardConnectionError,
     type ConnectError,
     type ConnectionFailure,
 } from "#sdk/errors"
 import { type Configuration, validateConfiguration } from "./configuration.js"
-import { gatewayUrl, InstanceResolver } from "./instance.js"
-import { mapFailureCause, withDeadline } from "./effect-failures.js"
+import { InstanceResolver } from "./instance.js"
+import type { LinkHelpers } from "#sdk/helpers"
 import { CountOwner } from "./counts.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import { MemberChunkOwner } from "./member-chunks.js"
 import { LogicalScheduler, type LogicalTimer, makeLogicalScheduler } from "./logical-scheduler.js"
-import { AttemptFailure, runSelectedGateway, type Session } from "./gateway.js"
-import { EventBus, isMessageEvent } from "./events.js"
+import { AttemptFailure } from "./gateway.js"
+import { sdkVersion } from "./logging.js"
+import { EventBus } from "./events.js"
+import { nowMs } from "./clock.js"
+import { defaultTransport, type Transport } from "./transport/index.js"
+import { identifySpacingMs, startupBudgetMs } from "./client/backoff.js"
+import { clearCaches } from "./client/intake.js"
+import { drainWork } from "./client/drain.js"
+import {
+    closeAll,
+    defectsOnly,
+    formatDuration,
+    logShutdownEnd,
+    logShutdownStart,
+    superviseShards,
+} from "./client/lifetime.js"
+import { readCaller, suspendInput, suspendMarked } from "./defects.js"
+import { runShardLoop, type ShardLoopHost, type ShardRuntime } from "./client/shard-loop.js"
 import type { MessageCollector } from "./collector.js"
 import type { ReactionCollector } from "./reaction-collector.js"
 import {
@@ -65,15 +114,15 @@ import {
     type MemberReference,
     type RoleReference,
 } from "#sdk/guilds"
-import type { GuildRequest } from "./guilds.js"
-import { guildDeleteMine, guildLeave } from "./guild-lifecycle.js"
+import { guildFetch, roleList, type GuildRequest } from "./guilds.js"
+import { guildDeleteOwnMessages, guildLeave, ownDeletionOptions } from "./guild-lifecycle.js"
 import { RestOwner } from "./rest.js"
 import type { BotApplicationOperation, BotApplicationOperationOptions } from "#sdk/application"
 import type { BotApplicationRequest } from "./application.js"
 import type { ReactionEmojiInput, ReactionUsersQuery } from "#sdk/reactions"
 import type { MessagePinsQuery } from "#sdk/pins"
 import type { MessageSearchContext, MessageSearchQuery } from "#sdk/message-search"
-import type { ClientLogging } from "./logging.js"
+import type { ClientLogger } from "./logging.js"
 import type {
     Message,
     MessageCore,
@@ -96,7 +145,7 @@ import type {
     RefreshedAttachmentUrl,
 } from "#sdk/attachments"
 import type { AttachmentDownloadSource } from "./rest.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
 const cacheKinds = [
     "messages",
@@ -129,16 +178,64 @@ const freezeCacheDiagnostic = (diagnostic: CacheDiagnostic | undefined): CacheDi
           })
 
 const typingRefreshMs = 8_000
-
-interface ShardRuntime {
-    readonly shardId: number
-    state: ConnectionState
-    latency: number | null
-    recovery: { phase: "startup" | "recovery"; attempt: number; retryDelayMs: number | null } | null
-    session: Session
-}
+/** Time allowed for each session store save during shutdown */
+const sessionSaveTimeoutMs = 5_000
+/** Guild list page size used to count guilds for automatic sharding, the largest Fluxer accepts */
+const guildCountPageSize = 200
+/** Communities whose cache refill may fail before the refill stops */
+const refillFailureLimit = 10
 
 type GuildBuild<A> = () => GuildRequest<A> | InputValidationFailure
+
+/** Marks a JSON encoding failure that this module detected itself, so it is not mistaken for a caller throw */
+class CommandDataUnencodable {
+    constructor(readonly cause: unknown) {}
+}
+
+/**
+ * Encode gateway command data as JSON. A circular structure, a BigInt or nesting too deep for the stack returns the
+ * encoding failure. Any other throw comes from caller code run while encoding, such as a getter, a proxy trap or a
+ * toJSON method, and propagates unchanged
+ */
+function encodeCommandData(data: unknown): { readonly json: string | undefined } | { readonly failure: unknown } {
+    // Objects on the path from the root to the value being encoded, the same path JSON.stringify checks for cycles
+    const path: unknown[] = []
+    try {
+        const json = JSON.stringify(data, function (this: unknown, _key, value: unknown) {
+            path.length = path.lastIndexOf(this) + 1
+            if (typeof value === "bigint")
+                throw new CommandDataUnencodable(new TypeError("BigInt values cannot be encoded as JSON"))
+            if (typeof value === "object" && value !== null) {
+                if (path.includes(value))
+                    throw new CommandDataUnencodable(new TypeError("Circular structures cannot be encoded as JSON"))
+                path.push(value)
+            }
+            return value
+        })
+        return { json }
+    } catch (error) {
+        if (error instanceof CommandDataUnencodable) return { failure: error.cause }
+        if (error instanceof RangeError) return { failure: error }
+        throw error
+    }
+}
+
+/** Translate a failed guild-count read into the startup failure that connect and run report */
+function automaticPlanFailure(
+    error: GuildOperationError | ClientClosedError,
+    startupTimeoutMs: number,
+): ConnectionFailure {
+    // Closure during startup surfaces as ClientClosedError from connect, as for discovery
+    if (error instanceof ClientClosedError) return new ConnectionError("discovery", "closed")
+    if (error.status === 401) return new AuthenticationError()
+    if (error.reason === "rateLimit") return new RateLimitError("http", error.retryAfterMs)
+    if (error.reason === "timeout") return new ConnectionTimeoutError(startupTimeoutMs)
+    return new ConnectionError("discovery", error.reason === "response" ? "protocol" : "network", error.status, {
+        cause: error,
+        details: { detail: "the community count for automatic sharding could not be read" },
+        hint: 'Check that the bot token can list the bot\'s communities, or set sharding.totalShards to a number instead of "auto"',
+    })
+}
 
 /** Internal fresh-Identify coordination used only by supervisor.child.run */
 export interface IdentifyGate {
@@ -162,22 +259,23 @@ export class ClientOwner<M extends MessageCore = Message> {
     readonly memberChunks: MemberChunkOwner
 
     setPresence(input: PresenceInput) {
-        return Effect.suspend((): Effect.Effect<void, PresenceFailure> => {
+        // The presence owner marks its reads of the caller input, so its own faults stay SDK faults
+        return suspendMarked((): Effect.Effect<void, PresenceFailure> => {
             if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
             const failure = this.presence.set(input)
             if (failure === undefined) return Effect.void
             if (failure === false) return Effect.fail(new ClientClosedError())
-            return Effect.fail(new PresenceError("input", failure.detail))
+            return Effect.fail(new PresenceError({ reason: "input", inputValidation: failure.detail }))
         })
     }
     setPresenceMembers(guildId: string, memberIds: readonly string[]) {
-        return Effect.suspend((): Effect.Effect<void, PresenceFailure> => {
+        return suspendMarked((): Effect.Effect<void, PresenceFailure> => {
             if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
             const failure = this.presence.setMembers(guildId, memberIds)
             if (failure === undefined) return Effect.void
-            if (failure === "limit") return Effect.fail(new PresenceError("limit"))
+            if (failure === "limit") return Effect.fail(new PresenceError({ reason: "limit" }))
             if (failure === false) return Effect.fail(new ClientClosedError())
-            return Effect.fail(new PresenceError("input", failure.detail))
+            return Effect.fail(new PresenceError({ reason: "input", inputValidation: failure.detail }))
         })
     }
     #messageCollectors = new Set<MessageCollector<M>>()
@@ -190,8 +288,13 @@ export class ClientOwner<M extends MessageCore = Message> {
         this.#reactionCollectors.add(collector)
         return () => this.#reactionCollectors.delete(collector)
     }
-    readonly logging: ClientLogging
-    readonly events = new EventBus<M>(() => this.logging)
+    readonly logging: ClientLogger
+    /** Client-wide failure reports, delivered to onError or logged */
+    readonly failures: FailureReporter
+    readonly events = new EventBus<M>(
+        () => this.logging,
+        () => this.failures,
+    )
     readonly decodeMessage: Configuration<M>["decodeMessage"]
     readonly rest: RestOwner<M>
     /** One owner-scoped immutable discovery result, independent of credentials and REST admission state */
@@ -200,12 +303,19 @@ export class ClientOwner<M extends MessageCore = Message> {
     readonly resources: GuildCache | undefined
     readonly channelCache: ChannelCache | undefined
     readonly userCache: UserCache
+    /** Client-wide cache change notifications, shared by every cache this client owns */
+    readonly cacheChanges = new CacheChangeHub()
     #configuration: Configuration<M> | undefined
     #state: ConnectionState = "Disconnected"
-    readonly #plan: ShardPlan
+    /** Known shard plan. An automatic plan stays undefined until the first connect computes it */
+    #plan: ShardPlan | undefined
     readonly #shards = new Map<number, ShardRuntime>()
     readonly #shardListeners = new Map<number, Set<(state: ConnectionState) => void>>()
+    readonly #shardHost: ShardLoopHost<M>
     #groupReady = false
+    /** Shards whose sessions shutdown saves, captured when shutdown begins */
+    #saveOnClose: ReadonlySet<number> | undefined
+    /** Logical time before which the next fresh Identify may not be sent */
     #nextIdentifyAt = 0
     #worker: Fiber.Fiber<void> | undefined
     #workerExit: Exit.Exit<void, ConnectionFailure> | undefined
@@ -216,25 +326,26 @@ export class ClientOwner<M extends MessageCore = Message> {
     #listeners = new Set<(state: ConnectionState) => void>()
     #managed = false
     #shutdownStarted = false
+    /** Whether connect or run began, so shutdown records describe a client that did something */
+    #everStarted = false
+    /** Logical times of recent moves to a larger automatic plan, oldest first */
+    #reshards: number[] = []
+    /** The shard whose 4011 closure started a move to a larger plan, until the new plan is adopted */
+    #reshardShard: number | undefined
+    /** Shards that resumed a session from the session store, whose guild caches wait for a refill */
+    readonly #restoredShards = new Set<number>()
 
     constructor(
         configuration: Configuration<M>,
         readonly scope: Scope.Scope,
-        private readonly reports: CacheReports | undefined,
+        failures: FailureReporter,
         readonly logical: LogicalScheduler,
         private readonly identifyGate: IdentifyGate | undefined,
+        /** Network implementations for REST, discovery and the gateway */
+        readonly transport: Transport = defaultTransport,
     ) {
         this.decodeMessage = configuration.decodeMessage
         this.#configuration = configuration
-        this.#plan = configuration.sharding
-        for (const shardId of this.#plan.shardIds)
-            this.#shards.set(shardId, {
-                shardId,
-                state: "Disconnected",
-                latency: null,
-                recovery: null,
-                session: { id: undefined, sequence: null },
-            })
         const route = (guildId: string) => this.shardIdForGuild(guildId)
         this.presence = new PresenceOwner(
             {
@@ -244,39 +355,212 @@ export class ClientOwner<M extends MessageCore = Message> {
             },
             route,
         )
+        // The configured initial presence is the first presence intent: Identify carries it and READY publishes it
+        if (configuration.gateway.presence !== undefined) this.presence.set(configuration.gateway.presence)
         this.counts = new CountOwner(this.#gatewayRequests, route)
         this.memberChunks = new MemberChunkOwner(this.#gatewayRequests, logical, route)
         this.logging = configuration.logging
+        this.failures = failures
         this.cache = configuration.cache
             ? new MessageCache(
                   configuration.cache,
-                  (report) => reports!.offer(report),
+                  (error, message) => this.failures.report({ kind: "cache", error, message: messageIds(message) }),
                   () => logical.now(),
                   logical,
+                  this.cacheChanges,
               )
             : undefined
         this.resources = Object.keys(configuration.resourceCache).length
-            ? new GuildCache(configuration.resourceCache, () => logical.now(), logical)
+            ? new GuildCache(configuration.resourceCache, () => logical.now(), logical, this.cacheChanges)
             : undefined
         this.channelCache = configuration.channelCache
-            ? new ChannelCache(configuration.channelCache, () => logical.now(), logical)
+            ? new ChannelCache(configuration.channelCache, () => logical.now(), logical, this.cacheChanges)
             : undefined
-        this.userCache = new UserCache(configuration.userCache, () => logical.now(), logical)
-        this.instance = new InstanceResolver(configuration.instance, scope)
-        this.rest = new RestOwner(
-            this.cache,
-            configuration.uploadMaxBytes,
-            this.resources,
-            this.channelCache,
-            this.userCache,
-            () => this.instance.resolve(),
-            configuration.decodeMessage,
+        this.userCache = new UserCache(configuration.userCache, () => logical.now(), logical, this.cacheChanges)
+        this.instance = new InstanceResolver(configuration.instance, scope, {
+            http: transport.http,
+            onDiscovered: (resolved) => {
+                this.#instanceLinks = resolved.links
+                const migration = resolved.domainMigration
+                if (!migration) return
+                const webapp = new URL(resolved.endpoints.webapp).host
+                this.logging.log({
+                    level: migration.enabled ? "info" : "debug",
+                    category: "lifecycle",
+                    code: "lifecycle.domainMigration",
+                    message: migration.enabled
+                        ? `The Fluxer instance announced a web domain migration, so links and OAuth URLs use the web app at ${webapp}`
+                        : "The Fluxer instance announced a web domain migration that is switched off, so links and OAuth URLs are unchanged",
+                    fields: {
+                        enabled: migration.enabled,
+                        webapp,
+                        anonymousRolloutBasisPoints: migration.anonymousRolloutBasisPoints,
+                    },
+                })
+            },
+        })
+        this.rest = new RestOwner({
+            cache: this.cache,
+            uploadMaxBytes: configuration.uploadMaxBytes,
+            resources: this.resources,
+            channels: this.channelCache,
+            users: this.userCache,
+            resolveInstance: () => this.instance.resolve(),
+            decodeMessage: configuration.decodeMessage,
             logical,
-            configuration.logging,
+            logging: configuration.logging,
+            http: transport.http,
+            settings: configuration.rest,
+        })
+        if (configuration.sharding !== "auto") this.#adoptPlan(configuration.sharding, "Disconnected")
+        this.#shardHost = {
+            logging: this.logging,
+            instance: this.instance,
+            caches: this,
+            events: this.events,
+            presence: this.presence,
+            counts: this.counts,
+            memberChunks: this.memberChunks,
+            sockets: transport.sockets,
+            state: () => this.#state,
+            setShardState: (shard, state) => this.#setShardState(shard, state),
+            newSession: (shardId) => this.#clearShardGuilds(shardId),
+            identify: (shardId, send) => this.#identifyPermit(shardId, send),
+            identifyFields: (shardId) => this.#identifyFields(configuration, shardId),
+            sessions: configuration.sessions,
+            ...(configuration.sharding === "auto"
+                ? { reshard: (shardId: number) => this.#acceptReshard(shardId) }
+                : {}),
+            ...(configuration.sessions && configuration.refillCaches
+                ? { restored: (shardId: number) => void this.#restoredShards.add(shardId) }
+                : {}),
+            readyUser: (body, shardId) => this.#readyUser(body, shardId),
+        }
+    }
+
+    /**
+     * Record the known plan, replace the shard runtimes and size REST concurrency for the local shard count. Called at
+     * creation, when an automatic plan is computed and when an automatic plan moves to a larger one
+     */
+    #adoptPlan(plan: ShardPlan, state: ConnectionState) {
+        this.#plan = plan
+        this.#shards.clear()
+        this.rest.scaleConcurrency(plan.shardIds.length)
+        for (const shardId of plan.shardIds)
+            this.#shards.set(shardId, {
+                shardId,
+                state,
+                latency: null,
+                recovery: null,
+                session: { id: undefined, sequence: null },
+                submit: undefined,
+                gatewayUrl: undefined,
+            })
+    }
+
+    /**
+     * Pace a fresh Identify across this client's shards, then wait for the supervisor's gate when one is configured.
+     * An application identify coordinator replaces the SDK's own spacing, and its permits are requested one at a time.
+     * A single unsharded, uncoordinated shard sends immediately
+     */
+    #identifyPermit(shardId: number, send: () => void): Effect.Effect<void, AttemptFailure> {
+        const owner = this
+        const plan = owner.#plan!
+        const coordinator = owner.#configuration?.identifyCoordinator
+        const permit = coordinator
+            ? Effect.tryPromise({
+                  try: (signal) => Promise.resolve(coordinator.permit(shardId, plan.totalShards, signal)),
+                  catch: (error) => error,
+              }).pipe(
+                  Effect.asVoid,
+                  Effect.mapError((error) => {
+                      owner.logging.log({
+                          level: "error",
+                          category: "lifecycle",
+                          code: "lifecycle.identifyPermitFailed",
+                          message: `The identify coordinator (sharding.identify) failed to grant shard ${shardId} permission to start a new session, so the SDK retries the connection as after a network failure`,
+                          shardId,
+                          error,
+                          origin: "application",
+                      })
+                      return new AttemptFailure(
+                          new ConnectionError("gateway", "network", null, {
+                              cause: error,
+                              details: {
+                                  detail: "the identify coordinator did not grant permission to start a new session",
+                              },
+                              hint: "Check the permit function of the sharding.identify coordinator",
+                          }),
+                          true,
+                      )
+                  }),
+              )
+            : Effect.void
+        const grant = () =>
+            owner.identifyGate
+                ? owner.identifyGate
+                      .permit(shardId, send)
+                      .pipe(Effect.mapError((error) => new AttemptFailure(error, true)))
+                : Effect.sync(send)
+        if (!plan.identifyShards) return permit.pipe(Effect.andThen(Effect.suspend(grant)))
+        if (coordinator) return owner.#identify.withPermit(permit.pipe(Effect.andThen(Effect.suspend(grant))))
+        return owner.#identify.withPermit(
+            Effect.gen(function* () {
+                const clock = yield* Clock.Clock
+                const now = () => nowMs(clock)
+                // Pace actual Identify sends, including handshakes that finish out of order
+                while (owner.#nextIdentifyAt > now()) yield* Effect.sleep(owner.#nextIdentifyAt - now())
+                yield* grant()
+                owner.#nextIdentifyAt = now() + identifySpacingMs
+            }),
         )
+    }
+
+    /**
+     * Identify fields for one new session: The current presence intent, the flags and the ignored dispatch names.
+     * Automatic filtering reads the event registrations present now, so later registrations take effect at the next
+     * new session only
+     */
+    #identifyFields(configuration: Configuration<M>, shardId: number): IdentifyFields {
+        const gateway = configuration.gateway
+        const registered = this.events.registeredEvents()
+        let ignoredEvents: readonly string[]
+        if (gateway.ignoredEvents === "auto") {
+            ignoredEvents = automaticIgnoredEvents(registered, gateway.automaticNeeds)
+        } else {
+            ignoredEvents = gateway.ignoredEvents
+            const suppressed = suppressedRegistrations(registered, new Set(ignoredEvents))
+            if (suppressed.length)
+                this.logging.log({
+                    level: "warn",
+                    category: "gateway",
+                    code: "gateway.ignoredEventRegistered",
+                    message: `Handlers for ${suppressed.join(", ")} receive nothing on shard ${shardId}, because gateway.ignoredEvents suppresses every gateway event that delivers them`,
+                    shardId,
+                    fields: { events: suppressed.join(",") },
+                })
+        }
+        if (ignoredEvents.length && this.logging.enabled("debug", "gateway"))
+            this.logging.log({
+                level: "debug",
+                category: "gateway",
+                code: "gateway.identifyFilter",
+                message: `Shard ${shardId} asks Fluxer not to send ${ignoredEvents.length} gateway event type${ignoredEvents.length === 1 ? "" : "s"}`,
+                shardId,
+                fields: { ignoredEvents: ignoredEvents.join(","), automatic: gateway.ignoredEvents === "auto" },
+            })
+        return {
+            presence: this.presence.identifyPresence(),
+            ignoredEvents,
+            flags: gateway.flags,
+        }
     }
     get state(): ConnectionState {
         return this.#state
+    }
+    /** Default deadline for multi-step REST workflows, from rest.defaultTimeoutMs */
+    get defaultTimeoutMs(): number {
+        return this.rest.defaultTimeoutMs
     }
     get gatewayLatencyMs(): number | null {
         if (this.#state !== "Connected") return null
@@ -335,36 +619,41 @@ export class ClientOwner<M extends MessageCore = Message> {
             gatewayRequests: Object.freeze(this.#gatewayRequests.diagnostics()),
             events: Object.freeze(this.events.diagnostics()),
             caches,
+            counters: this.logging.counters(),
         })
     }
     cacheEntries<K extends CacheKind>(
         kind: K,
         options?: CacheEntriesOptions,
     ): Effect.Effect<readonly CachedResources<M>[K][], ConfigurationError> {
-        return Effect.suspend(() => {
+        return suspendInput(() => {
             if (!cacheKinds.includes(kind))
-                return Effect.fail(new ConfigurationError("kind", "Cache entry kind must name a supported cache"))
-            if (
-                options !== undefined &&
-                (typeof options !== "object" ||
-                    options === null ||
-                    Array.isArray(options) ||
-                    Object.keys(options).some((key) => key !== "limit"))
-            )
+                return Effect.fail(
+                    new ConfigurationError("kind", `The cache kind must be one of ${cacheKinds.join(", ")}`),
+                )
+            if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
                 return Effect.fail(new ConfigurationError("limit", "Cache entry options must contain only limit"))
-            const limit = options?.limit === undefined ? 100 : options.limit
+            const unsupported = options && Object.keys(options).find((key) => key !== "limit")
+            if (unsupported !== undefined)
+                return Effect.fail(
+                    new ConfigurationError(
+                        "limit",
+                        `Unsupported option ${JSON.stringify(unsupported)} in the cache entry options`,
+                        { hint: unsupportedKeyHint(unsupported, ["limit"]) },
+                    ),
+                )
+            // Read limit once, so the validated limit is the one applied
+            const limitInput = options?.limit
+            const limit = limitInput === undefined ? 100 : limitInput
             if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 1_000)
                 return Effect.fail(
                     new ConfigurationError("limit", "Cache entry limit must be a safe integer from 1 through 1,000"),
                 )
-            return Effect.succeed(this.#cacheEntries(kind, limit))
+            return Effect.sync(() => this.#cacheEntries(kind, limit))
         })
     }
     clearCache() {
-        this.cache?.clear()
-        this.resources?.clear()
-        this.channelCache?.clear()
-        this.userCache.clear()
+        clearCaches(this)
     }
     #cacheEntries<K extends CacheKind>(kind: K, limit: number): readonly CachedResources<M>[K][] {
         switch (kind) {
@@ -384,8 +673,14 @@ export class ClientOwner<M extends MessageCore = Message> {
         }
     }
     shardIdForGuild(guildId: string): number | undefined {
+        if (this.#plan === undefined) return undefined
         const id = guildShardId(guildId, this.#plan.totalShards)
         return this.#shards.has(id) ? id : undefined
+    }
+    /** The public client.shardIdForGuild: shardIdForGuild after checking the caller's ID */
+    ownedShardForGuild(guildId: unknown): number | undefined {
+        if (!identifier(guildId)) throw new ConfigurationError("guildId", "Guild IDs must be decimal strings")
+        return this.shardIdForGuild(guildId)
     }
     gatewayState(guildId?: string): ConnectionState {
         if (guildId === undefined) return this.#state
@@ -406,24 +701,41 @@ export class ClientOwner<M extends MessageCore = Message> {
         listener(this.gatewayState(guildId))
         return () => {
             listeners.delete(listener)
-            if (!listeners.size) this.#shardListeners.delete(id)
+            // A move to a larger plan replaces the listener sets, and a new set for the same ID must stay
+            if (!listeners.size && this.#shardListeners.get(id) === listeners) this.#shardListeners.delete(id)
         }
     }
-    #gapShard(shardId: number) {
-        const affects = (guildId: string | null | undefined) =>
-            guildId === undefined ||
-            (guildId === null ? shardId === 0 : guildShardId(guildId, this.#plan.totalShards) === shardId)
+    #shardGuilds(shardId: number) {
+        const totalShards = this.#plan?.totalShards ?? 1
+        return (guildId: string | null | undefined) =>
+            guildId === undefined || (guildId === null ? shardId === 0 : guildShardId(guildId, totalShards) === shardId)
+    }
+    /**
+     * Invalidate a shard's cached observations when its connection is lost. Guild-scoped entries stay while the shard
+     * can still resume, because Fluxer's Resume replays every missed dispatch or refuses the session, and
+     * #clearShardGuilds releases them once a new session is needed. Messages and users are cleared at once
+     */
+    #gapShard(shardId: number, resumable: boolean) {
+        const affects = this.#shardGuilds(shardId)
         this.cache?.gap(affects)
-        this.resources?.gap(affects)
-        this.channelCache?.gap(affects)
+        if (resumable) {
+            this.resources?.pause(affects)
+            this.channelCache?.pause(affects)
+        } else this.#clearShardGuilds(shardId)
         this.userCache.gap(affects)
         this.counts.detach(shardId)
         this.memberChunks.detach(shardId)
         this.presence.detach(shardId)
     }
+    /** Release a shard's guild-scoped entries when its next connection starts a new session, which replays nothing */
+    #clearShardGuilds(shardId: number) {
+        const affects = this.#shardGuilds(shardId)
+        this.resources?.gap(affects)
+        this.channelCache?.gap(affects)
+    }
     #setShardState(shard: ShardRuntime, state: ConnectionState) {
         if (this.#state === "Closing" || this.#state === "Closed" || shard.state === state) return
-        if (state === "Recovering") this.#gapShard(shard.shardId)
+        if (state === "Recovering") this.#gapShard(shard.shardId, true)
         shard.state = state
         if (state !== "Connected") shard.latency = null
         for (const listener of this.#shardListeners.get(shard.shardId) ?? []) listener(state)
@@ -438,7 +750,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         if (state === "Disconnected") {
             // A reusable startup can have delivered events from a ready sibling before the group failed
             for (const shard of this.#shards.values())
-                if (shard.state === "Connected" || shard.state === "Recovering") this.#gapShard(shard.shardId)
+                if (shard.state === "Connected" || shard.state === "Recovering") this.#gapShard(shard.shardId, false)
         }
         if (state === "Closing" || state === "Closed") this.cache?.close()
         if (state === "Closing" || state === "Closed") this.counts.close()
@@ -498,66 +810,187 @@ export class ClientOwner<M extends MessageCore = Message> {
         this.#setState("Closed")
     }
 
+    #selfUserId: string | undefined
+    /** The one users.fetchSelf read in flight, which concurrent mentions share */
+    #selfUserRead: Deferred.Deferred<string | undefined> | undefined
+    /** Consecutive failed reads, and the logical time before which no new read starts */
+    #selfUserFailures = 0
+    #selfUserRetryAtMs = 0
+    static readonly #selfUserBackoffMs = 5_000
+    static readonly #selfUserMaxBackoffMs = 300_000
+
+    /** The bot's username from the latest READY, for the connected record */
+    #readyName: string | undefined
+    /** Each shard's community count from its latest READY, for the connected record */
+    readonly #readyCommunities = new Map<number, number>()
+    /** Links for the discovered instance, so the connected record can offer an installation link */
+    #instanceLinks: LinkHelpers | undefined
+
+    /**
+     * Keep the bot account ID from a READY body's user, so mention prefixes need no REST read, and the bot's username
+     * and the shard's community count for the connected record. For a bot, READY lists each community as unavailable
+     */
+    #readyUser(body: unknown, shardId: number) {
+        const user = record(body) && record(body.user) ? body.user : undefined
+        if (identifier(user?.id) && user.id !== "0") this.#selfUserId = user.id
+        if (typeof user?.username === "string" && user.username.length > 0) this.#readyName = user.username
+        if (record(body) && Array.isArray(body.guilds)) this.#readyCommunities.set(shardId, body.guilds.length)
+        else this.#readyCommunities.delete(shardId)
+    }
+
+    /**
+     * Log once per start that every local shard is connected, naming the bot and its community count when READY
+     * supplied them. A bot that owns every shard and is in no community gets a Warn with an installation link instead
+     */
+    #logConnected(context: Context.Context<never>) {
+        const plan = this.#plan
+        if (plan === undefined) return
+        const counts = plan.shardIds.map((shardId) => this.#readyCommunities.get(shardId))
+        const communities = counts.every((count) => count !== undefined)
+            ? counts.reduce<number>((total, count) => total + count!, 0)
+            : undefined
+        const everyShard = plan.shardIds.length === plan.totalShards
+        const subject = `Connected to Fluxer${this.#readyName === undefined ? "" : ` as ${this.#readyName}`}`
+        const empty = communities === 0 && everyShard
+        const message = empty
+            ? `${subject}, but the bot is not in any community yet. ${this.#inviteText()}`
+            : communities === undefined
+              ? subject
+              : `${subject} in ${communities} ${communities === 1 ? "community" : "communities"}${everyShard ? "" : " on this client's shards"}`
+        this.logging.log(
+            {
+                level: empty ? "warn" : "info",
+                category: "lifecycle",
+                code: "lifecycle.connected",
+                message,
+                fields: { communities: communities ?? null, shards: plan.shardIds.length },
+            },
+            context,
+        )
+    }
+
+    /** Where to invite the bot: Its installation link when the bot account ID and instance are known */
+    #inviteText(): string {
+        const id = this.#selfUserId
+        if (id === undefined || this.#instanceLinks === undefined)
+            return "Invite it with an installation link that uses the application ID"
+        try {
+            return `Invite it by opening ${this.#instanceLinks.installation(id)}`
+        } catch {
+            // allow-silent: An ID the link helper rejects still gets the general instruction
+            return "Invite it with an installation link that uses the application ID"
+        }
+    }
+
+    /**
+     * The bot account ID for command mention prefixes, kept for the client lifetime.
+     * READY normally supplies it. Until then it is read through users.fetchSelf, and concurrent callers share one read.
+     * A failed read is logged at Warn and produces undefined, and callers get undefined without a new read for a backoff
+     * that starts at 5 seconds and doubles per consecutive failure up to 5 minutes, unless READY supplies the ID first
+     */
+    selfUserId(): Effect.Effect<string | undefined> {
+        return Effect.suspend(() => {
+            if (this.#selfUserId !== undefined) return Effect.succeed(this.#selfUserId)
+            if (this.#selfUserRead !== undefined) return Deferred.await(this.#selfUserRead)
+            if (this.logical.now() < this.#selfUserRetryAtMs) return Effect.succeed(undefined)
+            const read = Deferred.makeUnsafe<string | undefined>()
+            this.#selfUserRead = read
+            return this.user("users.fetchSelf", () => userFetch("@me")).pipe(
+                Effect.map((user) => {
+                    this.#selfUserFailures = 0
+                    return (this.#selfUserId = user.id)
+                }),
+                Effect.catch((error) =>
+                    Effect.sync(() => {
+                        this.#selfUserFailures += 1
+                        const retryInMs = Math.min(
+                            ClientOwner.#selfUserMaxBackoffMs,
+                            ClientOwner.#selfUserBackoffMs * 2 ** (this.#selfUserFailures - 1),
+                        )
+                        this.#selfUserRetryAtMs = this.logical.now() + retryInMs
+                        this.logging.log({
+                            level: "warn",
+                            category: "commands",
+                            code: "commands.mentionPrefixUnavailable",
+                            message: `The bot's user ID could not be read, so commands that start with a mention of the bot are ignored for ${retryInMs / 1_000} s. The next such command after that reads the ID again`,
+                            error,
+                            fields: { retryInMs, failures: this.#selfUserFailures },
+                        })
+                        return undefined
+                    }),
+                ),
+                // Waiters get the reader's result. An interrupted or defective read releases them with undefined and
+                // lets the next mention read again
+                Effect.onExit((exit) =>
+                    Effect.sync(() => {
+                        this.#selfUserRead = undefined
+                        Deferred.doneUnsafe(read, Effect.succeed(Exit.isSuccess(exit) ? exit.value : undefined))
+                    }),
+                ),
+            )
+        })
+    }
+
     user<A>(
         operation: UserOperation,
         build: () => UserRequest<A> | InputValidationFailure,
         options?: UserOperationOptions,
     ) {
-        return Effect.suspend(() => {
+        return suspendInput(() => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
             const request = build()
             if (request instanceof InputValidationFailure)
                 return Effect.fail(
-                    new UserOperationError(operation, "input", "notDispatched", null, null, null, request.detail),
+                    new UserOperationError({
+                        operation,
+                        reason: "input",
+                        outcome: "notDispatched",
+                        inputValidation: request.detail,
+                    }),
                 )
             const owner = this
             const token = this.#configuration.token
+            // Read the caller's options here, where a throwing getter is reported as an application fault
+            const timeout = options?.timeoutMs ?? owner.rest.defaultTimeoutMs
+            const unsupportedOption = record(options)
+                ? unsupportedKeyFailure(options, ["timeoutMs", "signal"], "options", "the operation options")
+                : undefined
             return Effect.gen(function* () {
-                const timeout = options?.timeoutMs ?? 30_000
                 if (options !== undefined && !record(options))
                     return yield* Effect.fail(
-                        new UserOperationError(
+                        new UserOperationError({
                             operation,
-                            "input",
-                            "notDispatched",
-                            null,
-                            null,
-                            null,
-                            inputValidationFailure("options", "type", "Operation options must be an object").detail,
-                        ),
-                    )
-                if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
-                    return yield* Effect.fail(
-                        new UserOperationError(
-                            operation,
-                            "input",
-                            "notDispatched",
-                            null,
-                            null,
-                            null,
-                            inputValidationFailure(
+                            reason: "input",
+                            outcome: "notDispatched",
+                            inputValidation: inputValidationFailure(
                                 "options",
-                                "allowedFields",
-                                "Operation options may contain only timeoutMs and signal",
+                                "type",
+                                "Operation options must be an object",
                             ).detail,
-                        ),
+                        }),
+                    )
+                if (unsupportedOption)
+                    return yield* Effect.fail(
+                        new UserOperationError({
+                            operation,
+                            reason: "input",
+                            outcome: "notDispatched",
+                            inputValidation: unsupportedOption.detail,
+                        }),
                     )
                 if (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2_147_483_647)
                     return yield* Effect.fail(
-                        new UserOperationError(
+                        new UserOperationError({
                             operation,
-                            "input",
-                            "notDispatched",
-                            null,
-                            null,
-                            null,
-                            inputValidationFailure(
+                            reason: "input",
+                            outcome: "notDispatched",
+                            inputValidation: inputValidationFailure(
                                 "options.timeoutMs",
                                 "range",
                                 "Operation timeoutMs must be an integer from 1 through 2,147,483,647 milliseconds",
                             ).detail,
-                        ),
+                        }),
                     )
                 const deadline = owner.logical.now() + timeout
                 if (request.verifyType) {
@@ -569,24 +1002,23 @@ export class ClientOwner<M extends MessageCore = Message> {
                     )
                     if (request.verifyType === "group" && channel.type !== "group")
                         return yield* Effect.fail(
-                            new UserOperationError(
+                            new UserOperationError({
                                 operation,
-                                "input",
-                                "notDispatched",
-                                null,
-                                null,
-                                null,
-                                inputValidationFailure(
+                                reason: "input",
+                                outcome: "notDispatched",
+                                inputValidation: inputValidationFailure(
                                     "channelId",
                                     "relationship",
                                     "This operation requires a group DM channel",
                                 ).detail,
-                            ),
+                            }),
                         )
                 }
                 const remaining = Math.floor(deadline - owner.logical.now())
                 if (remaining <= 0)
-                    return yield* Effect.fail(new UserOperationError(operation, "timeout", "notDispatched"))
+                    return yield* Effect.fail(
+                        new UserOperationError({ operation, reason: "timeout", outcome: "notDispatched" }),
+                    )
                 if (request.noCache)
                     return yield* owner.rest.user(token, operation, () => request, { timeoutMs: remaining })
                 const guard = owner.userCache.begin(request.resource, {
@@ -639,25 +1071,89 @@ export class ClientOwner<M extends MessageCore = Message> {
                     return Effect.fail(new ClientClosedError())
                 if (!identifier(id))
                     return Effect.fail(
-                        new UserOperationError(
-                            `${kind}.get`,
-                            "input",
-                            "notDispatched",
-                            null,
-                            null,
-                            null,
-                            inputValidationFailure(
+                        new UserOperationError({
+                            operation: `${kind}.get`,
+                            reason: "input",
+                            outcome: "notDispatched",
+                            inputValidation: inputValidationFailure(
                                 kind === "users" ? "userId" : "channelId",
                                 "format",
                                 kind === "users"
                                     ? "User IDs must be decimal strings"
                                     : "Channel IDs must be decimal strings",
                             ).detail,
-                        ),
+                        }),
                     )
                 return Effect.succeed(this.userCache.get(kind, id))
             },
         )
+    }
+
+    /** Send one caller-described request through this client's REST scheduler */
+    request<T>(input: RestRequest | DefaultRestRequest): Effect.Effect<RestResponse<T>, RestRequestFailure> {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.request<T>(this.#configuration.token, input)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    /**
+     * Send one application command on a ready local shard through that socket's paced path.
+     * Validation happens before anything is queued. The data is copied through JSON so later caller changes cannot
+     * alter the frame, and a frame above Fluxer's 4,096-byte limit is rejected rather than closing the connection
+     */
+    gatewaySend(shardId: number, op: number, d: unknown, options?: unknown): Effect.Effect<void, GatewaySendFailure> {
+        // Only encoding the caller data is marked, so a throw from its getters or toJSON is an application fault
+        return suspendMarked((): Effect.Effect<void, GatewaySendFailure> => {
+            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
+                return Effect.fail(new ClientClosedError())
+            const validShard = typeof shardId === "number" && Number.isSafeInteger(shardId) && shardId >= 0
+            const validOpcode = typeof op === "number" && Number.isSafeInteger(op) && op >= 0
+            const input = (path: string, explanation: string, cause?: unknown) =>
+                Effect.fail(
+                    new GatewaySendError({
+                        reason: "input",
+                        shardId: validShard ? shardId : null,
+                        opcode: validOpcode ? op : null,
+                        inputValidation: inputValidationFailure(path, path === "d" ? "format" : "type", explanation)
+                            .detail,
+                        cause,
+                    }),
+                )
+            if (!validShard) return input("shardId", "Shard IDs must be non-negative integers")
+            if (!validOpcode) return input("op", "Opcodes must be non-negative integers")
+            // Only the default API passes options, whose signal the operation executor reads
+            const unsupported = record(options)
+                ? readCaller(() => unsupportedKeyFailure(options, ["signal"], "options", "the gateway send options"))
+                : undefined
+            if (unsupported)
+                return Effect.fail(
+                    new GatewaySendError({ reason: "input", shardId, opcode: op, inputValidation: unsupported.detail }),
+                )
+            if (reservedClientOpcodes.has(op))
+                return Effect.fail(new GatewaySendError({ reason: "reserved", shardId, opcode: op }))
+            const result = readCaller(() => encodeCommandData(d))
+            if ("failure" in result) return input("d", "Command data must be encodable as JSON", result.failure)
+            const encoded = result.json
+            if (encoded === undefined) return input("d", "Command data must be a JSON value; use null for no data")
+            if (Buffer.byteLength(`{"op":${op},"d":${encoded}}`) > maxClientPayloadBytes)
+                return input("d", "The encoded command must be at most 4,096 bytes")
+            const shard = this.#shards.get(shardId)
+            if (!shard) return Effect.fail(new GatewaySendError({ reason: "notOwned", shardId, opcode: op }))
+            if (shard.state !== "Connected" || shard.submit === undefined)
+                return Effect.fail(new GatewaySendError({ reason: "notReady", shardId, opcode: op }))
+            return shard.submit(op, JSON.parse(encoded)).pipe(
+                Effect.mapError(
+                    (reason) =>
+                        new GatewaySendError({
+                            reason: reason === "busy" ? "busy" : "notReady",
+                            shardId,
+                            opcode: op,
+                        }),
+                ),
+            )
+        })
     }
 
     webhook<A>(
@@ -686,8 +1182,13 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    deleteGuildMessages(guildId: string, options?: GuildOperationOptions) {
-        return this.guild("guilds.deleteMine", () => guildDeleteMine(guildId), options)
+    deleteOwnGuildMessages(guildId: string, options: unknown) {
+        return suspendInput(() => {
+            const checked = ownDeletionOptions<GuildOperationOptions>(options)
+            return checked instanceof InputValidationFailure
+                ? this.guild<void>("guilds.deleteOwnMessages", () => checked)
+                : this.guild("guilds.deleteOwnMessages", () => guildDeleteOwnMessages(guildId), checked)
+        })
     }
 
     channel<A>(
@@ -709,15 +1210,16 @@ export class ClientOwner<M extends MessageCore = Message> {
                     return Effect.fail(new ClientClosedError())
                 if (!identifier(id))
                     return Effect.fail(
-                        new ChannelOperationError(
-                            "channels.get",
-                            "input",
-                            "notDispatched",
-                            null,
-                            null,
-                            null,
-                            inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings").detail,
-                        ),
+                        new ChannelOperationError({
+                            operation: "channels.get",
+                            reason: "input",
+                            outcome: "notDispatched",
+                            inputValidation: inputValidationFailure(
+                                "channelId",
+                                "format",
+                                "Channel IDs must be decimal strings",
+                            ).detail,
+                        }),
                     )
                 return Effect.succeed(this.channelCache?.get(id))
             },
@@ -725,7 +1227,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
 
     getResource<K extends ResourceKind>(kind: K, target: string | MemberReference | RoleReference) {
-        return Effect.suspend((): Effect.Effect<Resources[K] | undefined, ClientClosedError | GuildOperationError> => {
+        return suspendInput((): Effect.Effect<Resources[K] | undefined, ClientClosedError | GuildOperationError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
             const guildId = kind === "guilds" ? target : record(target) ? target.guildId : undefined
@@ -739,46 +1241,37 @@ export class ClientOwner<M extends MessageCore = Message> {
                       : undefined
             if (!identifier(guildId) || !identifier(id))
                 return Effect.fail(
-                    new GuildOperationError(
-                        `${kind}.get`,
-                        "input",
-                        "notDispatched",
-                        null,
-                        null,
-                        null,
-                        inputValidationFailure(
+                    new GuildOperationError({
+                        operation: `${kind}.get`,
+                        reason: "input",
+                        outcome: "notDispatched",
+                        inputValidation: inputValidationFailure(
                             kind === "guilds" ? "guildId" : "target",
                             "format",
                             kind === "guilds"
                                 ? "Guild IDs must be decimal strings"
                                 : "Resource targets require decimal guild and resource IDs",
                         ).detail,
-                    ),
+                    }),
                 )
-            return Effect.succeed(this.resources?.get(kind, guildId, id))
+            return Effect.sync(() => this.resources?.get(kind, guildId, id))
         })
     }
 
-    reply(target: MessageReference, input: MessageInput, options?: SendOptions) {
-        return Effect.suspend(() => {
+    reply(target: MessageReference, input: MessageInput | string, options?: SendOptions) {
+        return suspendInput(() => {
             const request = replyInput(target, input)
             if (request instanceof MessageError) return Effect.fail(request)
             return this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? (this.reports?.start() ?? Effect.void).pipe(
-                      Effect.andThen(
-                          this.rest.reply(this.#configuration.token, request.target, request.input, options),
-                      ),
-                  )
+                ? this.rest.reply(this.#configuration.token, request.target, request.input, options)
                 : Effect.fail(new ClientClosedError())
         })
     }
 
-    send(channelId: string, input: MessageInput, options?: SendOptions) {
+    send(channelId: string, input: MessageInput | string, options?: SendOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? (this.reports?.start() ?? Effect.void).pipe(
-                      Effect.andThen(this.rest.send(this.#configuration.token, channelId, input, options)),
-                  )
+                ? this.rest.send(this.#configuration.token, channelId, input, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -816,57 +1309,38 @@ export class ClientOwner<M extends MessageCore = Message> {
     forward(channelId: string, input: ForwardMessageInput, options?: SendOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? (this.reports?.start() ?? Effect.void).pipe(
-                      Effect.andThen(this.rest.forward(this.#configuration.token, channelId, input, options)),
-                  )
+                ? this.rest.forward(this.#configuration.token, channelId, input, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
 
-    sendDirectMessage(userId: string, input: MessageInput, options?: SendOptions) {
-        return Effect.suspend((): Effect.Effect<M, SendError> => {
+    sendDirectMessage(userId: string, input: MessageInput | string, options?: SendOptions) {
+        return suspendInput((): Effect.Effect<M, SendError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
             if (!identifier(userId))
                 return Effect.fail(
-                    new MessageError(
-                        "input",
-                        "notSent",
-                        null,
-                        null,
-                        null,
-                        inputValidationFailure("userId", "format", "User IDs must be decimal strings").detail,
-                    ),
+                    new MessageError({
+                        reason: "input",
+                        outcome: "notDispatched",
+                        inputValidation: inputValidationFailure("userId", "format", "User IDs must be decimal strings")
+                            .detail,
+                    }),
                 )
-            if (!record(input))
+            if (typeof input !== "string" && !record(input))
                 return Effect.fail(
-                    new MessageError(
-                        "input",
-                        "notSent",
-                        null,
-                        null,
-                        null,
-                        inputValidationFailure("input", "type", "Direct message input must be an object").detail,
-                    ),
-                )
-            if (input.messageReference !== undefined)
-                return Effect.fail(
-                    new MessageError(
-                        "input",
-                        "notSent",
-                        null,
-                        null,
-                        null,
-                        inputValidationFailure(
-                            "messageReference",
-                            "relationship",
-                            "Direct messages cannot include a message reference",
+                    new MessageError({
+                        reason: "input",
+                        outcome: "notDispatched",
+                        inputValidation: inputValidationFailure(
+                            "input",
+                            "type",
+                            "Direct message input must be a string or an object",
                         ).detail,
-                    ),
+                    }),
                 )
-            return (this.reports?.start() ?? Effect.void).pipe(
-                Effect.andThen(this.rest.send(this.#configuration.token, userId, input, options, userId)),
-            )
+            // The send encoder rejects a messageReference first, reading it only once with the other fields
+            return this.rest.send(this.#configuration.token, userId, input, options, userId)
         })
     }
 
@@ -900,9 +1374,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     fetch(target: MessageReference, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? (this.reports?.start() ?? Effect.void).pipe(
-                      Effect.andThen(this.rest.fetch(this.#configuration.token, target, options)),
-                  )
+                ? this.rest.fetch(this.#configuration.token, target, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -923,15 +1395,16 @@ export class ClientOwner<M extends MessageCore = Message> {
         const owner = this
         if (!Effect.isEffect(task))
             return Effect.fail(
-                new MessageOperationError(
-                    "typing",
-                    "input",
-                    "notDispatched",
-                    null,
-                    null,
-                    null,
-                    inputValidationFailure("task", "type", "Native keepTyping task must be an Effect").detail,
-                ),
+                new MessageOperationError({
+                    operation: "typing",
+                    reason: "input",
+                    outcome: "notDispatched",
+                    inputValidation: inputValidationFailure(
+                        "task",
+                        "type",
+                        "The task passed to keepTyping must be an Effect",
+                    ).detail,
+                }),
             )
         return Effect.uninterruptibleMask((restore) =>
             restore(owner.typing(channelId, options)).pipe(
@@ -999,9 +1472,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     fetchHistory(channelId: string, query?: MessageHistoryQuery, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? (this.reports?.start() ?? Effect.void).pipe(
-                      Effect.andThen(this.rest.fetchHistory(this.#configuration.token, channelId, query, options)),
-                  )
+                ? this.rest.fetchHistory(this.#configuration.token, channelId, query, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -1014,12 +1485,10 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    edit(target: MessageReference, input: EditMessageInput, options?: MessageOperationOptions) {
+    edit(target: MessageReference, input: EditMessageInput | string, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? (this.reports?.start() ?? Effect.void).pipe(
-                      Effect.andThen(this.rest.edit(this.#configuration.token, target, input, options)),
-                  )
+                ? this.rest.edit(this.#configuration.token, target, input, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -1027,9 +1496,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     delete(target: MessageReference, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? (this.reports?.start() ?? Effect.void).pipe(
-                      Effect.andThen(this.rest.delete(this.#configuration.token, target, options)),
-                  )
+                ? this.rest.delete(this.#configuration.token, target, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -1037,11 +1504,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     deleteAttachment(target: MessageReference, attachmentId: string, options?: MessageOperationOptions) {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? (this.reports?.start() ?? Effect.void).pipe(
-                      Effect.andThen(
-                          this.rest.deleteAttachment(this.#configuration.token, target, attachmentId, options),
-                      ),
-                  )
+                ? this.rest.deleteAttachment(this.#configuration.token, target, attachmentId, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }
@@ -1054,36 +1517,43 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    deleteMine(channelId: string, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.deleteMine(this.#configuration.token, channelId, options)
-                : Effect.fail(new ClientClosedError()),
-        )
+    deleteOwnMessages(channelId: string, options: unknown) {
+        return suspendInput(() => {
+            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
+                return Effect.fail(new ClientClosedError())
+            const checked = ownDeletionOptions<MessageOperationOptions>(options)
+            if (checked instanceof InputValidationFailure)
+                return Effect.fail(
+                    new MessageOperationError({
+                        operation: "deleteOwnMessages",
+                        reason: "input",
+                        outcome: "notDispatched",
+                        inputValidation: checked.detail,
+                    }),
+                )
+            return this.rest.deleteOwnMessages(this.#configuration.token, channelId, checked)
+        })
     }
 
     get(target: MessageReference) {
-        return Effect.suspend((): Effect.Effect<M | undefined, ClientClosedError | MessageOperationError> => {
+        return suspendInput((): Effect.Effect<M | undefined, ClientClosedError | MessageOperationError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
             const reference = snapshotReference(target)
             if (reference === undefined)
                 return Effect.fail(
-                    new MessageOperationError(
-                        "get",
-                        "input",
-                        "notDispatched",
-                        null,
-                        null,
-                        null,
-                        inputValidationFailure(
+                    new MessageOperationError({
+                        operation: "messages.get",
+                        reason: "input",
+                        outcome: "notDispatched",
+                        inputValidation: inputValidationFailure(
                             "target",
                             "format",
                             "Message targets require decimal id and channelId strings",
                         ).detail,
-                    ),
+                    }),
                 )
-            return Effect.succeed(this.cache?.get(reference))
+            return Effect.sync(() => this.cache?.get(reference))
         })
     }
 
@@ -1091,49 +1561,27 @@ export class ClientOwner<M extends MessageCore = Message> {
         Deferred.doneUnsafe(this.#typingClosed, Effect.void)
         this.events.stop()
         this.rest.stop()
-        return Effect.all(
-            [
-                Effect.exit(this.instance.shutdown()),
-                Effect.exit(this.events.shutdown()),
-                Effect.exit(this.rest.shutdown()),
-                Effect.exit(this.reports?.shutdown() ?? Effect.void),
-                Effect.all(
-                    [
-                        Effect.forEach(
-                            [...this.#messageCollectors],
-                            (collector) => Effect.exit(Deferred.await(collector.closed).pipe(Effect.asVoid)),
-                            { concurrency: "unbounded" },
-                        ),
-                        Effect.forEach(
-                            [...this.#reactionCollectors],
-                            (collector) => Effect.exit(Deferred.await(collector.closed).pipe(Effect.asVoid)),
-                            { concurrency: "unbounded" },
-                        ),
-                    ],
-                    { concurrency: "unbounded" },
-                ).pipe(
-                    Effect.map((exits) => {
-                        const reasons = exits
-                            .flat()
-                            .flatMap((exit) =>
-                                Exit.isFailure(exit)
-                                    ? exit.cause.reasons.filter((reason) => reason._tag === "Die")
-                                    : [],
-                            )
-                        return reasons.length ? Exit.failCause(Cause.fromReasons<never>(reasons)) : Exit.void
-                    }),
-                ),
-            ],
-            {
-                concurrency: "unbounded",
-            },
-        ).pipe(
-            Effect.flatMap((exits) => {
-                const reasons = exits.flatMap((exit) => (Exit.isFailure(exit) ? exit.cause.reasons : []))
-                return reasons.length ? Effect.failCause(Cause.fromReasons<never>(reasons)) : Effect.void
-            }),
-            Effect.onExit(() => this.#awaitTyping()),
-        )
+        return closeAll([
+            Effect.exit(this.instance.shutdown()),
+            Effect.exit(this.events.shutdown()),
+            Effect.exit(this.rest.shutdown()),
+            Effect.exit(this.failures.shutdown()),
+            Effect.all(
+                [
+                    Effect.forEach(
+                        [...this.#messageCollectors],
+                        (collector) => Effect.exit(Deferred.await(collector.closed).pipe(Effect.asVoid)),
+                        { concurrency: "unbounded" },
+                    ),
+                    Effect.forEach(
+                        [...this.#reactionCollectors],
+                        (collector) => Effect.exit(Deferred.await(collector.closed).pipe(Effect.asVoid)),
+                        { concurrency: "unbounded" },
+                    ),
+                ],
+                { concurrency: "unbounded" },
+            ).pipe(Effect.map((exits) => defectsOnly(exits.flat()))),
+        ]).pipe(Effect.onExit(() => this.#awaitTyping()))
     }
 
     #awaitTyping(): Effect.Effect<void> {
@@ -1151,321 +1599,329 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     #supervise(configuration: Configuration<M>, startup: Deferred.Deferred<void, ConnectError>) {
         const owner = this
-        return Effect.suspend(() => {
-            const exits: Exit.Exit<unknown, ConnectionFailure>[] = []
-            const sessions = Effect.gen(function* () {
-                const clock = yield* Clock.Clock
-                const deadline = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + configuration.startupTimeoutMs
-                return yield* Effect.forEach(
-                    [...owner.#shards.values()],
-                    (shard) =>
-                        owner.#loop(configuration, startup, shard, deadline).pipe(
-                            mapFailureCause((failure) =>
-                                configuration.sharding.identifyShards && !(failure instanceof ShardConnectionError)
-                                    ? new ShardConnectionError(shard.shardId, failure)
-                                    : failure,
-                            ),
-                            Effect.onExit((exit) =>
-                                Effect.sync(() => {
-                                    exits.push(exit)
-                                }),
-                            ),
-                        ),
-                    { concurrency: "unbounded", discard: true },
-                )
-            })
-            const startupGuard = Deferred.await(startup).pipe(
-                Effect.ignore,
-                withDeadline(
-                    configuration.startupTimeoutMs,
-                    () => new ConnectionTimeoutError(configuration.startupTimeoutMs),
+        return Effect.gen(function* () {
+            // Automatic sizing counts guilds under its own deadline, so the shard group always gets its full budget
+            let plan = owner.#plan ?? (yield* owner.#automaticPlan(configuration))
+            // The refill waits for the whole group, and a failed startup ends this worker and the refill with it
+            yield* Effect.forkChild(
+                Effect.exit(Deferred.await(startup)).pipe(
+                    Effect.flatMap((ready) => (Exit.isSuccess(ready) ? owner.#refillRestored() : Effect.void)),
                 ),
-                Effect.andThen(Effect.never),
             )
-            return Effect.raceFirst(sessions, startupGuard).pipe(
-                // A losing session may defect during socket cleanup. Keep those causes across the race boundary
-                Effect.onExit((outcome) => {
-                    const missing = exits.flatMap((exit) =>
-                        Exit.isFailure(exit)
-                            ? exit.cause.reasons.filter(
-                                  (reason) =>
-                                      reason._tag !== "Interrupt" &&
-                                      (!Exit.isFailure(outcome) || !outcome.cause.reasons.includes(reason)),
-                              )
-                            : [],
-                    )
-                    return missing.length ? Effect.failCause(Cause.fromReasons(missing)) : Effect.void
-                }),
-            )
+            for (let first = true; ; first = false) {
+                const exit = yield* Effect.exit(owner.#runPlan(configuration, startup, plan, first))
+                const shardId = owner.#reshardShard
+                if (Exit.isSuccess(exit)) return
+                if (shardId === undefined || Cause.hasDies(exit.cause)) return yield* Effect.failCause(exit.cause)
+                plan = yield* owner.#reshard(configuration, plan, shardId)
+            }
         })
     }
 
-    #loop(
+    /**
+     * Run every shard of one plan until one fails permanently. Only the first plan offers stored sessions, because a
+     * snapshot belongs to the plan it was saved under
+     */
+    #runPlan(
         configuration: Configuration<M>,
         startup: Deferred.Deferred<void, ConnectError>,
-        shard: ShardRuntime,
-        deadline: number,
+        plan: ShardPlan,
+        loadSessions: boolean,
     ) {
         const owner = this
         return Effect.gen(function* () {
-            const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
-            const emit = (diagnostic: Parameters<ClientLogging["emit"]>[1]) =>
-                owner.logging.emit(fiber, {
-                    ...diagnostic,
-                    ...(configuration.sharding.identifyShards ? { shardId: shard.shardId } : {}),
+            const spaced = plan.identifyShards && configuration.identifyCoordinator === undefined
+            const startupTimeoutMs = startupBudgetMs(configuration.startupTimeoutMs, spaced ? plan.shardIds.length : 1)
+            if (startupTimeoutMs > configuration.startupTimeoutMs)
+                owner.logging.log({
+                    level: "info",
+                    category: "lifecycle",
+                    code: "lifecycle.startupDeadline",
+                    message: `Startup of ${plan.shardIds.length} shards may take up to ${formatDuration(startupTimeoutMs)}: The configured ${formatDuration(configuration.startupTimeoutMs)} (connection.startupTimeoutMs) plus ${identifySpacingMs / 1_000} s per additional shard, because the SDK starts shard sessions ${identifySpacingMs / 1_000} s apart`,
+                    fields: {
+                        startupTimeoutMs,
+                        configuredMs: configuration.startupTimeoutMs,
+                        shards: plan.shardIds.length,
+                    },
                 })
-            const measure = (measurement: Parameters<ClientLogging["emitMeasurement"]>[1]) =>
-                owner.logging.emitMeasurement(fiber, measurement)
-            emit({ event: "connecting", phase: "startup" })
-            const clock = yield* Clock.Clock
-            const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000
-            let established = false
-            let attempts = 0
-            let recoveryStep = 0
-            let connectedAt: number | undefined
-            let disconnectedAt: number | undefined
-            let url: string | undefined
-            let inviteBase: string | undefined
+            return yield* superviseShards({
+                shards: [...owner.#shards.values()],
+                startupTimeoutMs,
+                attributeShards: plan.identifyShards,
+                startup,
+                runShard: (shard, deadline) =>
+                    runShardLoop({
+                        host: owner.#shardHost,
+                        configuration,
+                        startup,
+                        shard,
+                        plan,
+                        deadline,
+                        startupTimeoutMs,
+                        established: owner.#groupReady,
+                        loadSessions,
+                    }),
+            })
+        })
+    }
+
+    /**
+     * Decide whether a 4011 (sharding required) closure on this shard moves the automatic plan to a larger one: True when
+     * it does, otherwise why not. Closures of sibling shards during the same move join it
+     */
+    #acceptReshard(shardId: number): true | string {
+        if (this.#reshardShard !== undefined) return true
+        const refused = admitReshard(this.#reshards, this.logical.now(), this.#plan!.totalShards)
+        if (refused !== undefined) return refused
+        this.#reshardShard = shardId
+        return true
+    }
+
+    /**
+     * Move every local shard to a larger automatic plan after Fluxer closed shardId with 4011. The old sessions are
+     * already closed. Their guild-scoped observations are released under the old routing, the guilds are counted again
+     * and the new plan's shards start new sessions. Guild-scoped state observers see the waiting state, because the
+     * shard that served their guild is gone
+     */
+    #reshard(
+        configuration: Configuration<M>,
+        previous: ShardPlan,
+        shardId: number,
+    ): Effect.Effect<ShardPlan, ConnectionFailure> {
+        const owner = this
+        return Effect.gen(function* () {
+            const waiting = owner.#groupReady ? "Recovering" : "Connecting"
+            for (const shard of owner.#shards.values()) {
+                owner.#gapShard(shard.shardId, false)
+                shard.state = waiting
+                shard.latency = null
+                shard.recovery = null
+                shard.submit = undefined
+            }
+            const listeners = [...owner.#shardListeners.values()]
+            owner.#shardListeners.clear()
+            owner.#setState(waiting)
+            for (const set of listeners) for (const listener of set) listener(waiting)
+            const guilds = yield* owner.countGuilds(configuration.startupTimeoutMs)
+            const plan = largerShardPlan(guilds, previous.totalShards)
+            owner.#reshardShard = undefined
+            owner.#adoptPlan(plan, "Connecting")
+            owner.presence.reroute()
+            owner.logging.log({
+                level: "warn",
+                category: "lifecycle",
+                code: "lifecycle.resharded",
+                message: `Fluxer closed shard ${shardId} with close code 4011 (sharding required), so automatic sharding moved from ${previous.totalShards} to ${plan.totalShards} shards for ${guilds} communit${guilds === 1 ? "y" : "ies"}. Every shard starts a new session, so events sent during the move are missed`,
+                shardId,
+                fields: { guilds, previousTotalShards: previous.totalShards, totalShards: plan.totalShards },
+            })
+            return plan
+        })
+    }
+
+    /**
+     * Refill the enabled guild, role and channel caches for the guilds of shards that resumed a stored session, since a
+     * resumed session receives no guild data. Guilds are fetched one request at a time through the REST scheduler, so
+     * the refill holds at most one REST slot and waits out rate limits. It stops after refillFailureLimit failed guilds
+     * and when the client closes
+     */
+    #refillRestored(): Effect.Effect<void> {
+        const owner = this
+        const shards = new Set(owner.#restoredShards)
+        owner.#restoredShards.clear()
+        const guildsEnabled = owner.resources?.diagnostics("guilds").configured === true
+        const rolesEnabled = owner.resources?.diagnostics("roles").configured === true
+        const channelsEnabled = owner.channelCache !== undefined
+        if (shards.size === 0 || (!guildsEnabled && !rolesEnabled && !channelsEnabled)) return Effect.void
+        return Effect.gen(function* () {
+            const startedAt = owner.logical.now()
+            const plan = owner.#plan!
+            const guildIds: string[] = []
+            let after: string | undefined
+            let failed = 0
+            let firstError: unknown
+            let stopped: string | undefined
             while (true) {
-                attempts += 1
-                const phase = established ? "recovery" : "startup"
-                const mode = shard.session.id !== undefined && shard.session.sequence !== null ? "resume" : "identify"
-                const attemptStartedAt = owner.logging.measurements ? now() : 0
-                let attemptConnected = false
-                shard.recovery = { phase, attempt: attempts, retryDelayMs: null }
-                emit({ event: "attempt", phase, attempt: attempts, mode })
-                const budget = established ? 30_000 : Math.max(0, deadline - now())
-                const attempt = Effect.gen(function* () {
-                    const attemptDeadline = now() + budget
-                    if (!url) {
-                        const endpoint = yield* owner.instance.resolve().pipe(
-                            mapFailureCause(
-                                (error) =>
-                                    new AttemptFailure(
-                                        error instanceof ClientClosedError
-                                            ? new ConnectionError("discovery", "closed")
-                                            : error,
-                                        error instanceof RateLimitError ||
-                                            (error instanceof ConnectionError &&
-                                                error.reason === "network" &&
-                                                (error.status === null || error.status >= 500)),
-                                    ),
-                            ),
-                            withDeadline(budget, () => new AttemptFailure(new ConnectionTimeoutError(budget), true)),
-                        )
-                        url = gatewayUrl(endpoint.gateway)
-                        inviteBase = endpoint.invite
-                    }
-                    return yield* runSelectedGateway(
-                        configuration.decodeMessage,
-                        url,
-                        configuration.token,
-                        shard.session,
-                        Math.max(0, attemptDeadline - now()),
-                        (readyMode) => {
-                            const connectedAtMs = now()
-                            attemptConnected = true
-                            if (owner.logging.measurements)
-                                measure({
-                                    operation: "gateway.connection",
-                                    stage: "network",
-                                    durationMs: connectedAtMs - attemptStartedAt,
-                                    outcome: "success",
-                                    retryCount: attempts - 1,
-                                })
-                            established = true
-                            connectedAt = connectedAtMs
-                            disconnectedAt = undefined
-                            shard.recovery = null
-                            owner.#setShardState(shard, "Connected")
-                            emit({ event: "connected", phase, attempt: attempts, mode: readyMode })
-                            if (owner.#state === "Connected") Deferred.doneUnsafe(startup, Effect.void)
-                        },
-                        (latency) => {
-                            shard.latency = latency
-                        },
-                        () => {
-                            disconnectedAt ??= now()
-                            owner.#setShardState(shard, "Recovering")
-                        },
-                        (event, message, bytes) => {
-                            owner.resources?.event(event, message)
-                            owner.channelCache?.event(event, message)
-                            if (event === "userUpdate" && "discriminator" in message) {
-                                const guard = owner.userCache.begin("users", { id: message.id })
-                                owner.userCache.complete(guard, [message])
-                                owner.userCache.invalidate("directMessages")
-                            }
-                            if (
-                                (event === "directMessageCreate" || event === "directMessageUpdate") &&
-                                "recipients" in message
-                            ) {
-                                const guard = owner.userCache.begin("directMessages", { id: message.id })
-                                owner.userCache.complete(guard, [message])
-                            }
-                            if (
-                                event === "directMessageRecipientAdd" ||
-                                event === "directMessageRecipientRemove" ||
-                                event === "directMessageDelete"
-                            ) {
-                                const id =
-                                    "channelId" in message
-                                        ? message.channelId
-                                        : "id" in message
-                                          ? message.id
-                                          : undefined
-                                owner.userCache.invalidate("directMessages", typeof id === "string" ? id : undefined)
-                            }
-                            if (event === "directMessageDelete" && "id" in message)
-                                owner.cache?.deleteChannel(message.id)
-                            if (event === "guildChannelDelete" && "id" in message)
-                                owner.cache?.deleteChannel(message.id)
-                            if (isMessageEvent<typeof event, M>(event, message)) owner.cache?.observe(message)
-                            else if ("ids" in message) {
-                                for (const id of message.ids) owner.cache?.delete({ id, channelId: message.channelId })
-                            } else if (event === "messageDelete" && "id" in message && "channelId" in message)
-                                owner.cache?.delete(message)
-                            owner.events.offer(event, message, bytes, shard.shardId)
-                        },
-                        owner.resources || owner.channelCache || owner.cache
-                            ? (event, value) => {
-                                  owner.resources?.guildEvent(event, value)
-                                  if (event !== "GUILD_EMOJIS_UPDATE" && event !== "GUILD_STICKERS_UPDATE")
-                                      owner.channelCache?.guildEvent(event, value)
-                                  if (event === "GUILD_DELETE")
-                                      owner.cache?.gap(
-                                          (guildId) => guildId === undefined || (record(value) && value.id === guildId),
-                                      )
-                              }
-                            : undefined,
-                        {
-                            attach: (send, members, mode) => owner.presence.attach(send, members, mode, shard.shardId),
-                            detach: () => owner.presence.detach(shard.shardId),
-                            guildCreate: (guildId) => owner.presence.guildCreate(guildId),
-                        },
-                        {
-                            attach: (guilds, channels) => owner.counts.attach(guilds, channels, shard.shardId),
-                            detach: () => owner.counts.detach(shard.shardId),
-                            receiveGuildCounts: (value) => owner.counts.receiveGuildCounts(value),
-                            receiveChannelMemberCounts: (value) => owner.counts.receiveChannelMemberCounts(value),
-                        },
-                        {
-                            attach: (send) => owner.memberChunks.attach(send, shard.shardId),
-                            detach: () => owner.memberChunks.detach(shard.shardId),
-                            receive: (value, bytes) => owner.memberChunks.receive(value, bytes),
-                            rateLimited: (value) => owner.memberChunks.rateLimited(value),
-                        },
-                        configuration.sharding.identifyShards
-                            ? [shard.shardId, configuration.sharding.totalShards]
-                            : undefined,
-                        configuration.sharding.identifyShards || owner.identifyGate
-                            ? (send) => {
-                                  const grant = () =>
-                                      owner
-                                          .identifyGate!.permit(shard.shardId, send)
-                                          .pipe(Effect.mapError((error) => new AttemptFailure(error, true)))
-                                  if (!configuration.sharding.identifyShards)
-                                      return owner.identifyGate ? grant() : Effect.sync(send)
-                                  return owner.#identify.withPermit(
-                                      Effect.gen(function* () {
-                                          // Pace actual Identify sends, including handshakes that finish out of order
-                                          while (owner.#nextIdentifyAt > now())
-                                              yield* Effect.sleep(owner.#nextIdentifyAt - now())
-                                          if (owner.identifyGate) yield* grant()
-                                          else send()
-                                          owner.#nextIdentifyAt = now() + 1_000
-                                      }),
-                                  )
-                              }
-                            : undefined,
-                        inviteBase,
-                    )
-                })
-                const result = yield* Effect.uninterruptibleMask((restore) =>
-                    Effect.exit(restore(attempt)).pipe(
-                        Effect.flatMap((result) => {
-                            // Translate even when caller interruption is pending, without exposing AttemptFailure
-                            if (
-                                Exit.isFailure(result) &&
-                                (Cause.hasDies(result.cause) || Cause.hasInterrupts(result.cause))
-                            ) {
-                                if (!Cause.hasInterruptsOnly(result.cause))
-                                    emit({
-                                        event: "connectionEnded",
-                                        phase: established ? "recovery" : "startup",
-                                        failure: Cause.hasDies(result.cause) ? "defect" : "interrupted",
-                                    })
-                                return Effect.failCause(Cause.map(result.cause, (failure) => failure.failure))
-                            }
-                            return Effect.succeed(result)
-                        }),
+                const page = yield* Effect.result(
+                    owner.guild("guilds.fetchPage", () =>
+                        guildList({ limit: guildCountPageSize, ...(after === undefined ? {} : { after }) }),
                     ),
                 )
-                if (!attemptConnected && owner.logging.measurements)
-                    measure({
-                        operation: "gateway.connection",
-                        stage: "network",
-                        durationMs: now() - attemptStartedAt,
-                        outcome: Exit.isFailure(result) && Cause.hasInterrupts(result.cause) ? "cancelled" : "failure",
-                        retryCount: attempts - 1,
-                    })
-                if (Exit.isSuccess(result))
-                    return yield* Effect.die(new Error("Gateway lifetime ended without an outcome"))
-                const reason = result.cause.reasons.find((reason) => reason._tag === "Fail")
-                if (reason?._tag !== "Fail") return yield* Effect.die(new Error("Gateway failure had no reason"))
-                const failure = reason.error
-                if (established && connectedAt !== undefined) emit({ event: "connectionLost", phase: "recovery" })
-                if (failure.resetSession) {
-                    shard.session = { id: undefined, sequence: null }
-                    emit({ event: "sessionReset", phase, mode: "identify" })
+                if (page._tag === "Failure") {
+                    if (page.failure instanceof ClientClosedError) return
+                    firstError = page.failure
+                    stopped = "the bot's community list could not be read"
+                    break
                 }
-                const reported =
-                    !established && failure.failure instanceof ConnectionTimeoutError
-                        ? new ConnectionTimeoutError(configuration.startupTimeoutMs)
-                        : failure.failure
-                const classification =
-                    failure.failure instanceof ConnectionError ? failure.failure.reason : failure.failure._tag
-                if (!failure.retry || (!established && attempts >= configuration.maxStartupAttempts)) {
-                    shard.recovery = null
-                    emit({
-                        event: "connectionEnded",
-                        phase: established ? "recovery" : "startup",
-                        failure: classification,
-                    })
-                    return yield* Effect.fail(reported)
+                for (const guild of page.success)
+                    if (shards.has(guildShardId(guild.id, plan.totalShards))) guildIds.push(guild.id)
+                if (page.success.length < guildCountPageSize) break
+                after = page.success.at(-1)!.id
+            }
+            let refilled = 0
+            for (const guildId of stopped === undefined ? guildIds : []) {
+                const reads: Effect.Effect<unknown, unknown>[] = [
+                    ...(guildsEnabled ? [owner.guild("guilds.fetch", () => guildFetch(guildId))] : []),
+                    ...(rolesEnabled ? [owner.guild("roles.fetchAll", () => roleList(guildId))] : []),
+                    ...(channelsEnabled ? [owner.channel("channels.fetchAll", () => channelList(guildId))] : []),
+                ]
+                let failure: unknown
+                for (const read of reads) {
+                    const result = yield* Effect.result(read)
+                    if (result._tag === "Success") continue
+                    if (result.failure instanceof ClientClosedError) return
+                    failure ??= result.failure
                 }
-                if (established) {
-                    owner.#setShardState(shard, "Recovering")
-                    if (connectedAt !== undefined && (disconnectedAt ?? now()) - connectedAt >= 60_000) recoveryStep = 0
-                    connectedAt = undefined
+                if (failure === undefined) {
+                    refilled += 1
+                    continue
                 }
-                const ceiling = established
-                    ? Math.min(30_000, 1000 * 2 ** Math.min(recoveryStep++, 5))
-                    : Math.min(30_000, 1000 * 2 ** Math.min(attempts - 1, 5))
-                const jitter = (yield* Random.next) * ceiling
-                const requiredWait = failure.failure instanceof RateLimitError ? (failure.failure.retryAfterMs ?? 0) : 0
-                const delay = Math.max(jitter, requiredWait)
-                if (!established && delay >= deadline - now()) {
-                    emit({
-                        event: "connectionEnded",
-                        phase,
-                        failure: requiredWait > 0 ? "RateLimitError" : "ConnectionTimeoutError",
-                    })
-                    return yield* Effect.fail(
-                        requiredWait > 0 ? failure.failure : new ConnectionTimeoutError(configuration.startupTimeoutMs),
+                failed += 1
+                firstError ??= failure
+                if (failed >= refillFailureLimit) {
+                    stopped = `${failed} communities failed`
+                    break
+                }
+            }
+            const durationMs = Math.round(owner.logical.now() - startedAt)
+            const shardText = `${shards.size} shard${shards.size === 1 ? "" : "s"}`
+            owner.logging.log({
+                level: failed > 0 || stopped !== undefined ? "warn" : "info",
+                category: "lifecycle",
+                code: "lifecycle.cacheRefill",
+                message:
+                    stopped !== undefined
+                        ? `The cache refill after ${shardText} resumed saved sessions stopped after ${refilled} of ${guildIds.length} communities, because ${stopped}. The remaining cache entries fill as events and requests arrive`
+                        : failed > 0
+                          ? `Refilled the caches of ${refilled} of ${guildIds.length} communities after ${shardText} resumed saved sessions. The others failed, so their cache entries fill as events and requests arrive`
+                          : `Refilled the caches of ${refilled} communit${refilled === 1 ? "y" : "ies"} after ${shardText} resumed saved sessions, in ${formatDuration(durationMs)}`,
+                durationMs,
+                ...(firstError === undefined ? {} : { error: firstError }),
+                fields: { guilds: guildIds.length, refilled, failed, shards: shards.size },
+            })
+        })
+    }
+
+    /**
+     * Count the bot's guilds by paging the current-user guild list within timeoutMs. Automatic sharding and the
+     * supervisor's automatic plan both size their plans from this count
+     */
+    countGuilds(timeoutMs: number): Effect.Effect<number, ConnectionFailure> {
+        const owner = this
+        return Effect.gen(function* () {
+            const clock = yield* Clock.Clock
+            const deadline = nowMs(clock) + timeoutMs
+            let guilds = 0
+            let after: string | undefined
+            while (true) {
+                const remaining = Math.floor(deadline - nowMs(clock))
+                if (remaining <= 0) return yield* Effect.fail(new ConnectionTimeoutError(timeoutMs))
+                const page = yield* owner
+                    .guild(
+                        "guilds.fetchPage",
+                        () => guildList({ limit: guildCountPageSize, ...(after === undefined ? {} : { after }) }),
+                        { timeoutMs: remaining },
                     )
-                }
-                emit({
-                    event: "retry",
-                    phase: established ? "recovery" : "startup",
-                    attempt: attempts,
-                    delayMs: delay,
-                    failure: classification,
-                })
-                shard.recovery = { phase: established ? "recovery" : "startup", attempt: attempts, retryDelayMs: delay }
-                yield* Effect.sleep(delay)
+                    .pipe(Effect.mapError((error) => automaticPlanFailure(error, timeoutMs)))
+                guilds += page.length
+                if (page.length < guildCountPageSize) return guilds
+                after = page.at(-1)!.id
             }
         })
+    }
+
+    /**
+     * Size the plan from the bot's guild count, read by paging the current-user guild list under the startup deadline.
+     * GET /gateway/bot is never used, because Fluxer returns a fixed compatibility shard count there
+     */
+    #automaticPlan(configuration: Configuration<M>): Effect.Effect<ShardPlan, ConnectionFailure> {
+        const owner = this
+        return Effect.gen(function* () {
+            const guilds = yield* owner.countGuilds(configuration.startupTimeoutMs)
+            if (owner.#plan !== undefined) return owner.#plan
+            const plan = automaticShardPlan(guilds)
+            owner.#adoptPlan(plan, "Connecting")
+            owner.logging.log({
+                level: "info",
+                category: "lifecycle",
+                code: "lifecycle.automaticSharding",
+                message: `Automatic sharding chose ${plan.totalShards} shard${plan.totalShards === 1 ? "" : "s"} for ${guilds} communit${guilds === 1 ? "y" : "ies"}, aiming for at most ${guildsPerShard} communities per shard on average`,
+                fields: { guilds, totalShards: plan.totalShards, guildsPerShard },
+            })
+            return plan
+        })
+    }
+
+    /**
+     * Save the resumable session of each shard that was Connected when shutdown began, once, after its socket closed.
+     * A shard that was recovering is skipped, because its session may already have expired. Failures are logged in
+     * full and never block shutdown
+     */
+    #saveSessions(): Effect.Effect<void> {
+        const store = this.#configuration?.sessions
+        const live = this.#saveOnClose
+        this.#saveOnClose = undefined
+        const plan = this.#plan
+        if (!store || !live || !plan) return Effect.void
+        const owner = this
+        const shards = [...this.#shards.values()].filter(
+            (shard) =>
+                live.has(shard.shardId) &&
+                shard.session.id !== undefined &&
+                shard.session.sequence !== null &&
+                shard.gatewayUrl !== undefined,
+        )
+        return Effect.forEach(
+            shards,
+            (shard) => {
+                const snapshot: SessionSnapshot = Object.freeze({
+                    sessionId: shard.session.id!,
+                    sequence: shard.session.sequence!,
+                    resumeUrl: shard.gatewayUrl!,
+                    savedAt: Date.now(),
+                    totalShards: plan.totalShards,
+                })
+                return Effect.tryPromise({
+                    try: () => Promise.resolve(store.save(shard.shardId, snapshot)),
+                    catch: (error) => error,
+                }).pipe(
+                    Effect.timeoutOrElse({
+                        duration: sessionSaveTimeoutMs,
+                        orElse: () =>
+                            Effect.fail(
+                                new Error(
+                                    `The session store's save did not finish within ${formatDuration(sessionSaveTimeoutMs)}`,
+                                ),
+                            ),
+                    }),
+                    Effect.matchEffect({
+                        onSuccess: () =>
+                            Effect.sync(() =>
+                                owner.logging.log({
+                                    level: "debug",
+                                    category: "lifecycle",
+                                    code: "lifecycle.sessionSaved",
+                                    message: `Saved shard ${shard.shardId}'s session, so the next start can resume it`,
+                                    shardId: shard.shardId,
+                                }),
+                            ),
+                        onFailure: (error) =>
+                            Effect.sync(() =>
+                                owner.logging.log({
+                                    level: "error",
+                                    category: "lifecycle",
+                                    code: "lifecycle.sessionSaveFailed",
+                                    message: `Shard ${shard.shardId}'s session could not be saved, so the next start begins a new session`,
+                                    shardId: shard.shardId,
+                                    error,
+                                    origin: "application",
+                                }),
+                            ),
+                    }),
+                )
+            },
+            { concurrency: "unbounded", discard: true },
+        )
     }
 
     #start(): Effect.Effect<void, ConnectError> {
@@ -1476,8 +1932,30 @@ export class ClientOwner<M extends MessageCore = Message> {
                     return yield* Effect.fail(new ClientClosedError())
                 if (owner.#state === "Connected") return
                 if (owner.#state !== "Disconnected") return yield* Effect.fail(new ClientBusyError())
-                yield* owner.reports?.start() ?? Effect.void
                 const configuration = owner.#configuration!
+                owner.#everStarted = true
+                const creator = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
+                owner.logging.banners(creator.context)
+                const plan = owner.#plan
+                const host = new URL(configuration.instance.bootstrap).host
+                owner.logging.log(
+                    {
+                        level: "info",
+                        category: "lifecycle",
+                        code: "lifecycle.starting",
+                        message:
+                            plan === undefined
+                                ? `Starting Fluxerly ${sdkVersion()} for ${host} with an automatic shard count`
+                                : `Starting Fluxerly ${sdkVersion()} for ${host} with ${plan.shardIds.length} shard${plan.shardIds.length === 1 ? "" : "s"}`,
+                        fields: {
+                            version: sdkVersion(),
+                            instance: host,
+                            shards: plan?.shardIds.length ?? null,
+                            totalShards: plan?.totalShards ?? null,
+                        },
+                    },
+                    creator.context,
+                )
                 const startup = Deferred.makeUnsafe<void, ConnectError>()
                 let becameReady = false
                 owner.#workerExit = undefined
@@ -1505,8 +1983,17 @@ export class ClientOwner<M extends MessageCore = Message> {
                                 else Deferred.doneUnsafe(startup, exit)
                                 if (becameReady || defect) {
                                     const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
-                                    if (!closing) owner.logging.emit(fiber, { event: "closing" })
+                                    const startedAt = Date.now()
+                                    if (!closing)
+                                        logShutdownStart(
+                                            owner.logging,
+                                            fiber.context,
+                                            owner.#everStarted,
+                                            "the connection ended",
+                                        )
                                     owner.#setState("Closing")
+                                    // An explicit shutdown lands here once the sockets are closed
+                                    if (closing) yield* owner.#saveSessions()
                                     const services = yield* Effect.exit(owner.#closeServices())
                                     const outcome = Exit.isFailure(services)
                                         ? Exit.failCause(
@@ -1518,7 +2005,12 @@ export class ClientOwner<M extends MessageCore = Message> {
                                         : exit
                                     owner.#workerExit = outcome
                                     owner.#finish()
-                                    if (!closing) owner.logging.emit(fiber, { event: "closed" })
+                                    if (!closing)
+                                        logShutdownEnd(owner.logging, fiber.context, {
+                                            everStarted: owner.#everStarted,
+                                            startedAt,
+                                            services,
+                                        })
                                     Deferred.doneUnsafe(
                                         owner.#terminal,
                                         interrupted && !Exit.isFailure(services) ? Effect.void : outcome,
@@ -1529,12 +2021,17 @@ export class ClientOwner<M extends MessageCore = Message> {
                             }),
                         ),
                         // Outcomes are retained above, not left as unobserved fiber failures
+                        // allow-silent: Outcomes are retained above, not left as unobserved fiber failures
                         Effect.catchCause(() => Effect.void),
                     ),
                     owner.scope,
                 )
                 const worker = owner.#worker
+                // A shutdown can interrupt the worker before it runs, and then its exit handler above never runs.
+                // Startup still ends, with the same ClientClosedError a closing client gives, instead of waiting forever
+                worker.addObserver(() => Deferred.doneUnsafe(startup, Effect.fail(new ClientClosedError())))
                 return yield* restore(Deferred.await(startup)).pipe(
+                    Effect.tap(() => Effect.sync(() => owner.#logConnected(creator.context))),
                     Effect.onInterrupt(() =>
                         Effect.gen(function* () {
                             yield* Fiber.interrupt(worker)
@@ -1550,7 +2047,9 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     connect(): Effect.Effect<void, ConnectError> {
         return Effect.suspend(() => {
-            if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
+            // A draining shutdown keeps the state until the drain ends, but the client never connects again
+            if (this.#shutdownStarted || this.#state === "Closing" || this.#state === "Closed")
+                return Effect.fail(new ClientClosedError())
             return this.#managed ? Effect.fail(new ClientBusyError()) : this.#start()
         })
     }
@@ -1559,57 +2058,102 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Deferred.await(this.#terminal)
     }
 
-    shutdown(): Effect.Effect<void> {
+    /**
+     * Shut down once. A positive drainMs first stops event intake and lets running work finish until that deadline, while
+     * the state and REST admission stay as they were
+     */
+    shutdown(drainMs = 0): Effect.Effect<void> {
         return Effect.withFiber((fiber) =>
             this.events.ownsHandler(fiber.id) ||
-            this.reports?.owns(fiber.id) ||
+            this.failures.owns(fiber.id) ||
             [...this.#messageCollectors].some((collector) => collector.owns(fiber.id)) ||
             [...this.#reactionCollectors].some((collector) => collector.owns(fiber.id))
-                ? // A native handler cannot join its own cleanup: The client scope owns shutdown and interrupts this caller
-                  Effect.forkIn(this.#performShutdown(), this.scope).pipe(Effect.andThen(Effect.never))
-                : this.#performShutdown(),
+                ? // A native handler cannot join its own cleanup: The client scope owns shutdown and interrupts this caller.
+                  // A drain would wait for this handler, so the handler ends at once instead of when the drain ends
+                  Effect.forkIn(this.#performShutdown(drainMs), this.scope).pipe(
+                      Effect.andThen(drainMs > 0 ? Effect.interrupt : Effect.never),
+                  )
+                : this.#performShutdown(drainMs),
         )
     }
 
-    #performShutdown(): Effect.Effect<void> {
+    #performShutdown(drainMs: number): Effect.Effect<void> {
         const owner = this
         return Effect.uninterruptible(
             Effect.suspend(() => {
                 if (owner.#shutdownStarted) return Deferred.await(owner.#shutdown)
                 if (owner.#state === "Closed") return Effect.void
                 owner.#shutdownStarted = true
-                owner.#setState("Closing")
-                owner.events.stop()
-                owner.rest.stop()
-                return Effect.gen(function* () {
-                    const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
-                    owner.logging.emit(fiber, { event: "closing" })
-                    if (owner.#worker) yield* Fiber.interrupt(owner.#worker)
-                    const services = yield* Effect.exit(owner.#closeServices())
-                    const exit = owner.#workerExit
-                    owner.#finish()
-                    owner.logging.emit(fiber, { event: "closed" })
-                    if (Exit.isFailure(services)) {
-                        Deferred.doneUnsafe(owner.#terminal, services)
-                        return yield* Effect.failCause(services.cause)
-                    }
-                    if (exit && Exit.isFailure(exit) && Cause.hasDies(exit.cause)) {
-                        Deferred.doneUnsafe(owner.#terminal, exit)
-                        return yield* Effect.failCause(
-                            Cause.fromReasons<never>(exit.cause.reasons.filter((reason) => reason._tag !== "Fail")),
-                        )
-                    }
-                    Deferred.doneUnsafe(owner.#terminal, Effect.void)
-                }).pipe(Effect.onExit((exit) => Deferred.done(owner.#shutdown, exit)))
+                const drain =
+                    drainMs > 0
+                        ? Effect.withFiber((fiber) =>
+                              drainWork({
+                                  events: owner.events,
+                                  requests: () => owner.rest.inFlight(),
+                                  logging: owner.logging,
+                                  drainMs,
+                                  context: fiber.context,
+                              }).pipe(Effect.provideService(Clock.Clock, owner.logical.clock)),
+                          )
+                        : Effect.void
+                return drain.pipe(
+                    Effect.andThen(owner.#closeAfterDrain()),
+                    Effect.onExit((exit) => Deferred.done(owner.#shutdown, exit)),
+                )
             }),
         )
+    }
+
+    /** The shutdown steps after any drain. A connection that ended during the drain has already closed the client */
+    #closeAfterDrain(): Effect.Effect<void> {
+        const owner = this
+        return Effect.suspend(() => {
+            if (owner.#state === "Closed") return Effect.void
+            // Only sessions that are live now are worth resuming later
+            owner.#saveOnClose = new Set(
+                [...owner.#shards.values()]
+                    .filter((shard) => shard.state === "Connected")
+                    .map((shard) => shard.shardId),
+            )
+            owner.#setState("Closing")
+            owner.events.stop()
+            owner.rest.stop()
+            return Effect.gen(function* () {
+                const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
+                const startedAt = Date.now()
+                logShutdownStart(owner.logging, fiber.context, owner.#everStarted, undefined)
+                if (owner.#worker) yield* Fiber.interrupt(owner.#worker)
+                // Every shard's socket is closed now, so a saved session cannot receive further dispatches
+                yield* owner.#saveSessions()
+                const services = yield* Effect.exit(owner.#closeServices())
+                const exit = owner.#workerExit
+                owner.#finish()
+                logShutdownEnd(owner.logging, fiber.context, {
+                    everStarted: owner.#everStarted,
+                    startedAt,
+                    services,
+                })
+                if (Exit.isFailure(services)) {
+                    Deferred.doneUnsafe(owner.#terminal, services)
+                    return yield* Effect.failCause(services.cause)
+                }
+                if (exit && Exit.isFailure(exit) && Cause.hasDies(exit.cause)) {
+                    Deferred.doneUnsafe(owner.#terminal, exit)
+                    return yield* Effect.failCause(
+                        Cause.fromReasons<never>(exit.cause.reasons.filter((reason) => reason._tag !== "Fail")),
+                    )
+                }
+                Deferred.doneUnsafe(owner.#terminal, Effect.void)
+            })
+        })
     }
 
     run(): Effect.Effect<void, ConnectError> {
         const owner = this
         return Effect.uninterruptibleMask((restore) =>
             Effect.suspend(() => {
-                if (owner.#state === "Closed" || owner.#state === "Closing") return Effect.fail(new ClientClosedError())
+                if (owner.#shutdownStarted || owner.#state === "Closed" || owner.#state === "Closing")
+                    return Effect.fail(new ClientClosedError())
                 if (owner.#managed || owner.#state !== "Disconnected") return Effect.fail(new ClientBusyError())
                 owner.#managed = true
                 return restore(owner.#start().pipe(Effect.andThen(owner.waitForClose()))).pipe(
@@ -1631,29 +2175,47 @@ export function makeClient<F extends MessageFields | undefined = undefined>(
         const configuration = yield* validateConfiguration<F>(options, native)
         return yield* configuration.logging.provide(
             Effect.gen(function* () {
-                const callback = configuration.cache?.onError
-                const reporter = callback
-                    ? (report: CachePolicyErrorReport): Effect.Effect<unknown, unknown> =>
+                const context = yield* Effect.context<never>()
+                if (native) configuration.logging.context = context
+                const callback = configuration.onError as ((report: unknown) => unknown) | undefined
+                const hook = callback
+                    ? (report: InternalReport): Effect.Effect<unknown, unknown> =>
                           native
                               ? Effect.suspend(() => {
                                     const result = callback(report)
-                                    // The report worker supplies the captured creation context, including the native reporter's services
+                                    // The report worker supplies the captured creation context, including the hook's services
                                     return Effect.isEffect(result)
                                         ? (result as Effect.Effect<unknown, unknown>)
-                                        : Effect.die(new Error("Cache reporter must return an Effect"))
+                                        : Effect.die(
+                                              new TypeError(
+                                                  "An onError hook in the native Effect API must return an Effect",
+                                              ),
+                                          )
                                 })
-                              : Effect.callback((resume) => {
-                                    void Promise.resolve()
-                                        .then(() => callback(report))
-                                        .then(
-                                            () => resume(Effect.void),
-                                            () => resume(Effect.die(new Error("Cache reporter failed"))),
-                                        )
+                              : Effect.tryPromise({
+                                    try: () => Promise.resolve(callback(publicReport(report))).then(throwIfErr),
+                                    catch: (error) => error,
                                 })
                     : undefined
-                const reports = configuration.cache ? yield* makeCacheReports(reporter, scope) : undefined
-                const logical = yield* makeLogicalScheduler(scope)
-                return new ClientOwner(configuration, scope, reports, logical, identifyGate)
+                const failures = new FailureReporter(configuration.logging, hook, () => context)
+                const logical = yield* makeLogicalScheduler(scope, (owner, cause) =>
+                    configuration.logging.log({
+                        level: "error",
+                        category: owner.includes("cache") ? "cache" : "sdk",
+                        code: "sdk.timerFailed",
+                        message: `The ${owner} timer callback failed`,
+                        error: primaryError(cause),
+                        cause,
+                    }),
+                )
+                return new ClientOwner(
+                    configuration,
+                    scope,
+                    failures,
+                    logical,
+                    identifyGate,
+                    configuration.transport.transport,
+                )
             }),
         )
     })

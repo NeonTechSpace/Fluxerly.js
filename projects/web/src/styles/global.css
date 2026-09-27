@@ -73,7 +73,8 @@ h1 {
 }
 .docs-content :not(pre) > code {
     font-size: 0.95em;
-    overflow-wrap: anywhere;
+    /* Break a long identifier only when it cannot fit on its own line, so table columns keep whole names */
+    overflow-wrap: break-word;
 }
 .docs-content blockquote {
     font-style: normal;
@@ -113,6 +114,11 @@ h1 {
 .reference-nav-entry {
     padding-inline-start: 1.1rem;
     font-size: 0.85rem;
+}
+.reference-nav-category {
+    padding-block: 0.3rem;
+    padding-inline-start: 1.9rem;
+    font-size: 0.8rem;
 }
 .docs-content details {
     margin-block: 0;
@@ -272,21 +278,80 @@ h1 {
 .reference-preview-close:hover {
     background: var(--color-fd-accent);
 }
-.reference-preview-trigger {
+.reference-preview .reference-preview-hint {
+    color: var(--color-fd-muted-foreground);
+    font-size: 0.7rem;
+}
+.reference-preview-toggle {
     display: none;
 }
+/* Code tokens that name public API keep their colour and layout, and show a preview cue only under the pointer */
+.reference-token:hover {
+    cursor: help;
+    text-decoration: underline dotted;
+    text-underline-offset: 0.2em;
+}
+/* Touch readers cannot hover, so one toggle switches type links between previewing and opening */
 @media (hover: none), (pointer: coarse) {
-    .reference-preview-trigger {
+    .reference-preview .reference-preview-hint {
+        display: none;
+    }
+    .reference-preview-toggle {
         display: inline-flex;
-        justify-content: center;
         align-items: center;
-        min-width: 1.6rem;
-        min-height: 1.6rem;
-        margin-left: 0.15rem;
-        color: var(--color-fd-primary);
-        vertical-align: middle;
+        min-height: 2.75rem;
+        margin-block: 0.5rem 1rem;
+        padding: 0.4rem 0.8rem;
+        border: 1px solid var(--color-fd-border);
+        border-radius: 0.5rem;
+        background: var(--color-fd-muted);
+        color: var(--color-fd-foreground);
+        font-size: 0.9rem;
         cursor: pointer;
     }
+    .reference-preview-toggle[aria-pressed="true"] {
+        border-color: var(--color-fd-primary);
+        color: var(--color-fd-primary);
+    }
+}
+.skip-link {
+    position: fixed;
+    top: 0.5rem;
+    left: 0.5rem;
+    z-index: 200;
+    padding: 0.6rem 1rem;
+    border-radius: 0.5rem;
+    background: var(--color-fd-primary);
+    color: var(--color-fd-primary-foreground);
+    font-weight: 600;
+    transform: translateY(-200%);
+}
+.skip-link:focus {
+    transform: none;
+}
+.page-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    margin-block: -0.25rem 1.25rem;
+    font-size: 0.85rem;
+}
+.page-actions button {
+    min-height: 2rem;
+    padding: 0.25rem 0.7rem;
+    border: 1px solid var(--color-fd-border);
+    border-radius: 0.35rem;
+    background: var(--color-fd-muted);
+    color: var(--color-fd-foreground);
+    cursor: pointer;
+}
+.page-actions a {
+    color: var(--color-fd-muted-foreground);
+    text-underline-offset: 0.2em;
+}
+.page-actions [role="status"] {
+    color: var(--color-fd-muted-foreground);
 }
 .search-excerpt > .min-w-0 {
     display: -webkit-box;

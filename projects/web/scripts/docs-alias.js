@@ -1,7 +1,9 @@
 import { parseVersion } from "./versions.js"
 
 const escapePattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-const labels = { latest: "Latest", rc: "RC", canary: "Canary" }
+const labels = { rc: "RC", canary: "Canary" }
+
+// Schema 1 snapshots contain exact-version links. Rolling channels rebase them outside code
 
 function rebaseLinkTargets(value, sourceVersion, alias) {
     const version = escapePattern(sourceVersion)
@@ -10,7 +12,7 @@ function rebaseLinkTargets(value, sourceVersion, alias) {
         .replace(new RegExp(`(\\]\\(\\s*<?)/docs/${version}${boundary}`, "g"), `$1/docs/${alias}`)
         .replace(new RegExp(`^(\\s{0,3}\\[[^\\]]+\\]:\\s*<?)/docs/${version}${boundary}`, "g"), `$1/docs/${alias}`)
         .replace(
-            new RegExp(`(\\b(?:href|src)\\s*=\\s*[\\\"'])/docs/${version}${boundary}`, "g"),
+            new RegExp(`(\\b(?:href|src)\\s*=\\s*["'])/docs/${version}${boundary}`, "g"),
             `$1/docs/${alias}`,
         )
 }

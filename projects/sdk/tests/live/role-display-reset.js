@@ -1,35 +1,31 @@
+// Role display-position reset on a sandbox server with initially cleared positions: a successful reset and a
+// lost-response reset each dispatch once, invalidate cached roles and leave every other role field unchanged.
+// Journal `.env.test.role-reset.local` records the sandbox and bot identity and two test roles. An existing
+// journal is cleaned up before a new run by verified test-role deletion
 import assert from "node:assert/strict"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { createGuildTestRole, cleanupGuildTestRole } from "./guild-fixture.mjs"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    processValue,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { createSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
-const selectedGuild = process.env.FLUXER_TEST_ROLE_RESET_GUILD_ID
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.role-reset.local", import.meta.url)
+const journalFile = openJournal("role-reset")
 const rawFetch = globalThis.fetch
 let stage = "configuration"
 let lock, token, guildId, botId, journal, client, scope, Effect, Exit, Scope
 let verified = false
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...details }))
+const report = createReporter({ mode }, { passed: true })
 const sorted = (roles) => [...roles].sort((a, b) => a.id.localeCompare(b.id))
-const withoutDisplay = (roles) => sorted(roles).map(({ hoist_position, ...role }) => role)
+const withoutDisplay = (roles) => sorted(roles).map(({ hoist_position: _hoistPosition, ...role }) => role)
 
-async function api(method, path, body) {
-    const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-        method,
-        headers: {
-            Authorization: `Bot ${token}`,
-            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-    })
-    const data = response.status === 204 ? (await response.body?.cancel(), null) : await response.json()
-    assert.ok(response.ok)
-    return { status: response.status, data }
-}
+const api = createSandboxApi({ fetch: rawFetch, token: () => token, timeoutMs: 10_000 })
 
 async function value(operation) {
     if (mode === "default") {
@@ -42,14 +38,17 @@ async function value(operation) {
     return result.success
 }
 
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+// Cache lookups return the entry or undefined directly in the default API and as an Effect in the native API
+const cached = (lookup) => (mode === "default" ? lookup : Effect.runPromise(lookup))
+
+const save = () => journalFile.save(journal)
 async function cleanup() {
     if (!verified || !journal) return
     assert.equal(journal.kind, "role-display-reset")
     assert.equal(journal.guildId, guildId)
     assert.equal(journal.botId, botId)
     await cleanupGuildTestRole(api, journal, save)
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("test_roles_removed")
 }
@@ -62,31 +61,26 @@ const watchdog = setTimeout(() => {
 try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
-    assert.match(selectedGuild ?? "", /^[1-9][0-9]{0,19}$/)
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    guildId = env.FLUXER_TEST_GUILD_ID
-    token = env.FLUXER_TEST_BOT_TOKEN
+    // The selected server must be confirmed by the current process, never by the stored configuration alone
+    const selectedGuild = processValue("FLUXER_TEST_ROLE_RESET_GUILD_ID")
+    const sandbox = loadSandboxEnvironment()
+    guildId = sandbox.guildId
+    token = sandbox.token
     assert.equal(guildId, selectedGuild)
-    assert.ok(token && token === token.trim())
-    assert.match(env.FLUXER_TEST_APPLICATION_ID ?? "", /^[1-9][0-9]{0,19}$/)
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
     stage = "sandbox_identity"
-    const [application, self, guild] = await Promise.all([
-        api("GET", "/oauth2/applications/@me"),
-        api("GET", "/users/@me"),
-        api("GET", `/guilds/${guildId}`),
-    ])
-    assert.equal(application.data.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(application.data.bot?.id, self.data.id)
-    assert.equal(self.data.bot, true)
-    assert.equal(guild.data.id, guildId)
-    botId = self.data.id
+    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, {
+        applicationId: sandbox.applicationId,
+        guildId,
+        applicationPath: "/oauth2/applications/@me",
+        concurrent: true,
+    })
+    botId = identity.botId
     verified = true
     report(stage)
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
     }
 
@@ -97,7 +91,7 @@ try {
     assert.ok(original.every((role) => role.hoist_position === null))
     report(stage, { originalRoleCount: original.length })
     journal = { kind: "role-display-reset", guildId, botId }
-    writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+    journalFile.create(journal)
     const first = await createGuildTestRole(api, journal, save)
     journal.secondRole = { guildId }
     const second = await createGuildTestRole(api, journal.secondRole, save)
@@ -107,7 +101,7 @@ try {
         ;({ Effect, Exit, Scope } = await import("effect"))
         scope = Scope.makeUnsafe()
         client = await value(sdk.createClient({ token, cache: { roles: true } }).pipe(Scope.provide(scope)))
-    } else client = await value(sdk.createClient({ token, cache: { roles: true } }))
+    } else client = sdk.createClient({ token, cache: { roles: true } })
 
     const positions = [
         { id: first, hoistPosition: 7 },
@@ -121,7 +115,7 @@ try {
             assert.equal(before.find((role) => role.id === position.id)?.hoist_position, position.hoistPosition)
         assert.deepEqual(sorted(before.filter((role) => role.id !== first && role.id !== second)), sorted(original))
         await value(client.roles.fetchAll(guildId))
-        assert.equal((await value(client.roles.get({ guildId, id: first }))).hoistPosition, 7)
+        assert.equal((await cached(client.roles.get({ guildId, id: first }))).hoistPosition, 7)
 
         stage = loseResponse ? "reset_lost_response" : "reset_success"
         let dispatches = 0
@@ -151,7 +145,7 @@ try {
             globalThis.fetch = rawFetch
         }
         assert.equal(dispatches, 1)
-        assert.equal(await value(client.roles.get({ guildId, id: first })), undefined)
+        assert.equal(await cached(client.roles.get({ guildId, id: first })), undefined)
         const after = (await api("GET", `/guilds/${guildId}/roles`)).data
         assert.deepEqual(withoutDisplay(after), withoutDisplay(before))
         assert.ok(after.every((role) => role.hoist_position === null))
@@ -166,36 +160,28 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    try {
-        if (client) {
-            await value(client.shutdown())
-            assert.equal(client.state, "Closed")
-        }
-    } catch {
-        quiescent = false
-        console.error(JSON.stringify({ mode, check: "client_cleanup", passed: false }))
-        process.exitCode = 1
-    }
-    try {
-        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-    } catch {
-        quiescent = false
-        console.error(JSON.stringify({ mode, check: "scope_cleanup", passed: false }))
-        process.exitCode = 1
-    }
-    if (quiescent) {
-        if (client) report("client_closed")
-        try {
+    // Keep the journal, lock and deadline if the client or its scope may still be writing
+    await finalizeOwned({
+        writers: [
+            client && ["client_cleanup", () => value(client.shutdown())],
+            scope && ["scope_cleanup", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        checks: [client && ["client_cleanup", () => assert.equal(client.state, "Closed")]],
+        cleanup: async () => {
+            if (client) report("client_closed")
             await cleanup()
-        } catch {
-            console.error(JSON.stringify({ mode, check: "role_cleanup", passed: false, journalRetained: true }))
+        },
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            if (finalizer === "cleanup")
+                console.error(JSON.stringify({ mode, check: "role_cleanup", passed: false, journalRetained: true }))
+            else if (finalizer === "sandbox_lock")
+                console.error(
+                    JSON.stringify({ mode, check: "sandbox_lock_cleanup", passed: false, lockRetained: true }),
+                )
+            else console.error(JSON.stringify({ mode, check: finalizer, passed: false }))
             process.exitCode = 1
-        }
-        clearTimeout(watchdog)
-        if (lock !== undefined) {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        }
-    }
+        },
+    })
 }

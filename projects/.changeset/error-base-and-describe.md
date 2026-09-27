@@ -1,0 +1,17 @@
+---
+"@neontechspace/fluxerly": major
+---
+
+Base every SDK error on the exported `FluxerlyError` with a stable `code`, an optional fix `hint`, frozen `details`, a standard `cause` and `toJSON()`.
+Errors now keep the application or transport failure that caused them. A network failure is kept as a cause that records only the transport error code, such as `ECONNRESET`, never the transport message. API validation failures include the sanitized field path with each error code.
+Messages and `toJSON()` output mask credential patterns, including application text quoted by `ApplicationError` and `SdkDefect`, while `cause` keeps the original value.
+Masking applies to error text, `describeError` output and log records. It covers bare Fluxer bot tokens of the form `<application_id>.<secret>`, keeping the application ID. It also covers the value after an assignment to a key ending in `token` or `secret`, such as `FLUXER_BOT_TOKEN=`, the value after a quoted key such as `"botToken":`, and a credential-shaped value after an unquoted key and a colon, so prose such as `Missing token: check the configuration` stays readable
+
+Add `describeError(error)` for readable output with the code, hint, safe details and cause chain. It collapses stack frames inside the SDK and Effect into one line and prints no frames for expected SDK errors other than `ConfigurationError` and `SdkDefect`. It also accepts an Effect Cause and describes each failure, defect and interruption, so native programs can pass `exit.cause` directly. A thrown value that is not an Error is named `Non-Error value (string)` and similar.
+Add `errors` with `apiCode`, `isRetryable` and `match`. The `errors.apiCode(error)` helper returns the recognized Fluxer rejection category of an operation error, such as `"missingPermissions"` or `"twoFactorRequired"`, and undefined for every other value, so `errors.apiCode(result.error) === "missingPermissions"` works on any error of an operation's Result without checking its `_tag` first.
+A read that failed after it was sent records `details.read`, so `errors.isRetryable` treats it as safe to repeat, unlike a write with an unknown outcome.
+Add `ApplicationError` for failures raised by application callbacks such as a `runBot` `setup` or `commands` callback or a `keepTyping` task
+
+Migration: `MessageOperationError`, `ChannelOperationError`, `GuildOperationError`, `UserOperationError`, `WebhookOperationError`, `BotApplicationOperationError`, `AttachmentRefreshError`, `MessageCleanupError`, `MessageError` and `OAuthOperationError` now take one options object, described by `OperationErrorOptions` for the resource operation errors.
+Replace `new AttachmentDownloadError(reason, status, inputValidation)` with `new AttachmentDownloadError({ reason, status, inputValidation, cause })`. `CountOperationError`, `MemberChunkError`, `PaginationError` and `PresenceError` change the same way, taking `{ operation, reason, inputValidation, cause }`, `{ reason, retryAfterMs, inputValidation, cause }`, `{ operation, reason, inputValidation, cause }` and `{ reason, inputValidation, cause }`. `PresenceError` no longer defaults its reason to `input`, and omitted status, retry and input detail values still default to null.
+`ConfigurationError`, `ConnectionError`, `HelperError`, `AssetUrlError`, `CollectorError`, `EventWaitError`, `SupervisorError` and `SupervisorChildError` accept a trailing options object with `cause`. `ConfigurationError` also accepts `hint` there, and `ConnectionError` accepts `hint` and `details`

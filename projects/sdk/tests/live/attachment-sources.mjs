@@ -358,7 +358,7 @@ async function verifySustainedEmptyFailure(ops, rawFetch, getFetch, setFetch, ch
         assert.equal(failure?._tag, "MessageError")
         assert.equal(failure?.reason, "timeout")
         // The real inline message request has been dispatched before its incomplete body times out
-        assert.equal(failure?.delivery, "unknown")
+        assert.equal(failure?.outcome, "unknown")
         assert.equal(injected, 1)
         assert.ok(stats.reads >= 256)
         assert.ok(stats.reads < sustainedEmptyReadLimit)

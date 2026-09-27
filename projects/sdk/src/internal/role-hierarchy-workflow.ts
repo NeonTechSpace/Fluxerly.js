@@ -1,58 +1,81 @@
-import { Effect } from "effect"
-import type { GuildOperationFailure, GuildOperationOptions, MemberReference } from "#sdk/guilds"
+/**
+ * Role hierarchy checks that fetch the required guild data.
+ * Invariant: Checks describe the fetched data and never authorize an action.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
+import * as Effect from "effect/Effect"
+import type { CanManageOptions, GuildOperationFailure, GuildOperationOptions, MemberReference } from "#sdk/guilds"
 import { GuildOperationError } from "#sdk/guilds"
+import { composedStepFacts } from "#sdk/api-errors"
 import type { ClientOwner } from "./client.js"
 import { mapFailureCause } from "./effect-failures.js"
 import { guildFetch, memberFetch, memberSelf, roleList } from "./guilds.js"
-import { identifier, record } from "./message.js"
+import { identifier, record } from "./decode/primitives.js"
+import { suspendInput } from "./defects.js"
 import { evaluateMemberHierarchy } from "./role-hierarchy.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
 const inputFailure = (failure: InputValidationFailure) =>
-    new GuildOperationError("members.fetchHierarchyCheck", "input", "notDispatched", null, null, null, failure.detail)
-const timeoutFailure = () => new GuildOperationError("members.fetchHierarchyCheck", "timeout", "notDispatched")
+    new GuildOperationError({
+        operation: "members.fetchCanManage",
+        reason: "input",
+        outcome: "notDispatched",
+        inputValidation: failure.detail,
+    })
+const timeoutFailure = () =>
+    new GuildOperationError({ operation: "members.fetchCanManage", reason: "timeout", outcome: "notDispatched" })
 
 function target(value: unknown): MemberReference | InputValidationFailure {
     if (!record(value)) return inputValidationFailure("target", "type", "Hierarchy target must be an object")
-    if (Object.keys(value).some((key) => key !== "guildId" && key !== "userId"))
-        return inputValidationFailure("target", "allowedFields", "Hierarchy target may contain only guildId and userId")
-    if (!identifier(value.guildId))
+    const unsupported = unsupportedKeyFailure(value, ["guildId", "userId"], "target", "the hierarchy target")
+    if (unsupported) return unsupported
+    // Read each field once, so the validated IDs are the ones fetched
+    const guildId = value.guildId
+    if (!identifier(guildId))
         return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
-    if (!identifier(value.userId))
+    const userId = value.userId
+    if (!identifier(userId))
         return inputValidationFailure("target.userId", "format", "User IDs must be decimal strings")
-    return { guildId: value.guildId, userId: value.userId }
+    return { guildId, userId }
 }
 
-function options(value: unknown): GuildOperationOptions | InputValidationFailure {
+function options(value: unknown): CanManageOptions | InputValidationFailure {
     if (value === undefined) return {}
     if (!record(value)) return inputValidationFailure("options", "type", "Hierarchy options must be an object")
-    if (Object.keys(value).some((key) => key !== "timeoutMs" && key !== "signal"))
-        return inputValidationFailure(
-            "options",
-            "allowedFields",
-            "Hierarchy options may contain only timeoutMs and signal",
-        )
+    const unsupported = unsupportedKeyFailure(
+        value,
+        ["timeoutMs", "signal", "actorUserId"],
+        "options",
+        "the hierarchy options",
+    )
+    if (unsupported) return unsupported
+    const actorUserId = value.actorUserId
+    if (actorUserId !== undefined && !identifier(actorUserId))
+        return inputValidationFailure("options.actorUserId", "format", "User IDs must be decimal strings")
+    const timeoutMs = value.timeoutMs
     if (
-        value.timeoutMs !== undefined &&
-        (typeof value.timeoutMs !== "number" ||
-            !Number.isSafeInteger(value.timeoutMs) ||
-            value.timeoutMs < 1 ||
-            value.timeoutMs > 2_147_483_647)
+        timeoutMs !== undefined &&
+        (typeof timeoutMs !== "number" ||
+            !Number.isSafeInteger(timeoutMs) ||
+            timeoutMs < 1 ||
+            timeoutMs > 2_147_483_647)
     )
         return inputValidationFailure(
             "options.timeoutMs",
             "range",
-            "Hierarchy timeout must be an integer from 1 through 2,147,483,647",
+            "Hierarchy timeout must be an integer from 1 through 2,147,483,647 ms",
         )
+    const signal = value.signal
     if (
-        value.signal !== undefined &&
-        (!record(value.signal) ||
-            typeof value.signal.aborted !== "boolean" ||
-            typeof value.signal.addEventListener !== "function" ||
-            typeof value.signal.removeEventListener !== "function")
+        signal !== undefined &&
+        (!record(signal) ||
+            typeof signal.aborted !== "boolean" ||
+            typeof signal.addEventListener !== "function" ||
+            typeof signal.removeEventListener !== "function")
     )
         return inputValidationFailure("options.signal", "type", "Hierarchy signal must be an AbortSignal")
-    return value
+    // Keep only the validated actor and timeout: The requests use their own remaining deadlines
+    return { ...(actorUserId === undefined ? {} : { actorUserId }), ...(timeoutMs === undefined ? {} : { timeoutMs }) }
 }
 
 function remaining(deadline: number, now: () => number): GuildOperationOptions | undefined {
@@ -62,31 +85,35 @@ function remaining(deadline: number, now: () => number): GuildOperationOptions |
 
 function remoteFailure(error: GuildOperationFailure): GuildOperationFailure {
     if (error instanceof GuildOperationError)
-        return new GuildOperationError(
-            "members.fetchHierarchyCheck",
-            error.reason === "input" ? "response" : error.reason,
-            error.outcome,
-            error.status,
-            error.retryAfterMs,
-            error.apiError,
-        )
+        return new GuildOperationError({
+            operation: "members.fetchCanManage",
+            reason: error.reason === "input" ? "response" : error.reason,
+            outcome: error.outcome,
+            status: error.status,
+            retryAfterMs: error.retryAfterMs,
+            apiError: error.apiError,
+            ...composedStepFacts(error),
+        })
     return error
 }
 
-/** Fetches the four independent hierarchy inputs in parallel under one deadline, then evaluates the pure local rule */
-export function fetchHierarchyCheck(
-    owner: Pick<ClientOwner, "guild" | "logical">,
+/** Fetches the four independent hierarchy inputs in parallel under one deadline, then evaluates the pure local rule.
+ * The actor is the bot unless actorUserId names another member of the target's guild
+ */
+export function fetchCanManage(
+    owner: Pick<ClientOwner, "guild" | "logical"> & { readonly defaultTimeoutMs?: number },
     input: MemberReference,
-    suppliedOptions?: GuildOperationOptions,
+    suppliedOptions?: CanManageOptions,
 ): Effect.Effect<boolean, GuildOperationFailure> {
-    return Effect.suspend(() => {
+    // Reading and validating the caller target and options is marked as application input
+    return suspendInput(() => {
         const member = target(input)
         const validOptions = options(suppliedOptions)
         if (member instanceof InputValidationFailure) return Effect.fail(inputFailure(member))
         if (validOptions instanceof InputValidationFailure) return Effect.fail(inputFailure(validOptions))
         return Effect.gen(function* () {
             const now = () => owner.logical.now()
-            const deadline = now() + (validOptions.timeoutMs ?? 30_000)
+            const deadline = now() + (validOptions.timeoutMs ?? owner.defaultTimeoutMs ?? 30_000)
             const guildOptions = remaining(deadline, now)
             const selfOptions = remaining(deadline, now)
             const targetOptions = remaining(deadline, now)
@@ -96,7 +123,13 @@ export function fetchHierarchyCheck(
             const [guild, actor, targetMember, roles] = yield* Effect.all(
                 [
                     owner.guild("guilds.fetch", () => guildFetch(member.guildId), guildOptions),
-                    owner.guild("members.fetchSelf", () => memberSelf(member.guildId), selfOptions),
+                    validOptions.actorUserId === undefined
+                        ? owner.guild("members.fetchSelf", () => memberSelf(member.guildId), selfOptions)
+                        : owner.guild(
+                              "members.fetch",
+                              () => memberFetch({ guildId: member.guildId, userId: validOptions.actorUserId! }),
+                              selfOptions,
+                          ),
                     owner.guild("members.fetch", () => memberFetch(member), targetOptions),
                     owner.guild("roles.fetchAll", () => roleList(member.guildId), roleOptions),
                 ],
@@ -104,7 +137,13 @@ export function fetchHierarchyCheck(
             ).pipe(mapFailureCause(remoteFailure))
             const manageable = evaluateMemberHierarchy({ guild, actor, target: targetMember, roles })
             return manageable === undefined
-                ? yield* Effect.fail(new GuildOperationError("members.fetchHierarchyCheck", "response", "unknown"))
+                ? yield* Effect.fail(
+                      new GuildOperationError({
+                          operation: "members.fetchCanManage",
+                          reason: "response",
+                          outcome: "unknown",
+                      }),
+                  )
                 : manageable
         })
     })

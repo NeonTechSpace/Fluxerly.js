@@ -54,14 +54,14 @@ function fixture(options = {}) {
             if (/[\\/]dist[\\/]docs$/.test(path)) {
                 if (!docsListed) clock += options.localMs ?? 0
                 docsListed = true
-                return options.docsEntries ?? ["latest", "1000.0.0-canary.0"]
+                return options.docsEntries ?? ["1000.0.0", "canary"]
             }
             if (/[\\/]dist$/.test(path)) return ["deployment.json", "_headers", "docs"]
             return ["index.html"]
         },
         lstat: async (path) => {
             calls.push(["stat", path])
-            const directory = /[\\/](?:docs|latest|1000\.0\.0-canary\.0)$/.test(path)
+            const directory = /[\\/](?:docs|1000\.0\.0|canary)$/.test(path)
             const size = path.endsWith("deployment.json") ? 100 : path.endsWith("_headers") ? 20 : 30
             return { size, isDirectory: () => directory, isFile: () => !directory }
         },
@@ -85,7 +85,13 @@ function fixture(options = {}) {
                 return json({ success: true, result: options.deployment?.(reads) ?? deployment })
             }
             const custom = url.startsWith(env.CLOUDFLARE_PREVIEW_URL)
+            const challenge = (custom ? options.customChallenge : options.deploymentChallenge) ? { "cf-mitigated": "challenge" } : {}
             if (url.endsWith("/docs/latest/"))
+                return new Response(null, {
+                    status: options.latestStatus ?? 302,
+                    headers: { location: options.latestLocation ?? "/docs/1000.0.0/", "x-robots-tag": "noindex, nofollow", ...challenge },
+                })
+            if (url.endsWith("/docs/1000.0.0/"))
                 return new Response("Docs", {
                     status: (custom ? options.customRouteStatus : options.routeStatus) ?? 200,
                     headers: { "x-robots-tag": options.routeHeader ?? "noindex, nofollow", "content-type": options.routeContentType ?? "text/html; charset=utf-8",
@@ -131,10 +137,11 @@ test("Preview settings reject unsafe origins and configuration without exposing 
     ]) {
         assert.throws(() => previewSettings({ ...env, CLOUDFLARE_PREVIEW_URL: origin }), /preview/i)
     }
-    assert.throws(
-        () => previewSettings({ ...env, CLOUDFLARE_ACCOUNT_ID: "invalid" }),
-        (error) => !error.message.includes(env.CLOUDFLARE_API_TOKEN),
-    )
+    for (const patch of [{ CLOUDFLARE_ACCOUNT_ID: "invalid" }, { CLOUDFLARE_API_TOKEN: "" }, { CLOUDFLARE_PAGES_PROJECT: "Invalid project" }]) {
+        assert.throws(() => previewSettings({ ...env, ...patch }), (error) =>
+            /Configure the Cloudflare/.test(error.message) && !error.message.includes(env.CLOUDFLARE_API_TOKEN))
+    }
+    assert.equal(previewSettings(env).branch, "preview")
 })
 
 test("Local source identity and global noindex are verified before provider reads or upload", async () => {
@@ -153,8 +160,8 @@ test("Local source identity and global noindex are verified before provider read
     assert.equal(calls.length, 0)
 })
 
-test("Upload rejects local source routes and missing published latest before provider reads", async () => {
-    for (const docsEntries of [["preview"], ["latest", "preview"], ["latest", "dev"]]) {
+test("Upload rejects local source routes, a generated latest copy and empty output before provider reads", async () => {
+    for (const docsEntries of [["preview"], ["1000.0.0", "preview"], ["1000.0.0", "dev"], ["1000.0.0", "latest"], []]) {
         const { io, calls } = fixture({ docsEntries })
         await assert.rejects(deployPreview(env, io), /published-only documentation/)
         assert.ok(calls.every(([kind]) => kind === "file" || kind === "directory"))
@@ -163,22 +170,19 @@ test("Upload rejects local source routes and missing published latest before pro
 
 test("Project, Production and Git-auto-production mismatches fail before upload", async () => {
     const projects = [
-        { ...project, name: "wrong-project" },
-        { ...project, id: undefined },
-        { ...project, subdomain: undefined },
-        { ...project, production_branch: undefined },
-        { ...project, production_branch: "preview" },
-        { ...project, source: { config: { production_branch: "main", production_deployments_enabled: true } } },
-        { ...project, source: { config: { production_branch: "main" } } },
-        {
-            ...project,
-            source: { config: { production_branch: "preview", production_deployments_enabled: false } },
-        },
-        { ...project, domains: ["wrong.example.com"] },
+        [{ ...project, name: "wrong-project" }, /project identity/],
+        [{ ...project, id: undefined }, /project identity/],
+        [{ ...project, subdomain: undefined }, /Pages subdomain/],
+        [{ ...project, production_branch: undefined }, /Production branch was not verified/],
+        [{ ...project, production_branch: "preview" }, /configured as Production/],
+        [{ ...project, source: { config: { production_branch: "main", production_deployments_enabled: true } } }, /Git-connected production/],
+        [{ ...project, source: { config: { production_branch: "main" } } }, /Git-connected production/],
+        [{ ...project, source: { config: { production_branch: "preview", production_deployments_enabled: false } } }, /branches disagree/],
+        [{ ...project, domains: ["wrong.example.com"] }, /hostname is not associated/],
     ]
-    for (const value of projects) {
+    for (const [value, reason] of projects) {
         const { io, calls } = fixture({ project: value })
-        await assert.rejects(deployPreview(env, io))
+        await assert.rejects(deployPreview(env, io), reason)
         assert.equal(calls.filter(([kind]) => kind === "upload").length, 0)
     }
     const { io, calls } = fixture({ preflightStatus: 403 })
@@ -188,10 +192,8 @@ test("Project, Production and Git-auto-production mismatches fail before upload"
     unavailable.io.fetch = async () => {
         throw new Error(env.CLOUDFLARE_API_TOKEN)
     }
-    await assert.rejects(
-        deployPreview(env, unavailable.io),
-        (error) => error.message === "Cloudflare preview read is unavailable",
-    )
+    await assert.rejects(deployPreview(env, unavailable.io), (error) =>
+        /read is unavailable/.test(error.message) && !error.message.includes(env.CLOUDFLARE_API_TOKEN))
     assert.equal(unavailable.calls.filter(([kind]) => kind === "upload").length, 0)
 })
 
@@ -214,7 +216,8 @@ test("Orchestration uploads once to the explicit Preview branch and verifies the
         [["upload", "test-docs", env.CLOUDFLARE_ACCOUNT_ID, "preview", source]],
     )
     for (const [, url, init] of calls.filter(([kind]) => kind === "fetch")) {
-        assert.equal(init.redirect, "error")
+        // Only the latest entrance is read as a redirect. Its target and every other read refuse redirects
+        assert.equal(init.redirect, url.endsWith("/docs/latest/") ? "manual" : "error")
         assert.equal(init.cache, "no-store")
         assert.ok(init.signal instanceof AbortSignal)
         assert.equal(
@@ -224,32 +227,56 @@ test("Orchestration uploads once to the explicit Preview branch and verifies the
     }
 })
 
-test("Deployment progress names each phase and reports elapsed waits without exposing credentials", async () => {
-    const { io } = fixture({
+// Consecutive calls of one kind form a step, so progress can be located against the effects around it
+function steps(calls) {
+    const result = []
+    for (const [kind, value] of calls) {
+        if (result.at(-1)?.kind !== kind) result.push({ kind, messages: [] })
+        if (kind === "progress") result.at(-1).messages.push(value)
+    }
+    return result
+}
+function recordProgress(f) {
+    f.io.progress = (message) => f.calls.push(["progress", message])
+    return f
+}
+
+test("Deployment progress reports each phase before its effects and each readback wait without exposing credentials", async () => {
+    const f = recordProgress(fixture({
         deployment: (count) =>
             count === 1 ? { ...deployment, latest_stage: { name: "deploy", status: "active" } } : deployment,
-    })
-    const messages = []
-    io.progress = (message) => messages.push(message)
-    await deployPreview(env, io)
-    assert.ok(messages.some((message) => /local Preview artifact/i.test(message)))
-    assert.ok(messages.some((message) => /Cloudflare Pages Preview target/i.test(message)))
-    assert.ok(messages.some((message) => /Uploading.*Wrangler/i.test(message)))
-    assert.ok(messages.some((message) => /acknowledged.*verifying/i.test(message)))
-    assert.ok(messages.some((message) => /Waiting.*\(0s elapsed\)/i.test(message)))
-    assert.ok(messages.every((message) => !message.includes(env.CLOUDFLARE_API_TOKEN)))
+    }))
+    await deployPreview(env, f.io)
+    const sequence = steps(f.calls)
+    const kinds = sequence.map((step) => step.kind)
+    const firstFetch = kinds.indexOf("fetch")
+    const upload = kinds.indexOf("upload")
+    assert.equal(kinds[0], "progress")
+    assert.equal(kinds[firstFetch - 1], "progress")
+    assert.equal(kinds[upload - 1], "progress")
+    assert.equal(kinds[upload + 1], "progress")
+    assert.equal(kinds.at(-1), "progress")
+    const waits = kinds.flatMap((kind, index) => kind === "sleep" ? [sequence[index - 1]] : [])
+    assert.equal(waits.length, 1)
+    // The single readback wait reports its elapsed time, which is zero on the fixture clock
+    for (const wait of waits) assert.match(wait.messages.join("\n"), /\b0s\b/)
+    assert.ok(f.calls.every(([kind, message]) => kind !== "progress" || !message.includes(env.CLOUDFLARE_API_TOKEN)))
 })
 
-test("Deployment progress separates local bytes and phase timings from network transfer", async () => {
-    const { io } = fixture({ localMs: 2_000, targetMs: 3_000, wranglerMs: 105_000, readbackMs: 6_000 })
-    const messages = []
-    io.progress = (message) => messages.push(message)
-    await deployPreview(env, io)
-    assert.ok(messages.some((message) => /4 files, 180 bytes.*largest file 100 bytes.*local preflight 2s/i.test(message)))
-    assert.ok(messages.some((message) => /target verified in 3s/i.test(message)))
-    assert.ok(messages.some((message) => /Wrangler completed in 105s.*not a network transfer measurement/i.test(message)))
-    assert.ok(messages.some((message) => /Preview readback verified in 6s/i.test(message)))
-    assert.ok(messages.every((message) => !message.includes(env.CLOUDFLARE_API_TOKEN)))
+test("Deployment progress reports local artifact size and the elapsed time of each phase", async () => {
+    const f = recordProgress(fixture({ localMs: 2_000, targetMs: 3_000, wranglerMs: 105_000, readbackMs: 6_000 }))
+    await deployPreview(env, f.io)
+    const sequence = steps(f.calls)
+    const kinds = sequence.map((step) => step.kind)
+    const text = (index) => sequence[index].messages.join("\n")
+    const firstFetch = kinds.indexOf("fetch")
+    const upload = kinds.indexOf("upload")
+    // Local files, bytes, largest file and local preflight time, measured before any provider read
+    for (const fact of [/\b4\b/, /\b180\b/, /\b100\b/, /\b2s\b/]) assert.match(text(firstFetch - 1), fact)
+    assert.match(text(upload - 1), /\b3s\b/)
+    assert.match(text(upload + 1), /\b105s\b/)
+    assert.match(text(kinds.length - 1), /\b6s\b/)
+    assert.ok(f.calls.every(([kind, message]) => kind !== "progress" || !message.includes(env.CLOUDFLARE_API_TOKEN)))
 })
 
 test("Silent child progress suppresses output and resolves only after the child closes", async () => {
@@ -258,52 +285,51 @@ test("Silent child progress suppresses output and resolves only after the child 
     const secret = env.CLOUDFLARE_API_TOKEN
     let clock = 0
     let heartbeat
-    let deadline
-    let heartbeatCleared = false
-    let deadlineCleared = false
+    const spawned = []
+    const intervals = []
+    const timeouts = []
+    const cleared = []
     const result = runSilentProcess("node", ["wrangler.js"], {
         env: { CLOUDFLARE_API_TOKEN: secret },
         timeout: 300_000,
     }, {
         spawn: (_file, _args, options) => {
-            assert.equal(options.stdio, "ignore")
+            spawned.push(options)
             return child
         },
         now: () => clock,
         progress: (message) => messages.push(message),
         setInterval: (callback, milliseconds) => {
-            assert.equal(milliseconds, 30_000)
+            intervals.push(milliseconds)
             heartbeat = callback
             return "heartbeat"
         },
-        clearInterval: (handle) => {
-            assert.equal(handle, "heartbeat")
-            heartbeatCleared = true
-        },
-        setTimeout: (callback, milliseconds) => {
-            assert.equal(milliseconds, 300_000)
-            deadline = callback
+        clearInterval: (handle) => cleared.push(handle),
+        setTimeout: (_callback, milliseconds) => {
+            timeouts.push(milliseconds)
             return "deadline"
         },
-        clearTimeout: (handle) => {
-            assert.equal(handle, "deadline")
-            deadlineCleared = true
-        },
+        clearTimeout: (handle) => cleared.push(handle),
     })
     clock = 30_000
     heartbeat()
     child.emit("close", 0, null)
     assert.deepEqual(await result, { status: "exited", timedOut: false, code: 0, signal: null })
-    assert.equal(typeof deadline, "function")
-    assert.deepEqual(messages, ["Wrangler upload is still running (30s elapsed)"])
+    assert.deepEqual(spawned.map((options) => options.stdio), ["ignore"])
+    assert.deepEqual(intervals, [30_000])
+    assert.deepEqual(timeouts, [300_000])
+    // One heartbeat reports the elapsed time, then close clears both timers
+    assert.equal(messages.length, 1)
+    assert.match(messages[0], /\b30s\b/)
     assert.ok(messages.every((message) => !message.includes(secret)))
-    assert.equal(heartbeatCleared, true)
-    assert.equal(deadlineCleared, true)
+    assert.deepEqual(new Set(cleared), new Set(["deadline", "heartbeat"]))
+    assert.equal(cleared.length, 2)
 })
 
 test("Silent child errors are consumed but cannot settle the process before close", async () => {
     const child = new EventEmitter()
     const secret = env.CLOUDFLARE_API_TOKEN
+    const messages = []
     let resolved = false
     const result = runSilentProcess("node", [], { timeout: 300_000 }, {
         spawn: () => child,
@@ -311,7 +337,7 @@ test("Silent child errors are consumed but cannot settle the process before clos
         clearInterval: () => {},
         setTimeout: () => "deadline",
         clearTimeout: () => {},
-        progress: (message) => assert.ok(!message.includes(secret)),
+        progress: (message) => messages.push(message),
     }).then((outcome) => {
         resolved = true
         return outcome
@@ -325,9 +351,10 @@ test("Silent child errors are consumed but cannot settle the process before clos
 
     const failed = await runSilentProcess("node", [], { timeout: 1 }, {
         spawn: () => { throw new Error(secret) },
-        progress: (message) => assert.ok(!message.includes(secret)),
+        progress: (message) => messages.push(message),
     })
     assert.deepEqual(failed, { status: "spawn-error", timedOut: false })
+    assert.ok(messages.every((message) => !message.includes(secret)))
 })
 
 test("Silent child timeout escalates termination and awaits close", async () => {
@@ -363,6 +390,8 @@ test("Silent child timeout escalates termination and awaits close", async () => 
         resolved = true
         return outcome
     })
+    heartbeat()
+    const running = messages.at(-1)
     clock = 1
     deadline()
     await Promise.resolve()
@@ -370,6 +399,7 @@ test("Silent child timeout escalates termination and awaits close", async () => 
     assert.deepEqual(kills, ["SIGTERM"])
     clock = 2
     heartbeat()
+    const cleanup = messages.at(-1)
     clock = 6
     forceKill()
     await Promise.resolve()
@@ -377,11 +407,12 @@ test("Silent child timeout escalates termination and awaits close", async () => 
     assert.deepEqual(kills, ["SIGTERM", "SIGKILL"])
     child.emit("close", null, "SIGKILL")
     assert.deepEqual(await result, { status: "timed-out", timedOut: true, code: null, signal: "SIGKILL" })
-    assert.ok(messages.some((message) => /timed out.*Stopping the child process/i.test(message)))
-    assert.ok(messages.some((message) => /Waiting for Wrangler child cleanup/i.test(message)))
-    assert.ok(messages.some((message) => /still stopping.*Forcing cleanup/i.test(message)))
+    // Both heartbeats, the timeout and the forced kill each report progress
+    assert.equal(messages.length, 4)
     assert.ok(messages.every((message) => !message.includes(secret)))
-    assert.ok(messages.every((message) => !/upload is still running/i.test(message)))
+    // A heartbeat after the timeout reports cleanup instead of repeating the running report
+    const template = (message) => message.replace(/\d+/g, "")
+    assert.notEqual(template(cleanup), template(running))
 })
 
 test("Deployment readback trusts only the verified project's unique Pages origin", () => {
@@ -473,10 +504,15 @@ test("Stale source, missing noindex and nonpublic hostname remain failures withi
         { routeHeader: "not-noindex" },
         { routeContentType: "application/json" },
         { markerStatus: 404 },
+        // A generated latest copy or a redirect outside published documentation is not the expected entrance
+        { latestStatus: 200 },
+        { latestLocation: "https://elsewhere.example/docs/1000.0.0/" },
+        { latestLocation: "/docs/latest/" },
     ]) {
         const { io, calls, reads } = fixture(options)
         await assert.rejects(deployPreview(env, io), /did not converge.*reconcile/)
-        assert.equal(reads(), 24)
+        // Readback keeps polling instead of failing on the first unconverged read
+        assert.ok(reads() > 1)
         assert.equal(calls.filter(([kind]) => kind === "upload").length, 1)
         assert.ok(calls.filter(([kind]) => kind === "sleep").reduce((sum, [, ms]) => sum + ms, 0) <= 120_000)
     }

@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit } from "effect"
+import { Effect } from "effect"
 import { runBot } from "@neontechspace/fluxerly/effect"
 
 const program = runBot({
@@ -7,15 +7,11 @@ const program = runBot({
     events: {
         messageCreate: ({ message, reply }) => {
             if (message.author.isBot || message.content !== "!ping") return Effect.void
-            return reply({ content: "Pong!" }).pipe(
-                Effect.catch((error) => Effect.sync(() => console.warn("Reply failed", { kind: error._tag }))),
-            )
+            // A failed reply is reported to the log without stopping the bot
+            return reply("Pong!")
         },
     },
 })
 
-const exit = await Effect.runPromiseExit(program)
-if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
-    console.error("Bot stopped because an operation or cleanup failed")
-    process.exitCode = 1
-}
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+await Effect.runPromiseExit(program)

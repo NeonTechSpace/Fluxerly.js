@@ -1,6 +1,8 @@
-/** Named category IDs for listing a guild in Fluxer's public server directory.
+/** Named category IDs for listing a community in Fluxer's public community directory.
  * Pass a value as categoryId to discovery.apply, discovery.edit or discovery.search.
- * These categories concern public guild listings, not instance endpoint discovery
+ * These categories concern public community listings, not instance endpoint discovery
+ *
+ * @category Guilds and members
  */
 export const DiscoveryCategories: Readonly<{
     /** Category for gaming communities */
@@ -33,7 +35,11 @@ export const DiscoveryCategories: Readonly<{
     Other: 8,
 } as const)
 
-/** A category returned by discovery.fetchCategories, with Fluxer's display name rather than an SDK-translated label */
+/**
+ * A category returned by discovery.fetchCategories, with Fluxer's display name rather than an SDK-translated label
+ *
+ * @category Guilds and members
+ */
 export interface DiscoveryCategory {
     /** Numeric provider category ID to pass as categoryId when applying or editing */
     readonly id: number
@@ -41,9 +47,9 @@ export interface DiscoveryCategory {
     readonly name: string
 }
 
-/** Describe a guild for a public server-directory application.
- * Pass this input to discovery.apply after checking the guild's current status and eligibility.
- * An eligible verified or partnered server can become publicly listed immediately, without a later review step.
+/** Describe a community for a public community-directory application.
+ * Pass this input to discovery.apply after checking the community's current status and eligibility.
+ * An eligible verified or partnered community can become publicly listed immediately, without a later review step.
  * String lengths use JavaScript UTF-16 code units, so some characters count as two
  * @example
  * ```ts
@@ -69,6 +75,8 @@ export interface DiscoveryCategory {
  *     return client.discovery.withdraw(guildId)
  * }
  * ```
+ *
+ * @category Guilds and members
  */
 export interface DiscoveryApplicationInput {
     /** Listing description, 10–300 UTF-16 code units. Fluxer may reject moderated content */
@@ -92,12 +100,16 @@ export interface DiscoveryApplicationInput {
  * Supply at least one field, with the same validation as DiscoveryApplicationInput.
  * Omitted fields remain unchanged, tags replaces the entire list, and tags: [] clears it.
  * Null cannot clear the required description, category or language
+ *
+ * @category Guilds and members
  */
 export type DiscoveryApplicationEdit = Partial<DiscoveryApplicationInput>
 
 /** Current application or public listing returned by directory reads and writes.
  * This frozen observation is not cached and includes no reviewer identities.
  * Review and removal explanations are provider text, not fixed SDK diagnostics
+ *
+ * @category Guilds and members
  */
 export interface DiscoveryApplication {
     /** Decimal guild ID whose application was observed */
@@ -129,25 +141,29 @@ export interface DiscoveryApplication {
 }
 
 /** Current listing eligibility and application state returned by discovery.fetchStatus.
- * A guild may qualify now but fail a later submission if its status changes
+ * A community may qualify now but fail a later submission if its status changes
+ *
+ * @category Guilds and members
  */
 export interface DiscoveryStatus {
     /** Current application or listing, null when no record exists */
     readonly application: DiscoveryApplication | null
-    /** False when directory discovery is disabled or the guild fails current eligibility */
+    /** False when directory discovery is disabled or the community fails current eligibility */
     readonly eligible: boolean
     /** Provider's current minimum member count, not a local configuration setting */
     readonly minMemberCount: number
 }
 
-/** Public guild listing returned by discovery.search.
+/** Public community listing returned by discovery.search.
  * It contains directory-visible details and approximate counts, not the full Guild object or an invitation to join.
  * The SDK does not retain this result in the guild cache
+ *
+ * @category Guilds and members
  */
 export interface DiscoveryGuild {
     /** Decimal guild ID */
     readonly id: string
-    /** Directory-visible guild name */
+    /** Directory-visible community name */
     readonly name: string
     /** Icon hash, or null when the directory has none */
     readonly icon: string | null
@@ -171,9 +187,11 @@ export interface DiscoveryGuild {
     readonly verificationLevel: number
 }
 
-/** Filter and choose one page of public guild listings with discovery.search.
+/** Filter and choose one page of public community listings with discovery.search.
  * Omit filters to use the provider's unfiltered directory and default ordering.
  * Pages start at a numeric offset in the current results. If listings change, later pages can skip or repeat entries
+ *
+ * @category Guilds and members
  */
 export interface DiscoverySearchQuery {
     /** Free-text query of at most 100 UTF-16 code units */
@@ -192,21 +210,27 @@ export interface DiscoverySearchQuery {
     readonly offset?: number
 }
 
-/** Frozen category match count for the current directory filters, ignoring the selected category */
+/**
+ * Frozen category match count for the current directory filters, ignoring the selected category
+ *
+ * @category Guilds and members
+ */
 export interface DiscoveryCategoryCount {
     /** Provider category ID */
     readonly categoryId: number
-    /** Current matching guild count */
+    /** Current matching community count */
     readonly count: number
 }
 
-/** One page of public guild listings, with the offset, page limit and number of current matches.
+/** One page of public community listings, with the offset, page limit and number of current matches.
  * Listings can change between requests, so `total` does not guarantee that paging will visit every listing exactly once
+ *
+ * @category Guilds and members
  */
 export interface DiscoverySearchPage {
     /** Frozen directory results in provider order */
     readonly guilds: readonly DiscoveryGuild[]
-    /** Provider-reported matching guild count, which can change immediately */
+    /** Provider-reported matching community count, which can change immediately */
     readonly total: number
     /** Frozen current-filter category counts, ignoring DiscoverySearchQuery.categoryId */
     readonly categoryCounts: readonly DiscoveryCategoryCount[]

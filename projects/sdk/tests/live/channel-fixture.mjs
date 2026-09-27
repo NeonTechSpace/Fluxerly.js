@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 
 const markerPattern = /^fluxerly-sdk-channel-[a-f0-9]{32}$/
+const testChannelPattern = /^fluxerly-sdk-test-[a-f0-9]{32}$/
 const fixtureKeys = new Set(["categoryA", "categoryB", "inheritedChild", "explicitChild", "voiceTier"])
 
 const markerMatches = (entry, channel) =>
@@ -89,4 +90,60 @@ export async function cleanupGuildChannelFixtures(api, journal, save) {
                     !after.data.some((channel) => channel.type === entry.type && markerMatches(entry, channel)),
             ),
     )
+}
+
+/**
+ * Journals the main test channel's unique name through `create` before dispatch, then records the returned ID through
+ * `save`. Cleanup reconciles a lost response through that name, never through another POST
+ */
+export async function createMainTestChannel(api, journal, { create, save }) {
+    assert.equal(journal.name, undefined)
+    journal.name = `fluxerly-sdk-test-${randomUUID().replaceAll("-", "")}`
+    create()
+    const channel = (await api("POST", `/guilds/${journal.guildId}/channels`, { name: journal.name, type: 0 })).data
+    assert.match(channel?.id ?? "", /^\d+$/)
+    assert.equal(channel.guild_id, journal.guildId)
+    assert.equal(channel.name, journal.name)
+    journal.channelId = channel.id
+    save()
+    return channel
+}
+
+/**
+ * Deletes the main test channel only while it matches the journaled server, type, unique name and any returned ID.
+ * Without a returned ID, exactly one listed channel must carry the name, so absent or ambiguous intent fails closed
+ */
+export async function cleanupMainTestChannel(api, journal, save) {
+    const { guildId } = journal
+    assert.match(guildId ?? "", /^\d+$/)
+    assert.match(journal.name ?? "", testChannelPattern)
+    const listed = await api("GET", `/guilds/${guildId}/channels`)
+    assert.ok(Array.isArray(listed.data))
+    // A returned ID is authoritative. Marker lookup is only safe while creation never returned an ID
+    const matches =
+        journal.channelId === undefined ? listed.data.filter((channel) => channel.name === journal.name) : []
+    assert.ok(matches.length <= 1)
+    let channel = matches[0]
+    if (journal.channelId !== undefined) {
+        const recorded = await api("GET", `/channels/${journal.channelId}`)
+        if (recorded.status !== 404) channel = recorded.data
+    }
+    if (journal.channelId === undefined) assert.ok(channel, "Unresolved channel creation retains its journal")
+    if (channel) {
+        assert.match(channel.id, /^\d+$/)
+        if (journal.channelId !== undefined) assert.equal(channel.id, journal.channelId)
+        assert.equal(channel.guild_id, guildId)
+        assert.equal(channel.type, 0)
+        assert.equal(channel.name, journal.name)
+        const current = await api("GET", `/channels/${channel.id}`)
+        assert.equal(current.data?.id, channel.id)
+        assert.equal(current.data?.name, journal.name)
+        assert.equal(current.data?.guild_id, guildId)
+        journal.channelId = channel.id
+        save()
+        await api("DELETE", `/channels/${channel.id}`)
+        assert.equal((await api("GET", `/channels/${channel.id}`)).status, 404)
+    }
+    const after = await api("GET", `/guilds/${guildId}/channels`)
+    assert.ok(Array.isArray(after.data) && !after.data.some((channel) => channel.name === journal.name))
 }

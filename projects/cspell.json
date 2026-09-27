@@ -1,0 +1,29 @@
+{
+    "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
+    "version": "0.2",
+    "overrides": [
+        {
+            "filename": "sdk/src/**/*.ts",
+            "includeRegExpList": ["CStyleComment"]
+        }
+    ],
+    "language": "en",
+    "dictionaryDefinitions": [
+        { "name": "fluxerly", "path": "./cspell-words.txt", "addWords": true }
+    ],
+    "dictionaries": ["fluxerly"],
+    "files": [
+        "sdk/src/**/*.ts",
+        "web/content/guides/**/*.{md,mdx}",
+        "../docs/*.md",
+        "../README.md",
+        "../SECURITY.md",
+        "../AGENTS.md",
+        "AGENTS.md",
+        "sdk/AGENTS.md",
+        "sdk/README.md",
+        "sdk/consumer/AGENTS.md",
+        "sdk/tests/live/README.md"
+    ],
+    "ignorePaths": ["**/node_modules/**", "**/dist/**"]
+}

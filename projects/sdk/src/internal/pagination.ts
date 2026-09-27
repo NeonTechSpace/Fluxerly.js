@@ -1,16 +1,25 @@
-import { Effect, Stream } from "effect"
+/**
+ * Pagination: Default iterators and native streams over existing page operations.
+ * Invariant: Traversal keeps the page operations' retries, rate limits and cache rules. Each consumption owns one buffered page
+ * and bounded pin deduplication state, released on termination or client closure. The default iterator owns Result conversion,
+ * while native streams keep request execution and cleanup in the caller's scope. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
+import * as Effect from "effect/Effect"
+import * as Stream from "effect/Stream"
 import { ClientClosedError } from "#sdk/errors"
 import { PaginationError, type PaginationOperation } from "#sdk/pagination"
 import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
 import type { OperationOptions } from "#sdk/client"
 import type { ClientOwner } from "./client.js"
-import { encodeHistory, record, snapshotReference } from "./message.js"
+import { encodeHistory, snapshotReference } from "./message.js"
+import { fieldsOnce, record } from "./decode/primitives.js"
+import { suspendInput } from "./defects.js"
 import { memberPage } from "./guilds.js"
 import { guildList } from "./guild-lifecycle.js"
 import { auditLogPage } from "./audit-logs.js"
 import { encodePinsQuery } from "./pins.js"
 import { encodeReactionUsersQuery, resolveReactionEmoji } from "./reactions.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
 interface Page<A> {
     readonly items: readonly A[]
@@ -33,27 +42,20 @@ interface Source<A, E> {
 const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
 
-// Default signal validation happens before executing the shared, signal-free request options
-export function iterationOptions(value: unknown) {
+/**
+ * Validate default iteration options before executing the shared, signal-free request options. The signal is passed in
+ * when the caller already read it, so each option field is read once
+ */
+export function iterationOptions(value: unknown, signal: unknown) {
     if (value === undefined) return { request: {}, signal: undefined }
     if (!record(value)) return inputValidationFailure("options", "type", "Iteration options must be an object")
-    if (Object.keys(value).some((key) => key !== "timeoutMs" && key !== "signal"))
-        return inputValidationFailure(
-            "options",
-            "allowedFields",
-            "Iteration options may contain only timeoutMs and signal",
-        )
-    const signal = value.signal as OperationOptions["signal"]
-    if (
-        signal !== undefined &&
-        (!signal ||
-            typeof signal.aborted !== "boolean" ||
-            typeof signal.addEventListener !== "function" ||
-            typeof signal.removeEventListener !== "function")
-    )
-        return inputValidationFailure("options.signal", "type", "Iteration signal must be an AbortSignal")
+    const unsupported = unsupportedKeyFailure(value, ["timeoutMs", "signal"], "options", "the iteration options")
+    if (unsupported) return unsupported
     const timeoutMs = value.timeoutMs
-    return { request: { ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number }) }, signal }
+    return {
+        request: timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number },
+        signal: signal as OperationOptions["signal"],
+    }
 }
 
 /** One consumption owns its page and optional pin IDs, not credentials or retained result arrays */
@@ -124,7 +126,7 @@ export class Pagination<A, E> {
                 }
                 if (this.#failure) return yield* Effect.fail(this.#failure)
                 if (this.#pages === this.settings.maxPages)
-                    return yield* Effect.fail(new PaginationError(this.operation, "pageLimit"))
+                    return yield* Effect.fail(new PaginationError({ operation: this.operation, reason: "pageLimit" }))
                 this.#pages++
                 const page = yield* this.source.load(
                     this.#cursor,
@@ -140,7 +142,8 @@ export class Pagination<A, E> {
                           : this.operation === "iterateHistory" || this.operation === "auditLogs.iterate"
                             ? BigInt(page.next) < BigInt(this.#cursor)
                             : BigInt(page.next) > BigInt(this.#cursor)
-                    if (!advances) this.#failure = new PaginationError(this.operation, "cursorStalled")
+                    if (!advances)
+                        this.#failure = new PaginationError({ operation: this.operation, reason: "cursorStalled" })
                 }
                 this.#cursor = page.next ?? undefined
             }
@@ -159,84 +162,81 @@ function prepare<A, E>(
     build: (settings: Settings) => Source<A, E> | InputValidationFailure,
     supportsCounts = false,
 ): Effect.Effect<Pagination<A, E>, PaginationError> {
-    return Effect.suspend(() => {
+    // Only reading and validating the caller query, options and page arguments is marked as application input
+    return suspendInput((): Effect.Effect<readonly [Settings, Source<A, E>], PaginationError> => {
         const invalid = (detail: InputValidationFailure) =>
-            Effect.fail(new PaginationError(operation, "input", detail.detail))
+            Effect.fail(new PaginationError({ operation, reason: "input", inputValidation: detail.detail }))
         if (!record(query)) return invalid(inputValidationFailure("query", "type", "Iteration query must be an object"))
-        if (
-            Object.keys(query).some(
-                (key) =>
-                    ![
-                        "maxItems",
-                        "maxPages",
-                        "pageSize",
-                        cursorKey,
-                        ...(supportsCounts ? ["withCounts"] : []),
-                    ].includes(key),
-            )
+        const field = fieldsOnce(query)
+        const unsupportedQuery = unsupportedKeyFailure(
+            query,
+            ["maxItems", "maxPages", "pageSize", cursorKey, ...(supportsCounts ? ["withCounts"] : [])],
+            "query",
+            "the iteration query",
         )
-            return invalid(
-                inputValidationFailure("query", "allowedFields", "Iteration query contains an unsupported field"),
-            )
-        const maxItems = query.maxItems,
-            maxPages = query.maxPages === undefined ? 100 : query.maxPages,
-            pageSize = query.pageSize === undefined ? defaultSize : query.pageSize
+        if (unsupportedQuery) return invalid(unsupportedQuery)
+        const maxItemsInput = field("maxItems"),
+            maxPagesInput = field("maxPages"),
+            pageSizeInput = field("pageSize")
+        const maxItems = maxItemsInput,
+            maxPages = maxPagesInput === undefined ? 100 : maxPagesInput,
+            pageSize = pageSizeInput === undefined ? defaultSize : pageSizeInput
         if (!positive(maxItems))
             return invalid(
-                inputValidationFailure("query.maxItems", "range", "maxItems must be a positive safe integer"),
+                inputValidationFailure(
+                    "query.maxItems",
+                    "range",
+                    "The limit maxItems is required and must be a positive safe integer",
+                ),
             )
         if (!positive(maxPages))
             return invalid(
-                inputValidationFailure("query.maxPages", "range", "maxPages must be a positive safe integer"),
+                inputValidationFailure("query.maxPages", "range", "The limit maxPages must be a positive safe integer"),
             )
         if (!positive(pageSize) || pageSize > maximumSize)
             return invalid(
                 inputValidationFailure(
                     "query.pageSize",
                     "range",
-                    `pageSize must be a positive safe integer no greater than ${maximumSize}`,
+                    `The limit pageSize must be an integer from 1 through ${maximumSize.toLocaleString("en-US")}`,
                 ),
             )
         const input = options === undefined ? {} : options
         if (!record(input))
             return invalid(inputValidationFailure("options", "type", "Iteration options must be an object"))
-        if (Object.keys(input).some((key) => key !== "timeoutMs"))
-            return invalid(
-                inputValidationFailure(
-                    "options",
-                    "allowedFields",
-                    "Native iteration options may contain only timeoutMs",
-                ),
-            )
+        // The native Effect API cancels by interruption, so its options have no signal
+        const unsupportedOption = unsupportedKeyFailure(input, ["timeoutMs"], "options", "the iteration options")
+        if (unsupportedOption) return invalid(unsupportedOption)
         const timeout = input.timeoutMs
         if (timeout !== undefined && (!positive(timeout) || timeout > 2_147_483_647))
             return invalid(
                 inputValidationFailure(
                     "options.timeoutMs",
                     "range",
-                    "Iteration timeout must be a positive safe integer no greater than 2,147,483,647",
+                    "Iteration timeout must be an integer from 1 through 2,147,483,647 ms",
                 ),
             )
-        const cursor = query[cursorKey]
+        const cursor = field(cursorKey)
         if (cursor !== undefined && typeof cursor !== "string")
             return invalid(
                 inputValidationFailure(`query.${cursorKey}`, "type", `Iteration ${cursorKey} cursor must be a string`),
             )
-        if (supportsCounts && query.withCounts !== undefined && typeof query.withCounts !== "boolean")
-            return invalid(inputValidationFailure("query.withCounts", "type", "withCounts must be a boolean"))
+        const withCounts = supportsCounts ? field("withCounts") : undefined
+        if (withCounts !== undefined && typeof withCounts !== "boolean")
+            return invalid(
+                inputValidationFailure("query.withCounts", "type", "The query option withCounts must be a boolean"),
+            )
         const settings = {
             maxItems,
             maxPages,
             pageSize,
             cursor,
             options: timeout === undefined ? {} : { timeoutMs: timeout },
-            ...(supportsCounts ? { withCounts: query.withCounts === true } : {}),
+            ...(supportsCounts ? { withCounts: withCounts === true } : {}),
         }
         const source = build(settings)
-        return source instanceof InputValidationFailure
-            ? invalid(source)
-            : Effect.succeed(new Pagination<A, E>(owner, operation, settings, source))
-    })
+        return source instanceof InputValidationFailure ? invalid(source) : Effect.succeed([settings, source] as const)
+    }).pipe(Effect.map(([settings, source]) => new Pagination<A, E>(owner, operation, settings, source)))
 }
 
 const cursorQuery = (key: "before" | "after", cursor: string | undefined, limit: number) => ({
@@ -309,7 +309,9 @@ export const guildPagination = <M extends MessageCore = Message>(
                         .pipe(
                             Effect.flatMap((items) =>
                                 cursor !== undefined && items.some((guild) => BigInt(guild.id) <= BigInt(cursor))
-                                    ? Effect.fail(new PaginationError("guilds.iterate", "cursorStalled"))
+                                    ? Effect.fail(
+                                          new PaginationError({ operation: "guilds.iterate", reason: "cursorStalled" }),
+                                      )
                                     : Effect.succeed({ items, next: items.at(-1)?.id ?? null }),
                             ),
                         ),
@@ -370,50 +372,52 @@ export const auditLogPagination = <M extends MessageCore = Message>(
     query: unknown,
     options?: MessageOperationOptions,
 ) =>
-    Effect.suspend(() => {
+    suspendInput(() => {
         if (!record(query))
             return Effect.fail(
-                new PaginationError(
-                    "auditLogs.iterate",
-                    "input",
-                    inputValidationFailure("query", "type", "Audit log iteration query must be an object").detail,
-                ),
-            )
-        if (
-            Object.keys(query).some(
-                (key) => !["maxItems", "maxPages", "pageSize", "before", "userId", "actionType"].includes(key),
-            )
-        )
-            return Effect.fail(
-                new PaginationError(
-                    "auditLogs.iterate",
-                    "input",
-                    inputValidationFailure(
+                new PaginationError({
+                    operation: "auditLogs.iterate",
+                    reason: "input",
+                    inputValidation: inputValidationFailure(
                         "query",
-                        "allowedFields",
-                        "Audit log iteration query may contain only pagination bounds, before, userId, and actionType",
+                        "type",
+                        "Audit log iteration query must be an object",
                     ).detail,
-                ),
+                }),
             )
-        if (query.userId === undefined && query.actionType === undefined)
+        const unsupported = unsupportedKeyFailure(
+            query,
+            ["maxItems", "maxPages", "pageSize", "before", "userId", "actionType"],
+            "query",
+            "the audit log iteration query",
+        )
+        if (unsupported)
             return Effect.fail(
-                new PaginationError(
-                    "auditLogs.iterate",
-                    "input",
-                    inputValidationFailure(
+                new PaginationError({
+                    operation: "auditLogs.iterate",
+                    reason: "input",
+                    inputValidation: unsupported.detail,
+                }),
+            )
+        const field = fieldsOnce(query)
+        const userId = field("userId")
+        const actionType = field("actionType")
+        if (userId === undefined && actionType === undefined)
+            return Effect.fail(
+                new PaginationError({
+                    operation: "auditLogs.iterate",
+                    reason: "input",
+                    inputValidation: inputValidationFailure(
                         "query",
                         "required",
                         "Audit log iteration query must select userId or actionType",
                     ).detail,
-                ),
+                }),
             )
-        const userId = query.userId
-        const actionType = query.actionType
-        const bounds = {
-            maxItems: query.maxItems,
-            maxPages: query.maxPages,
-            pageSize: query.pageSize,
-            before: query.before,
+        const bounds: Record<string, unknown> = {}
+        for (const key of ["maxItems", "maxPages", "pageSize", "before"]) {
+            const value = field(key)
+            if (value !== undefined) bounds[key] = value
         }
         const filters = {
             ...(userId === undefined ? {} : { userId: userId as string }),

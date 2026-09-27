@@ -1,9 +1,24 @@
+// Users, direct messages, latest-message batches, bot server profile, presence intent and an optional existing
+// group with currently authorized private recipients.
+// Journal `.env.test.users.local` records the sandbox, bot and recipient identity, a marker, test-owned message
+// IDs and pending sends, the DM open state and temporary bot-profile and group restoration data. An existing
+// journal selects a recovery-only run. It reconciles pending opens and sends, deletes only marker-owned test
+// messages, restores the bot profile and group name, and closes a test-opened DM. A journal in any other format fails
+// closed and stays for inspection
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { readFileSync, writeFileSync, openSync, closeSync, writeSync, existsSync, unlinkSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { Effect, Scope, Exit } from "effect"
 import WebSocket from "ws"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { anyStatus, createSandboxApi } from "./support/sandbox-api.js"
 
 // Manual, currently authorized recipient checks only; never run through check, CI or a schedule
 const mode = process.argv[2]
@@ -16,52 +31,28 @@ const recipient = process.env.FLUXER_TEST_DM_USER_ID
 const groupId = process.env.FLUXER_TEST_GROUP_DM_ID
 const extraGroupUser = process.env.FLUXER_TEST_GROUP_EXTRA_USER_ID
 const processId = /^[1-9][0-9]{0,19}$/
-function requireProcessId(value, name) {
-    assert.ok(typeof value === "string" && processId.test(value), `Set the currently authorized ${name}`)
+// A refused target names only its process variable, never the supplied value
+function requireProcessId(value, variable) {
+    if (typeof value === "string" && processId.test(value)) return
+    console.error(JSON.stringify({ mode, stage: "configuration", passed: false, variable }))
+    process.exit(1)
 }
-requireProcessId(recipient, "DM recipient")
-if (groupId !== undefined) requireProcessId(groupId, "group ID")
-if (extraGroupUser !== undefined) requireProcessId(extraGroupUser, "group participant")
-const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-const token = env.FLUXER_TEST_BOT_TOKEN
-const guildId = env.FLUXER_TEST_GUILD_ID
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.users.local", import.meta.url)
+requireProcessId(recipient, "FLUXER_TEST_DM_USER_ID")
+if (groupId !== undefined) requireProcessId(groupId, "FLUXER_TEST_GROUP_DM_ID")
+if (extraGroupUser !== undefined) requireProcessId(extraGroupUser, "FLUXER_TEST_GROUP_EXTRA_USER_ID")
+const journalFile = openJournal("users")
 const rawFetch = globalThis.fetch
 const rawSend = WebSocket.prototype.send
 const historyPageSize = 100
 const historyPageLimit = 5
 const ownedSockets = new Set()
 const presenceWrites = []
-let lock, journal, bot, scope, botId
+let lock, journal, bot, scope, botId, token, guildId
 let verified = false,
     stage = "configuration"
-const report = (check, extra = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...extra }))
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
-const value = async (operation) => {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
-async function api(method, path, body) {
-    const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-        method,
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: {
-            Authorization: `Bot ${token}`,
-            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    })
-    const data = await response.json().catch(() => null)
-    return { status: response.status, data }
-}
+const report = createReporter({ mode }, { passed: true })
+const save = () => journalFile.save(journal)
+const api = createSandboxApi({ fetch: rawFetch, token: () => token, accept: anyStatus })
 const privateList = async () => {
     const response = await api("GET", "/users/@me/channels")
     assert.equal(response.status, 200)
@@ -160,20 +151,13 @@ async function authorizeRecoveryTargets() {
     assert.equal(journal.botId, botId)
     assert.equal(journal.recipient, recipient, "Recovery requires authorization for the journaled recipient")
     assert.match(journal.marker, markerPattern)
-    const legacy = journal.version !== 2
-    const dm = legacy
-        ? { id: journal.dmId, opening: journal.dmWasOpen === false && journal.dmId === undefined }
-        : journal.dm
-    const group = legacy ? { id: journal.groupId } : journal.group
+    const { dm, group } = journal
     const allowedChannels = new Set()
     const privateChannels = await privateList()
     if (dm?.id !== undefined) {
         const current = privateChannels.filter((channel) => channel.id === dm.id)
         if (current.length === 0)
-            assert.ok(
-                !legacy && dm.wasOpen === false && dm.closing === true,
-                "Journaled DM is not currently authorized",
-            )
+            assert.ok(dm.wasOpen === false && dm.closing === true, "Journaled DM is not currently authorized")
         else {
             assert.equal(current.length, 1, "Journaled DM is not currently authorized")
             assert.equal(current[0].type, 1)
@@ -190,10 +174,8 @@ async function authorizeRecoveryTargets() {
         verifyGroup(current)
         allowedChannels.add(group.id)
     }
-    if (!legacy) {
-        for (const entry of [...journal.messages, ...Object.values(journal.pendingSends)])
-            assert.ok(allowedChannels.has(entry.channelId), "Journaled message channel is not authorized")
-    }
+    for (const entry of [...journal.messages, ...Object.values(journal.pendingSends)])
+        assert.ok(allowedChannels.has(entry.channelId), "Journaled message channel is not authorized")
     if (dm?.opening) assert.ok(dm.id === undefined)
 }
 
@@ -274,48 +256,6 @@ async function deleteJournaledMessages() {
     }
 }
 
-async function upgradeLegacyJournal() {
-    assert.equal(journal.guildId, guildId)
-    assert.equal(journal.botId, botId)
-    assert.equal(journal.recipient, recipient, "Recovery requires authorization for the journaled recipient")
-    assert.match(journal.marker, markerPattern)
-    assert.ok(
-        journal.dmId !== undefined || journal.dmWasOpen === false,
-        "Legacy journal cannot prove a pending DM open",
-    )
-    for (const channelId of [journal.dmId, journal.groupId].filter(Boolean)) {
-        assert.ok(id(channelId))
-        for (const message of await scanMessages(channelId, undefined)) {
-            if (
-                message.author?.id !== botId ||
-                typeof message.content !== "string" ||
-                !message.content.startsWith(`${journal.marker}:`)
-            )
-                continue
-            const entry = { channelId, id: message.id, marker: message.content }
-            await deleteKnownMessage(entry)
-        }
-    }
-    journal = {
-        version: 2,
-        guildId: journal.guildId,
-        botId: journal.botId,
-        recipient: journal.recipient,
-        marker: journal.marker,
-        dm:
-            journal.dmId === undefined
-                ? { wasOpen: false, opening: true }
-                : { id: journal.dmId, wasOpen: journal.dmWasOpen === true },
-        messages: [],
-        pendingSends: {},
-        ...(journal.profile === undefined ? {} : { profile: journal.profile }),
-        ...(journal.groupId === undefined
-            ? {}
-            : { group: { id: journal.groupId, name: journal.groupName, recipients: journal.groupRecipients } }),
-    }
-    save()
-}
-
 async function restoreProfile() {
     if (!journal.profile) return
     const current = await api("GET", `/guilds/${guildId}/members/@me`)
@@ -381,16 +321,16 @@ async function restoreDmState() {
 
 async function cleanup() {
     if (!verified || !journal) return
-    if (journal.version === 2) validateJournal()
+    // A journal from another format fails closed here and stays for inspection
+    validateJournal()
     await authorizeRecoveryTargets()
-    if (journal.version !== 2) await upgradeLegacyJournal()
     await reconcilePendingDmOpen()
     validateJournal()
     await deleteJournaledMessages()
     await restoreProfile()
     await restoreGroup()
     await restoreDmState()
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("test_messages_and_private_channel_cleanup_verified")
 }
@@ -412,28 +352,25 @@ const watchdog = setTimeout(() => {
     process.exit(1)
 }, 180_000).unref()
 try {
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    assert.ok(token)
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
+    lock = acquireLock()
     stage = "sandbox_and_recipient_identity"
-    const app = await api("GET", "/applications/@me")
-    const self = await api("GET", "/users/@me")
-    assert.equal(app.status, 200)
-    assert.equal(self.status, 200)
-    assert.equal(app.data.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(app.data.bot?.id, self.data.id)
-    assert.equal(self.data.bot, true)
-    assert.equal((await api("GET", `/guilds/${guildId}`)).data.id, guildId)
-    botId = self.data.id
+    const identity = await verifySandboxIdentity(async (path) => {
+        const response = await api("GET", path)
+        assert.equal(response.status, 200)
+        return response.data
+    }, sandbox)
+    botId = identity.botId
     assert.notEqual(recipient, botId)
     const member = await api("GET", `/guilds/${guildId}/members/${recipient}`)
     assert.equal(member.status, 200)
     assert.equal(member.data.user?.id, recipient)
     verified = true
     report(stage)
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
         report("recovery_only_complete")
     } else {
@@ -461,13 +398,13 @@ try {
             messages: [],
             pendingSends: {},
         }
-        writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+        journalFile.create(journal)
         scope = Scope.makeUnsafe()
         const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
         const created = sdk.createClient({ token, cache: { users: true, directMessages: true, messages: true } })
         bot =
             mode === "default"
-                ? created._unsafeUnwrap()
+                ? created
                 : await Effect.runPromise(created.pipe(Effect.provideService(Scope.Scope, scope)))
         if (latestOnly) {
             stage = "explicit_dm_latest_message_batch"
@@ -507,7 +444,8 @@ try {
             assert.equal((await value(bot.directMessages.fetchLatestMessages([dm.id]))).messages[dm.id]?.id, sent.id)
             report(stage)
         } else {
-            const cached = (operation) => (mode === "default" ? operation._unsafeUnwrap() : value(operation))
+            // Cache lookups return plain values in the default API and never-failing Effects natively
+            const cached = (operation) => (mode === "default" ? operation : value(operation))
             WebSocket.prototype.send = function (data, ...args) {
                 try {
                     const payload = JSON.parse(String(data))
@@ -535,14 +473,14 @@ try {
             const observe = (message) => {
                 if (message.author?.id === botId && message.content.startsWith(journal.marker)) seen.add(message.id)
             }
-            if (mode === "default") bot.on("messageCreate", observe)._unsafeUnwrap()
+            if (mode === "default") bot.on("messageCreate", observe)
             else
                 await Effect.runPromise(
                     bot
                         .on("messageCreate", (message) => Effect.sync(() => observe(message)))
                         .pipe(Effect.provideService(Scope.Scope, scope)),
                 )
-            await cached(bot.presence.set({ status: "idle", customStatus: { text: journal.marker } }))
+            await value(bot.presence.set({ status: "idle", customStatus: { text: journal.marker } }))
             await value(bot.connect())
             const waitUntil = async (predicate) => {
                 const until = Date.now() + 15_000
@@ -620,7 +558,7 @@ try {
             try {
                 await assert.rejects(
                     () => value(bot.directMessages.send(recipient, { content: lost.marker })),
-                    (error) => error._tag === "MessageError" && error.delivery === "unknown",
+                    (error) => error._tag === "MessageError" && error.outcome === "unknown",
                 )
             } finally {
                 globalThis.fetch = rawFetch
@@ -734,26 +672,9 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({
-                mode,
-                check: "cleanup",
-                passed: false,
-                finalizer,
-                journalRetained: journal !== undefined,
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exitCode = 1
-    }
     try {
         if (bot && bot.state === "Connected") {
-            await (mode === "default"
-                ? bot.presence.set({ status: "online", customStatus: null })._unsafeUnwrap()
-                : value(bot.presence.set({ status: "online", customStatus: null })))
+            await value(bot.presence.set({ status: "online", customStatus: null }))
             const until = Date.now() + 6_000
             while (presenceWrites.at(-1)?.status !== "online" && Date.now() < until)
                 await new Promise((resolve) => setTimeout(resolve, 25))
@@ -763,38 +684,50 @@ try {
         console.error(JSON.stringify({ mode, check: "presence_reset", passed: false }))
         process.exitCode = 1
     }
-    if (bot && bot.state !== "Closed")
-        try {
-            const stopped = bot.shutdown()
-            await (Effect.isEffect(stopped) ? Effect.runPromise(stopped) : stopped)
-        } catch {
-            retainEvidence("bot_client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            await cleanup()
-        } catch {
-            console.error(
-                JSON.stringify({ mode, check: "cleanup", passed: false, journalRetained: journal !== undefined }),
-            )
-            process.exitCode = 1
-        }
-    WebSocket.prototype.send = rawSend
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            console.error(JSON.stringify({ mode, check: "lock_cleanup", passed: false, lockRetained: true }))
-            process.exitCode = 1
-        }
+    // Keep the journal, lock and deadline if a failed owned finalizer may have left a writer alive
+    try {
+        await finalizeOwned({
+            writers: [
+                bot &&
+                    bot.state !== "Closed" && [
+                        "bot_client_shutdown",
+                        async () => {
+                            const stopped = bot.shutdown()
+                            await (Effect.isEffect(stopped) ? Effect.runPromise(stopped) : stopped)
+                        },
+                    ],
+                scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+            ],
+            cleanup,
+            lock,
+            watchdog,
+            onFailure: (finalizer) => {
+                if (finalizer === "cleanup")
+                    console.error(
+                        JSON.stringify({
+                            mode,
+                            check: "cleanup",
+                            passed: false,
+                            journalRetained: journal !== undefined,
+                        }),
+                    )
+                else if (finalizer === "sandbox_lock")
+                    console.error(JSON.stringify({ mode, check: "lock_cleanup", passed: false, lockRetained: true }))
+                else
+                    console.error(
+                        JSON.stringify({
+                            mode,
+                            check: "cleanup",
+                            passed: false,
+                            finalizer,
+                            journalRetained: journal !== undefined,
+                            lockRetained: lock?.held ?? false,
+                        }),
+                    )
+                process.exitCode = 1
+            },
+        })
+    } finally {
+        WebSocket.prototype.send = rawSend
     }
-    // Keep the deadline if a failed owned finalizer may have left a writer alive
-    if (quiescent) clearTimeout(watchdog)
 }

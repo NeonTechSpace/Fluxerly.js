@@ -1,4 +1,15 @@
-import { Clock, Deferred, Duration, Effect, Scope } from "effect"
+/**
+ * Logical timers tied to SDK work, over the Clock captured when an owner is created.
+ * Invariant: Timers belong to the owner's scope, stay separate from host watchdogs and protocol wall time, and report callback failures.
+ * Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
+ */
+import * as Cause from "effect/Cause"
+import * as Clock from "effect/Clock"
+import * as Deferred from "effect/Deferred"
+import * as Duration from "effect/Duration"
+import * as Effect from "effect/Effect"
+import * as Scope from "effect/Scope"
+import { nowMs } from "./clock.js"
 
 export type LogicalTimer = object
 
@@ -16,10 +27,14 @@ export class LogicalScheduler {
     #sequence = 0
     #wake = Deferred.makeUnsafe<void>()
 
-    constructor(readonly clock: Clock.Clock) {}
+    constructor(
+        readonly clock: Clock.Clock,
+        /** Report a failed timer callback with its owner label and full Cause */
+        private readonly onFailure?: (owner: string, cause: Cause.Cause<unknown>) => void,
+    ) {}
 
     now(): number {
-        return Number(this.clock.monotonicTimeNanosUnsafe()) / 1_000_000
+        return nowMs(this.clock)
     }
 
     set(callback: () => void, delayMs: number, owner: string): LogicalTimer {
@@ -79,9 +94,16 @@ export class LogicalScheduler {
                         // An earlier callback can cancel a later callback from the same due snapshot
                         if (!this.#entries.delete(timer)) return Effect.void
                         return Effect.sync(entry.callback).pipe(
-                            // Report only the closed owner label. A defective logger cannot orphan unrelated timers
-                            Effect.catchCause(() =>
-                                Effect.logError(`${entry.owner} logical timer callback failed`).pipe(
+                            // A failed callback is reported with its cause and cannot orphan unrelated timers
+                            Effect.catchCause((cause) =>
+                                Effect.sync(() => {
+                                    if (this.onFailure) this.onFailure(entry.owner, cause)
+                                    else
+                                        process.stderr.write(
+                                            `Fluxerly ${entry.owner} timer callback failed: ${String(Cause.squash(cause))}\n`,
+                                        )
+                                }).pipe(
+                                    // allow-silent: A failing reporter must not stop the scheduler loop
                                     Effect.catchCause(() => Effect.void),
                                 ),
                             ),
@@ -101,10 +123,13 @@ export class LogicalScheduler {
     }
 }
 
-export const makeLogicalScheduler = (scope: Scope.Scope): Effect.Effect<LogicalScheduler> =>
+export const makeLogicalScheduler = (
+    scope: Scope.Scope,
+    onFailure?: (owner: string, cause: Cause.Cause<unknown>) => void,
+): Effect.Effect<LogicalScheduler> =>
     Effect.gen(function* () {
         const clock = yield* Clock.Clock
-        const scheduler = new LogicalScheduler(clock)
+        const scheduler = new LogicalScheduler(clock, onFailure)
         yield* Effect.forkIn(scheduler.run.pipe(Effect.interruptible), scope, { uninterruptible: true })
         yield* Scope.addFinalizer(
             scope,

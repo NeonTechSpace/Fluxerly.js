@@ -1,4 +1,15 @@
-import { Cause, Deferred, Effect, Exit, type Fiber } from "effect"
+/**
+ * Reaction collector: Buffering, filters and terminal cleanup for reaction events.
+ * Invariant: The collector owns its queue, snapshots and scheduled work, and completion releases its client registration.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
+import type { ClientLogger } from "./logging.js"
+import { messageIds, primaryError, type FailureReporter } from "./failures.js"
+import * as Cause from "effect/Cause"
+import * as Deferred from "effect/Deferred"
+import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
+import type * as Fiber from "effect/Fiber"
 import type { ConnectionState, OperationOptions } from "#sdk/client"
 import {
     CollectorError,
@@ -11,9 +22,13 @@ import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import type { Message, MessageCore, MessageReference } from "#sdk/messages"
 import type { MessageReaction, MessageReactionBatch, ReactionEmojiInput } from "#sdk/reactions"
 import type { ClientOwner } from "./client.js"
-import { record, snapshotReference } from "./message.js"
+import { snapshotReference } from "./message.js"
+import { record } from "./decode/primitives.js"
+import { readCaller, readInput, suspendMarked, thrownCause } from "./defects.js"
 import { resolveReactionEmoji } from "./reactions.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
+import { collectorBudgetMessage } from "./collector.js"
+import { unsupportedKeyHint } from "./suggest.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
 type Settings = Required<Omit<ReactionCollectorOptions, "filter" | "emoji" | "guildId" | "idleMs">> &
@@ -43,18 +58,23 @@ function settings(options: unknown, defaultApi: boolean): Settings | Configurati
         maxPendingMessages: 256,
         maxPendingBytes: 4_194_304,
     }
-    if (
-        Object.keys(input).some(
-            (key) =>
-                !Object.hasOwn(result, key) &&
-                key !== "guildId" &&
-                key !== "filter" &&
-                key !== "emoji" &&
-                key !== "onReaction" &&
-                !(defaultApi && key === "signal"),
+    const supported = [
+        ...Object.keys(result),
+        "guildId",
+        "filter",
+        "emoji",
+        "onReaction",
+        ...(defaultApi ? ["signal"] : []),
+    ]
+    const unsupported = Object.keys(input).find((key) => !supported.includes(key))
+    if (unsupported !== undefined)
+        return new ConfigurationError(
+            "collectorOptions",
+            `Unsupported collector option ${JSON.stringify(unsupported)}`,
+            {
+                hint: unsupportedKeyHint(unsupported, supported),
+            },
         )
-    )
-        return new ConfigurationError("collectorOptions", "Unsupported collector option")
     for (const key of Object.keys(result) as (keyof typeof result)[]) {
         const value = input[key]
         if (value === undefined) continue
@@ -64,10 +84,7 @@ function settings(options: unknown, defaultApi: boolean): Settings | Configurati
             value <= 0 ||
             ((key === "timeoutMs" || key === "idleMs") && value > 2_147_483_647)
         )
-            return new ConfigurationError(
-                key,
-                "Collector budgets must be positive safe integers within the timer range",
-            )
+            return new ConfigurationError(key, collectorBudgetMessage(key))
         result[key] = value
     }
     if (input.filter !== undefined && typeof input.filter !== "function")
@@ -82,7 +99,7 @@ function settings(options: unknown, defaultApi: boolean): Settings | Configurati
             "Collector emoji must be Unicode, custom emoji markup or an emoji identity",
         )
     if (input.onReaction !== undefined && typeof input.onReaction !== "function")
-        return new ConfigurationError("onReaction", "Reaction handler must be a function")
+        return new ConfigurationError("onReaction", 'The collector option "onReaction" must be a function')
     const signal = input.signal
     if (
         signal !== undefined &&
@@ -122,6 +139,8 @@ export class ReactionCollector {
     #worker: Fiber.Fiber<void> | undefined
     #outcome: Exit.Exit<ReactionCollectorResult, CollectorFailure> | undefined
     #untrack: (() => void) | undefined
+    #logger: ClientLogger | undefined
+    #failures: FailureReporter | undefined
 
     owns(fiberId: number) {
         return this.#worker?.id === fiberId
@@ -134,6 +153,8 @@ export class ReactionCollector {
         const collector = this
         return Effect.gen(function* () {
             collector.#untrack = owner.trackReactionCollector(collector)
+            collector.#logger = owner.logging
+            collector.#failures = owner.failures
             const work = Effect.gen(function* () {
                 while (collector.#active) {
                     const reaction = yield* Deferred.await(collector.#next)
@@ -146,7 +167,9 @@ export class ReactionCollector {
                                           cause.reasons.filter((reason) => reason._tag !== "Fail"),
                                       ),
                                   )
-                                : Effect.sync(() => collector.fail(collector.#handlerFailure())),
+                                : Effect.sync(() =>
+                                      collector.fail(collector.#handlerFailure(cause), { cause, item: reaction }),
+                                  ),
                         ),
                     )
                     collector.#busy = false
@@ -163,12 +186,8 @@ export class ReactionCollector {
         })
     }
 
-    #handlerFailure() {
-        const error = new CollectorError("handler")
-        // Materialize the retained safe stack without keeping its callback frame alive
-        const stack = error.stack
-        if (stack !== undefined) error.stack = stack
-        return error
+    #handlerFailure(cause: Cause.Cause<unknown>) {
+        return new CollectorError("handler", null, null, { cause: primaryError(cause) })
     }
 
     #workerFinished(exit: Exit.Exit<void, unknown>) {
@@ -203,6 +222,9 @@ export class ReactionCollector {
     }
 
     start<M extends MessageCore>(owner: ClientOwner<M>, target: MessageReference) {
+        // Filter failures need these even when no callback worker runs
+        this.#logger = owner.logging
+        this.#failures = owner.failures
         const settings = this.#settings!
         const signal = settings.signal
         const abort = () => this.#finish(Exit.interrupt())
@@ -212,7 +234,7 @@ export class ReactionCollector {
         this.#release = () => {
             intake()
             state?.()
-            signal?.removeEventListener("abort", abort)
+            readCaller(() => signal?.removeEventListener("abort", abort))
         }
         try {
             state =
@@ -220,11 +242,11 @@ export class ReactionCollector {
                     ? owner.subscribe(this.#stateChanged.bind(this))
                     : owner.subscribeGateway(settings.guildId, this.#stateChanged.bind(this))
             if (!this.#active) state()
-            signal?.addEventListener("abort", abort, { once: true })
-            if (signal?.aborted) abort()
+            readCaller(() => signal?.addEventListener("abort", abort, { once: true }))
+            if (readCaller(() => signal?.aborted)) abort()
             if (this.#active) this.#scheduleDeadline()
         } catch (error) {
-            this.#finish(Exit.die(error))
+            this.#finish(Exit.failCause(thrownCause(error)))
             throw error
         }
     }
@@ -264,7 +286,19 @@ export class ReactionCollector {
 
     #offer(message: MessageReaction | MessageReactionBatch, bytes: number) {
         if (!this.#active) return
-        if (this.#busy && this.#messages.length === this.#settings!.maxReactions) return
+        if (this.#busy && this.#messages.length === this.#settings!.maxReactions) {
+            // The collector is full and finishing its last callback, so later events cannot join the result
+            this.#logger?.drop(
+                { event: "collector" },
+                {
+                    level: "debug",
+                    category: "collectors",
+                    code: "collectors.dropped",
+                    message: "A full reaction collector ignored an event while its last callback finished",
+                },
+            )
+            return
+        }
         try {
             if (this.#expired()) return
             const settings = this.#settings!
@@ -330,13 +364,13 @@ export class ReactionCollector {
                 let accepted: unknown
                 try {
                     accepted = this.#settings!.filter ? this.#settings!.filter(message) : true
-                } catch {
-                    return this.fail(new CollectorError("filter"))
+                } catch (error) {
+                    return this.fail(new CollectorError("filter", null, null, { cause: error }), { item: message })
                 }
                 discardInvalidCallbackReturn(accepted)
                 if (!this.#active) return
                 if (this.#expired()) return
-                if (typeof accepted !== "boolean") return this.fail(new CollectorError("filter"))
+                if (typeof accepted !== "boolean") return this.fail(new CollectorError("filter"), { item: message })
                 if (!accepted) continue
                 const size = Buffer.byteLength(JSON.stringify(message))
                 if (this.#expired()) return
@@ -359,7 +393,32 @@ export class ReactionCollector {
     stop() {
         this.#succeed("stopped")
     }
-    fail(error: CollectorFailure) {
+    /** End the collector with a failure. A failed application filter or callback is also reported with its original
+     * value through the client's onError, or logged at Error, while waitForClose still returns the CollectorError
+     */
+    fail(error: CollectorFailure, source?: { readonly cause?: Cause.Cause<unknown>; readonly item?: MessageReaction }) {
+        if (this.#active && error instanceof CollectorError && error.reason !== "connectionLost") {
+            if ((error.reason === "handler" || error.reason === "filter") && this.#failures) {
+                // The result keeps this error. Serializing its stack now releases the frames V8 captured with it, whose
+                // closures would otherwise keep the failed item and callbacks alive for as long as the result is held
+                void error.stack
+                this.#failures.report({
+                    kind: error.reason === "filter" ? "filter" : "collector",
+                    error: error.cause ?? error,
+                    cause: source?.cause,
+                    message: source?.item === undefined ? undefined : messageIds(source.item),
+                })
+            } else
+                this.#logger?.log({
+                    level: "warn",
+                    category: "collectors",
+                    code: "collectors.failed",
+                    message: `A reaction collector failed: ${error.message}`,
+                    fields: { reason: error.reason },
+                    error,
+                    origin: error.reason === "handler" || error.reason === "filter" ? "application" : "sdk",
+                })
+        }
         this.#finish(Exit.fail(error))
     }
     #succeed(reason: ReactionCollectorResult["reason"]) {
@@ -385,7 +444,7 @@ export class ReactionCollector {
             release?.()
         } catch (error) {
             outcome = Exit.failCause(
-                Cause.combine(Exit.isFailure(outcome) ? outcome.cause : Cause.empty, Cause.die(error)),
+                Cause.combine(Exit.isFailure(outcome) ? outcome.cause : Cause.empty, thrownCause(error)),
             )
         }
         this.#outcome = outcome
@@ -408,15 +467,16 @@ export function collectReactions<E = never, R = never, M extends MessageCore = M
     handler?: (reaction: MessageReaction) => Effect.Effect<unknown, E, R>,
 ): Effect.Effect<ReactionCollector, CollectorRegistrationError, R> {
     return Effect.gen(function* () {
-        if (owner.state === "Closing" || owner.state === "Closed") return yield* Effect.fail(new ClientClosedError())
-        const message = snapshotReference(target)
+        const message = yield* readInput(() => snapshotReference(target))
         if (message === undefined)
             return yield* Effect.fail(
                 new ConfigurationError("message", "Message reference must contain decimal id and channelId"),
             )
-        const config = settings(options, defaultApi)
+        const config = yield* readInput(() => settings(options, defaultApi))
         if (config instanceof ConfigurationError) return yield* Effect.fail(config)
-        if (config.signal?.aborted) return yield* Effect.interrupt
+        // Misuse is checked first. A closing client is a shutdown race, which the bindings return as a failed handle
+        if (owner.state === "Closing" || owner.state === "Closed") return yield* Effect.fail(new ClientClosedError())
+        if (yield* readInput(() => config.signal?.aborted)) return yield* Effect.interrupt
         if (config.guildId === undefined) {
             if (owner.state !== "Connected") return yield* Effect.fail(new CollectorError("notConnected"))
         } else if (
@@ -426,7 +486,11 @@ export function collectReactions<E = never, R = never, M extends MessageCore = M
             return yield* Effect.fail(new CollectorError("notConnected"))
         const collector = new ReactionCollector(config, owner.logical)
         if (handler) yield* collector.run(owner, handler)
-        collector.start(owner, message)
+        // The caller signal methods are marked reads, so their throws are application faults
+        yield* suspendMarked(() => {
+            collector.start(owner, message)
+            return Effect.void
+        })
         return collector
     })
 }

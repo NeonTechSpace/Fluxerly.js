@@ -1,18 +1,30 @@
+// Targeted member nickname change with a lost response, raw reconciliation, cache invalidation and SDK restoration
+// for a currently authorized non-bot member.
+// Journal `.env.test.members.local` records sandbox, bot and member identity, the marker nickname and the original
+// nickname. An existing journal is recovered before a new run: recovery requires the same currently supplied member
+// ID, restores the original nickname only from the exact marker and refuses an unexpected concurrent change
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { Effect, Exit, Scope } from "effect"
+import {
+    acquireLock,
+    checkSandboxIdentity,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    processValue,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { createSandboxApi } from "./support/sandbox-api.js"
 
 // Manual, current-authorization check only. FLUXER_TEST_MEMBER_ID must come from this invocation, never the env file
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
-const memberId = process.env.FLUXER_TEST_MEMBER_ID
-assert.match(memberId ?? "", /^[1-9][0-9]{0,19}$/, "Set the currently authorized FLUXER_TEST_MEMBER_ID")
+const memberId = processValue("FLUXER_TEST_MEMBER_ID")
 
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.members.local", import.meta.url)
+const journalFile = openJournal("members")
 let lock
 let journal
 let client
@@ -24,39 +36,15 @@ let botId
 let verified = false
 let stage = "configuration"
 
-const report = (check) => console.log(JSON.stringify({ mode, check, passed: true }))
+const report = createReporter({ mode }, { passed: true })
 
-async function value(operation) {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
+// Cache lookups return the member or undefined directly in the default API and as a never-failing Effect natively
+function cachedMember(reference) {
+    return mode === "default" ? client.members.get(reference) : Effect.runPromise(client.members.get(reference))
 }
 
-async function api(method, path, body) {
-    let response
-    try {
-        response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-            method,
-            redirect: "error",
-            signal: AbortSignal.timeout(15_000),
-            headers: {
-                Authorization: `Bot ${token}`,
-                ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-            },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        })
-        const data = await response.json().catch(() => null)
-        assert.ok(response.ok, `Sandbox HTTP ${response.status}`)
-        return data
-    } finally {
-        if (response && !response.bodyUsed) await response.body?.cancel()
-    }
-}
+const sandboxApi = createSandboxApi({ fetch: rawFetch, token: () => token })
+const api = async (method, path, body) => (await sandboxApi(method, path, body)).data
 
 async function fetchTarget() {
     const member = await api("GET", `/guilds/${guildId}/members/${memberId}`)
@@ -96,7 +84,7 @@ async function cleanup() {
         await api("PATCH", `/guilds/${guildId}/members/${memberId}`, { nick: journal.originalNickname })
         assert.equal((await fetchTarget()).nick ?? null, journal.originalNickname)
     }
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("target_nickname_restored")
 }
@@ -108,15 +96,11 @@ const watchdog = setTimeout(() => {
 
 try {
     // An existing lock, including a stale one, is a failure: do not bypass another run or delete its recovery state
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
 
-    const env = { ...parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8")), ...process.env }
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^[1-9][0-9]{0,19}$/)
-    assert.match(env.FLUXER_TEST_APPLICATION_ID ?? "", /^[1-9][0-9]{0,19}$/)
+    const sandbox = loadSandboxEnvironment({ processOverrides: true })
+    token = sandbox.token
+    guildId = sandbox.guildId
 
     stage = "sandbox_and_target_identity"
     const [application, self, rawGuild] = await Promise.all([
@@ -125,10 +109,7 @@ try {
         api("GET", `/guilds/${guildId}`),
     ])
     let target = await fetchTarget()
-    assert.equal(application.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(application.bot?.id, self.id)
-    assert.equal(self.bot, true)
-    assert.equal(rawGuild.id, guildId)
+    checkSandboxIdentity({ application, user: self, guild: rawGuild }, sandbox)
     assert.equal(target.user?.id, memberId)
     assert.notEqual(target.user?.bot, true, "Use the currently authorized non-bot target")
     assert.notEqual(memberId, self.id, "Use an explicitly authorized non-bot target for this targeted-member check")
@@ -137,8 +118,8 @@ try {
     verified = true
     report(stage)
 
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
         target = await fetchTarget()
     }
@@ -150,10 +131,10 @@ try {
         originalNickname: nickname(target),
         changedNickname: `fn_${randomUUID().replaceAll("-", "").slice(0, 28)}`,
     }
-    writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+    journalFile.create(journal)
 
     const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
-    if (mode === "default") client = sdk.createClient({ token, cache: { members: true } })._unsafeUnwrap()
+    if (mode === "default") client = sdk.createClient({ token, cache: { members: true } })
     else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(
@@ -166,10 +147,7 @@ try {
     report(stage)
 
     await value(client.members.fetch({ guildId, userId: memberId }))
-    assert.equal(
-        (await value(client.members.get({ guildId, userId: memberId })))?.nickname ?? null,
-        journal.originalNickname,
-    )
+    assert.equal((await cachedMember({ guildId, userId: memberId }))?.nickname ?? null, journal.originalNickname)
 
     stage = "target_nickname_set_lost_response"
     let markerDispatches = 0
@@ -203,7 +181,7 @@ try {
         clientFetch = undefined
     }
     assert.equal(markerDispatches, 1)
-    assert.equal(await value(client.members.get({ guildId, userId: memberId })), undefined)
+    assert.equal(await cachedMember({ guildId, userId: memberId }), undefined)
 
     stage = "target_nickname_raw_reconciliation"
     assert.equal(nickname(await fetchTarget()), journal.changedNickname)
@@ -229,57 +207,44 @@ try {
     process.exitCode = 1
 } finally {
     if (clientFetch) globalThis.fetch = clientFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({
-                mode,
-                stage: "client_cleanup",
-                passed: false,
-                finalizer,
-                journalRetained: journal !== undefined,
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exitCode = 1
+    const shutdown = async () => {
+        const closed = client.shutdown()
+        if (Effect.isEffect(closed)) await Effect.runPromise(closed)
+        else await closed
     }
-    if (client)
-        try {
-            const closed = client.shutdown()
-            if (Effect.isEffect(closed)) await Effect.runPromise(closed)
-            else await closed
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            await cleanup()
-        } catch {
-            console.error(
-                JSON.stringify({
-                    mode,
-                    stage: "resource_cleanup",
-                    passed: false,
-                    journalRetained: journal !== undefined,
-                }),
-            )
+    // Keep the journal, lock and deadline if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            client && ["client_shutdown", shutdown],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup,
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            if (finalizer === "cleanup")
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "resource_cleanup",
+                        passed: false,
+                        journalRetained: journal !== undefined,
+                    }),
+                )
+            else if (finalizer === "sandbox_lock")
+                console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
+            else
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "client_cleanup",
+                        passed: false,
+                        finalizer,
+                        journalRetained: journal !== undefined,
+                        lockRetained: lock !== undefined,
+                    }),
+                )
             process.exitCode = 1
-        }
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
-            process.exitCode = 1
-        }
-    }
-    if (quiescent) clearTimeout(watchdog)
+        },
+    })
 }

@@ -1,11 +1,12 @@
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
-import { parseEnv } from "node:util"
-
 // Opt-in hosted Fluxer protocol probe, not an SDK connection implementation
 // Protocol: https://docs.fluxer.app/gateway/overview/
-const environment = new URL("../../.env.test.local", import.meta.url)
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const report = (check, details = {}) => console.log(JSON.stringify({ check, ...details }))
+// Creates no journal and changes no server content: identity and gateway discovery reads, then one gateway session
+// that identifies, heartbeats and closes cleanly
+import { HarnessCheckError, acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { anyStatus, createSandboxApi } from "./support/sandbox-api.js"
+
+const report = createReporter({})
 
 class ProbeFailure extends Error {
     constructor(check, details = {}) {
@@ -16,18 +17,12 @@ class ProbeFailure extends Error {
 }
 
 async function get(path, token, check) {
-    let response
     try {
-        response = await fetch(`https://api.fluxer.app/v1${path}`, {
-            headers: { Authorization: `Bot ${token}` },
-            signal: AbortSignal.timeout(10_000),
-            redirect: "error",
-        })
-        if (!response.ok) {
-            await response.body?.cancel()
-            throw new ProbeFailure(check, { httpStatus: response.status })
-        }
-        return await response.json()
+        const api = createSandboxApi({ fetch, token: () => token, accept: anyStatus, timeoutMs: 10_000 })
+        const { status, data } = await api("GET", path)
+        if (status < 200 || status > 299) throw new ProbeFailure(check, { httpStatus: status })
+        if (data === null) throw new ProbeFailure(check)
+        return data
     } catch (error) {
         // Never print raw transport errors, bodies, URLs containing IDs or credentials
         throw error instanceof ProbeFailure ? error : new ProbeFailure(check)
@@ -70,6 +65,8 @@ async function probeGateway(url, token, botId) {
         const totalTimer = setTimeout(() => stop(new ProbeFailure("gateway_probe_timeout")), 90_000)
 
         const heartbeat = (scheduled) => {
+            // A heartbeat still awaiting its acknowledgement also covers the scheduled tick that falls in that wait
+            if (pendingHeartbeat && scheduled) pendingHeartbeat.scheduled = true
             if (closing || pendingHeartbeat || socket.readyState !== WebSocket.OPEN) return
             pendingHeartbeat = { scheduled }
             try {
@@ -163,27 +160,17 @@ async function probeGateway(url, token, botId) {
 let lock
 let stage = "configuration"
 try {
-    const env = parseEnv(readFileSync(environment, "utf8"))
-    const guildId = env.FLUXER_TEST_GUILD_ID
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    const token = env.FLUXER_TEST_BOT_TOKEN
-    if (!/^\d+$/.test(guildId ?? "") || !/^\d+$/.test(applicationId ?? "") || !token || token !== token.trim()) {
-        throw new ProbeFailure("configuration")
-    }
-    if (token.split(".")[0] !== applicationId) throw new ProbeFailure("configured_application")
+    const { guildId, applicationId, token } = loadSandboxEnvironment({ requireApplicationToken: true })
 
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
 
-    const application = await get("/applications/@me", token, "application_identity")
-    if (application.id !== applicationId) throw new ProbeFailure("application_identity")
-    const user = await get("/users/@me", token, "bot_identity")
-    if (user.bot !== true || typeof user.id !== "string" || application.bot?.id !== user.id) {
-        throw new ProbeFailure("bot_identity")
-    }
-    const guild = await get(`/guilds/${guildId}`, token, "test_server_access")
-    if (guild.id !== guildId) throw new ProbeFailure("test_server_identity")
+    // Request failures keep their per-read check names; identity mismatches report the refused identity check
+    const readChecks = { "/applications/@me": "application_identity", "/users/@me": "bot_identity" }
+    const { user } = await verifySandboxIdentity((path) => get(path, token, readChecks[path] ?? "test_server_access"), {
+        applicationId,
+        guildId,
+    })
     const gateway = await get("/gateway/bot", token, "gateway_discovery")
     stage = "gateway_endpoint"
     const url = new URL(gateway.url)
@@ -195,15 +182,15 @@ try {
     stage = "gateway_probe"
     report("sandbox_protocol", { passed: true, ...(await probeGateway(url, token, user.id)) })
 } catch (error) {
-    report(error instanceof ProbeFailure ? error.check : stage, {
+    report(error instanceof ProbeFailure || error instanceof HarnessCheckError ? error.check : stage, {
         passed: false,
         ...(error instanceof ProbeFailure ? error.details : {}),
     })
     process.exitCode = 1
 } finally {
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (lock !== undefined && !lock.release()) {
+        report("sandbox_lock_cleanup", { passed: false, lockRetained: true })
+        process.exitCode = 1
     }
 }
 // Bound failed runs even if an unresponsive transport did not complete its close

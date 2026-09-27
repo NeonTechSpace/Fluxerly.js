@@ -1,0 +1,960 @@
+import { Cause, Effect, Exit, Scope } from "effect"
+import { afterEach, expect, onTestFinished, test, vi } from "vitest"
+import {
+    ChannelType,
+    type ClientOptions,
+    type DefaultChannelAuditOperationOptions,
+    type DefaultChannelOperationOptions,
+    type EventName,
+    type GuildChannel,
+} from "../../../src/index.js"
+import {
+    defaultApi as createDefaultApi,
+    modes,
+    nativeApi as createNativeApi,
+    type Mode,
+} from "../../support/both-apis.js"
+import { startGatewayServer } from "../../support/gateway-server.js"
+import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
+import { settle } from "../../support/settle.js"
+
+vi.mock("ws", (original) => import("../../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
+
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
+
+/** Read the bitrate of a channel that must have decoded as a voice channel */
+function bitrateOf(channel: GuildChannel): number | null | undefined {
+    expect(channel.type).toBe(ChannelType.Voice)
+    return channel.type === ChannelType.Voice ? channel.bitrate : undefined
+}
+
+test.each(modes)("%s sends audit reasons only on supported channel mutations", async (mode) => {
+    const calls: Array<{ method: string; path: string; reason: string | null }> = []
+    rest(async (url, init) => {
+        const path = new URL(url).pathname
+        const body = init.body === undefined ? undefined : JSON.parse(String(init.body))
+        calls.push({ method: init.method!, path, reason: new Headers(init.headers).get("X-Audit-Log-Reason") })
+        if (init.method === "GET")
+            return Response.json(path.endsWith("/channels") ? [channel()] : channel(path.split("/").at(-1)!))
+        if (init.method === "DELETE" || Array.isArray(body) || path.includes("/permissions/"))
+            return new Response(null, { status: 204 })
+        return Response.json(channel(init.method === "POST" ? "13" : "10", body))
+    })
+    const api = await setup(mode)
+    const options = { auditReason: "  channel audit  " }
+    const overwrite = { id: "50", type: "role" as const, allow: 1n, deny: 0n }
+
+    await api.create("20", { type: ChannelType.Text, name: "created" }, options)
+    await api.edit("10", { name: "edited" }, options)
+    await api.delete("10", options)
+    await api.reorder("20", [{ id: "10", position: 1 }], options)
+    await api.setPermissionOverwrite("10", overwrite, options)
+    await api.removePermissionOverwrite("10", "50", options)
+
+    expect(calls).toEqual([
+        { method: "POST", path: "/v1/guilds/20/channels", reason: "channel audit" },
+        { method: "PATCH", path: "/v1/channels/10", reason: "channel audit" },
+        { method: "DELETE", path: "/v1/channels/10", reason: "channel audit" },
+        { method: "PATCH", path: "/v1/guilds/20/channels", reason: "channel audit" },
+        { method: "PUT", path: "/v1/channels/10/permissions/50", reason: "channel audit" },
+        { method: "DELETE", path: "/v1/channels/10/permissions/50", reason: "channel audit" },
+    ])
+
+    const readOptions = { auditReason: "not applicable" } as DefaultChannelOperationOptions
+    const beforeReads = calls.length
+    await expect(api.fetch("10", readOptions as unknown as { timeoutMs?: number })).rejects.toMatchObject({
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(calls).toHaveLength(beforeReads)
+
+    const privateReason = "not-for-diagnostics"
+    const failure = await api.delete("10", { auditReason: `${privateReason}\n` }).catch((error) => error)
+    expect(failure).toMatchObject({ reason: "input", outcome: "notDispatched" })
+    expect(JSON.stringify(failure)).not.toContain(privateReason)
+    expect(calls).toHaveLength(beforeReads)
+})
+
+const channel = (id = "10", extra: Record<string, unknown> = {}) => ({
+    id,
+    guild_id: "20",
+    type: 0,
+    name: "fixture",
+    position: 1,
+    parent_id: "12",
+    topic: null,
+    last_message_id: "9",
+    last_pin_timestamp: "2026-09-08T12:00:00.000Z",
+    rate_limit_per_user: 0,
+    nsfw: false,
+    nsfw_override: true,
+    content_warning_level: 1,
+    content_warning_text: "notice",
+    permission_overwrites: [{ id: "50", type: 0, allow: "1", deny: "18446744073709551615" }],
+    ...extra,
+})
+const voiceChannel = (id = "11", extra: Record<string, unknown> = {}) =>
+    channel(id, {
+        type: 2,
+        name: "voice",
+        bitrate: 64_000,
+        user_limit: 5,
+        voice_connection_limit: 10,
+        rtc_region: null,
+        ...extra,
+    })
+const category = (id = "12", extra: Record<string, unknown> = {}) =>
+    channel(id, { type: 4, name: "category", parent_id: null, ...extra })
+const message = (id = "10", channelId = "20", content = "fixture") => ({
+    id,
+    channel_id: channelId,
+    content,
+    author: { id: "30", username: "fixture" },
+})
+
+test.each(modes)("%s manages guild channels through exact routes with frozen, lossless projections", async (mode) => {
+    const calls: { path: string; method: string; body: unknown }[] = []
+    rest(async (url, init) => {
+        const path = new URL(url).pathname
+        const body = init.body ? JSON.parse(String(init.body)) : undefined
+        calls.push({ path, method: init.method!, body })
+        if (init.method === "DELETE" || Array.isArray(body) || path.includes("/permissions/"))
+            return new Response(null, { status: 204 })
+        if (init.method === "GET" && path.endsWith("/channels"))
+            return Response.json([channel(), voiceChannel(), category()])
+        if (init.method === "GET") return Response.json(path.endsWith("/11") ? voiceChannel() : channel())
+        if (init.method === "POST") return Response.json(channel("13", body as Record<string, unknown>))
+        return Response.json(channel("10", body as Record<string, unknown>))
+    })
+    const api = await setup(mode, { channels: true })
+
+    const fetched = await api.fetch()
+    expect(fetched).toMatchObject({
+        id: "10",
+        guildId: "20",
+        type: ChannelType.Text,
+        name: "fixture",
+        position: 1,
+        parentId: "12",
+        topic: null,
+        lastMessageId: "9",
+        lastPinTimestamp: "2026-09-08T12:00:00.000Z",
+        rateLimitPerUser: 0,
+        nsfw: false,
+        nsfwOverride: true,
+        contentWarningLevel: 1,
+        contentWarningText: "notice",
+        permissionOverwrites: [{ id: "50", type: "role", allow: 1n, deny: (1n << 64n) - 1n }],
+    })
+    expect(
+        Object.isFrozen(fetched) &&
+            Object.isFrozen(fetched.permissionOverwrites) &&
+            Object.isFrozen(fetched.permissionOverwrites?.[0]),
+    ).toBe(true)
+    expect(() => Object.assign(fetched, { name: "changed" })).toThrow()
+    const listed = await api.fetchAll()
+    expect(listed.map((value) => value.id)).toEqual(["10", "11", "12"])
+    expect(listed[1]).toMatchObject({
+        type: ChannelType.Voice,
+        bitrate: 64_000,
+        userLimit: 5,
+        voiceConnectionLimit: 10,
+    })
+    expect(Object.isFrozen(listed) && Object.isFrozen(listed[2])).toBe(true)
+
+    await api.create("20", { type: ChannelType.Text, name: "inherited", parentId: "12" })
+    expect(calls.at(-1)).toMatchObject({
+        path: "/v1/guilds/20/channels",
+        method: "POST",
+        body: { type: 0, name: "inherited", parent_id: "12" },
+    })
+    expect((calls.at(-1)!.body as Record<string, unknown>).permission_overwrites).toBeUndefined()
+    await api.create("20", {
+        type: ChannelType.Voice,
+        name: "cleared",
+        bitrate: 64_000,
+        userLimit: 5,
+        voiceConnectionLimit: 10,
+        permissionOverwrites: [],
+    })
+    expect(calls.at(-1)).toMatchObject({
+        body: {
+            type: 2,
+            name: "cleared",
+            bitrate: 64_000,
+            user_limit: 5,
+            voice_connection_limit: 10,
+            permission_overwrites: [],
+        },
+    })
+    await api.edit("10", { name: "edited", topic: "current", rateLimitPerUser: 15 })
+    expect(calls.at(-1)).toMatchObject({
+        path: "/v1/channels/10",
+        method: "PATCH",
+        body: { name: "edited", topic: "current", rate_limit_per_user: 15 },
+    })
+    await api.reorder("20", [
+        {
+            id: "10",
+            position: 2,
+            parentId: "12",
+            precedingSiblingId: "11",
+            syncPermissionsOnMove: true,
+        },
+    ])
+    expect(calls.at(-1)).toMatchObject({
+        path: "/v1/guilds/20/channels",
+        method: "PATCH",
+        body: [
+            {
+                id: "10",
+                position: 2,
+                parent_id: "12",
+                preceding_sibling_id: "11",
+                lock_permissions: true,
+            },
+        ],
+    })
+    const maximumPermission = (1n << 63n) - 1n
+    await api.create("20", {
+        type: ChannelType.Text,
+        name: "maximum",
+        permissionOverwrites: [{ id: "51", type: "member", allow: maximumPermission, deny: maximumPermission }],
+    })
+    expect(calls.at(-1)).toMatchObject({
+        path: "/v1/guilds/20/channels",
+        method: "POST",
+        body: {
+            type: 0,
+            name: "maximum",
+            permission_overwrites: [
+                { id: "51", type: 1, allow: maximumPermission.toString(), deny: maximumPermission.toString() },
+            ],
+        },
+    })
+    await api.edit("10", {
+        permissionOverwrites: [{ id: "51", type: "member", allow: maximumPermission, deny: maximumPermission }],
+    })
+    expect(calls.at(-1)).toMatchObject({
+        path: "/v1/channels/10",
+        method: "PATCH",
+        body: {
+            permission_overwrites: [
+                { id: "51", type: 1, allow: maximumPermission.toString(), deny: maximumPermission.toString() },
+            ],
+        },
+    })
+    await api.setPermissionOverwrite("10", {
+        id: "51",
+        type: "member",
+        allow: maximumPermission,
+        deny: maximumPermission,
+    })
+    expect(calls.at(-1)).toMatchObject({
+        path: "/v1/channels/10/permissions/51",
+        method: "PUT",
+        body: { type: 1, allow: maximumPermission.toString(), deny: maximumPermission.toString() },
+    })
+    await api.removePermissionOverwrite("10", "51")
+    expect(calls.at(-1)).toMatchObject({ path: "/v1/channels/10/permissions/51", method: "DELETE" })
+    await api.delete("10")
+    expect(calls.at(-1)).toMatchObject({ path: "/v1/channels/10", method: "DELETE" })
+})
+
+test.each(modes)(
+    "%s advertises protected channel-permission replacements without changing omitted fields or reads",
+    async (mode) => {
+        const calls: { path: string; method: string; body: unknown; features: string | null }[] = []
+        let overwrites = [{ id: "50", type: 0, allow: "0", deny: "0" }]
+        rest(async (url, init) => {
+            const path = new URL(url).pathname
+            const body = init.body ? JSON.parse(String(init.body)) : undefined
+            const features = new Headers(init.headers).get("X-Fluxer-Features")
+            calls.push({ path, method: init.method!, body, features })
+            if (init.method === "GET") return Response.json(channel("10", { permission_overwrites: overwrites }))
+            const requested = (body as { permission_overwrites?: typeof overwrites }).permission_overwrites
+            if (requested !== undefined && features === "view_channel_members_permission") overwrites = requested
+            if (path.includes("/permissions/")) {
+                if (features === "view_channel_members_permission")
+                    overwrites = [{ ...(body as (typeof overwrites)[0]), id: "50" }]
+                return new Response(null, { status: 204 })
+            }
+            return Response.json(
+                channel(init.method === "POST" ? "13" : "10", {
+                    ...(body as Record<string, unknown>),
+                    permission_overwrites: overwrites,
+                }),
+            )
+        })
+        const api = await setup(mode)
+        const bit = 1n << 54n
+        const enabled = [{ id: "50", type: "role" as const, allow: bit, deny: 0n }]
+        const cleared = [{ id: "50", type: "role" as const, allow: 0n, deny: 0n }]
+
+        await api.fetch()
+        await api.create("20", { type: ChannelType.Text, name: "inherited" })
+        await api.edit("10", { name: "unchanged permissions" })
+        expect(
+            (await api.create("20", { type: ChannelType.Text, name: "enabled", permissionOverwrites: enabled }))
+                .permissionOverwrites,
+        ).toEqual(enabled)
+        expect(
+            (await api.create("20", { type: ChannelType.Text, name: "cleared", permissionOverwrites: cleared }))
+                .permissionOverwrites,
+        ).toEqual(cleared)
+        await api.edit("10", { permissionOverwrites: enabled })
+        expect((await api.fetch()).permissionOverwrites).toEqual(enabled)
+        await api.edit("10", { permissionOverwrites: cleared })
+        expect((await api.fetch()).permissionOverwrites).toEqual(cleared)
+        await api.setPermissionOverwrite("10", enabled[0])
+        expect((await api.fetch()).permissionOverwrites).toEqual(enabled)
+        await api.setPermissionOverwrite("10", cleared[0])
+        expect((await api.fetch()).permissionOverwrites).toEqual(cleared)
+
+        expect(calls.filter((call) => call.features === null)).toEqual([
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            {
+                path: "/v1/guilds/20/channels",
+                method: "POST",
+                body: { type: 0, name: "inherited" },
+                features: null,
+            },
+            {
+                path: "/v1/channels/10",
+                method: "PATCH",
+                body: { name: "unchanged permissions" },
+                features: null,
+            },
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+        ])
+        expect(calls.filter((call) => call.features !== null)).toEqual([
+            {
+                path: "/v1/guilds/20/channels",
+                method: "POST",
+                body: {
+                    type: 0,
+                    name: "enabled",
+                    permission_overwrites: [{ id: "50", type: 0, allow: bit.toString(), deny: "0" }],
+                },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/guilds/20/channels",
+                method: "POST",
+                body: {
+                    type: 0,
+                    name: "cleared",
+                    permission_overwrites: [{ id: "50", type: 0, allow: "0", deny: "0" }],
+                },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/channels/10",
+                method: "PATCH",
+                body: { permission_overwrites: [{ id: "50", type: 0, allow: bit.toString(), deny: "0" }] },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/channels/10",
+                method: "PATCH",
+                body: { permission_overwrites: [{ id: "50", type: 0, allow: "0", deny: "0" }] },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/channels/10/permissions/50",
+                method: "PUT",
+                body: { type: 0, allow: bit.toString(), deny: "0" },
+                features: "view_channel_members_permission",
+            },
+            {
+                path: "/v1/channels/10/permissions/50",
+                method: "PUT",
+                body: { type: 0, allow: "0", deny: "0" },
+                features: "view_channel_members_permission",
+            },
+        ])
+    },
+)
+
+test.each(modes)("%s decodes each channel type with its type number and type-specific fields", async (mode) => {
+    const link = channel("13", { type: 998, name: "link", url: "https://example.test/docs" })
+    const future = channel("14", { type: 13, name: "future", bitrate: 96_000, url: null })
+    rest(async () => Response.json([channel(), voiceChannel(), category(), link, future]))
+    const api = await setup(mode)
+    const [text, voice, group, linked, unknown] = await api.fetchAll()
+
+    expect(text).toMatchObject({ id: "10", type: ChannelType.Text, topic: null, lastMessageId: "9" })
+    expect(voice).toMatchObject({ id: "11", type: ChannelType.Voice, bitrate: 64_000, userLimit: 5 })
+    expect(group).toMatchObject({ id: "12", type: ChannelType.Category, parentId: null })
+    expect(linked).toMatchObject({ id: "13", type: ChannelType.Link, url: "https://example.test/docs" })
+    // A type this SDK version does not know becomes "unknown", keeps its number in rawType and every supplied optional field
+    expect(unknown).toMatchObject({ id: "14", type: "unknown", rawType: 13, bitrate: 96_000, url: null, topic: null })
+    // Known types carry no rawType
+    expect(voice).not.toHaveProperty("rawType")
+    expect(bitrateOf(voice!)).toBe(64_000)
+})
+
+test.each(modes)("%s accepts provider bitrate bounds and returns the server-selected bitrate", async (mode) => {
+    const calls: { method: string; bitrate: number }[] = []
+    let serverMaximum = 384_000
+    rest(async (_url, init) => {
+        const body = JSON.parse(String(init.body)) as { bitrate: number }
+        calls.push({ method: init.method!, bitrate: body.bitrate })
+        return Response.json(voiceChannel("11", { bitrate: Math.min(body.bitrate, serverMaximum) }))
+    })
+    const api = await setup(mode)
+    for (const bitrate of [8_000, 384_000]) {
+        const created = await api.create("20", { type: ChannelType.Voice, name: "voice", bitrate })
+        expect(bitrateOf(created)).toBe(bitrate)
+        expect(bitrateOf(await api.edit("11", { bitrate }))).toBe(bitrate)
+    }
+    serverMaximum = 96_000
+    expect(bitrateOf(await api.create("20", { type: ChannelType.Voice, name: "voice", bitrate: 384_000 }))).toBe(96_000)
+    expect(bitrateOf(await api.edit("11", { bitrate: 384_000 }))).toBe(96_000)
+    expect(calls).toEqual([
+        { method: "POST", bitrate: 8_000 },
+        { method: "PATCH", bitrate: 8_000 },
+        { method: "POST", bitrate: 384_000 },
+        { method: "PATCH", bitrate: 384_000 },
+        { method: "POST", bitrate: 384_000 },
+        { method: "PATCH", bitrate: 384_000 },
+    ])
+})
+
+test.each(modes)("%s rejects invalid writes before dispatch and whole malformed channel responses", async (mode) => {
+    let calls = 0
+    let response: unknown = channel()
+    rest(async () => {
+        calls++
+        return Response.json(response)
+    })
+    const api = await setup(mode)
+    for (const input of [
+        { type: ChannelType.Text, name: "" },
+        { type: ChannelType.Text, name: "  " },
+        { type: -1, name: "valid" },
+        { type: ChannelType.Text, name: "valid", topic: "" },
+        { type: ChannelType.Text, name: "valid", rateLimitPerUser: 21_601 },
+        { type: ChannelType.Voice, name: "valid", bitrate: 7_999 },
+        { type: ChannelType.Voice, name: "valid", bitrate: 384_001 },
+        { type: ChannelType.Voice, name: "valid", userLimit: 100 },
+        { type: ChannelType.Voice, name: "valid", voiceConnectionLimit: 101 },
+        {
+            type: ChannelType.Text,
+            name: "valid",
+            permissionOverwrites: [
+                { id: "50", type: "role", allow: 0n, deny: 0n },
+                { id: "50", type: "member", allow: 0n, deny: 0n },
+            ],
+        },
+        {
+            type: ChannelType.Text,
+            name: "valid",
+            permissionOverwrites: [{ id: "50", type: "role", allow: 1n << 63n, deny: 0n }],
+        },
+        {
+            type: ChannelType.Text,
+            name: "valid",
+            permissionOverwrites: [{ id: "50", type: "role", allow: 0n, deny: 1n << 63n }],
+        },
+    ])
+        await expect(api.create("20", input)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    for (const input of [
+        {},
+        { type: ChannelType.Text },
+        { parentId: "12" },
+        { name: undefined },
+        { rateLimitPerUser: -1 },
+        { bitrate: 7_999 },
+        { bitrate: 384_001 },
+        { extra: true },
+        { permissionOverwrites: [{ id: "50", type: "role", allow: 1n << 63n, deny: 0n }] },
+        { permissionOverwrites: [{ id: "50", type: "role", allow: 0n, deny: 1n << 63n }] },
+    ])
+        await expect(api.edit("10", input)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    for (const positions of [
+        [],
+        [{ id: "10", position: -1 }],
+        [{ id: "10" }, { id: "10" }],
+        [{ id: "10", precedingSiblingId: "invalid" }],
+        [{ id: "10", syncPermissionsOnMove: "yes" }],
+    ])
+        await expect(api.reorder("20", positions)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    for (const overwrite of [
+        { id: "50", type: "user", allow: 0n, deny: 0n },
+        { id: "50", type: "role", allow: -1n, deny: 0n },
+        { id: "50", type: "role", allow: 1n << 63n, deny: 0n },
+        { id: "50", type: "role", allow: 0n, deny: 1n << 63n },
+        { id: "50", type: "role", allow: 1n << 64n, deny: 0n },
+    ])
+        await expect(api.setPermissionOverwrite("10", overwrite)).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    await expect(api.fetch("invalid")).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+    await expect(api.removePermissionOverwrite("10", "invalid")).rejects.toMatchObject({
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    for (const options of [{ timeoutMs: 0 }, { timeoutMs: 2_147_483_648 }, { unexpected: true }])
+        await expect(api.fetch("10", options as never)).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    expect(calls).toBe(0)
+
+    for (response of [
+        { ...channel(), id: "11" },
+        { ...channel(), guild_id: undefined },
+        { ...channel(), type: -1 },
+        { ...channel(), last_pin_timestamp: "2025-02-29T00:00:00Z" },
+        { ...channel(), permission_overwrites: [{ id: "50", type: 0, allow: "01", deny: "0" }] },
+        { ...channel(), permission_overwrites: [{ id: "50", type: 2, allow: "0", deny: "0" }] },
+    ])
+        await expect(api.fetch()).rejects.toMatchObject({ reason: "response", outcome: "unknown", status: 200 })
+    response = [channel(), { ...voiceChannel(), guild_id: undefined }]
+    await expect(api.fetchAll()).rejects.toMatchObject({ reason: "response", outcome: "unknown", status: 200 })
+    response = channel("10", { type: 999 })
+    expect(await api.fetch()).toMatchObject({ type: "unknown", rawType: 999 })
+})
+
+test.each(modes)("%s edits distinguish a null topic, an empty topic and empty overwrites", async (mode) => {
+    const requests: Array<{ method: string; path: string; body: unknown }> = []
+    rest(async (url, init) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        requests.push({ method: init.method!, path: new URL(url).pathname, body })
+        return Response.json(channel("10", body))
+    })
+    const api = await setup(mode)
+
+    expect(await api.edit("10", { topic: null })).toMatchObject({ topic: null })
+    await expect(api.edit("10", { topic: "" })).rejects.toMatchObject({
+        _tag: "ChannelOperationError",
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(await api.edit("10", { permissionOverwrites: [] })).toMatchObject({ permissionOverwrites: [] })
+
+    expect(requests).toEqual([
+        { method: "PATCH", path: "/v1/channels/10", body: { topic: null } },
+        { method: "PATCH", path: "/v1/channels/10", body: { permission_overwrites: [] } },
+    ])
+})
+
+// Read retries and write no-replay are the shared method-based policy covered in client/read-retries.test.ts
+test.each(modes)("%s preserves failure outcome metadata for channel writes without private bodies", async (mode) => {
+    const api = await setup(mode)
+    rest(async () => new Response("private upstream body", { status: 503 }))
+    for (const [operation, write] of [
+        ["channels.create", () => api.create("20", { type: ChannelType.Text, name: "created" })],
+        ["channels.edit", () => api.edit("10", { name: "edited" })],
+        ["channels.delete", () => api.delete("10")],
+        ["channels.reorder", () => api.reorder("20", [{ id: "10", position: 2 }])],
+        [
+            "channels.setPermissionOverwrite",
+            () => api.setPermissionOverwrite("10", { id: "50", type: "role", allow: 0n, deny: 0n }),
+        ],
+        ["channels.removePermissionOverwrite", () => api.removePermissionOverwrite("10", "50")],
+    ] as const) {
+        const failure = await write().catch((error) => error)
+        expect(failure).toMatchObject({
+            _tag: "ChannelOperationError",
+            operation,
+            reason: "rejected",
+            outcome: "unknown",
+            status: 503,
+        })
+        expect(JSON.stringify(failure)).not.toContain("private upstream")
+    }
+    rest(async () => new Response("private upstream body", { status: 403 }))
+    const rejection = await api.edit("10", { name: "edited" }).catch((error) => error)
+    expect(rejection).toMatchObject({
+        _tag: "ChannelOperationError",
+        operation: "channels.edit",
+        reason: "rejected",
+        outcome: "rejected",
+        status: 403,
+    })
+    expect(JSON.stringify(rejection)).not.toContain("private upstream")
+})
+
+test.each(modes)(
+    "%s keeps channel caching opt-in, local-only and conservatively invalidates dispatched writes",
+    async (mode) => {
+        const calls: string[] = []
+        let status = 200
+        rest(async (url, init) => {
+            calls.push(`${init.method} ${new URL(url).pathname}`)
+            if (status !== 200) return Response.json({}, { status })
+            if (init.method === "GET" && new URL(url).pathname.endsWith("/channels"))
+                return Response.json([channel(), voiceChannel()])
+            if (init.method === "GET") return Response.json(channel())
+            if (init.method === "POST") return Response.json(channel("13"))
+            if (init.method === "PATCH" && !new URL(url).pathname.endsWith("/channels")) return Response.json(channel())
+            return new Response(null, { status: 204 })
+        })
+        const disabled = await setup(mode)
+        expect(await disabled.get()).toBeUndefined()
+        await disabled.fetch()
+        expect(await disabled.get()).toBeUndefined()
+        expect(calls).toHaveLength(1)
+        await expect(disabled.get("bad")).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+
+        const api = await setup(mode, { channels: true })
+        expect(await api.get()).toBeUndefined()
+        const retained = await api.fetch()
+        expect(await api.get()).toBe(retained)
+        await api.fetchAll()
+        expect(await api.get("11")).toBeDefined()
+        for (const mutate of [
+            () => api.create("20", { type: ChannelType.Text, name: "created" }),
+            () => api.edit("10", { name: "edited" }),
+            () => api.delete("10"),
+            () => api.setPermissionOverwrite("10", { id: "50", type: "role", allow: 0n, deny: 0n }),
+            () => api.removePermissionOverwrite("10", "50"),
+            () => api.reorder("20", [{ id: "10", position: 2 }]),
+        ]) {
+            await mutate()
+            expect(await api.get()).toBeUndefined()
+            expect(await api.get("11")).toBeUndefined()
+            await api.fetchAll()
+        }
+        status = 400
+        await expect(api.reorder("20", [{ id: "10", position: 2 }])).rejects.toMatchObject({
+            outcome: "rejected",
+            status: 400,
+        })
+        expect(await api.get()).toBeUndefined()
+        expect(await api.get("11")).toBeUndefined()
+        status = 200
+        await api.fetchAll()
+        await expect(api.reorder("20", [])).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+        expect(await api.get()).toBeDefined()
+        expect(await api.get("11")).toBeDefined()
+        status = 503
+        await expect(
+            api.setPermissionOverwrite("10", { id: "50", type: "role", allow: 0n, deny: 0n }),
+        ).rejects.toMatchObject({
+            outcome: "unknown",
+        })
+        expect(await api.get()).toBeUndefined()
+        status = 200
+    },
+)
+
+test.each(modes)(
+    "%s delivers guild-only channel events and invalidates cached bulk observations before handlers",
+    async (mode) => {
+        const dispatch = await gateway()
+        rest(async (url, init) => {
+            if (init.method === "GET" && new URL(url).pathname.endsWith("/channels"))
+                return Response.json([channel(), voiceChannel()])
+            return Response.json(channel())
+        })
+        const api = await setup(mode, { channels: true })
+        await api.connect()
+        await api.fetchAll()
+        const seen: { event: string; value: unknown; frozen?: boolean }[] = []
+        let bulkCache: unknown = "unset"
+        // Handlers only record, because a throwing handler reaches observer-error reporting rather than this test
+        for (const event of ["guildChannelCreate", "guildChannelUpdate", "guildChannelDelete"] as const)
+            await api.on(event, (value) => {
+                seen.push({ event, value, frozen: Object.isFrozen(value) })
+            })
+        await api.on("guildChannelUpdateBulk", async (value) => {
+            bulkCache = await api.get("10")
+            seen.push({ event: "guildChannelUpdateBulk", value })
+        })
+        dispatch("CHANNEL_CREATE", channel("13", { name: "created" }))
+        dispatch("CHANNEL_UPDATE", channel("10", { name: "updated" }))
+        dispatch("CHANNEL_DELETE", channel("10"))
+        await vi.waitFor(() => expect(seen).toHaveLength(3))
+        expect(seen).toEqual(
+            expect.arrayContaining([
+                {
+                    event: "guildChannelCreate",
+                    value: expect.objectContaining({ id: "13", name: "created" }),
+                    frozen: true,
+                },
+                {
+                    event: "guildChannelUpdate",
+                    value: expect.objectContaining({ id: "10", name: "updated" }),
+                    frozen: true,
+                },
+                {
+                    event: "guildChannelDelete",
+                    value: expect.objectContaining({ id: "10", guildId: "20" }),
+                    frozen: true,
+                },
+            ]),
+        )
+        expect(await api.get("10")).toBeUndefined()
+        expect(await api.get("11")).toBeDefined()
+        dispatch("CHANNEL_UPDATE_BULK", { guild_id: "20", channels: [channel("11", { position: 7 })] })
+        await vi.waitFor(() => expect(seen).toHaveLength(4))
+        expect(seen[3]).toEqual({
+            event: "guildChannelUpdateBulk",
+            value: expect.objectContaining({
+                guildId: "20",
+                channels: [expect.objectContaining({ id: "11", position: 7 })],
+            }),
+        })
+        expect(bulkCache).toBeUndefined()
+        expect(await api.get("11")).toBeUndefined()
+
+        dispatch("CHANNEL_UPDATE", {
+            id: "90",
+            type: 1,
+            recipients: [
+                {
+                    id: "91",
+                    username: "fixture",
+                    discriminator: "0001",
+                    global_name: null,
+                    avatar: null,
+                    avatar_color: null,
+                    flags: 0,
+                },
+            ],
+            name: "direct message",
+            icon: null,
+            owner_id: null,
+            nicks: {},
+            last_message_id: null,
+        })
+        // A later guild update on the same socket and subscription proves the direct-message update was skipped
+        dispatch("CHANNEL_UPDATE", channel("11", { name: "after direct message" }))
+        await vi.waitFor(() => expect(seen).toHaveLength(5))
+        expect(seen[4]).toEqual({
+            event: "guildChannelUpdate",
+            value: expect.objectContaining({ id: "11", name: "after direct message" }),
+            frozen: true,
+        })
+        expect(api.state()).toBe("Connected")
+    },
+)
+
+test.each(modes)("%s rejects malformed channel gateway payloads without partial public delivery", async (mode) => {
+    const dispatch = await gateway()
+    rest(async () => Response.json(channel()))
+    const api = await setup(mode)
+    const handler = vi.fn()
+    await api.connect()
+    await api.on("guildChannelUpdateBulk", handler)
+    dispatch("CHANNEL_UPDATE_BULK", {
+        guild_id: "20",
+        channels: [
+            channel(),
+            { ...channel("11"), permission_overwrites: [{ id: "50", type: 0, allow: "bad", deny: "0" }] },
+        ],
+    })
+    const closed = api.defaultApi ? settle(api.defaultApi.waitForClose()) : settle(api.native!.waitForClose())
+    await expect(closed).rejects.toMatchObject({ reason: "protocol" })
+    expect(handler).not.toHaveBeenCalled()
+})
+
+test.each(modes)(
+    "%s evicts channel messages for gateway visibility loss and successful or uncertain channel deletion",
+    async (mode) => {
+        const dispatch = await gateway()
+        let delayed = false
+        let started = false
+        let release!: () => void
+        const held: (() => void)[] = []
+        let status = 204
+        rest(async (url, init) => {
+            const path = new URL(url).pathname
+            if (init.method === "GET" && /^\/v1\/channels\/21\/messages\/[1-4]$/.test(path)) {
+                await new Promise<void>((resolve) => held.push(resolve))
+                return Response.json(message(path.at(-1)!, "21"))
+            }
+            if (init.method === "GET" && path === "/v1/channels/20/messages/10") {
+                if (delayed) {
+                    started = true
+                    await new Promise<void>((resolve) => {
+                        release = resolve
+                    })
+                }
+                return Response.json(message())
+            }
+            if (init.method === "DELETE" && path === "/v1/channels/20")
+                return status === 204 ? new Response(null, { status }) : Response.json({}, { status })
+            return Response.json(channel())
+        })
+        const api = await setup(mode, { messages: true, channels: true })
+        await api.connect()
+        let deletions = 0
+        await api.on("guildChannelDelete", () => {
+            deletions++
+        })
+        await api.fetchMessage()
+        expect(await api.getMessage()).toBeDefined()
+        dispatch("CHANNEL_DELETE", channel("20"))
+        await vi.waitFor(() => expect(deletions).toBe(1))
+        await vi.waitFor(async () => expect(await api.getMessage()).toBeUndefined())
+
+        delayed = true
+        const late = api.fetchMessage()
+        await vi.waitFor(() => expect(started).toBe(true))
+        dispatch("CHANNEL_DELETE", channel("20"))
+        await vi.waitFor(() => expect(deletions).toBe(2))
+        release()
+        expect((await late).id).toBe("10")
+        expect(await api.getMessage()).toBeUndefined()
+
+        delayed = false
+        for (const outcome of [204, 503]) {
+            status = outcome
+            await api.fetchMessage()
+            expect(await api.getMessage()).toBeDefined()
+            if (outcome === 204) await api.delete("20")
+            else await expect(api.delete("20")).rejects.toMatchObject({ outcome: "unknown", status: 503 })
+            expect(await api.getMessage()).toBeUndefined()
+        }
+
+        const active = Array.from({ length: 4 }, (_, index) =>
+            api.fetchMessage({ id: String(index + 1), channelId: "21" }),
+        )
+        await vi.waitFor(() => expect(held).toHaveLength(4))
+        const queued = api.fetchMessage()
+        dispatch("CHANNEL_DELETE", channel("20"))
+        await vi.waitFor(() => expect(deletions).toBe(3))
+        held.splice(0).forEach((continueRequest) => continueRequest())
+        expect((await queued).id).toBe("10")
+        await Promise.all(active)
+        expect(await api.getMessage()).toBeUndefined()
+    },
+)
+
+test.each(modes)("%s awaits active channel request cleanup on cancellation and shutdown", async (mode) => {
+    let active = 0
+    rest(
+        (_url, init) =>
+            new Promise((_resolve, reject) => {
+                active++
+                init.signal!.addEventListener(
+                    "abort",
+                    () =>
+                        setTimeout(() => {
+                            active--
+                            reject(Error("fixture cancellation"))
+                        }, 20),
+                    { once: true },
+                )
+            }),
+    )
+    const api = await setup(mode)
+    const controller = new AbortController()
+    const pending = api.native
+        ? Effect.runPromiseExit(api.native.channels.fetch("10"), { signal: controller.signal })
+        : api.fetch("10", { signal: controller.signal }).catch((error) => error)
+    await vi.waitFor(() => expect(active).toBe(1))
+    controller.abort()
+    const failure = await pending
+    if (api.native) expect(Exit.isFailure(failure) && Cause.hasInterruptsOnly(failure.cause)).toBe(true)
+    else expect(failure).toMatchObject({ _tag: "CancelledError" })
+    expect(active).toBe(0)
+    const closing = api.fetch().catch((error) => error)
+    await vi.waitFor(() => expect(active).toBe(1))
+    await api.close()
+    expect(await closing).toMatchObject({ _tag: "ClientClosedError" })
+    expect(active).toBe(0)
+})
+
+/** Run a native Effect with an optional AbortSignal, throwing its typed failure */
+async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Promise<A> {
+    const result = await Effect.runPromise(Effect.result(effect), signal ? { signal } : undefined)
+    if (result._tag === "Failure") throw result.failure
+    return result.success
+}
+
+function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
+        url.endsWith("/gateway/bot")
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            : handler(url, init),
+    )
+}
+
+async function setup(mode: Mode, cache?: ClientOptions["cache"]) {
+    // Registered before the client so its shutdown runs first, then this closes native subscriptions
+    const scope = Scope.makeUnsafe()
+    onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+    const options =
+        cache === undefined
+            ? { gateway: { onMalformedDispatch: "terminate" as const } }
+            : { gateway: { onMalformedDispatch: "terminate" as const }, cache }
+    const defaultApi = mode === "default" ? createDefaultApi(options) : undefined
+    const native = mode === "native" ? await createNativeApi(options) : undefined
+    const close = async () => (defaultApi ? settle(defaultApi.shutdown()) : settle(native!.shutdown()))
+    return {
+        defaultApi,
+        native,
+        close,
+        state: () => (defaultApi ?? native)!.state,
+        connect: async () => (defaultApi ? settle(defaultApi.connect()) : settle(native!.connect())),
+        get: async (id = "10") => (defaultApi ? settle(defaultApi.channels.get(id)) : settle(native!.channels.get(id))),
+        fetch: async (id = "10", options?: { signal?: AbortSignal; timeoutMs?: number }) =>
+            defaultApi
+                ? settle(defaultApi.channels.fetch(id, options))
+                : run(native!.channels.fetch(id, options), options?.signal),
+        fetchAll: async (guildId = "20", options?: { signal?: AbortSignal; timeoutMs?: number }) =>
+            defaultApi
+                ? settle(defaultApi.channels.fetchAll(guildId, options))
+                : run(native!.channels.fetchAll(guildId, options), options?.signal),
+        fetchMessage: async (target = { id: "10", channelId: "20" }) =>
+            defaultApi ? settle(defaultApi.messages.fetch(target)) : settle(native!.messages.fetch(target)),
+        getMessage: async (target = { id: "10", channelId: "20" }) =>
+            defaultApi ? settle(defaultApi.messages.get(target)) : settle(native!.messages.get(target)),
+        create: async (guildId: string, input: any, options?: DefaultChannelAuditOperationOptions) =>
+            defaultApi
+                ? settle(defaultApi.channels.create(guildId, input, options))
+                : run(native!.channels.create(guildId, input, options), options?.signal as AbortSignal),
+        edit: async (id: string, input: any, options?: DefaultChannelAuditOperationOptions) =>
+            defaultApi
+                ? settle(defaultApi.channels.edit(id, input, options))
+                : run(native!.channels.edit(id, input, options), options?.signal as AbortSignal),
+        delete: async (id: string, options?: DefaultChannelAuditOperationOptions) =>
+            defaultApi
+                ? settle(defaultApi.channels.delete(id, options))
+                : run(native!.channels.delete(id, options), options?.signal as AbortSignal),
+        reorder: async (guildId: string, positions: any, options?: DefaultChannelAuditOperationOptions) =>
+            defaultApi
+                ? settle(defaultApi.channels.reorder(guildId, positions, options))
+                : run(native!.channels.reorder(guildId, positions, options), options?.signal as AbortSignal),
+        setPermissionOverwrite: async (id: string, overwrite: any, options?: DefaultChannelAuditOperationOptions) =>
+            defaultApi
+                ? settle(defaultApi.channels.setPermissionOverwrite(id, overwrite, options))
+                : run(native!.channels.setPermissionOverwrite(id, overwrite, options), options?.signal as AbortSignal),
+        removePermissionOverwrite: async (
+            id: string,
+            targetId: string,
+            options?: DefaultChannelAuditOperationOptions,
+        ) =>
+            defaultApi
+                ? settle(defaultApi.channels.removePermissionOverwrite(id, targetId, options))
+                : run(
+                      native!.channels.removePermissionOverwrite(id, targetId, options),
+                      options?.signal as AbortSignal,
+                  ),
+        on: async (event: EventName, handler: (value: any) => void | Promise<void>) =>
+            defaultApi
+                ? settle(defaultApi.on(event, handler))
+                : settle(
+                      native!
+                          .on(event, (value) => Effect.promise(() => Promise.resolve(handler(value))))
+                          .pipe(Scope.provide(scope)),
+                  ),
+    }
+}
+
+async function gateway() {
+    const server = await startGatewayServer({ heartbeatIntervalMs: 600_000, sessionId: "fixture" })
+    return (event: string, d: unknown) => server.dispatch(event, d)
+}

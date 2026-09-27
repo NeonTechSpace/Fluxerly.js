@@ -1,8 +1,12 @@
+// Built default/native client connection, shutdown and the read-only modes selected by the second argument.
+// Creates no journal and changes no server content. The rate-limit mode injects one synthetic 429 and
+// scheduling-header overrides into read-only bot-self and guild requests
 import assert from "node:assert/strict"
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import WebSocket from "ws"
+import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { readSandbox } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 const cancelRecovery = process.argv[3] === "--cancel-recovery"
@@ -14,15 +18,17 @@ const rateLimitsCheck = process.argv[3] === "--rate-limits"
 const processId = /^[1-9][0-9]{0,19}$/
 const qualityUserId = qualityCheck ? process.env.FLUXER_TEST_DM_USER_ID : undefined
 const qualityGroupId = qualityCheck ? process.env.FLUXER_TEST_GROUP_DM_ID : undefined
-function requireProcessId(value, name) {
-    assert.ok(typeof value === "string" && processId.test(value), `Set the currently authorized ${name}`)
+const report = createReporter({ mode })
+// A refused target names only its process variable, never the supplied value
+function requireProcessId(value, variable) {
+    if (typeof value === "string" && processId.test(value)) return
+    report("configuration", { passed: false, variable })
+    process.exit(1)
 }
 if (qualityCheck) {
-    requireProcessId(qualityUserId, "quality user")
-    requireProcessId(qualityGroupId, "quality group")
+    requireProcessId(qualityUserId, "FLUXER_TEST_DM_USER_ID")
+    requireProcessId(qualityGroupId, "FLUXER_TEST_GROUP_DM_ID")
 }
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, ...details }))
 let stage = "configuration"
 let lock
 let gatewayProbe
@@ -82,18 +88,7 @@ async function waitForReady(client) {
     }
 }
 
-async function get(path, token) {
-    const response = await fetch(`https://api.fluxer.app/v1${path}`, {
-        headers: { Authorization: `Bot ${token}` },
-        signal: AbortSignal.timeout(10_000),
-        redirect: "error",
-    })
-    if (!response.ok) {
-        await response.body?.cancel()
-        throw new Error("Identity request failed")
-    }
-    return response.json()
-}
+const get = (path, token) => readSandbox(path, token, { timeout: 10_000 })
 
 function instanceDocument(value) {
     assert.equal(typeof value, "object")
@@ -175,6 +170,16 @@ function verifyResolvedInstance(resolved, external) {
     assert.ok(Object.isFrozen(resolved) && Object.isFrozen(resolved.endpoints))
 }
 
+// A read-only bot-self read through the raw request API, checked against the independently verified bot identity
+async function verifyRestRequest(client, userId, run) {
+    stage = "rest_request_self_read"
+    const response = await run(client.rest.request({ method: "GET", path: "/users/@me" }))
+    assert.equal(response.status, 200)
+    assert.equal(typeof response.headers, "object")
+    assert.equal(response.body?.id, userId)
+    report(stage, { passed: true, remoteMutations: false })
+}
+
 async function observeHeartbeat(client) {
     stage = "heartbeat"
     const deadline = performance.now() + 65_000
@@ -212,12 +217,19 @@ function verifyInstallationLink(link, applicationId) {
     assert.equal([...url.searchParams.keys()].sort().join(","), "client_id,permissions,scope")
 }
 
+// Cache reads return plain values in the default API and never-failing Effects in the native API
+async function readLocal(operation) {
+    if (mode === "default") return operation
+    const { Effect } = await import("effect")
+    return Effect.runPromise(operation)
+}
+
 async function verifyDiagnostics(client, guildId, token, run) {
     stage = "diagnostics_live_snapshot"
     const held = await run(client.guilds.fetch(guildId))
     assert.equal(held.id, guildId)
     assert.ok(Object.isFrozen(held))
-    assert.equal((await run(client.cache.entries("guilds", { limit: 1 })))[0], held)
+    assert.equal((await readLocal(client.cache.entries("guilds", { limit: 1 })))[0], held)
     const snapshot = client.diagnostics()
     assert.equal(snapshot.caches.guilds.retainedEntries, 1)
     assert.equal(snapshot.caches.guilds.configured, true)
@@ -256,12 +268,12 @@ async function verifyDiagnostics(client, guildId, token, run) {
         }
         assert.equal(client.diagnostics().rest.activeRequests, 1)
         client.cache.clear()
-        assert.deepEqual(await run(client.cache.entries("guilds")), [])
+        assert.deepEqual(await readLocal(client.cache.entries("guilds")), [])
         assert.equal(held.id, guildId)
         release()
         const late = await pending
         assert.equal(late.value?.id, guildId)
-        assert.deepEqual(await run(client.cache.entries("guilds")), [])
+        assert.deepEqual(await readLocal(client.cache.entries("guilds")), [])
         assert.equal(client.diagnostics().rest.activeRequests, 0)
     } finally {
         release()
@@ -308,7 +320,7 @@ async function verifyQuality(client, token, run, fail) {
             assert.equal(error.reason, "input")
             assert.equal(error.status, null)
             assert.equal(error.apiError, null)
-            assert.equal(error.outcome ?? error.delivery, error.delivery === undefined ? "notDispatched" : "notSent")
+            assert.equal(error.outcome, "notDispatched")
             assert.equal(error.inputValidation?.path, path)
             assert.equal(error.inputValidation?.constraint, constraint)
             assert.ok(Object.isFrozen(error.inputValidation))
@@ -328,13 +340,13 @@ async function verifyQuality(client, token, run, fail) {
     const group = await run(client.directMessages.fetch(groupId))
     assert.equal(user.id, externalUser.id)
     assert.equal(group.id, externalGroup.id)
-    assert.equal(await run(client.users.get(userId)), user)
-    assert.equal(await run(client.directMessages.get(groupId)), group)
+    assert.equal(await readLocal(client.users.get(userId)), user)
+    assert.equal(await readLocal(client.directMessages.get(groupId)), group)
     for (const [resource, value] of [
         ["users", user],
         ["directMessages", group],
     ]) {
-        assert.deepEqual(await run(client.cache.entries(resource)), [value])
+        assert.deepEqual(await readLocal(client.cache.entries(resource)), [value])
         assert.equal(client.diagnostics().caches[resource].retainedEntries, 1)
     }
     assert.equal(client.diagnostics().rest.activeRequests, 0)
@@ -372,6 +384,11 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
         const queued = await fail(client.guilds.fetch(guildId, { timeoutMs: 100 }))
         assert.equal(queued.reason, "timeout")
         assert.equal(queued.outcome, "notDispatched")
+        // Raw requests share the client's admission, so the learned global wait also holds them back
+        const rawQueued = await fail(client.rest.request({ method: "GET", path: `/guilds/${guildId}`, timeoutMs: 100 }))
+        assert.equal(rawQueued._tag, "RestRequestError")
+        assert.ok(rawQueued.reason === "timeout" || rawQueued.reason === "rateLimit")
+        assert.equal(rawQueued.outcome, "notDispatched")
         assert.equal(remoteReads, 0)
         assert.equal(client.diagnostics().rest.queuedRequests, 0)
         report(stage, { passed: true, injectedRejections: injected, remoteRequests: remoteReads })
@@ -380,7 +397,10 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
         await sleep(1100)
         assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
         assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
-        assert.equal(remoteReads, 2)
+        const raw = await run(client.rest.request({ method: "GET", path: "/users/@me", timeoutMs: 10_000 }))
+        assert.equal(raw.status, 200)
+        assert.equal(raw.body?.id, userId)
+        assert.equal(remoteReads, 3)
         assert.equal(client.diagnostics().rest.activeRequests, 0)
         assert.equal(client.diagnostics().rest.queuedRequests, 0)
         report(stage, { passed: true, remoteReads, remoteMutations: false })
@@ -457,25 +477,16 @@ try {
             rateLimitsCheck,
     )
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
     stage = "configuration"
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    const token = env.FLUXER_TEST_BOT_TOKEN
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    const guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.match(applicationId ?? "", /^\d+$/)
-    assert.match(guildId ?? "", /^\d+$/)
+    const { token, applicationId, guildId } = loadSandboxEnvironment()
 
     stage = "sandbox_identity"
-    const application = await get("/oauth2/applications/@me", token)
-    const user = await get("/users/@me", token)
-    assert.equal(application.id, applicationId)
-    assert.equal(user.bot, true)
-    assert.equal(typeof user.id, "string")
-    assert.equal(application.bot?.id, user.id)
-    assert.equal((await get(`/guilds/${guildId}`, token)).id, guildId)
+    const { application, user } = await verifySandboxIdentity((path) => get(path, token), {
+        applicationId,
+        guildId,
+        applicationPath: "/oauth2/applications/@me",
+    })
     report(stage, { passed: true, clientSecretUsed: false })
     if (cancelRecovery) gatewayProbe = observeGateway()
 
@@ -483,13 +494,11 @@ try {
     if (mode === "default") {
         const { createClient, links } = await import("@neontechspace/fluxerly")
         stage = "creation"
-        const created = createClient({
+        client = createClient({
             token,
             ...(diagnosticsCheck ? { cache: { guilds: true } } : {}),
             ...(qualityCheck ? { cache: { users: true, directMessages: true } } : {}),
         })
-        assert.ok(created.isOk())
-        client = created.value
         assert.equal(client.state, "Disconnected")
         const controller = new AbortController()
         let running
@@ -547,12 +556,10 @@ try {
                 report(stage, { passed: true, noCache: true })
             } else if (applicationCheck) {
                 stage = "current_application"
-                const current = await client.application.fetchCurrent()
+                const current = await client.application.fetch()
                 assert.ok(current.isOk())
                 verifyCurrentApplication(current.value, applicationId, application)
-                const link = links.installation(current.value.id, { permissions: 0n })
-                assert.ok(link.isOk())
-                verifyInstallationLink(link.value, applicationId)
+                verifyInstallationLink(links.installation(current.value.id, { permissions: 0n }), applicationId)
                 report(stage, { passed: true, noCache: true, clientSecretUsed: false })
             } else {
                 stage = "connect"
@@ -567,6 +574,12 @@ try {
                 assert.equal(client.state, "Connected")
                 report("ready", { passed: true })
                 await observeHeartbeat(client)
+                if (!cancelRecovery)
+                    await verifyRestRequest(client, user.id, async (operation) => {
+                        const result = await operation
+                        assert.ok(result.isOk())
+                        return result.value
+                    })
                 if (cancelRecovery) {
                     await gatewayProbe.interrupt(client)
                     stage = "managed_recovery_cancellation"
@@ -632,10 +645,9 @@ try {
                         report(stage, { passed: true, noCache: true })
                     } else if (applicationCheck) {
                         stage = "current_application"
-                        const current = yield* client.application.fetchCurrent()
+                        const current = yield* client.application.fetch()
                         verifyCurrentApplication(current, applicationId, application)
-                        const link = yield* links.installation(current.id, { permissions: 0n })
-                        verifyInstallationLink(link, applicationId)
+                        verifyInstallationLink(links.installation(current.id, { permissions: 0n }), applicationId)
                         report(stage, { passed: true, noCache: true, clientSecretUsed: false })
                     } else {
                         stage = "connect"
@@ -645,6 +657,8 @@ try {
                         assert.equal(client.state, "Connected")
                         report("ready", { passed: true })
                         yield* Effect.promise(() => observeHeartbeat(client))
+                        if (!cancelRecovery)
+                            yield* Effect.promise(() => verifyRestRequest(client, user.id, Effect.runPromise))
                         if (cancelRecovery) {
                             yield* Effect.promise(() => gatewayProbe.interrupt(client))
                             stage = "managed_recovery_cancellation"
@@ -693,9 +707,9 @@ try {
     process.exitCode = 1
 } finally {
     gatewayProbe?.restore()
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (lock !== undefined && !lock.release()) {
+        report("sandbox_lock_cleanup", { passed: false, lockRetained: true })
+        process.exitCode = 1
     }
 }
 // No success-path process.exit: The invoking shell must observe natural exit

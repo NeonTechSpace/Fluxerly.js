@@ -1,7 +1,11 @@
+/**
+ * Pure role hierarchy comparison.
+ * Invariant: Comparisons use position and then ID, and invalid or cross-guild roles compare as unknown.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type { GuildMember, GuildRole } from "#sdk/guilds"
 import type { RoleHierarchyInput } from "#sdk/role-hierarchy"
-
-const identifier = (value: unknown): value is string => typeof value === "string" && /^[1-9][0-9]*$/.test(value)
+import { identifier } from "./decode/primitives.js"
 
 const validRole = (value: unknown): value is GuildRole =>
     typeof value === "object" &&

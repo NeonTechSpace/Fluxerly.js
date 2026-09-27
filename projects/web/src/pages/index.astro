@@ -1,5 +1,5 @@
 ---
 import versions from '../../content/versions.json'
-if (versions.defaultVersion) return Astro.redirect('/docs/latest/')
-return Astro.redirect('/docs/preview/')
+// The deployed worker answers this with an HTTP redirect before static output is used
+return Astro.redirect(versions.latestPath ? `/docs/${versions.latestPath}/` : '/docs/preview/')
 ---

@@ -1,3 +1,4 @@
+import { pageSchema, requireTransformSchema } from "./transform-schemas.js"
 import Slugger from "github-slugger"
 import { remarkHeading } from "fumadocs-core/mdx-plugins"
 
@@ -5,6 +6,7 @@ import { remarkHeading } from "fumadocs-core/mdx-plugins"
 // Keeping both the raw anchor and an auto-slugged heading creates duplicate IDs
 export function remarkReferenceAnchors() {
     return function transform(root, file) {
+        requireTransformSchema("referenceAnchors", pageSchema(file))
         const reserved = new Set()
         visit(root)
         const slugger = new Slugger()
@@ -38,7 +40,11 @@ export function remarkReferenceAnchors() {
                     if (reserved.has(match[1])) throw new Error(`Duplicate TypeDoc anchor: ${match[1]}`)
                     reserved.add(match[1])
                     node.children.splice(i--, 1)
-                } else visit(child)
+                } else {
+                    // Member anchors in table rows keep their IDs, so headings such as Properties must avoid them
+                    if (child.type === "html") for (const [, id] of child.value.matchAll(/\bid="([^"]+)"/g)) reserved.add(id)
+                    visit(child)
+                }
             }
         }
     }

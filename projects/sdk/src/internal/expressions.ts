@@ -1,3 +1,8 @@
+/**
+ * Emoji and sticker operations and gateway expression updates.
+ * Invariant: An expression update is a changed collection, never an initial list or cache refill, and it invalidates the cache first.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type {
     GuildEmoji,
     GuildSticker,
@@ -5,12 +10,13 @@ import type {
     ExpressionReference,
     ExpressionBatch,
     ExpressionDeleteOptions,
+    ExpressionSourceGuild,
 } from "#sdk/expressions"
 import type { ModerationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, record } from "./message.js"
+import { identifier, record } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { normalizedText as text } from "./field-text.js"
 
 export type ExpressionKind = "emojis" | "stickers"
@@ -24,12 +30,13 @@ function snapshotArray(value: unknown, maximum: number): readonly unknown[] | un
     if (!Array.isArray(value)) return undefined
     const count = value.length
     if (count > maximum) return undefined
+    // oxlint-disable-next-line unicorn/no-new-array -- preallocates the counted length once, and the loop below assigns every index
     const items = new Array<unknown>(count)
     for (let index = 0; index < count; index++) items[index] = value[index]
     return Object.freeze(items)
 }
 
-export function decodeExpression<K extends ExpressionKind>(
+function decodeExpression<K extends ExpressionKind>(
     kind: K,
     value: unknown,
     guildId: string,
@@ -57,7 +64,8 @@ export function decodeExpression<K extends ExpressionKind>(
     }) as ExpressionResources[K]
 }
 
-function list<K extends ExpressionKind>(kind: K, value: unknown, guildId: string) {
+/** Decode a complete guild expression collection, or undefined when any item is malformed or repeated */
+export function expressionItems<K extends ExpressionKind>(kind: K, value: unknown, guildId: string) {
     if (!Array.isArray(value)) return undefined
     const result: ExpressionResources[K][] = []
     const ids = new Set<string>()
@@ -76,7 +84,7 @@ export function decodeExpressionUpdate<K extends ExpressionKind>(
     value: unknown,
 ): ExpressionUpdate<K> | undefined {
     if (!record(value) || !identifier(value.guild_id)) return undefined
-    const items = list(kind, value[kind], value.guild_id)
+    const items = expressionItems(kind, value[kind], value.guild_id)
     return items && Object.freeze({ guildId: value.guild_id, items })
 }
 
@@ -92,7 +100,7 @@ export function expressionList<K extends ExpressionKind>(
         method: "GET",
         status: 200,
         cache: { selection: { kind, guildId }, replace: true },
-        decode: (value) => list(kind, value, guildId),
+        decode: (value) => expressionItems(kind, value, guildId),
     }
 }
 
@@ -122,24 +130,21 @@ export function expressionMetadata(
     }
 }
 
+function expressionFields(kind: ExpressionKind, create: boolean): readonly string[] {
+    return ["name", ...(create ? ["image"] : []), ...(kind === "stickers" ? ["description", "tags"] : [])]
+}
+
 function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = "") {
     const path = (field: string) => (prefix ? `${prefix}.${field}` : field)
     if (!record(value)) return inputValidationFailure(prefix || "input", "type", "Expression input must be an object")
-    if (
-        Object.keys(value).some(
-            (key) =>
-                ![
-                    "name",
-                    ...(create ? ["image"] : []),
-                    ...(kind === "stickers" ? ["description", "tags"] : []),
-                ].includes(key),
-        )
+    const accepted = expressionFields(kind, create)
+    const unsupported = unsupportedKeyFailure(
+        value,
+        accepted,
+        prefix || "input",
+        `the ${kind === "emojis" ? "emoji" : "sticker"} input`,
     )
-        return inputValidationFailure(
-            prefix || "input",
-            "allowedFields",
-            "Expression input contains an unsupported field",
-        )
+    if (unsupported) return unsupported
     if (kind === "emojis" && !(typeof value.name === "string" && /^[A-Za-z0-9_]{2,32}$/.test(value.name)))
         return inputValidationFailure(
             path("name"),
@@ -150,7 +155,7 @@ function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = 
         return inputValidationFailure(
             path("name"),
             "length",
-            "Sticker name must contain 2 through 30 UTF-16 code units after provider normalization",
+            "Sticker name must contain 2 through 30 UTF-16 code units after Fluxer's normalization",
         )
     if (create) {
         if (typeof value.image !== "string" || value.image.length > 699_150)
@@ -177,7 +182,7 @@ function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = 
             return inputValidationFailure(
                 path("description"),
                 "length",
-                "Sticker description must be null or contain 1 through 500 UTF-16 code units after provider normalization",
+                "Sticker description must be null or contain 1 through 500 UTF-16 code units after Fluxer's normalization",
             )
         const rawTags = value.tags
         const snapshot = rawTags === undefined ? undefined : snapshotArray(rawTags, 10)
@@ -185,7 +190,7 @@ function encode(kind: ExpressionKind, value: unknown, create: boolean, prefix = 
             return inputValidationFailure(
                 path("tags[]"),
                 "format",
-                "Sticker tags must contain at most ten entries of 1 through 30 UTF-16 code units after provider normalization",
+                "Sticker tags must contain at most ten entries of 1 through 30 UTF-16 code units after Fluxer's normalization",
             )
         tags = snapshot as readonly string[] | undefined
     }
@@ -269,7 +274,7 @@ export function expressionBatch<K extends ExpressionKind>(
         cache: { selection: { kind, guildId }, mutation: true, batch: true },
         decode: (value) => {
             if (!record(value) || !Array.isArray(value.failed)) return undefined
-            const success = list(kind, value.success, guildId)
+            const success = expressionItems(kind, value.success, guildId)
             if (
                 !success ||
                 value.failed.some(
@@ -305,12 +310,13 @@ export function expressionEdit<K extends ExpressionKind>(
             !Object.hasOwn(input, "tags")
         )
             return inputValidationFailure("input", "required", "Sticker edit requires name, description, and tags")
-        if (
-            Object.keys(input).some(
-                (key) => !["name", "description", "tags", "guildId", "id", "animated"].includes(key),
-            )
+        const unsupported = unsupportedKeyFailure(
+            input,
+            ["name", "description", "tags", "guildId", "id", "animated"],
+            "input",
+            "the sticker edit",
         )
-            return inputValidationFailure("input", "allowedFields", "Sticker edit contains an unsupported field")
+        if (unsupported) return unsupported
         if (
             (input.id !== undefined && input.id !== id) ||
             (input.guildId !== undefined && input.guildId !== guildId) ||
@@ -366,5 +372,44 @@ export function expressionDelete(
         status: 204,
         cache: { selection: { kind, guildId: target.guildId, id: target.id }, mutation: true },
         decode: () => undefined,
+    }
+}
+
+/** Upper bound for a source guild's badge list. Fluxer currently sends at most three badges */
+const maximumSourceFeatures = 64
+
+/** Reads the public presentation of an expression's source guild. Every documented field is required. The response
+ * carries nothing that ties it to the requested expression, so only its shape is checked. Unrecognized badge strings are
+ * retained unchanged, so a badge added by Fluxer does not fail the read, while a non-string entry is malformed
+ */
+export function expressionSource(
+    kind: ExpressionKind,
+    id: string,
+): GuildRequest<ExpressionSourceGuild> | InputValidationFailure {
+    if (!identifier(id))
+        return inputValidationFailure("expressionId", "format", "Expression IDs must be decimal strings")
+    return {
+        guildId: id,
+        bucket: `${kind}:source`,
+        path: `/${kind}/${id}/source`,
+        method: "GET",
+        status: 200,
+        decode: (value) => {
+            if (
+                !record(value) ||
+                !identifier(value.id) ||
+                typeof value.name !== "string" ||
+                (value.icon !== null && typeof value.icon !== "string")
+            )
+                return undefined
+            const features = snapshotArray(value.features, maximumSourceFeatures)
+            if (!features?.every((feature) => typeof feature === "string")) return undefined
+            return Object.freeze({
+                id: value.id,
+                name: value.name,
+                icon: value.icon,
+                features: features as readonly string[],
+            })
+        },
     }
 }

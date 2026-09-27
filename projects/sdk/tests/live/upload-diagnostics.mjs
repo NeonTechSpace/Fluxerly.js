@@ -24,7 +24,7 @@ const reasons = new Set([
     "tooLarge",
     "untrustedUrl",
 ])
-const outcomes = new Set(["notSent", "notDispatched", "rejected", "unknown"])
+const outcomes = new Set(["notDispatched", "rejected", "unknown"])
 const codes = new Set([
     "ECONNRESET",
     "ECONNREFUSED",
@@ -54,7 +54,7 @@ export function safeFailure(error) {
                     : {}),
             }))
         if (reasons.has(error?.reason)) result.reason = error.reason
-        const outcome = error?.outcome ?? error?.delivery
+        const outcome = error?.outcome
         if (outcomes.has(outcome)) result.outcome = outcome
         if (Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599) result.status = error.status
         const code = [error?.code, error?.cause?.code].find((value) => codes.has(value))

@@ -1,135 +1,274 @@
 ---
 title: Add prefix commands to a bot
 navTitle: Commands
-description: Register a command, convert arguments and generate help from the same definitions
+description: Register prefix commands, convert arguments, add guards and cooldowns, and generate help from the same definitions
 ---
 
-A prefix command is a message such as `!ping` or `!greet Maya`. Fluxerly's optional command router reads the name after the configured prefix and calls the matching handler. It uses the existing client and does not connect another bot
+A [prefix command](/docs/{{version}}/glossary/#prefix-command) is a message such as `!ping` or `!greet Maya`. Fluxerly's [command router](/docs/{{version}}/glossary/#command-router) reads the name after the configured prefix and calls the matching handler. It uses the bot's existing client and does not open another connection. The SDK has no slash commands, buttons or other interaction components, so every command is a message the bot reads
 
-These examples replace the plain message handler in [the starter bot](/docs/{{version}}/quick-start/). Call the command installer inside the `runBot` installation callback, check its Result and return its subscription in the array. Remove the original `!ping` handler to avoid duplicate replies
+These examples extend [the starter bot](/docs/{{version}}/quick-start/). Pass commands in the `commands` option of `runBot`, and remove the starter's `!ping` message handler so the bot does not reply twice
 
-## Register and attach commands
+## Register commands
 
-Register related commands together. Each object key becomes a command name. If a definition is invalid or a name is already in use, registration fails and the existing router stays unchanged
+Each key of `commands` becomes a command name. The `reply` helper accepts a string or full message content and replies to the incoming message
 
 ```ts
-import { commands, type Client } from "@neontechspace/fluxerly"
+import { runBot } from "@neontechspace/fluxerly"
 
-export function installCommands(client: Client) {
-    const created = commands.create({ prefix: "!" })
-    if (created.isErr()) return created
-
-    const registered = created.value.registerMany({
-        ping: {
-            description: "Check that the bot can reply",
-            arguments: {},
-            execute: async ({ reply }) => {
-                const sent = await reply({ content: "Pong!" })
-                if (sent.isErr()) throw sent.error
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        commands: {
+            ping: {
+                description: "Check that the bot can reply",
+                execute: ({ reply }) => reply("Pong!"),
+            },
+            about: {
+                description: "Describe this bot",
+                execute: ({ reply }) => reply("Built with Fluxerly"),
             },
         },
-        about: {
-            description: "Describe this bot",
-            arguments: {},
-            execute: async ({ reply }) => {
-                const sent = await reply({ content: "Built with Fluxerly" })
-                if (sent.isErr()) throw sent.error
-            },
-        },
-    })
-    if (registered.isErr()) return registered
-    return registered.value.attach(client)
-}
+    },
+})
 ```
 
-Check the installer's Result. On success, it returns a subscription that the application can stop or wait for. An attachment failure happens during setup, while a command failure happens after a matching message arrives
+Sending `!ping` now answers `Pong!`, and `!about` describes the bot. Returning the reply's [Result](/docs/{{version}}/glossary/#result) from `execute` is enough: If the reply fails, the router reports the failure with the command name without stopping other commands
 
-The bound `reply` uses the incoming message as its reference and forwards the handler's cancellation signal. The handler still checks its Result and throws an expected failure for the router to report. Returning an Err by itself would not report a callback failure
+<details>
+<summary>When do command definitions fail?</summary>
 
-Commands in a batch use the order of the object's own string keys. Inherited keys are ignored. Use `arguments: {}` when a command accepts no positional arguments. Use `arguments: undefined` to keep unrestricted raw `args`, as with an individually registered command that has no argument schema. Pass a group as the batch's second argument to apply it to every command
+An invalid definition, such as a duplicate name or an unknown argument type, throws `ConfigurationError` when `runBot` is called, before the bot connects.
+A command failure happens later, when a matching message arrives. A handler that throws, rejects or returns an Err result has failed, and the router reports it to the `onError` hook, when one is set, or logs it in full at Error
+
+Commands keep the order of the object's own string keys. Omit `arguments` to receive the raw `args` without conversion, and use `arguments: {}` when a command accepts no arguments. The `reply` helper also forwards the handler's cancellation `signal`, so stopping the bot cancels a pending reply
+
+</details>
 
 ## Convert arguments before execution
 
-The router converts message tokens into typed arguments before running a command. This command accepts `!greet "Ada Lovelace"`. The quoted parser treats the name as one text argument
+The router converts the words after the command name into typed values before running it. This bot accepts `!greet "Ada Lovelace"` and `!remind 10m Stretch`. The quoted parser treats a quoted name as one argument
+
+```ts
+import { commands, runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        parse: commands.parseQuoted,
+        commands: {
+            greet: {
+                description: "Greet a name",
+                arguments: { name: { type: "text" } },
+                execute: ({ values, reply }) => reply(`Hello, ${values.name}!`),
+            },
+            remind: {
+                description: "Repeat a note after a delay",
+                arguments: {
+                    delay: { type: "duration", min: 1_000, max: 3_600_000 },
+                    note: { type: "text", rest: true },
+                },
+                execute: async ({ values, reply, signal }) => {
+                    await new Promise((resolve) => setTimeout(resolve, values.delay))
+                    if (!signal.aborted) return reply(values.note)
+                },
+            },
+        },
+    },
+})
+```
+
+In TypeScript, `values.name` is a string and `values.delay` is a number of milliseconds. A missing, invalid or extra argument stops the command before `execute`, and `runBot` answers with the reason and the command's usage, such as `Missing name. Usage: !greet <name>`. That reply is the `onReject: "reply"` default of `runBot`. Set `onReject: "silent"` to send nothing, or pass a function for custom feedback. A router from `commands.create` gives no feedback unless `onReject` is set
+
+A `duration` argument reads text such as `90s`, `5m` or `1h30m` and produces milliseconds. Add `wholeSeconds: true` to reject a millisecond part such as `1m500ms`, for a value that must be whole seconds, like the `durationMs` of a [ban](/docs/{{version}}/guilds-and-permissions/#moderate-members). Its `default`, when given, must then be whole seconds too
+
+Other argument types include:
+
+- Whole and decimal numbers, with `integer` and `number` and optional `min`, `max` and `default`
+- One of a fixed list of strings, with `choice`
+- A decimal [ID](/docs/{{version}}/glossary/#id), with `id`. Add `mention: "user"`, `"channel"` or `"role"` to also accept that kind of mention, as in `{ type: "id", mention: "user" }`. The value is the ID either way
+- A member of the message's [community](/docs/{{version}}/glossary/#guild), with `member`, which turns a user ID or mention into a `{ guildId, userId }` reference
+- One entry from a fixed list of candidates given at registration, with `userChoice`, `channelChoice` or `roleChoice`. For any user, channel or role, use `id` or `member` instead
+- Any other format, with `custom` and a parse function of the application
+
+Accepting an ID does not mean the user may act on that resource
+
+<details>
+<summary>How are ID and member arguments checked?</summary>
+
+An `id` or `member` argument accepts a nonzero decimal ID without leading zeroes, up to `9223372036854775807`, and the same limit applies to IDs inside mentions. Any other value is rejected as invalid before the command runs. Use a `custom` argument for other formats.
+A `member` argument produces a `{ guildId, userId }` reference in the message's community without checking that the user is still a member
+
+</details>
+
+## Guard, limit and wrap commands
+
+A [guard](/docs/{{version}}/glossary/#guard) decides whether a matched command may run. A [cooldown](/docs/{{version}}/glossary/#cooldown) limits how often each user, channel or community can run it. [Middleware](/docs/{{version}}/glossary/#middleware) wraps every command, for example to measure how long it takes
+
+```ts
+import { guards, runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        mentionPrefix: true,
+        use: [
+            async (context, next) => {
+                const started = Date.now()
+                await next()
+                console.info(`${context.name} took ${Date.now() - started} ms`)
+            },
+        ],
+        commands: {
+            purge: {
+                description: "Delete recent messages",
+                guard: [guards.guildOnly(), guards.requirePermissions(["ManageMessages"])],
+                cooldown: { durationMs: 30_000, per: "channel" },
+                arguments: { count: { type: "integer", min: 1, max: 100, default: 10 } },
+                execute: ({ values, reply }) => reply(`Would delete ${values.count} messages`),
+            },
+        },
+    },
+})
+```
+
+Here `!purge` runs only in a community, for a member with the Manage Messages permission, and at most once every 30 seconds in each channel. With `mentionPrefix`, a mention of the bot also works as a prefix. An unknown command name is ignored unless `onUnmatched` handles it, and its `suggestion` names the closest registered command when one is similar.
+Each unmatched message is logged at Debug with the code `commands.unmatched` and the fields `reason`, `messageId`, `channelId` and, when there is one, `suggestion`
+
+A guard returns `true` to allow the command, `false` to deny it silently or `{ deny: "reason" }` to deny it with a reason. Each built-in guard in `guards` covers one common check and allows only:
+
+- Messages sent in a community, with `guards.guildOnly()`
+- Direct and group conversations, with `guards.dmOnly()`
+- Listed user IDs, such as the bot owner's, with `guards.ownerOnly(ids)`
+- Members who have every named permission in the channel, with `guards.requirePermissions(names)`
+
+<details>
+<summary>How the built-in guards read data</summary>
+
+The `requirePermissions` guard reads the community, member, roles and channel from enabled caches first and fetches only what is missing, at most once each per command. A failed read fails the command, which is reported with the command name. Its decision does not guarantee that Fluxer allows a later action.
+The `dmOnly` guard denies a message that has a `guildId` without a request. Otherwise it confirms a private conversation from the direct-message cache or the channel cache, or reads the channel once. A cached or fetched community channel denies the command. A read that fails for any other reason, such as a network failure or timeout, leaves the channel unconfirmed and fails the command, which is reported with the command name. Enable `cache.directMessages` to avoid a read for each command in the same conversation
+
+</details>
+
+<details>
+<summary>How cooldowns are stored</summary>
+
+A cooldown takes `durationMs` and `per`, which is `"user"` by default, `"channel"` or `"guild"`. Without a `store`, the router keeps cooldowns in memory in this process. That store holds 10,000 keys by default. Set the router's `cooldowns: { maxEntries }` option to change the limit, for example `cooldowns: { maxEntries: 50_000 }`.
+A full store never turns a user away: It removes expired keys first, then the key that would expire soonest, which lets that key run again early. Pass a `store` to share cooldowns between processes
+
+</details>
+
+<details>
+<summary>How often a rejected command is answered</summary>
+
+So that repeated attempts do not make the bot repeat itself, the `"reply"` feedback answers an active cooldown once until it expires, and a guard denial once per user and command every 5 seconds. Argument errors are answered every time.
+A skipped answer still counts as a rejection and is logged at Debug. An `onReject` function receives every rejection instead, so it can apply its own limit
+
+</details>
+
+## Use the Effect entry point
+
+The [Effect](/docs/{{version}}/glossary/#effect) API accepts the same options. Each reply stops when the command handler is interrupted and keeps `SendError` in the Effect error channel. Services required by any command remain requirements of the returned program
+
+```ts
+import { Effect } from "effect"
+import { runBot } from "@neontechspace/fluxerly/effect"
+
+export const program = runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        commands: {
+            ping: { execute: ({ reply }) => reply("Pong!").pipe(Effect.asVoid) },
+            about: { execute: ({ reply }) => reply("Built with Fluxerly").pipe(Effect.asVoid) },
+        },
+    },
+})
+```
+
+## Attach commands to an existing client
+
+To add commands to a client the application already manages, create a router, register commands and attach it to the client. Creation and registration throw `ConfigurationError` for invalid definitions. Close the returned subscription to detach the router, or wait for its cleanup with `waitForClose()`
 
 ```ts
 import { commands, type Client } from "@neontechspace/fluxerly"
 
-export function installGreeting(client: Client) {
-    const created = commands.create({ prefix: "!", parse: commands.parseQuoted })
-    if (created.isErr()) return created
-
-    const registered = created.value.register({
-        name: "greet",
-        description: "Greet a name",
-        arguments: { name: { type: "text" } },
-        execute: async ({ values, reply }) => {
-            const sent = await reply({
-                content: `Hello, ${values.name}!`,
-            })
-            if (sent.isErr()) throw sent.error
-        },
-        onReject: async ({ reply }) => {
-            const sent = await reply({
-                content: 'Try !greet "Ada Lovelace"',
-            })
-            if (sent.isErr()) throw sent.error
-        },
-    })
-    if (registered.isErr()) return registered
-    return registered.value.attach(client)
-}
-```
-
-In TypeScript, `values.name` is inferred as a string. Missing or extra arguments take the rejection path before `execute`. Other descriptors cover integers, choices, IDs and ID-or-mention inputs. Selecting an ID does not authorize an operation on that resource
-
-## Use the Effect entry point
-
-The Effect API provides the same keyed batch and bound reply. Each reply inherits command-handler interruption and keeps `SendError` in the Effect error channel. Services required by any command in the batch remain requirements of the returned router
-
-```ts
-import { Effect } from "effect"
-import { commands, type Client } from "@neontechspace/fluxerly/effect"
-
-export const installCommands = (client: Client) =>
-    Effect.gen(function* () {
-        const root = yield* commands.create({ prefix: "!" })
-        const router = yield* root.registerMany({
-            ping: {
-                arguments: {},
-                execute: ({ reply }) => reply({ content: "Pong!" }).pipe(Effect.asVoid),
-            },
-            about: {
-                arguments: {},
-                execute: ({ reply }) => reply({ content: "Built with Fluxerly" }).pipe(Effect.asVoid),
-            },
+export function attachCommands(client: Client) {
+    return commands
+        .create({ prefix: "!" })
+        .registerMany({
+            ping: { execute: ({ reply }) => reply("Pong!") },
+            about: { execute: ({ reply }) => reply("Built with Fluxerly") },
         })
-        return yield* router.attach(client)
-    })
+        .attach(client)
+}
 ```
 
 ## Add help from the registered commands
 
-The router can build help pages from command descriptions and argument schemas. It does not send them or decide who may see them
+Each command receives a `help` function that builds help pages from the registered descriptions and arguments. A `help` command can reply with the first page
 
 ```ts
-import type { Client, DefaultPrefixCommandRouter, Message } from "@neontechspace/fluxerly"
+import { runBot } from "@neontechspace/fluxerly"
 
-export async function replyWithHelp(
-    client: Client,
-    router: DefaultPrefixCommandRouter,
-    message: Message,
-) {
-    const pages = router.help({ prefix: "!", maxLength: 1800 })
-    if (pages.isErr()) throw pages.error
-
-    for (const content of pages.value) {
-        const sent = await client.messages.reply(message, { content })
-        if (sent.isErr()) throw sent.error
-    }
-}
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        commands: {
+            help: {
+                description: "List the commands",
+                execute: ({ help, reply }) => reply(help()[0] ?? "No commands"),
+            },
+            ping: {
+                description: "Check that the bot can reply",
+                execute: ({ reply }) => reply("Pong!"),
+            },
+        },
+    },
+})
 ```
 
-Pass the final registered router to this helper from a help handler. Sequential sends preserve page order. A failed page does not remove pages already posted
+Sending `!help` lists each command with its description. The `help` function only builds the pages: It does not send them or decide who may see them. Each page holds up to 2,000 characters, which fits one message, so a small bot needs only the first. For more commands, reply with each page in turn. A router created with `commands.create` has the same `help` method
 
-For a larger bot, separate command definitions by feature and attach one combined router. [Groups, guards and cooldowns](/docs/{{version}}/api/interfaces/js-ts.DefaultPrefixCommandRouter/) can add structure when needed. Hidden help entries do not restrict access. Apply the application's access policy in each command's guard
+To keep a command out of help and out of unknown-command suggestions, for example an owner-only tool, register it with `hidden: true`. Hidden commands still run when someone types their name, so hiding does not restrict access. Protect each command that needs it with a guard
+
+For a larger bot, split command definitions by feature and attach one combined router. [Groups](/docs/{{version}}/api/interfaces/js-ts.DefaultPrefixCommandRouter/) such as `admin` in `!admin inspect` add structure when needed. The `group` option of `help`, such as `help({ group: ["admin"] })`, describes one group. A group registered with `hidden: true` hides everything inside it, and selecting a hidden group throws `ConfigurationError` as for a missing one
+
+## Wire it up
+
+A complete bot places the router beside the other `runBot` options. This one adds a help command, a per-user cooldown, a larger cooldown store, its own failure hook, a hidden owner-only command and a clean stop on Ctrl+C
+
+```ts
+import { guards, runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    processSignals: true,
+    commands: {
+        prefix: "!",
+        cooldowns: { maxEntries: 50_000 },
+        onError: (report) => console.error(report.describe()),
+        commands: {
+            help: {
+                description: "List the commands",
+                execute: ({ help, reply }) => reply(help()[0] ?? "No commands"),
+            },
+            ping: {
+                description: "Check that the bot can reply",
+                cooldown: { durationMs: 5_000, per: "user" },
+                execute: ({ reply }) => reply("Pong!"),
+            },
+            uptime: {
+                hidden: true,
+                guard: guards.ownerOnly(process.env.BOT_OWNER_ID ?? ""),
+                execute: ({ reply }) => reply(`Running for ${Math.round(process.uptime())} s`),
+            },
+        },
+    },
+})
+```
+
+Set `BOT_OWNER_ID` to the owner's decimal user ID. Without it, `guards.ownerOnly` throws `ConfigurationError` before the bot connects, which stops the program with that error. The commands `onError` hook receives command failures instead of the client-level `onError`, and without either hook the SDK logs each failure in full. If the bot itself stops with a failure, such as a rejected token, `runBot` logs it once and sets `process.exitCode` to 1

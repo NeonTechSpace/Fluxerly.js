@@ -1,241 +1,105 @@
 # SDK contracts
 
-This document defines cross-cutting implementation constraints for SDK contributors.
-Member signatures, defaults and caller-visible behavior belong in public source comments and the website reference.
+This document defines implementation constraints that span SDK modules.
+A rule that one module owns lives in that module's header comment, which links back to the section it implements.
+Member signatures, defaults and caller-visible behavior belong in public source comments.
 See [technology choices](/docs/TECHNOLOGY.md) for tooling and [the repository guide](/docs/REPOSITORY.md) for code and checks
-
-The [default](/projects/sdk/src/index.ts) and [Effect-native](/projects/sdk/src/effect.ts) interfaces own the public API documentation
 
 ## Public API model
 
-Both public entry points share one Effect implementation.
-The default API runs operations and converts their results to neverthrow. Consumers do not need to manage an Effect runtime.
-The Effect-native API runs in the caller's context and scope and preserves interruption without starting a detached SDK runtime.
-High-level helpers combine supported operations without exposing private modules.
-Add a helper only for a concrete use case, with clear cleanup responsibility and a reasonable maintenance cost
+The [default](/projects/sdk/src/index.ts) and [Effect](/projects/sdk/src/effect.ts) entry points are barrels over one Effect implementation.
+Public signatures and member documentation live in the hand-written interfaces under [src/api/default/](/projects/sdk/src/api/default/) and [src/api/effect/](/projects/sdk/src/api/effect/), with paired members documented identically.
+The [operation table](/projects/sdk/src/internal/binding/operations.ts) defines every client namespace member once, and the [default](/projects/sdk/src/internal/binding/default.ts) and [native](/projects/sdk/src/internal/binding/native.ts) binders adapt it by kind. A rename or signature change goes through the table and both interface sets.
+The default API converts results to neverthrow, so consumers do not manage an Effect runtime.
+The Effect API runs in the caller's context and scope and preserves interruption without starting a detached SDK runtime.
+The [testing](/projects/sdk/src/testing.ts) and [Effect testing](/projects/sdk/src/effect-testing.ts) entry points create real clients over an in-memory protocol-v1 gateway and HTTP transport supplied through the `transport` option, and the default testing declarations stay free of Effect types.
+Add a high-level helper only for a concrete use case, with clear cleanup responsibility and a reasonable maintenance cost
 
 ## Results and failures
 
-Use the same expected-error definitions in both entry points, classified by one readonly `_tag` rather than a second error code.
-The default API must distinguish expected failures and cancellation from SDK defects.
-If cleanup also fails, callers must still be able to observe the original operation failure or interruption.
-Do not replace either failure, report a cleanup defect as an expected error, or leave it only in logs.
-Preserve native Effect cause information, but expose only allowlisted SDK diagnostic details through the default API.
-Never include credentials, private payloads or arbitrary upstream errors in default diagnostic output
+Return a Result or a failing Effect only where the failure is a real runtime outcome: Network and other I/O operations, gateway commands, event waits and a collector's result.
+Misuse is not an outcome. Invalid creation options, registrations, event names and cache-lookup input throw `ConfigurationError` or the domain error in the default API and are defects in the native API.
+Invalid input to an operation that already returns a Result or Effect stays in that failure channel, because such input often comes from runtime data.
+Pure helpers and cache lookups return plain values in both APIs, with `try` variants returning a Result or Effect for untrusted text.
+An Err result returned by any application callback is reported like a throw of its error
+
+Both entry points share expected-error definitions, classified by one readonly `_tag`.
+Every SDK error extends the [error base](/projects/sdk/src/errors.ts) with a stable `code`, an optional `hint`, frozen `details` and a standard `cause`. The code refines the tag for readers and must not become a second classification that callers branch on.
+The default API distinguishes expected failures and cancellation from SDK defects.
+If cleanup also fails, callers still observe the original failure or interruption, and the cleanup defect is neither reported as an expected error nor left only in logs.
+Both APIs keep a cleanup defect's original value, as the `SdkDefect` cause and reason or as the native Cause defect, and SDK error text such as messages, `toJSON` and `describeError` masks credential patterns in it.
+Preserve native Effect causes. A default-API `SdkDefect` carries every failure and defect value, including application-thrown values, and marks which side raised it.
+A throw while reading caller-supplied options or input, such as from a property getter or a caller AbortSignal listener method, is application-raised. Mark it where the SDK reads that input, through the [defect helpers](/projects/sdk/src/internal/defects.ts), rather than inferring the origin from the thrown value. Where SDK work runs in the same step, mark only the reads, so a fault in that work stays an SDK fault.
+SDK-generated details stay allowlisted, provider error bodies keep only sanitized codes, messages and field paths, transport causes keep only an error code, and no error, detail or cause the SDK creates contains credentials
 
 ## Connection and recovery
 
-The [instance resolver](/projects/sdk/src/internal/instance.ts) stores one unchanging endpoint map per client, including webhook-only clients.
-It discovers endpoints when needed, without authentication, and shares one discovery request among concurrent REST, gateway and explicit resolution callers.
-Each caller has its own deadline and cancellation. When the last caller leaves, it waits for the shared request to clean up
-
-An explicitly selected instance is trusted to advertise service origins that receive its credential.
-Require HTTPS and WSS unless that instance explicitly permits plaintext, validate bootstrap redirects and reject credentialed service redirects
-
-Pure instance-bound URLs use the advertised bases without refreshing discovery or performing requests
-
 Creation validates local configuration without opening sockets or starting background work.
-The client owns its credential reference, per-shard sessions and recovery loops, and one retained lifetime outcome.
-Connection readiness requires authentication and the required READY processing, not merely an open socket
+The [client](/projects/sdk/src/internal/client.ts) owns its credential reference, per-shard sessions and recovery loops, and one retained lifetime outcome. Readiness requires authentication and READY processing, not an open socket.
+Starting, running and observing the outcome are separate operations. A competing start or run is rejected without disturbing the one in progress, a failed standalone startup permits reuse only after cleanup, and an accepted managed run owns one permanent lifetime.
+Cancelling one outcome observer never consumes the retained outcome, and public state observation stays bounded rather than a lossless transition log
 
-The [gateway transport](/projects/sdk/src/internal/gateway.ts) enforces the maximum received message size before decoding text or parsing JSON, including messages received in fragments.
-Keep that explicit compatibility policy separate from Fluxer's outbound command limits, replay retention, subscription byte accounting and actual heap usage.
-Decode each accepted message once and reuse its received byte length for downstream admission.
-Local size and UTF-8 rejection are terminal protocol failures, not transient network failures to replay through automatic recovery.
-Public limits and failure behavior belong to the default/native Client and ConnectionError source contracts
+Each assigned shard has its own recovery loop, session, sequence, heartbeat and backoff, while REST scheduling, subscription limits and cache limits apply across the client.
+The [shard plan](/projects/sdk/src/internal/sharding.ts) decides guild ownership, never cache contents or discovery hints. An explicit plan never changes.
+Cross-process assignment stays application-owned, except that the [local supervisor](/projects/sdk/src/internal/supervisor.ts) splits a plan across the children it forks. A restarted child keeps its assignment, and only a reshard replaces the assignments. Identify commands across processes are coordinated only by an application-supplied identify coordinator or by that supervisor for its children, which consults such a coordinator when one is supplied.
+An automatic plan is sized at the first connect from the bot's guild count, never from `GET /gateway/bot`. When Fluxer closes a shard with 4011 (sharding required), the client releases the old sessions' guild-scoped observations, counts again and moves every shard to a larger plan with new sessions, a bounded number of times per hour.
+The supervisor with `totalShards: "auto"` answers a child's 4011 the same way: It stops every child, counts again and starts children for a larger plan, at most 3 moves an hour, and fails beyond that limit.
+Outbound commands share one per-socket pacing budget below Fluxer's payload limit, and heartbeat, Identify and Resume are never delayed behind other commands.
+Saved sessions are written only at shutdown after sockets close, and are resumed only within Fluxer's retention window and only against the discovered gateway endpoint.
+Invalid data from the server retries with a new session, bounded by a limit of consecutive protocol failures, while local receive rejections end the shard
 
-Starting a client, running it for its lifetime and observing its outcome are separate operations.
-Reject a competing start or run without cancelling or cleaning up the operation already in progress.
-An expected standalone startup failure permits reuse only after cleanup, while an accepted managed run owns one permanent client lifetime
-
-Cancellation of one outcome observer must not consume the retained outcome or stop other observers.
-Coordinate initial state delivery with subscription setup, and keep public state observation bounded rather than treating it as a lossless transition log
-
-Use separate startup and established-session retry policies, with one recovery loop per assigned shard rather than nested startup loops.
-Respect server-required waits and stop on permanent failures, cancellation or SDK defects.
-Do not count socket-cleanup time as healthy connected time when resetting recovery backoff.
-Attempt session resumption before fresh identification when the protocol permits it, without treating successful replay as lossless delivery
-
-The [client](/projects/sdk/src/internal/client.ts) manages its assigned sessions as one lifetime and spaces out Identify sends.
-The unchanging [shard plan](/projects/sdk/src/internal/sharding.ts) determines which shard handles each guild. Do not infer that assignment from cache contents or discovery sizing hints.
-Each shard keeps its own session state, sequence, heartbeat timing and reconnect backoff. REST request scheduling, event-subscription limits and cache limits apply across the client
-
-Keep a healthy shard's work independent of another shard's transient gap, while awaiting every assigned shard for initial readiness.
-Group startup has one deadline, including Identify waits, and terminal supervision must preserve sibling cleanup failures
-
-Cross-process assignment and Identify coordination remain application-owned unless callers opt into the local supervisor.
-The optional supervisor coordinates only fixed assignments and fresh Identify sends among child processes that it forked itself. It does not coordinate another process or host, discover shard counts, preserve sessions across replacement, or manage distributed REST limits
-
-Shutdown stops startup and recovery, shares cleanup across concurrent callers and awaits actual resource release.
-Do not report timeout or cancellation completion while abandoning an owned socket
-
-Importing the SDK and lower-level client operations must not install process-signal handlers or terminate the consumer process.
-The optional bot runner may handle SIGINT and SIGTERM only through explicit `processSignals: true`, and must remove its listeners after awaited cleanup. It never terminates the consumer process.
-The local supervisor may terminate only an unresponsive child process that it forked itself after its graceful deadline, and still awaits that child’s exit
-
-Allow bounded graceful socket closure, then force termination and await closure, with immediate termination for pending handshakes
+Shutdown stops startup and recovery, shares cleanup across concurrent callers and awaits actual resource release, never reporting completion while abandoning an owned socket.
+A [draining shutdown](/projects/sdk/src/internal/client/drain.ts) first stops event intake and only waits, up to its deadline, for running and queued handler work and in-flight REST requests. The ordinary shutdown that follows cancels what is left. The bot runner drains on a requested stop, and a supervised child drains when its parent stops it, keeping one second of the parent's grace period to close.
+All network I/O goes through one [transport seam](/projects/sdk/src/internal/transport/index.ts). A caller transport replaces only the fetch and WebSocket implementations, while the SDK keeps its redirect, deadline, cancellation, size and rate-limit policies, and every HTTP request and gateway handshake carries one User-Agent.
+Importing the SDK never installs process-signal handlers or terminates the process. Only the [bot runner](/projects/sdk/src/internal/bot-runner.ts) handles signals, on explicit opt-in, and sets `process.exitCode` after a failed run unless the application opts out. Only the supervisor terminates processes, limited to its own unresponsive children
 
 ## User-handler failures
 
-Isolate user-handler failure from unrelated work and internal SDK defects.
-Do not automatically retry a handler that may already have performed an external action.
-Report through the configured hook or shared operational logger, without private payloads.
-If the hook fails, attempt one safe fallback report without recursively invoking the hook.
-Reporting cannot guarantee delivery when the fallback logger also fails
+Isolate application failures from unrelated work and SDK defects, and never automatically retry a handler that may have performed an external action.
+Errors are never silent. Every application failure without a returned result, including handlers, commands, collector callbacks and filters, cleanup progress, cache callbacks, state observers and overflow, reaches exactly one destination: The subscription's `onError` hook, then the client's `onError` hook, then an Error record from the [failure reporter](/projects/sdk/src/internal/failures.ts).
+A callback that returns or resolves an Err result fails with its error, through [throwIfErr](/projects/sdk/src/internal/failures.ts), so returning a failed Result cannot hide a failure.
+A report carries the original thrown value unchanged with its stack and cause chain, plus event, command, subscription and message identifiers. Native reports also keep the Effect cause.
+Reporting never throws and never alters handler scheduling, subscription lifetime or operation outcomes.
+One failure is logged once. A `rest.rejected` Warn raised inside a handler invocation waits in that invocation's [rejection scope](/projects/sdk/src/internal/rejection-scope.ts) until the invocation ends or for at most one second, and a handler failure logged at Error for the same status and Fluxer code replaces it. A rejection the application handles or passes to an `onError` hook still logs the Warn.
+Any intentional discard in SDK source carries an `allow-silent:` comment naming where the failure is observed, enforced by the [silent-discard check](/projects/sdk/scripts/silent-discards.js), which runs with SDK lint
 
-## Message event and send boundaries
+## Delivery, requests and caches
 
-[Event intake](/projects/sdk/src/internal/events.ts) owns per-subscription scheduling and bounded pending delivery.
-[REST admission](/projects/sdk/src/internal/rest.ts) coordinates requests and rate state within one client, not across processes sharing a credential
-
-Overflow terminates the affected subscription rather than restarting the gateway.
-Shutdown discards pending delivery rather than draining external actions.
-Default callback promises remain application-owned, while native cleanup is cooperative and awaited.
-When a native handler requests shutdown, the client scope owns it to avoid the handler joining itself
-
-Mutations retry only after a confirmed rate-limit rejection. Eligible reads use the bounded retry policy documented for their public operation groups.
-Cancellation or a lost response after dispatch cannot establish non-delivery or rollback
-
-Byte budgets bound the accounted data, not total JavaScript heap or process memory
-
-Attachment byte inputs are copied before waiting, while sized files and finite streams remain caller-owned until readers are acquired.
-The [transfer source](/projects/sdk/src/internal/transfer-source.ts) verifies exact byte counts and awaits acquired reader cleanup without buffering unknown-length streams
-
-Presigned upload plans authorize individual destinations without sending bot credentials to them.
-Inline fallback is limited to a disabled presigned-upload feature or its explicit planning rejection, not a failed PUT or uncertain message request.
-Only copied byte sources may replay after an inline rate-limit rejection.
-Failed operations may leave provider-owned temporary uploads, and cancellation cannot roll back a dispatched message
-
-Downloads accept only the selected instance's media attachment URLs, enforce a caller-provided output limit and send no credential or cookie
-
-## Message-management boundaries
-
-Fetch, edit and delete reuse [REST admission](/projects/sdk/src/internal/rest.ts), with provisional route groups, learned server buckets and shared global limits.
-Keep management failures separate from the send/reply delivery contract.
-Repeated deletion or a missing target does not prove a prior operation succeeded
-
-## Message-history boundary
-
-[REST admission](/projects/sdk/src/internal/rest.ts) owns explicit history pages independently of cache reads and gateway events.
-Keep history and single-message fetches in separate provisional groups while sharing global admission, then honor learned server bucket identities.
-Do not introduce background traversal or prefetch through this path
-
-The [rate-limit implementation](/projects/sdk/src/internal/rate-limits.ts) limits how many learned aliases and bucket windows each REST client keeps.
-The [template registry](/projects/sdk/src/internal/rate-limit-templates.ts) maps pinned Fluxer template hashes to their declared resource parameters, not rate values.
-Fluxer hashes unresolved templates but enforces resolved resources, so a hash alone cannot establish cross-resource sharing.
-Unknown hashes group conservatively within that bucket on the client. Unbound resource parameters and exhausted tracking capacity retain conservative client-wide waits.
-Preserve known active pauses across remapping or eviction, and never let an older dispatched response overwrite a newer alias.
-SDK-built paths supply resource bindings without retaining credential-bearing URLs or query strings in alias keys.
-No bucket learning crosses REST owners, client credentials or immutable instance selections
-
-The [pagination implementation](/projects/sdk/src/internal/pagination.ts) uses existing remote page operations without changing their retries, rate limits or cache rules.
-Each consumption owns one buffered page and bounded pin-deduplication state, released on termination or client closure.
-The default iterator owns Result conversion, while native streams keep request execution and cleanup in the caller's scope
-
-## Guild resource boundary
-
-[Guild operations](/projects/sdk/src/internal/guilds.ts) validate requests and convert REST and gateway data without storing guild state.
-They use the client's REST request scheduler and global limits, with separate rate-limit groups for guild and message routes.
-They never enter the message cache or synthesize gateway events after HTTP responses
-
-The optional [guild cache](/projects/sdk/src/internal/guild-cache.ts) stores observed guild data separately, with limits for each resource across the client.
-REST registers resource conflict guards before admission waits and retains them through retries and cleanup.
-Gateway intake updates or invalidates caches before subscriber delivery, including related memberships after role deletion.
-Connection gaps prevent old requests from repopulating snapshots, while late writes still invalidate potentially affected newer observations
-
-Fluxer remains authoritative for membership, permissions and role hierarchy. An earlier observation cannot suppress a targeted role request.
-Multi-step resource workflows are not transactions, and uncertain writes must not be replayed as if they were reads
-
-## Guild channel boundary
-
-[Channel operations](/projects/sdk/src/internal/channels.ts) validate guild-channel requests and convert REST and gateway data.
-The client's REST scheduler uses separate rate-limit groups for guild and channel routes, while sharing global limits and cleanup
-
-The optional [channel cache](/projects/sdk/src/internal/channel-cache.ts) owns ID-keyed observations with client-wide limits, never effective permission decisions
-
-Dispatched mutations invalidate channel snapshots and pending channel reads because category and ordering changes can affect descendants.
-Rejection of a multi-entry reorder does not establish rollback of its earlier entries
-
-Bulk gateway observations invalidate their guild rather than retaining permissions that Fluxer may still be copying.
-Channel create/delete events can represent visibility changes, so they do not prove remote creation/deletion.
-Channel deletion or visibility loss evicts related cached messages without synthesizing message events or changing collector completion contracts
-
-Preserve omitted permission overwrites separately from an explicit empty list throughout input encoding
-
-## Message-cache boundary
-
-Fluxer is the source of truth, not the optional client-owned memory cache.
-[Cache intake](/projects/sdk/src/internal/cache.ts) updates stored data from REST responses and gateway events before notifying subscribers.
-Bound retained data and conflict metadata, and clear pre-gap observations even after session resumption
-
-For a guild with a known shard, a connection gap invalidates only that shard's cached data. Known private-conversation data belongs to shard zero.
-Unknown ownership remains conservative, including channel-only in-flight reads, without adding an unbounded channel-to-guild index.
-Pre-gap requests must neither repopulate invalid snapshots nor evict healthy post-gap observations on late completion
-
-[Cache reporting](/projects/sdk/src/internal/cache-reports.ts) owns native context and one active custom report per client.
-Neither retention nor reporting failure may change a successful REST result or event delivery
-
-## Message-collector boundary
-
-The [collector](/projects/sdk/src/internal/collector.ts) chooses its channel before buffering messages. Synchronous filters run separately from gateway decoding.
-It limits waiting messages and saved results separately, without REST or cache reads
-
-Observe internal lifecycle transitions rather than the coalescing public state stream so a brief gap cannot be missed.
-When the caller supplies a guild, the collector follows that guild's shard and accepts events from that source. Collectors given only a channel still handle connection gaps across all shards.
-Validate that context locally without hidden REST or cache reads, and discard conflicting source events before buffering
-
-Optional progress work runs in a collector-owned fiber under the client scope, with the registration context.
-Client shutdown and registration-scope closure wait for that work, while stopping intake prevents later callbacks
-
-Terminal cleanup releases intake, state and signal listeners, timers, queued payloads and filter/handler references.
-Application-held successful results may outlive collector cleanup
-
-Do not change existing subscription recovery behavior or imply atomic registration and remote sending
-
-## Gateway request ownership
-
-The [gateway request limit](/projects/sdk/src/internal/gateway-requests.ts) applies to the whole client, not separately to each local shard.
-The [count implementation](/projects/sdk/src/internal/counts.ts) holds one request slot across shard fragments and releases every fragment on terminal failure or interruption.
-Provider omissions are result data, not a substitute for local routing, readiness or transport failures
-
-The [member-chunk implementation](/projects/sdk/src/internal/member-chunks.ts) permits one active stream per client and fails it only for a connection gap on its shard or client closure
-
-The [presence implementation](/projects/sdk/src/internal/presence.ts) retains callers' requested presence and a bounded selection of members. Each shard sends its own paced updates.
-No gateway request path retains a roster or adds a distributed coordinator
+[Event intake](/projects/sdk/src/internal/events.ts) owns per-subscription scheduling and bounded delivery. Overflow affects only its own subscription, which drops waiting events or ends by its overflow policy, rather than restarting the gateway, and shutdown discards pending delivery unless a draining shutdown first lets queued handler events run.
+A partitioned subscription starts events in receive order per key and runs at most one invocation per key, selecting from its own bounded queue.
+[REST](/projects/sdk/src/internal/rest.ts) coordinates requests and rate state within one client only. Mutations retry only after a confirmed rate-limit rejection, and eligible reads use their documented bounded retries. Cancellation or a lost response after dispatch cannot establish non-delivery or rollback, and multi-step workflows are not transactions.
+Caller-described requests share the same admission, rate learning and retry rules, accept only relative API paths that cannot change the origin or carry a webhook credential, and appear in logs only as masked route templates.
+Byte budgets bound accounted data, not heap or process memory. No path adds background traversal, prefetch, retained rosters or a distributed coordinator.
+Fluxer is the source of truth. Optional client-owned caches bound what they retain and apply gateway intake before subscribers see an event. A connection gap invalidates older observations, so a pre-gap request can neither repopulate a snapshot nor evict a newer one. Guild-scoped snapshots stay while a shard resumes, because Fluxer's Resume replays every missed dispatch or refuses the session, and are released when the shard starts a new session. Cache and reporting failures never change a successful REST result or event delivery
 
 ## Logging
 
-Use the shared Effect logger.
-Keep explicit SDK development-log opt-in separate from operational handler-error reporting and consumer Debug settings.
-The default runtime owns its logging configuration, while native execution preserves caller logger and tracing context
-
-No customization may bypass private-data exclusion.
-Keep default public declarations free of Effect types by exposing advanced logger integration through the Effect entry point
-
-Log safe lifecycle events where connections are managed. Do not reconstruct them from public state observations that can combine multiple transitions.
-Logging adds no queue or persistence ownership, and sink failures must not alter operation outcomes or recurse
+The [client logger](/projects/sdk/src/internal/logging.ts) emits one record shape with a level, category, stable code, message and safe fields.
+Clients log lifecycle, reconnects, long rate-limit waits, drops, shutdown and application failures by default, and Debug records per category through settings or `FLUXERLY_DEBUG`.
+Every drop is recorded and counted in client diagnostics. Only Debug records may cover expected, high-volume outcomes such as unmatched commands.
+Native execution logs through the caller's Effect logger with `fluxerly.*` annotations and carries a Cause of masked copies, never the original failure values. Advanced logger integration stays in the Effect entry point, keeping default public declarations free of Effect types.
+Application errors appear in full, provider data is sanitized, and credentials are never logged. Message content and raw payloads appear only with the explicit unsafe payload settings, and no customization bypasses credential masking.
+Log lifecycle events where connections are managed rather than reconstructing them from coalesced state. Logging adds no persistence ownership and never alters operation outcomes.
+The [observer](/projects/sdk/src/internal/observer.ts) set by the `observe` client option belongs to the client logger. It receives frozen measurements of REST attempts, rate-limit waits, reconnects, resumes and handler invocations, carrying only route templates, names, codes, counts and durations. An observer fault is counted like a log sink fault and never changes SDK work.
+HTTP 401 and 403 rejections, which persist until someone changes the token or permissions, log one deduplicated Warn per route and code even when the application handles the Result.
+Every record code and error code has an entry in the [code catalogue](/projects/sdk/src/internal/code-catalogue.ts), which the website's error and log codes page is generated from
 
 ## Naming
 
-Use concrete verbs and let the containing object supply the subject, as in `client.connect`.
-Use the same operation names across both public entry points, without an Effect suffix.
-Use `create` for construction without background work, `connect` for readiness, `run` for owned execution and `waitFor` for observation.
-Reserve `fetch` for remote retrieval and `get` for local lookup.
-Use `shutdown` for permanent, awaited cleanup.
-Name units explicitly, such as `timeoutMs`, and use `is`, `has` or `can` for boolean conditions
+Use concrete verbs with the containing object as subject, as in `client.connect`, and the same names in both entry points without an Effect suffix.
+Use `create` for construction without background work, `connect` for readiness, `run` for owned execution, `waitFor` for observation, `fetch` for remote retrieval, `get` for local lookup and `shutdown` for permanent, awaited cleanup.
+Subscriptions, collectors and observers end with `close`, which returns at once. Subscriptions expose `waitForClose` and collectors expose `result` to await cleanup and the final outcome.
+Name units explicitly, such as `timeoutMs`, and use `is`, `has` or `can` for boolean conditions.
+Pass settings as named option objects rather than boolean positionals, and require an explicit `confirm: true` for irreversible bulk deletion
+
+Lists follow one convention. Members named `fetchAll`, `fetchFor<Owner>` or `fetchBans` return a complete list from one response.
+A `fetchPage` or `fetch<List>` member returns one page, and the matching `iterate` or `iterate<List>` member lazily traverses all pages of the same list with explicit bounds. A `search` member returns one page and pairs with `iterateSearch`
 
 ## Validation requirements
 
-Validate both public entry points, their execution differences and packed consumer imports.
-Cover admission races, readiness, retry limits and server waits, cancellation ownership, retained outcomes and awaited cleanup.
-Check combined failures, handler isolation, diagnostic privacy and native context preservation.
-Verify bounded state delivery, late observers and unavailable/reset latency values
-
-For provider projections, compare the supported fields with a pinned producer schema and implementation. Account for omitted fields explicitly, including privacy exclusions. Trace referenced validators to their definitions before relying on a type name
-
-Test values flowing between public operations: Helper output into request input, received snapshots into related actions, and equivalent default/native workflows. Include malformed JavaScript structures at documented validation boundaries. A fixture copied from the existing SDK shape cannot establish provider completeness
-
+Validate both APIs, their execution differences and packed consumer imports of every public entry point.
+Cover admission races, readiness, retry limits and server waits, cancellation ownership, retained outcomes, awaited cleanup, combined failures, handler isolation, diagnostic privacy, native context preservation, bounded state delivery, late observers and unavailable or reset latency values.
+Compare provider projections with a pinned producer schema and implementation, account for omitted fields explicitly, and trace referenced validators to their definitions.
+Test values flowing between public operations and equivalent default and native workflows, including malformed JavaScript structures at documented validation boundaries. A fixture copied from the SDK's own shape cannot establish provider completeness.
 Use separate runtime and consumer type checks, including natural process exit where resource ownership matters.
-Tests must establish the affected behavior rather than merely succeed against fixtures
-
 Use [development checks](/docs/REPOSITORY.md#development-checks) for commands and public source comments for the behavior under test

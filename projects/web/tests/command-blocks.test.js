@@ -4,6 +4,7 @@ import { createMarkdownProcessor } from "@astrojs/markdown-remark"
 import { commandVariant, escapeHtml, remarkCommandBlocks, renderCommandBlock, validateCommand } from "../scripts/command-blocks.js"
 import { commandPreferencesKey, parseCommandPreferences } from "../src/components/command-preferences.ts"
 import { authoredGuides } from "../scripts/generate.js"
+import { find, findAll, hasClass, parseHtml, textContent } from "./html.js"
 
 const install = { kind: "install", package: "@neontechspace/fluxerly", version: "1000.0.0-rc.2" }
 const managers = ["npm", "pnpm"]
@@ -16,10 +17,15 @@ test("Authored guide command blocks render with supported metadata", async () =>
     }
 })
 
-test("SDK install variants retain the exact selected release", () => {
+test("SDK install variants pin a prerelease exactly and keep the normal range for a Stable release", () => {
     assert.deepEqual(managers.map((manager) => commandVariant(install, manager).command), [
-        "npm install @neontechspace/fluxerly@1000.0.0-rc.2",
-        "pnpm add @neontechspace/fluxerly@1000.0.0-rc.2",
+        "npm install --save-exact @neontechspace/fluxerly@1000.0.0-rc.2",
+        "pnpm add --save-exact @neontechspace/fluxerly@1000.0.0-rc.2",
+    ])
+    const stable = { ...install, version: "1000.0.0" }
+    assert.deepEqual(managers.map((manager) => commandVariant(stable, manager).command), [
+        "npm install @neontechspace/fluxerly@1000.0.0",
+        "pnpm add @neontechspace/fluxerly@1000.0.0",
     ])
     assert.equal(commandVariant(install).note, "")
     assert.equal(commandVariant(install, "pnpm").note, "")
@@ -30,17 +36,17 @@ test("Effect add and list use the chosen manager, while node execution follows t
         assert.equal(commandVariant({ kind: "add", package: "effect", version: "4.0.0-rc.29" }, manager).command,
             `${manager === "npm" ? "npm install" : "pnpm add"} --save-exact effect@4.0.0-rc.29`)
         assert.equal(commandVariant({ kind: "list", package: "effect" }, manager).command, `${manager} list effect`)
-        assert.deepEqual(commandVariant({ kind: "run", command: "node bot.js" }, manager),
-            { command: "node bot.js", note: "" })
-        assert.deepEqual(commandVariant({ kind: "run", command: "node bot.js" }, manager, "ts"),
-            { command: "node bot.ts", note: "" })
+        const run = { kind: "run", command: "node --env-file=.env bot.js" }
+        assert.deepEqual(commandVariant(run, manager), { command: "node --env-file=.env bot.js", note: "" })
+        assert.deepEqual(commandVariant(run, manager, "ts"), { command: "node --env-file=.env bot.ts", note: "" })
+        assert.deepEqual(commandVariant({ kind: "run", command: "node bot.js" }, manager, "ts"), { command: "node bot.ts", note: "" })
     }
 })
 
 test("Invalid command metadata fails closed without exposing input", () => {
     for (const value of [null, [], {}, { ...install, version: "latest" }, { ...install, version: "dev" }, { ...install, version: "0.0.0" },
         { ...install, version: "1.0.0; secret-value" }, { ...install, package: "other" }, { ...install, token: "secret-value" },
-        { kind: "run", command: "echo secret-value" }, { kind: "add", package: "effect", version: "4.0.0-rc.01" },
+        { kind: "run", command: "echo secret-value" }, { kind: "run", command: "node bot.ts" }, { kind: "add", package: "effect", version: "4.0.0-rc.01" },
         { kind: "list", package: "effect", version: "4.0.0" }]) {
         assert.throws(() => validateCommand(value), { message: "Invalid command metadata" })
     }
@@ -52,19 +58,21 @@ test("Invalid command metadata fails closed without exposing input", () => {
 
 test("Static widgets use native labeled inert controls and escaped metadata", () => {
     assert.equal(escapeHtml('<&>"\''), "&lt;&amp;&gt;&quot;&#39;")
-    const html = renderCommandBlock(install)
-    const metadata = html.match(/data-command="([^"]+)"/)[1].replaceAll("&quot;", '"')
-    assert.deepEqual(JSON.parse(metadata), install)
-    const selects = html.match(/<select\b[^>]*>/g)
+    // The no-JavaScript browser check covers the hidden copy button and fallback text
+    const tree = parseHtml(renderCommandBlock(install))
+    const block = find(tree, (node) => hasClass(node, "command-block"))
+    assert.deepEqual(JSON.parse(block.properties.dataCommand), install)
+    const selects = findAll(block, "select")
     assert.equal(selects.length, 1)
-    assert.match(selects[0], /data-command-preference="manager"/)
-    assert.match(selects[0], /\baria-label="Package manager"/)
-    assert.match(selects[0], /\bdisabled(?:\s|=|>)/)
-    assert.match(html, /<pre tabindex="0">/)
-    assert.match(html, /<code data-command-code>npm install @neontechspace\/fluxerly@1000\.0\.0-rc\.2<\/code>/)
-    assert.match(html, /data-command-copy hidden/)
-    assert.match(html, /data-command-copy-status role="status"/)
-    assert.match(html, /data-command-fallback>[^<]+</)
+    assert.equal(selects[0].properties.dataCommandPreference, "manager")
+    assert.equal(selects[0].properties.ariaLabel, "Package manager")
+    assert.equal(selects[0].properties.disabled, true)
+    assert.deepEqual(findAll(selects[0], "option").map((option) => option.properties.value), managers)
+    // The command is keyboard scrollable and a copy result is announced
+    const pre = find(block, "pre")
+    assert.equal(pre.properties.tabIndex, 0)
+    assert.equal(textContent(find(pre, (node) => node.properties.dataCommandCode !== undefined)), commandVariant(install).command)
+    assert.equal(find(block, (node) => node.properties.dataCommandCopyStatus !== undefined).properties.role, "status")
     const root = { children: [{ type: "blockquote", children: [
         { type: "code", lang: "command", value: JSON.stringify(install) },
         { type: "code", lang: "js", value: "console.log('unchanged')" },
@@ -76,10 +84,13 @@ test("Static widgets use native labeled inert controls and escaped metadata", ()
 
 test("Astro Markdown renders the widget as static HTML rather than a highlighted JSON fence", async () => {
     const processor = await createMarkdownProcessor({ remarkPlugins: [remarkCommandBlocks] })
-    const result = await processor.render(`\`\`\`command\n${JSON.stringify(install)}\n\`\`\``)
-    assert.match(result.code, /<div class="command-block"/)
-    assert.match(result.code, /npm install @neontechspace\/fluxerly@1000\.0\.0-rc\.2/)
-    assert.doesNotMatch(result.code, /language-command|&lt;select/)
+    const tree = parseHtml((await processor.render(`\`\`\`command\n${JSON.stringify(install)}\n\`\`\``)).code)
+    const block = find(tree, (node) => hasClass(node, "command-block"))
+    assert.ok(block)
+    assert.equal(textContent(find(block, "code")), "npm install --save-exact @neontechspace/fluxerly@1000.0.0-rc.2")
+    assert.equal(findAll(block, "select").length, 1)
+    assert.deepEqual(findAll(tree, (node) => hasClass(node, "language-command")), [])
+    assert.ok(!textContent(tree).includes("<select"))
 })
 
 test("Stored preferences retain the package manager while ignoring unrelated fields", () => {

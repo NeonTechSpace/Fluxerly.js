@@ -1,12 +1,23 @@
+/**
+ * Optional guild cache: Guild, member, role and expression observations with limits for each resource across the client.
+ * Invariant: REST registers conflict guards before admission waits and keeps them through retries and cleanup, and gateway intake
+ * updates or invalidates the cache before delivery, including memberships after role deletion. Connection gaps stop old requests
+ * from repopulating snapshots while late writes still invalidate newer observations. Fluxer stays authoritative for membership,
+ * permissions and hierarchy, so an earlier observation never suppresses a targeted role request. Every applied store, removal and
+ * whole-kind clear is recorded to the client's change hub, a replacement counting as one store. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import { isDeepStrictEqual } from "node:util"
 import type { CacheDiagnostic } from "#sdk/client"
 import type { Guild, GuildMember, GuildRole } from "#sdk/guilds"
 import type { GuildEmoji, GuildSticker } from "#sdk/expressions"
 import type { EventMap, EventName } from "#sdk/events"
 import type { ResourceCacheSettings } from "#sdk/cache"
-import { decodeGuild, decodeGuildSnapshot } from "./guilds.js"
-import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
-import { identifier, record } from "./message.js"
+import { decodeGuild, decodeGuildSnapshot, decodeRoles } from "./guilds.js"
+import { expressionItems } from "./expressions.js"
+import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
+import type { LogicalScheduler } from "./logical-scheduler.js"
+import type { CacheChangeHub } from "./cache-changes.js"
+import { identifier, record } from "./decode/primitives.js"
 
 export type ResourceKind = "guilds" | "members" | "roles" | "emojis" | "stickers"
 export type Resources = {
@@ -30,17 +41,20 @@ export type ResourceRequest = {
 export type ResourceGuard = ResourceRequest & {
     generation: number
     invalid: boolean
-    /** A scoped gateway gap made this read stale; it must not evict a newer post-gap observation */
+    /** A scoped gateway gap made this read stale, so it must not evict a newer post-gap observation */
     gapped: boolean
     success: boolean
 }
 type Entry = { selection: Selection; value: Snapshot; bytes: number; expires: number | null }
 const kinds = ["guilds", "members", "roles", "emojis", "stickers"] as const
 const key = (selection: Selection) => `${selection.guildId}:${selection.id ?? selection.guildId}`
+/** Public cache change key: The guild ID for guilds, otherwise guildId:id */
+const changeKey = (selection: Selection) =>
+    selection.kind === "guilds" ? selection.guildId : `${selection.guildId}:${selection.id ?? selection.guildId}`
 const overlaps = (a: Selection, b: Selection) =>
     a.kind === b.kind && a.guildId === b.guildId && (a.id === undefined || b.id === undefined || a.id === b.id)
 
-/** One client's resource observations; REST owns bounded request admission and this owner retains no historical tombstones */
+/** One client's resource observations. REST owns bounded request admission and this owner retains no historical tombstones */
 export class GuildCache {
     #entries = {
         guilds: new Map<string, Entry>(),
@@ -53,13 +67,27 @@ export class GuildCache {
     #requests = new Set<ResourceGuard>()
     #generation = 0
     #closed = false
-    #timer: ReturnType<typeof setTimeout> | LogicalTimer | undefined
+    #expiry = new ExpiryQueue<Entry & { expires: number }>(
+        (entry) => this.#entries[entry.selection.kind].get(key(entry.selection)) === entry,
+    )
+    #timer: ExpiryTimer
 
     constructor(
         private readonly settings: ResourceConfiguration,
         private readonly now: () => number,
-        private readonly logical?: LogicalScheduler,
-    ) {}
+        logical?: LogicalScheduler,
+        readonly changes?: CacheChangeHub,
+    ) {
+        this.#timer = new ExpiryTimer(
+            "guild cache",
+            now,
+            () => {
+                this.#purge()
+                this.#schedule()
+            },
+            logical,
+        )
+    }
 
     get<K extends ResourceKind>(kind: K, guildId: string, id?: string): Resources[K] | undefined {
         const selection = { kind, guildId, ...(id === undefined ? {} : { id }) }
@@ -110,9 +138,18 @@ export class GuildCache {
         return entry
     }
 
-    #remove(entry: Entry) {
-        this.#entries[entry.selection.kind].delete(key(entry.selection))
+    /** Remove one retained snapshot, reporting the deletion unless the caller replaces it. Returns whether it was removed */
+    #remove(entry: Entry, notify = true): boolean {
+        const entries = this.#entries[entry.selection.kind]
+        if (entries.get(key(entry.selection)) !== entry) return false
+        entries.delete(key(entry.selection))
         this.#bytes[entry.selection.kind] -= entry.bytes
+        if (notify) this.#changed("delete", entry.selection)
+        return true
+    }
+
+    #changed(op: "set" | "delete", selection: Selection) {
+        if (this.changes?.active) this.changes.record(selection.kind, op, changeKey(selection))
     }
 
     #selections(request: ResourceRequest): readonly Selection[] {
@@ -130,6 +167,11 @@ export class GuildCache {
 
     #evict(selection: Selection, except?: ResourceGuard) {
         this.#invalidate(selection, except)
+        if (selection.id !== undefined) {
+            const entry = this.#entries[selection.kind].get(key(selection))
+            if (entry) this.#remove(entry)
+            return
+        }
         for (const entry of this.#entries[selection.kind].values())
             if (overlaps(selection, entry.selection)) this.#remove(entry)
     }
@@ -154,7 +196,7 @@ export class GuildCache {
             if (guard.mutation) this.missing(guard)
             return
         }
-        // Guild request decoders own the result shape; void writes never fabricate a snapshot
+        // Guild request decoders own the result shape, and void writes never fabricate a snapshot
         const values: readonly Snapshot[] =
             result === undefined ? [] : Array.isArray(result) ? result : [result as Snapshot]
         if (guard.mutation || (guard.replace && !guard.invalid))
@@ -196,41 +238,48 @@ export class GuildCache {
         if (!settings) return
         const entries = this.#entries[kind]
         const previous = entries.get(key(selection))
-        if (previous) this.#remove(previous)
-        if (settings.maxAgeMs === 0) return
-        const bytes = Buffer.byteLength(
-            JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item)),
-        )
-        if (bytes > settings.maxBytes) return
+        // A replacement reports one set, while an older copy that the new one cannot replace reports a delete
+        const replaced = previous !== undefined && this.#remove(previous, false)
+        const bytes =
+            settings.maxAgeMs === 0
+                ? 0
+                : Buffer.byteLength(
+                      JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item)),
+                  )
+        if (settings.maxAgeMs === 0 || bytes > settings.maxBytes) {
+            if (replaced) this.#changed("delete", selection)
+            return
+        }
         this.#purge()
         while (entries.size >= settings.maxEntries || this.#bytes[kind] > settings.maxBytes - bytes)
             this.#remove(entries.values().next().value!)
-        entries.set(key(selection), {
+        const entry: Entry = {
             selection,
             value,
             bytes,
             expires: settings.maxAgeMs === null ? null : this.now() + settings.maxAgeMs,
-        })
+        }
+        entries.set(key(selection), entry)
         this.#bytes[kind] += bytes
+        if (entry.expires !== null) this.#expiry.push(entry as Entry & { expires: number })
+        this.#changed("set", selection)
     }
 
     event(event: EventName, value: EventMap[EventName]) {
         if (this.#closed || !event.startsWith("guild")) return
         if ((event === "guildMemberAdd" || event === "guildMemberUpdate") && "roleIds" in value)
             this.#observe("members", value)
-        else if (
-            (event === "guildMemberRemove" || event === "guildBanAdd" || event === "guildBanRemove") &&
-            "guildId" in value &&
-            "userId" in value
-        )
-            this.#evict({ kind: "members", guildId: value.guildId, id: value.userId })
-        else if ((event === "guildRoleCreate" || event === "guildRoleUpdate") && "permissions" in value)
+        else if (event === "guildMemberRemove" || event === "guildBanAdd" || event === "guildBanRemove") {
+            const member = value as EventMap["guildMemberRemove"]
+            this.#evict({ kind: "members", guildId: member.guildId, id: member.userId })
+        } else if ((event === "guildRoleCreate" || event === "guildRoleUpdate") && "permissions" in value)
             this.#observe("roles", value)
         else if (event === "guildRoleUpdateBulk" && "roles" in value)
             for (const role of value.roles) this.#observe("roles", role)
-        else if (event === "guildRoleDelete" && "guildId" in value) {
-            this.#evict({ kind: "roles", guildId: value.guildId })
-            this.#evict({ kind: "members", guildId: value.guildId })
+        else if (event === "guildRoleDelete") {
+            const { guildId } = value as EventMap["guildRoleDelete"]
+            this.#evict({ kind: "roles", guildId })
+            this.#evict({ kind: "members", guildId })
         }
         this.#schedule()
     }
@@ -254,40 +303,40 @@ export class GuildCache {
             const guild = event === "GUILD_CREATE" ? decodeGuildSnapshot(value) : decodeGuild(value)
             if (guild) this.#observe("guilds", guild)
             else this.#evict({ kind: "guilds", guildId: value.id })
+            if (guild && event === "GUILD_CREATE") this.#seed(value.id, value)
         }
         this.#schedule()
     }
 
+    /**
+     * Replace a guild's roles, emojis and stickers with the complete collections of its GUILD_CREATE snapshot.
+     * Members are not seeded, because the snapshot lists only a few of them
+     */
+    #seed(guildId: string, snapshot: Readonly<Record<string, unknown>>) {
+        const collections = {
+            roles: () => decodeRoles(snapshot.roles, guildId),
+            emojis: () => expressionItems("emojis", snapshot.emojis, guildId),
+            stickers: () => expressionItems("stickers", snapshot.stickers, guildId),
+        }
+        for (const kind of ["roles", "emojis", "stickers"] as const) {
+            this.#evict({ kind, guildId })
+            // A malformed collection leaves the category empty for this guild rather than partly seeded
+            if (this.settings[kind]) for (const item of collections[kind]() ?? []) this.#observe(kind, item)
+        }
+    }
+
     #purge() {
-        const now = this.now()
-        for (const kind of kinds)
-            for (const entry of this.#entries[kind].values())
-                if (entry.expires !== null && entry.expires <= now) this.#remove(entry)
+        this.#expiry.purge(this.now(), (entry) => this.#remove(entry))
     }
 
     #schedule() {
-        if (this.#timer !== undefined)
-            if (this.logical) this.logical.clear(this.#timer as LogicalTimer)
-            else clearTimeout(this.#timer as ReturnType<typeof setTimeout>)
-        this.#timer = undefined
-        if (this.#closed) return
-        let next = Infinity
-        for (const kind of kinds)
-            for (const entry of this.#entries[kind].values())
-                if (entry.expires !== null) next = Math.min(next, entry.expires)
-        if (next !== Infinity) {
-            const callback = () => {
-                this.#purge()
-                this.#schedule()
-            }
-            const delay = Math.min(2_147_483_647, Math.max(1, Math.ceil(next - this.now())))
-            if (this.logical) this.#timer = this.logical.set(callback, delay, "guild cache")
-            else {
-                const timer = setTimeout(callback, delay)
-                timer.unref()
-                this.#timer = timer
-            }
+        if (this.#closed) {
+            this.#timer.cancel()
+            this.#expiry.clear()
+            return
         }
+        this.#expiry.compact(kinds.reduce((total, kind) => total + this.#entries[kind].size, 0))
+        this.#timer.set(this.#expiry.next())
     }
 
     gap(affects?: (guildId: string | null | undefined) => boolean) {
@@ -295,20 +344,31 @@ export class GuildCache {
             this.#generation++
             for (const request of this.#requests) request.invalid = true
             for (const kind of kinds) {
+                const held = this.#entries[kind].size > 0
                 this.#entries[kind].clear()
                 this.#bytes[kind] = 0
+                if (held && this.changes?.active) this.changes.record(kind, "clear", null)
             }
+            this.#expiry.clear()
         } else {
-            for (const request of this.#requests)
-                if (affects(request.selection.guildId)) {
-                    request.invalid = true
-                    request.gapped = true
-                }
+            this.pause(affects)
             for (const kind of kinds)
                 for (const entry of this.#entries[kind].values())
                     if (affects(entry.selection.guildId)) this.#remove(entry)
         }
         this.#schedule()
+    }
+
+    /**
+     * Keep in-flight reads for the affected guilds from storing their responses after the gateway connection was lost,
+     * while retained entries stay. A successful Resume replays every missed dispatch, which keeps those entries current
+     */
+    pause(affects: (guildId: string | null | undefined) => boolean) {
+        for (const request of this.#requests)
+            if (affects(request.selection.guildId)) {
+                request.invalid = true
+                request.gapped = true
+            }
     }
 
     close() {

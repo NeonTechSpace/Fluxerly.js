@@ -59,7 +59,7 @@ export function setupCommandPreferences() {
         updateBlocks()
     })
 
-    document.addEventListener("click", async (event) => {
+    async function copyCommand(event: MouseEvent) {
         const target = event.target
         if (!(target instanceof Element)) return
         const button = target.closest<HTMLButtonElement>("button[data-command-copy]")
@@ -74,6 +74,10 @@ export function setupCommandPreferences() {
             status.textContent = code.textContent === command ? "Copied" : "Previous command copied"
         } catch { status.textContent = "Copy failed. Select and copy the command manually" }
         finally { button.disabled = false }
+    }
+
+    document.addEventListener("click", (event) => {
+        copyCommand(event).catch((error: unknown) => console.error("Command copy failed", error))
     })
 
     window.addEventListener("storage", (event) => {

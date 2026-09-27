@@ -1,14 +1,18 @@
+// Member selection, presences and streamed failure/recovery for member chunk requests: overflow, a test-owned
+// dropped reply, cancellation, one interruption of this process's own socket and client closure.
+// Creates no journal and no remote resources, and changes no server content
 import assert from "node:assert/strict"
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
-import { Cause, Effect, Exit, Scope, Stream } from "effect"
+import { Effect, Exit, Scope, Stream } from "effect"
 import WebSocket from "ws"
+import { acquireLock, finalizeOwned, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createFailureClassifier, createOutcomeReporter } from "./support/reporting.js"
+import { fromExit, settleExit as value } from "./support/results.js"
+import { createSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 const absentId = "18446744073709551615"
-const report = (check, passed = true, details = {}) => console.log(JSON.stringify({ mode, check, passed, ...details }))
+const report = createOutcomeReporter({ mode })
 let stage = "configuration"
 let lock
 let client
@@ -18,20 +22,6 @@ let token
 let guildId
 let botId
 
-function fromExit(exit) {
-    if (Exit.isSuccess(exit)) return exit.value
-    if (Cause.hasDies(exit.cause)) throw Error("Unexpected SDK defect")
-    if (Cause.hasInterruptsOnly(exit.cause)) throw { _tag: "TestInterrupted" }
-    const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-    if (failure?._tag === "Fail") throw failure.error
-    throw Error("Unexpected operation outcome")
-}
-async function value(operation) {
-    if (Effect.isEffect(operation)) return fromExit(await Effect.runPromiseExit(operation))
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
 const outcome = (operation) =>
     operation.then(
         (value) => ({ ok: true, value }),
@@ -42,33 +32,12 @@ function expectFailure(result, reason, tag = "MemberChunkError") {
     assert.equal(result.error?._tag, tag)
     if (reason !== undefined) assert.equal(result.error.reason, reason)
 }
-async function api(path) {
-    const response = await fetch(`https://api.fluxer.app/v1${path}`, {
-        method: "GET",
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: { Authorization: `Bot ${token}` },
-    })
-    assert.equal(response.status, 200)
-    return response.json()
-}
-function safeFailure(error) {
-    const reasons = new Set([
-        "input",
-        "notConnected",
-        "busy",
-        "response",
-        "overflow",
-        "timeout",
-        "connectionLost",
-        "rateLimit",
-    ])
-    const tags = new Set(["MemberChunkError", "CancelledError", "ClientClosedError", "TestInterrupted"])
-    return {
-        category: tags.has(error?._tag) ? error._tag : error?.code === "ERR_ASSERTION" ? "assertion" : "unexpected",
-        ...(reasons.has(error?.reason) ? { reason: error.reason } : {}),
-    }
-}
+const sandboxApi = createSandboxApi({ fetch, token: () => token, accept: (response) => response.status === 200 })
+const api = async (path) => (await sandboxApi("GET", path)).data
+const safeFailure = createFailureClassifier({
+    tags: ["MemberChunkError", "CancelledError", "ClientClosedError", "TestInterrupted"],
+    reasons: ["input", "notConnected", "busy", "response", "overflow", "timeout", "connectionLost", "rateLimit"],
+})
 
 function observeGateway() {
     const emitDescriptor = Object.getOwnPropertyDescriptor(WebSocket.prototype, "emit")
@@ -214,25 +183,17 @@ const watchdog = setTimeout(() => {
 try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
-    assert.match(applicationId ?? "", /^[1-9][0-9]*$/)
+    lock = acquireLock()
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
     stage = "sandbox_identity"
-    const [application, bot, guild] = await Promise.all([
-        api("/oauth2/applications/@me"),
-        api("/users/@me"),
-        api(`/guilds/${guildId}`),
-    ])
-    assert.equal(application.id, applicationId)
-    assert.equal(bot.bot, true)
-    assert.equal(application.bot?.id, bot.id)
-    assert.equal(guild.id, guildId)
+    const { user: bot } = await verifySandboxIdentity(api, {
+        applicationId: sandbox.applicationId,
+        guildId,
+        applicationPath: "/oauth2/applications/@me",
+        concurrent: true,
+    })
     botId = bot.id
     assert.match(botId, /^[1-9][0-9]*$/)
     const botMember = await api(`/guilds/${guildId}/members/${botId}`)
@@ -241,7 +202,7 @@ try {
     assert.ok(Array.isArray(baseline) && baseline.length > 0 && baseline.length < 1_000)
     report(stage, true, { serverMutations: false })
     const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
-    if (mode === "default") client = await value(sdk.createClient({ token }))
+    if (mode === "default") client = sdk.createClient({ token })
     else {
         scope = Scope.makeUnsafe()
         client = await value(sdk.createClient({ token }).pipe(Scope.provide(scope)))
@@ -368,38 +329,25 @@ try {
     report(stage, false, safeFailure(error))
     process.exitCode = 1
 } finally {
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        report("client_cleanup", false, { finalizer, lockRetained: lock !== undefined })
-        process.exitCode = 1
+    // Keep the lock and deadline if a failed owned finalizer may have left a writer or socket alive
+    try {
+        await finalizeOwned({
+            writers: [
+                client && client.state !== "Closed" && ["client_shutdown", () => value(client.shutdown())],
+                scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+            ],
+            checks: [["socket_verification", () => watch?.verifyClosed()]],
+            lock,
+            watchdog,
+            onFailure: (finalizer) => {
+                report("client_cleanup", false, {
+                    finalizer: finalizer === "sandbox_lock" ? "sandbox_lock_cleanup" : finalizer,
+                    lockRetained: lock !== undefined,
+                })
+                process.exitCode = 1
+            },
+        })
+    } finally {
+        watch?.restore()
     }
-    if (client && client.state !== "Closed")
-        try {
-            await value(client.shutdown())
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            watch?.verifyClosed()
-        } catch {
-            retainEvidence("socket_verification")
-        }
-    watch?.restore()
-    if (quiescent && lock !== undefined)
-        try {
-            assert.equal(readFileSync(lockPath, "utf8"), String(process.pid))
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            retainEvidence("sandbox_lock_cleanup")
-        }
-    if (quiescent) clearTimeout(watchdog)
 }

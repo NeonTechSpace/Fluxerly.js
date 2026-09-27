@@ -1,6 +1,13 @@
-import { Cause, Effect, Exit } from "effect"
+/**
+ * Cause-preserving Effect helpers and the sanitized transport error.
+ * Invariant: Mapping and deadlines never drop defects or cleanup causes, and transport causes keep only an error code.
+ * Implements [SDK contracts: Results and failures](/docs/SDK-CONTRACTS.md#results-and-failures)
+ */
+import * as Cause from "effect/Cause"
+import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
 
-// Effect.mapError drops defects in mixed causes; ordinary catchCause can skip mapping on interruption
+// Effect.mapError drops defects in mixed causes, and ordinary catchCause can skip mapping on interruption
 export const mapFailureCause =
     <E, E2>(map: (error: E) => E2) =>
     <A, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E2, R> =>
@@ -35,3 +42,24 @@ export const withDeadline =
                 }),
             )
         })
+
+function transportCode(error: unknown, depth = 0): string | undefined {
+    if (typeof error !== "object" || error === null || depth > 3) return undefined
+    const code = (error as { code?: unknown }).code
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{1,63}$/.test(code)) return code
+    return transportCode((error as { cause?: unknown }).cause, depth + 1)
+}
+
+/** A sanitized network failure kept as an error's cause. It keeps the transport code, such as ECONNRESET,
+ * but not the transport message, which can contain URLs, credentials or upstream text
+ */
+export class TransportError extends Error {
+    /** Transport error code such as ECONNREFUSED or UND_ERR_CONNECT_TIMEOUT, when the runtime supplied one */
+    readonly code: string | undefined
+    constructor(source: unknown, what = "network request") {
+        const code = transportCode(source)
+        super(`The ${what} failed${code === undefined ? "" : ` (${code})`}`)
+        this.name = "TransportError"
+        this.code = code
+    }
+}

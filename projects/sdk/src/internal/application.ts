@@ -1,7 +1,12 @@
+/**
+ * Bot application request: Validates the current-application read and projects its response.
+ * Invariant: The operation is a bot-token read, and the projection keeps only the listed public application fields.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type { BotApplication } from "#sdk/application"
-import { identifier, record } from "./message.js"
+import { identifier, record } from "./decode/primitives.js"
 
-/** Validated current-application request; shared REST owns admission, retries, and cleanup */
+/** Validated current-application request. Shared REST owns admission, retries, and cleanup */
 export interface BotApplicationRequest<A> {
     readonly path: string
     readonly method: "GET"

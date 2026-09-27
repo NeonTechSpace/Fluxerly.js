@@ -1,3 +1,8 @@
+/**
+ * Attachment transfer sources: Exact-length readers over copied bytes, sized files and finite streams.
+ * Invariant: Each source verifies its exact byte count and awaits acquired reader cleanup without buffering unknown-length
+ * streams, and only copied byte sources can replay after an inline rate-limit rejection. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import { setImmediate as yieldToHost } from "node:timers/promises"
 import type { AttachmentStreamReadResult, AttachmentStreamReader, AttachmentStreamSource } from "#sdk/attachments"
 import type { FilePart } from "./attachments.js"
@@ -14,7 +19,7 @@ export type AttachmentTransferBody = {
 /** Marks reader finalization failures so the REST boundary does not present them as transport failures */
 export class AttachmentTransferCleanupError extends Error {
     constructor(cause: unknown) {
-        super("Attachment source finalization failed", { cause })
+        super("Closing the attachment file or stream reader failed", { cause })
         this.name = "AttachmentTransferCleanupError"
     }
 }
@@ -25,7 +30,7 @@ export class AttachmentTransferVerificationCleanupError extends Error {
         readonly verification: unknown,
         readonly cleanup: unknown,
     ) {
-        super("Attachment source verification and cleanup failed", { cause: cleanup })
+        super("The attachment did not supply its declared size, and closing its reader also failed", { cause: cleanup })
         this.name = "AttachmentTransferVerificationCleanupError"
     }
 }
@@ -75,7 +80,7 @@ async function completeCleanup(actions: readonly (() => void | PromiseLike<void>
     if (failures.length > 1) throw new AggregateError(failures, "Attachment source cleanup failed")
 }
 
-/** One operation-owned exact-length source. Byte inputs are copied before construction; file and stream sources remain caller-owned outside an acquired reader */
+/** One operation-owned exact-length source. Byte inputs are copied before construction, while file and stream sources remain caller-owned outside an acquired reader */
 export class AttachmentTransferSource {
     readonly size: number
     /** Byte inputs are snapshot-owned and can recreate a fully consumed inline body after a confirmed rate-limit rejection */
@@ -114,7 +119,8 @@ export class AttachmentTransferSource {
         if (this.#streamReader) return this.#streamReader
         if (this.file.source.kind !== "stream") throw new Error("Attachment source is not a stream")
         const reader = this.file.source.stream.getReader()
-        if (!isAttachmentStreamReader(reader)) throw new Error("Invalid attachment stream reader")
+        if (!isAttachmentStreamReader(reader))
+            throw new Error("The attachment stream getReader() result must have read, cancel, and releaseLock methods")
         this.#streamReader = reader
         return reader
     }
@@ -126,7 +132,7 @@ export class AttachmentTransferSource {
             this.#streamPending = await readNonempty(
                 this.#streamReaderForRead(),
                 () => this.#closed,
-                "Invalid attachment stream result",
+                "The attachment stream reader returned a result that is not { done, value } with Uint8Array bytes",
             )
         }
         return this.#streamPending
@@ -206,13 +212,20 @@ export class AttachmentTransferSource {
             if (closed) throw new Error("Attachment source closed")
             if (!reader) {
                 const candidate = stream.getReader()
-                if (!isAttachmentStreamReader(candidate)) throw new Error("Invalid attachment file stream reader")
+                if (!isAttachmentStreamReader(candidate))
+                    throw new Error(
+                        "The attachment file stream getReader() result must have read, cancel, and releaseLock methods",
+                    )
                 reader = candidate
             }
             if (!pending || pendingOffset === pending.byteLength) {
                 pending = undefined
                 pendingOffset = 0
-                pending = await readNonempty(reader, () => closed, "Invalid attachment file stream result")
+                pending = await readNonempty(
+                    reader,
+                    () => closed,
+                    "The attachment file stream reader returned a result that is not { done, value } with Uint8Array bytes",
+                )
             }
             return pending
         }
@@ -325,7 +338,8 @@ export class AttachmentTransferSource {
         }
         if (this.file.source.kind === "file") {
             const slice = this.file.source.file.slice(offset, offset + size)
-            if (!slice || typeof slice.stream !== "function") throw new Error("Invalid attachment file slice")
+            if (!slice || typeof slice.stream !== "function")
+                throw new Error("The attachment file slice() result must have a stream method")
             return this.#rangeStream(slice.stream(), size)
         }
         return this.#streamRange(offset, size)

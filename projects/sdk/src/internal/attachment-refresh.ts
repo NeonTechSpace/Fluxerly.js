@@ -1,8 +1,13 @@
+/**
+ * Attachment URL refresh request: Validates one ordered batch of attachment URLs and decodes the refreshed URLs.
+ * Invariant: Requested strings are never parsed, normalized or dereferenced, and results keep the request order.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type { RefreshedAttachmentUrl } from "#sdk/attachments"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
-import { record } from "./message.js"
+import { record } from "./decode/primitives.js"
 
-/** Validated attachment URL refresh request; shared REST owns admission, deadlines and bounded response parsing */
+/** Validated attachment URL refresh request. Shared REST owns admission, deadlines and bounded response parsing */
 export interface AttachmentRefreshRequest {
     readonly path: "/attachments/refresh-urls"
     readonly method: "POST"

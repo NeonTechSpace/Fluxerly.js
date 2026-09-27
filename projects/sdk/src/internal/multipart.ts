@@ -1,3 +1,8 @@
+/**
+ * Multipart framing for inline attachment uploads.
+ * Invariant: The body streams on demand without concatenating file bytes or adding an SDK file copy, and declares its exact length.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import { randomUUID } from "node:crypto"
 import type { EncodedBody, FilePart } from "./attachments.js"
 import {

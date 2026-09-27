@@ -1,3 +1,8 @@
+/**
+ * Message field selection shared by gateway and REST message projections.
+ * Invariant: The selection is snapshotted once, and one decoder serves every message projection for a client.
+ * Implements [SDK contracts: Public API model](/docs/SDK-CONTRACTS.md#public-api-model)
+ */
 import { ConfigurationError } from "#sdk/errors"
 import { decodeMessage } from "./message.js"
 import type { MessageCore, MessageField, MessageFields, SelectedMessage } from "#sdk/messages"
@@ -14,6 +19,7 @@ const fields: Record<MessageField, true> = {
     nonce: true,
     webhookId: true,
     pinned: true,
+    tts: true,
     createdAt: true,
     editedAt: true,
     type: true,
@@ -37,11 +43,17 @@ const fields: Record<MessageField, true> = {
 export function snapshotMessageFields(value: unknown): ReadonlySet<MessageField> | undefined {
     if (value === undefined) return undefined
     if (!Array.isArray(value))
-        throw new ConfigurationError("messageFields", "messageFields must be an array of known Message field names")
+        throw new ConfigurationError(
+            "messageFields",
+            "The option messageFields must be an array of known Message field names",
+        )
     const selected = new Set<MessageField>()
     for (const field of value) {
         if (typeof field !== "string" || !Object.hasOwn(fields, field))
-            throw new ConfigurationError("messageFields", "messageFields must be an array of known Message field names")
+            throw new ConfigurationError(
+                "messageFields",
+                "The option messageFields must be an array of known Message field names",
+            )
         selected.add(field as MessageField)
     }
     return selected

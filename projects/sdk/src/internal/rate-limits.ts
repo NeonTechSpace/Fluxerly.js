@@ -1,3 +1,11 @@
+/**
+ * Learned rate-limit buckets and aliases for one REST owner.
+ * Invariant: The owner bounds how many aliases and windows it keeps. Unknown hashes group conservatively within their bucket, and
+ * unbound resource parameters or exhausted tracking keep conservative client-wide waits. Known active pauses survive remapping or
+ * eviction, an older response never overwrites a newer alias, alias keys never keep credential-bearing URLs or query strings, and
+ * no learning crosses REST owners, credentials or instance selections. History and single-message fetches use separate
+ * provisional groups while sharing global admission. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import { createHash } from "node:crypto"
 import { rateLimitParameters } from "./rate-limit-templates.js"
 
@@ -296,4 +304,39 @@ export class RateLimits {
         this.#buckets.clear()
         this.#overflowUntil = 0
     }
+}
+
+/**
+ * A log-safe template for a caller-supplied path, whose segments the SDK did not build: The routeTemplate placeholders,
+ * then every remaining segment that is not a short lower-case word, such as a code or credential, becomes :value
+ */
+export function callerRouteTemplate(path: string): string {
+    return routeTemplate(path)
+        .split("/")
+        .map((part) =>
+            part === "" ||
+            part.startsWith(":") ||
+            (part.length <= 32 && /^(?:@me|[a-z]+(?:[-_][a-z]+)*\d?)$/.test(part))
+                ? part
+                : ":value",
+        )
+        .join("/")
+}
+
+/** A log-safe route template: IDs, invite codes, emoji and webhook tokens become placeholders and the query is removed */
+export function routeTemplate(path: string, webhookId?: string): string {
+    const pathname = `${webhookId === undefined ? "" : "/webhooks/:id/:token"}${path.split("?")[0]}`
+    const parts = pathname.split("/")
+    return parts
+        .map((part, index) => {
+            const previous = parts[index - 1]
+            if (part === "" || part.startsWith(":")) return part
+            if (/^\d+$/.test(part)) return ":id"
+            if (previous === "invites" || previous === "vanity-url") return ":code"
+            if (previous === "reactions") return ":emoji"
+            if (index > 1 && parts[index - 2] === "webhooks" && previous !== undefined && /^\d+$/.test(previous))
+                return ":token"
+            return /^[a-z@][a-z0-9@._-]*$/i.test(part) ? part : ":value"
+        })
+        .join("/")
 }

@@ -1,45 +1,34 @@
+// Invite creation defaults, invite gateway events, lost create-response reconciliation, revocation and missing-code
+// handling in a test-owned channel.
+// Journal `.env.test.invites.local` records sandbox and bot identity, a marker and the test channel's pending state
+// and ID, never invite codes. An existing journal is recovered before a new run: each remaining invite's destination
+// and creator are verified before revocation, then the channel is removed and its absence and the absence of its
+// invites are verified
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { readFileSync, writeFileSync, openSync, closeSync, writeSync, existsSync, unlinkSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { Effect, Scope, Exit } from "effect"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.invites.local", import.meta.url)
+const journalFile = openJournal("invites")
 let lock, journal, client, scope, token, guildId, botId
 let verified = false,
     stage = "configuration"
-const report = (check) => console.log(JSON.stringify({ mode, check, passed: true }))
+const report = createReporter({ mode }, { passed: true })
 // The journal contains destination identity only, never invite codes
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
-async function value(operation) {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
-async function api(method, path, body) {
-    const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-        method,
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: {
-            Authorization: `Bot ${token}`,
-            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    })
-    const data = await response.json().catch(() => null)
-    assert.ok(response.ok || response.status === 404, `Sandbox HTTP ${response.status}`)
-    return { status: response.status, data }
-}
+const save = () => journalFile.save(journal)
+const api = createSandboxApi({ fetch: rawFetch, token: () => token, accept: successOrNotFound })
 async function cleanup() {
     if (!verified || !journal) return
     assert.equal(journal.guildId, guildId)
@@ -76,7 +65,7 @@ async function cleanup() {
         assert.ok(Array.isArray(invites))
         assert.ok(!invites.some((item) => item.channel.id === journal.channelId))
     }
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("test_invites_revoked_and_channel_removed")
 }
@@ -85,31 +74,22 @@ const watchdog = setTimeout(() => {
     process.exit(1)
 }, 180_000).unref()
 try {
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token)
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
+    lock = acquireLock()
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
     stage = "sandbox_identity"
-    const app = await api("GET", "/applications/@me"),
-        self = await api("GET", "/users/@me")
-    assert.equal(app.data.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(app.data.bot?.id, self.data.id)
-    assert.equal(self.data.bot, true)
-    assert.equal((await api("GET", `/guilds/${guildId}`)).data.id, guildId)
-    botId = self.data.id
+    botId = (await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)).botId
     verified = true
     report(stage)
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
     }
     journal = { guildId, botId, marker: `fi_${randomUUID().replaceAll("-", "").slice(0, 16)}`, channelPending: false }
     save()
     const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
-    if (mode === "default") client = sdk.createClient({ token })._unsafeUnwrap()
+    if (mode === "default") client = sdk.createClient({ token })
     else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(sdk.createClient({ token }).pipe(Scope.provide(scope)))
@@ -168,7 +148,7 @@ try {
         ["inviteCreate", observeCreate],
         ["inviteDelete", observeDelete],
     ]) {
-        if (mode === "default") client.on(event, observe)._unsafeUnwrap()
+        if (mode === "default") client.on(event, observe)
         else
             await Effect.runPromise(
                 client
@@ -210,9 +190,9 @@ try {
         assert.equal(remote.guild.id, guildId)
         assert.equal((await value(client.invites.fetch(invite.code))).code, invite.code)
     }
-    assert.equal((await value(client.invites.fetchChannel(channel.id))).length, 2)
+    assert.equal((await value(client.invites.fetchForChannel(channel.id))).length, 2)
     assert.equal(
-        (await value(client.invites.fetchGuild(guildId))).filter((item) => item.channel.id === channel.id).length,
+        (await value(client.invites.fetchForGuild(guildId))).filter((item) => item.channel.id === channel.id).length,
         2,
     )
     report(stage)
@@ -248,7 +228,7 @@ try {
     assert.equal((await api("GET", `/invites/${encodeURIComponent(first.code)}`)).status, 404)
     await assert.rejects(value(client.invites.fetch(first.code)), (error) => error.status === 404)
     await assert.rejects(value(client.invites.delete(first.code)), (error) => error.status === 404)
-    assert.equal((await value(client.invites.fetchChannel(channel.id))).length, 2)
+    assert.equal((await value(client.invites.fetchForChannel(channel.id))).length, 2)
     assert.equal(observationOverflow, undefined, observationOverflow)
     report(stage)
 } catch (error) {
@@ -265,57 +245,44 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({
-                mode,
-                stage: "client_cleanup",
-                passed: false,
-                finalizer,
-                journalRetained: journal !== undefined,
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exitCode = 1
+    const shutdown = async () => {
+        const closed = client.shutdown()
+        if (Effect.isEffect(closed)) await Effect.runPromise(closed)
+        else await closed
     }
-    if (client)
-        try {
-            const closed = client.shutdown()
-            if (Effect.isEffect(closed)) await Effect.runPromise(closed)
-            else await closed
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            await cleanup()
-        } catch {
-            console.error(
-                JSON.stringify({
-                    mode,
-                    stage: "resource_cleanup",
-                    passed: false,
-                    journalRetained: journal !== undefined,
-                }),
-            )
+    // Keep the journal, lock and deadline if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            client && ["client_shutdown", shutdown],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup,
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            if (finalizer === "cleanup")
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "resource_cleanup",
+                        passed: false,
+                        journalRetained: journal !== undefined,
+                    }),
+                )
+            else if (finalizer === "sandbox_lock")
+                console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
+            else
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "client_cleanup",
+                        passed: false,
+                        finalizer,
+                        journalRetained: journal !== undefined,
+                        lockRetained: lock !== undefined,
+                    }),
+                )
             process.exitCode = 1
-        }
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
-            process.exitCode = 1
-        }
-    }
-    if (quiescent) clearTimeout(watchdog)
+        },
+    })
 }

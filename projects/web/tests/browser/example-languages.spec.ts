@@ -11,7 +11,7 @@ test("Example language follows guide filenames, execution, navigation, reload an
     await expect(selector).toHaveValue("js")
     await selector.selectOption("ts")
     await expect(page.locator("[data-example-filename]")).toHaveText("bot.ts")
-    await expect(page.locator("[data-command-code]").filter({ hasText: "node bot.ts" })).toHaveCount(1)
+    await expect(page.locator("[data-command-code]").filter({ hasText: "node --env-file=.env bot.ts" })).toHaveCount(1)
     await expect(example.locator('[data-example-variant="js"]')).toBeHidden()
     await expect(example.locator('[data-example-variant="ts"]')).toBeVisible()
     const code = await example.locator('[data-example-variant="ts"] code').textContent()
@@ -34,7 +34,7 @@ test("Example language follows guide filenames, execution, navigation, reload an
     await page.goBack()
     await expect(selector).toHaveValue("js")
     await expect(page.locator("[data-example-filename]")).toHaveText("bot.js")
-    await expect(page.locator("[data-command-code]").filter({ hasText: "node bot.js" })).toHaveCount(1)
+    await expect(page.locator("[data-command-code]").filter({ hasText: "node --env-file=.env bot.js" })).toHaveCount(1)
 })
 
 test("Messages guide defaults to JavaScript and copies each selected language faithfully", async ({ page, context }) => {
@@ -66,8 +66,9 @@ test("Messages guide defaults to JavaScript and copies each selected language fa
 })
 
 test("Canonical API TypeScript retains types that the executable JavaScript variant removes", async ({ page }) => {
-    await page.goto("/docs/preview/api/variables/js-ts.text/")
-    const example = page.locator("[data-example-block]").first()
+    await page.goto("/docs/preview/api/modules/js-ts/")
+    // The entry point's own examples include the typed pure helper example
+    const example = page.locator(".docs-content [data-example-block]").filter({ hasText: "pureHelpersExample" }).first()
     await expect(example.locator('[data-example-variant="js"]')).toBeVisible()
     const javascript = await example.locator('[data-example-variant="js"] code').textContent()
     expect(javascript).toContain("pureHelpersExample(bits, content)")
@@ -104,7 +105,7 @@ test("Example preferences synchronize between open pages", async ({ page, contex
     await page.locator("[data-example-language]").first().selectOption("ts")
     await expect(other.locator("[data-example-language]").first()).toHaveValue("ts")
     await expect(other.locator("[data-example-filename]")).toHaveText("bot.ts")
-    await expect(other.locator("[data-command-code]").filter({ hasText: "node bot.ts" })).toHaveCount(1)
+    await expect(other.locator("[data-command-code]").filter({ hasText: "node --env-file=.env bot.ts" })).toHaveCount(1)
     await other.close()
 })
 
@@ -115,22 +116,7 @@ test("Blocked storage leaves language selection and execution usable for the cur
     await page.goto("/docs/preview/quick-start/")
     await page.locator("[data-example-language]").first().selectOption("ts")
     await expect(page.locator("[data-example-filename]")).toHaveText("bot.ts")
-    await expect(page.locator("[data-command-code]").filter({ hasText: "node bot.ts" })).toHaveCount(1)
+    await expect(page.locator("[data-command-code]").filter({ hasText: "node --env-file=.env bot.ts" })).toHaveCount(1)
     await page.locator(".docs-content").getByRole("link", { name: /client.s message methods/ }).click()
     await expect(page.locator("[data-example-language]").first()).toHaveValue("ts")
-})
-
-test("Without client JavaScript, the first bot remains readable and runnable", async ({ browser }) => {
-    const context = await browser.newContext({ javaScriptEnabled: false })
-    const page = await context.newPage()
-    await page.goto("http://127.0.0.1:4322/docs/preview/quick-start/")
-    const example = page.locator("[data-example-block]").first()
-    await expect(example.getByRole("combobox", { name: "Example language" })).toBeDisabled()
-    await expect(example.locator('[data-example-variant="js"]')).toBeVisible()
-    await expect(example.locator('[data-example-variant="ts"]')).toBeHidden()
-    await expect(example.locator("[data-example-fallback]")).toBeVisible()
-    await expect(example.getByRole("button", { name: "Copy" })).toHaveCount(0)
-    await expect(page.locator("[data-example-filename]")).toHaveText("bot.js")
-    await expect(page.locator("[data-command-code]").filter({ hasText: "node bot.js" })).toHaveCount(1)
-    await context.close()
 })

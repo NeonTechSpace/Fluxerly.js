@@ -1,3 +1,8 @@
+/**
+ * User and private-conversation operations and projections.
+ * Invariant: Projections keep the public-field allowlist shared by explicit reads and complete user observations.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type {
     DirectMessageChannel,
     DirectMessageGroupEdit,
@@ -9,8 +14,9 @@ import type {
 } from "#sdk/users"
 import type { MessageCore } from "#sdk/messages"
 import type { MessageDecoder } from "./message-fields.js"
-import { decodeMessage, identifier, record } from "./message.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { decodeMessage } from "./message.js"
+import { identifier, record, safeInteger as integer } from "./decode/primitives.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { channelName, normalizedText } from "./field-text.js"
 
 /** Validated requests executed by the client's shared REST scheduler */
@@ -32,8 +38,8 @@ export interface UserRequest<A> {
 type UserValidationResult<A> = UserRequest<A> | InputValidationFailure
 
 const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
-const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value)
 const text = (value: unknown, min: number, max: number): value is string =>
+    // oxlint-disable-next-line typescript/no-misused-spread -- length limits count Unicode code points
     typeof value === "string" && [...value].length >= min && [...value].length <= max
 
 /** Public-field allowlist, shared by explicit reads and complete user observations */
@@ -127,8 +133,10 @@ export function userProfile(id: string, query?: UserProfileQuery): UserValidatio
     if (!identifier(id)) return inputValidationFailure("userId", "format", "User IDs must be decimal strings")
     if (query !== undefined && !record(query))
         return inputValidationFailure("query", "type", "User profile query must be an object")
-    if (record(query) && Object.keys(query).some((key) => key !== "guildId"))
-        return inputValidationFailure("query", "allowedFields", "User profile query may contain only guildId")
+    const unsupported = record(query)
+        ? unsupportedKeyFailure(query, ["guildId"], "query", "the user profile query")
+        : undefined
+    if (unsupported) return unsupported
     if (record(query) && query.guildId !== undefined && !identifier(query.guildId))
         return inputValidationFailure("query.guildId", "format", "Guild IDs must be decimal strings")
     const guildId = typeof query?.guildId === "string" ? query.guildId : undefined
@@ -200,7 +208,11 @@ export function directMessageOpen(id: string): UserValidationResult<DirectMessag
     if (!identifier(id)) return inputValidationFailure("userId", "format", "User IDs must be decimal strings")
     const json = JSON.stringify({ recipient_id: id })
     if (Buffer.byteLength(json) > 4_194_304)
-        return inputValidationFailure("userId", "size", "Direct message open input must fit the request byte limit")
+        return inputValidationFailure(
+            "userId",
+            "size",
+            "Direct message request must not exceed 4,194,304 encoded bytes",
+        )
     return {
         majorId: "@me",
         path: "/users/@me/channels",
@@ -270,6 +282,7 @@ export function directMessageLatestMessages(
     const count = ids.length
     if (count === 0 || count > 100)
         return inputValidationFailure("channelIds", "length", "Latest-message reads require 1 through 100 channel IDs")
+    // oxlint-disable-next-line unicorn/no-new-array -- preallocates the counted length once, and the loop below assigns every index
     const channelIds = new Array<string>(count)
     for (let index = 0; index < count; index++) channelIds[index] = ids[index]
     if (channelIds.some((id) => !identifier(id)))
@@ -314,25 +327,28 @@ export function directMessageEdit(
     if (!record(input)) return inputValidationFailure("input", "type", "Group DM input must be an object")
     if (Object.keys(input).length === 0)
         return inputValidationFailure("input", "required", "Group DM input must contain at least one field")
-    if (Object.keys(input).some((key) => !["name", "icon", "ownerId", "nicknames"].includes(key)))
-        return inputValidationFailure(
-            "input",
-            "allowedFields",
-            "Group DM input may contain only name, icon, ownerId, and nicknames",
-        )
-    if (
-        (input.name !== undefined && input.name !== null && !channelName(input.name)) ||
-        (input.icon !== undefined &&
-            input.icon !== null &&
-            (typeof input.icon !== "string" ||
-                !/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(input.icon))) ||
-        (input.ownerId !== undefined && !identifier(input.ownerId))
+    const unsupported = unsupportedKeyFailure(
+        input,
+        ["name", "icon", "ownerId", "nicknames"],
+        "input",
+        "the group DM input",
     )
+    if (unsupported) return unsupported
+    if (input.name !== undefined && input.name !== null && !channelName(input.name))
         return inputValidationFailure(
             "input",
             "format",
-            "Group DM fields must satisfy their documented types, lengths, image format, and ID format",
+            "Group DM name must be null or contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
         )
+    if (
+        input.icon !== undefined &&
+        input.icon !== null &&
+        (typeof input.icon !== "string" ||
+            !/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(input.icon))
+    )
+        return inputValidationFailure("input", "format", "Group DM icon must be null or a base64 image data URI")
+    if (input.ownerId !== undefined && !identifier(input.ownerId))
+        return inputValidationFailure("input", "format", "Group DM owner IDs must be decimal strings")
     if (
         input.nicknames !== undefined &&
         input.nicknames !== null &&
@@ -344,10 +360,15 @@ export function directMessageEdit(
         return inputValidationFailure(
             "nicknames",
             "format",
-            "Group DM nicknames must map decimal user IDs to null or nonempty strings of at most 32 UTF-16 code units after provider normalization",
+            "Group DM nicknames must map decimal user IDs to null or nonempty strings of at most 32 UTF-16 code units after Fluxer's normalization",
         )
     const json = JSON.stringify({ name: input.name, icon: input.icon, owner_id: input.ownerId, nicks: input.nicknames })
-    if (json === "{}") return inputValidationFailure("input", "required", "Group DM input must encode a change")
+    if (json === "{}")
+        return inputValidationFailure(
+            "input",
+            "required",
+            "Group DM input must set at least one field to a defined value",
+        )
     if (Buffer.byteLength(json) > 4_194_304)
         return inputValidationFailure("input", "size", "Group DM input must not exceed 4,194,304 encoded bytes")
     const current = directMessageFetch(id)

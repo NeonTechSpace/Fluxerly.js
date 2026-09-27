@@ -1,13 +1,18 @@
+/**
+ * Reaction operations, reaction user pages and reaction gateway projections.
+ * Invariant: Reaction events never change cached message snapshots.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type { ReactionEmoji, ReactionEmojiInput, ReactionTarget, ReactionUser, ReactionUsersPage } from "#sdk/reactions"
-import { inputValidationFailure } from "#sdk/input-validation"
+import { inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { format } from "#sdk/helpers"
-import { identifier, record } from "./message.js"
+import { identifier, record } from "./decode/primitives.js"
 
 export function encodeReactionUsersQuery(query: unknown) {
     const input = query === undefined ? {} : query
     if (!record(input)) return inputValidationFailure("query", "type", "Reaction user query must be an object")
-    if (Object.keys(input).some((key) => key !== "limit" && key !== "after"))
-        return inputValidationFailure("query", "allowedFields", "Reaction user query may contain only limit and after")
+    const unsupported = unsupportedKeyFailure(input, ["limit", "after"], "query", "the reaction user query")
+    if (unsupported) return unsupported
     const limitInput = input.limit
     const after = input.after
     const limit = limitInput === undefined ? 25 : limitInput
@@ -65,6 +70,7 @@ const name = (value: unknown): value is string =>
     value.length > 0 &&
     value.length <= 128 &&
     value.isWellFormed() &&
+    // oxlint-disable-next-line no-control-regex -- rejects control characters and spaces in emoji names
     !/[\x00-\x20\x7f]/.test(value)
 
 export function resolveReactionEmoji(
@@ -72,7 +78,7 @@ export function resolveReactionEmoji(
 ): string | { readonly name: string; readonly id: string } | undefined {
     if (typeof value === "string") {
         if (!value.startsWith("<")) return name(value) && !/[%/:<>]/.test(value) ? value : undefined
-        const parsed = format.parseCustomEmoji(value)
+        const parsed = format.tryParseCustomEmoji(value)
         if (parsed.isErr()) return undefined
         value = parsed.value
     }

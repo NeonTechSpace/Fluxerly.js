@@ -1,7 +1,7 @@
 name: Check
 on:
   push:
-    branches: [main, 'codex/**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -10,8 +10,37 @@ concurrency:
   group: check-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 jobs:
-  workspace:
-    name: Workspace checks
+  # Identical git trees need one full Check, so a run for content that already passed reuses that result
+  reuse:
+    name: Reuse a passing Check for identical content
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      reused: ${{ steps.reuse.outputs.reused }}
+      run_url: ${{ steps.reuse.outputs.run_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup
+        id: setup
+        with:
+          install: 'false'
+          cache: 'false'
+      - name: Find an earlier passing Check for the same git tree
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node projects/release/reuse.js
+  sdk:
+    name: SDK checks
+    needs: reuse
+    # A failed reuse lookup still runs the full job
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -19,25 +48,85 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         id: setup
-      - run: pnpm check
-        id: workspace
+      - name: Check SDK formatting, build, types, runtime and packed consumers
+        id: sdk
+        run: pnpm --filter @neontechspace/fluxerly check
         working-directory: projects
-      - name: Summarize workspace checks
+      - name: Summarize SDK checks
         if: always()
-        shell: bash
-        env:
-          SUMMARY_KIND: workspace
-          SUMMARY_STEPS: ${{ toJSON(steps) }}
-        run: |
-          if [ -f .github/scripts/workflow-summary.mjs ]; then
-            node .github/scripts/workflow-summary.mjs
-          else
-            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+        uses: $/.github/actions/summary
+        with:
+          title: SDK checks
+          steps: ${{ toJSON(steps) }}
+          next: Check the other jobs too. The check job combines every required result
+  tooling:
+    name: Website and release tooling checks
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup
+        id: setup
+      - name: Check release tooling types and tests
+        id: release
+        run: pnpm --filter @fluxerly/release test
+        working-directory: projects
+      - name: Build the SDK declarations for the documentation reference
+        id: build
+        run: pnpm --filter @neontechspace/fluxerly build
+        working-directory: projects
+      - name: Check the documentation website build, types and tests
+        id: website
+        run: pnpm --filter fluxerly-docs check
+        working-directory: projects
+      - name: Summarize website and release tooling checks
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Website and release tooling checks
+          steps: ${{ toJSON(steps) }}
+          next: Check the other jobs too. The check job combines every required result
+  workflows:
+    name: Workflow lint and security audit
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - name: Lint workflow syntax, expressions and shell scripts
+        id: actionlint
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # 1.7.12
+        with:
+          args: -color
+      - name: Audit workflow security
+        id: zizmor
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: 1.30.1
+          advanced-security: false
+          annotations: true
+      - name: Summarize workflow checks
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Workflow lint and security audit
+          steps: ${{ toJSON(steps) }}
+          next: Fix reported findings in the workflow source rather than suppressing them
   browser:
     name: Documentation browser checks
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -45,15 +134,32 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         id: setup
       - name: Build the SDK and documentation
         id: build
         run: pnpm build
         working-directory: projects
-      - name: Install browser
+      - name: Read the locked Playwright version
+        id: playwright
+        run: printf 'version=%s\n' "$(node --print 'require("./web/node_modules/@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
+        working-directory: projects
+      - name: Restore Playwright browsers
+        id: browser_cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      - name: Install browser and system dependencies
         id: browser_install
-        run: pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
+        env:
+          BROWSER_CACHED: ${{ steps.browser_cache.outputs.cache-hit }}
+        run: |
+          if [ "$BROWSER_CACHED" = true ]; then
+            pnpm --filter fluxerly-docs exec playwright install-deps chromium
+          else
+            pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
+          fi
         working-directory: projects
       - name: Check documentation in a browser
         id: browser
@@ -72,18 +178,17 @@ jobs:
           if-no-files-found: ignore
       - name: Summarize browser checks
         if: always()
-        shell: bash
-        env:
-          SUMMARY_KIND: browser
-          SUMMARY_STEPS: ${{ toJSON(steps) }}
-        run: |
-          if [ -f .github/scripts/workflow-summary.mjs ]; then
-            node .github/scripts/workflow-summary.mjs
-          else
-            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+        uses: $/.github/actions/summary
+        with:
+          title: Documentation browser checks
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Browser evidence artifact ID": ${{ toJSON(steps.browser_evidence.outputs.artifact-id) }}}
+          next: Live sandbox checks remain opt-in and separate from CI
   consumers:
     name: ${{ matrix.name }}
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -100,13 +205,19 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         id: setup
         with:
           runtime-policy: ${{ matrix.runtime-policy }}
       - name: Build the SDK on the selected Node version
         id: build
         run: pnpm --filter @neontechspace/fluxerly build
+        working-directory: projects
+      # The sdk job runs the suite on the development Node version, so this covers the declared engines floor
+      - name: Run the SDK test suite on the declared Node floor
+        id: test
+        if: matrix.runtime-policy == 'consumer-floor'
+        run: pnpm --filter @neontechspace/fluxerly test
         working-directory: projects
       - name: Check packed JavaScript and TypeScript consumers
         id: package
@@ -118,20 +229,15 @@ jobs:
         working-directory: projects
       - name: Summarize consumer compatibility
         if: always()
-        shell: bash
-        env:
-          SUMMARY_KIND: consumers
-          SUMMARY_STEPS: ${{ toJSON(steps) }}
-          SUMMARY_DETAILS: '{"runtimePolicy": ${{ toJSON(matrix.runtime-policy) }}}'
-        run: |
-          if [ -f .github/scripts/workflow-summary.mjs ]; then
-            node .github/scripts/workflow-summary.mjs
-          else
-            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+        uses: $/.github/actions/summary
+        with:
+          title: ${{ matrix.name }}
+          steps: ${{ toJSON(steps) }}
+          details: '{"Node runtime policy": ${{ toJSON(matrix.runtime-policy) }}}'
+          next: Both development and consumer-floor matrix jobs must pass before merging
   check:
     name: check
-    needs: [workspace, browser, consumers]
+    needs: [reuse, sdk, tooling, workflows, browser, consumers]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -139,13 +245,21 @@ jobs:
       - name: Summarize required checks and enforce the result
         shell: bash
         env:
-          WORKSPACE_RESULT: ${{ needs.workspace.result }}
+          REUSE_RESULT: ${{ needs.reuse.result }}
+          REUSED_RUN_URL: ${{ needs.reuse.outputs.run_url }}
+          SDK_RESULT: ${{ needs.sdk.result }}
+          TOOLING_RESULT: ${{ needs.tooling.result }}
+          WORKFLOWS_RESULT: ${{ needs.workflows.result }}
           BROWSER_RESULT: ${{ needs.browser.result }}
           CONSUMERS_RESULT: ${{ needs.consumers.result }}
         run: |
+          if [ "$REUSE_RESULT" = success ] && [ -n "$REUSED_RUN_URL" ]; then
+            printf '## Required checks\n\nReused %s, which passed for identical content. The check jobs did not run again\n' "$REUSED_RUN_URL" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           status=0
           printf '## Required checks\n\n| Check group | Result |\n| --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
-          for group in WORKSPACE BROWSER CONSUMERS; do
+          for group in SDK TOOLING WORKFLOWS BROWSER CONSUMERS; do
             variable="${group}_RESULT"
             result="${!variable}"
             printf '| %s | %s |\n' "$group" "$result" >> "$GITHUB_STEP_SUMMARY"
@@ -158,3 +272,45 @@ jobs:
           fi
           printf '\nCI does not publish packages or verify live sandbox behavior\n' >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+  release-trigger:
+    name: Release preparation trigger
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup
+        id: setup
+        with:
+          install: 'false'
+          cache: 'false'
+      - name: Detect a pushed SDK version that npm does not have
+        id: trigger
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: node projects/release/github.js prepare-trigger
+      - name: Dispatch Release prepare for the pushed source
+        id: dispatch
+        if: steps.trigger.outputs.prepare == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: gh workflow run release-prepare.yml --repo "$GITHUB_REPOSITORY" --ref main -f source_ref="$SOURCE_COMMIT"
+      - name: Summarize the release preparation trigger
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Release preparation trigger
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"SDK version": ${{ toJSON(steps.trigger.outputs.version) }}, "Release prepare dispatched": ${{ toJSON(steps.trigger.outputs.prepare) }}}
+          next: When dispatched, review the Release prepare run summary before publishing

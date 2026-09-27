@@ -4,20 +4,27 @@ import { createHash } from "node:crypto"
 import { copyFileSync, existsSync, globSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { parseVersion } from "../../release/planning.js"
 import { build } from "./build.js"
 
 const sdk = fileURLToPath(new URL("../", import.meta.url))
 
 export function validateVersion(version) {
-    assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(canary|rc)\.(0|[1-9]\d*))?$/)
+    parseVersion(version)
     return version
 }
 
 export function packageManifest(version) {
     const manifest = JSON.parse(readFileSync(join(sdk, "package.json"), "utf8"))
     assert.deepEqual(manifest.exports, {
-        ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
-        "./effect": { types: "./dist/effect.d.ts", import: "./dist/effect.js" },
+        ".": { types: "./dist/index.d.ts", import: "./dist/index.js", require: "./esm-only.cjs" },
+        "./effect": { types: "./dist/effect.d.ts", import: "./dist/effect.js", require: "./esm-only.cjs" },
+        "./testing": { types: "./dist/testing.d.ts", import: "./dist/testing.js", require: "./esm-only.cjs" },
+        "./effect/testing": {
+            types: "./dist/effect-testing.d.ts",
+            import: "./dist/effect-testing.js",
+            require: "./esm-only.cjs",
+        },
     })
     assert.deepEqual(Object.keys(manifest.imports), ["#sdk/*"])
     assert.equal(manifest.imports["#sdk/*"].default, "./dist/*.js")
@@ -45,12 +52,14 @@ export function commonFiles() {
         })
         .toSorted()
     assert.deepEqual(output, expected, "Build output differs from the source inventory; run the clean SDK build")
+    // oxlint-disable-next-line typescript/require-array-sort-compare -- relative path strings use the default code-unit order
     return [
         ...source,
         ...output,
         ...globSync("examples/starter/*.{js,ts}", { cwd: sdk }).map((path) => path.replaceAll("\\", "/")),
         "README.md",
         "consumer/AGENTS.md",
+        "esm-only.cjs",
         "LICENSE",
         ...(existsSync(join(sdk, "CHANGELOG.md")) ? ["CHANGELOG.md"] : []),
     ].toSorted()
@@ -71,6 +80,7 @@ export function prepareNpmPackage(target, version) {
     const files = copyCommonFiles(target)
     // pnpm pack serializes the shipped manifest this way; bind staging checksums to those exact archive bytes
     writeFileSync(join(target, "package.json"), JSON.stringify(manifest, null, 2))
+    // oxlint-disable-next-line typescript/require-array-sort-compare -- relative path strings use the default code-unit order
     return [...files, "package.json"].toSorted()
 }
 

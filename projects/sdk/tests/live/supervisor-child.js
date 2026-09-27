@@ -58,7 +58,7 @@ async function runDefault() {
     const { supervisor } = await import("@neontechspace/fluxerly")
     let client
     let assignment
-    let unsubscribe
+    let stateObserver
     let connectionProofStarted = false
 
     const sendConnectionProof = async () => {
@@ -66,9 +66,7 @@ async function runDefault() {
             const self = await client.users.fetchSelf()
             if (self.isErr()) await postSafely({ kind: "failed", shardId: assignment.shardIds[0] })
             else {
-                const cached = client.users.get(self.value.id)
-                assert.ok(cached.isOk())
-                assert.equal(cached.value?.id, self.value.id)
+                assert.equal(client.users.get(self.value.id)?.id, self.value.id)
                 await postSafely({
                     kind: "connected",
                     shardId: assignment.shardIds[0],
@@ -79,7 +77,7 @@ async function runDefault() {
         } catch {
             await postSafely({ kind: "failed", shardId: assignment.shardIds[0] })
         } finally {
-            unsubscribe?.()
+            stateObserver?.close()
         }
     }
 
@@ -89,7 +87,7 @@ async function runDefault() {
         configure: (configured) => {
             client = configured.client
             assignment = configured.assignment
-            unsubscribe = client.observeState((state) => {
+            stateObserver = client.observeState((state) => {
                 if (state !== "Connected" || connectionProofStarted) return
                 connectionProofStarted = true
                 return sendConnectionProof()
@@ -97,7 +95,7 @@ async function runDefault() {
             return postProof({ kind: "configured", shardId: assignment.shardIds[0] })
         },
     })
-    unsubscribe?.()
+    stateObserver?.close()
     if (result.isErr()) throw new Error("Child supervisor operation failed")
     assert.ok(client)
     assert.ok(assignment)

@@ -1,42 +1,38 @@
+// Discovery categories, status and directory search with independent readback and transient read recovery. The
+// manual mutation mode submits, edits and withdraws a real discovery application for an eligible disposable server.
+// Journal `.env.test.discovery.local` records sandbox and bot identity, a synthetic marker description, the
+// application timestamp and whether a provider write is unresolved. An existing journal is recovered before a new
+// run only with mutation authorization: unrelated descriptions or replacement applications are refused, the test
+// application is withdrawn, and removal of the record and the discoverable feature is verified. An unresolved write
+// keeps the journal for operator reconciliation
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { readFileSync, writeFileSync, openSync, closeSync, writeSync, existsSync, unlinkSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { Effect, Scope, Exit } from "effect"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    processAuthorized,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { createSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
 assert.ok(process.argv.slice(3).every((arg) => arg === "--mutate"))
 const mutate = process.argv.includes("--mutate")
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.discovery.local", import.meta.url)
+const journalFile = openJournal("discovery")
 let lock, client, scope, token, guildId, botId, journal
 let verified = false,
     stage = "configuration"
-const report = (check) => console.log(JSON.stringify({ mode, check, passed: true }))
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
-async function value(operation) {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
-async function api(method, path) {
-    const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-        method,
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: { Authorization: `Bot ${token}` },
-    })
-    const data = await response.json().catch(() => null)
-    assert.ok(response.ok, `Sandbox HTTP ${response.status}`)
-    return data
-}
+const report = createReporter({ mode }, { passed: true })
+const save = () => journalFile.save(journal)
+const sandboxApi = createSandboxApi({ fetch: rawFetch, token: () => token })
+const api = async (method, path) => (await sandboxApi(method, path)).data
 const status = () => api("GET", `/guilds/${guildId}/discovery`)
 async function cleanup() {
     if (!journal || !verified) return
@@ -59,45 +55,38 @@ async function cleanup() {
     assert.equal(guild.id, guildId)
     assert.ok(!guild.features.includes("DISCOVERABLE"), "Provider feature cleanup unresolved")
     assert.equal(journal.pending, false, "Unresolved provider write; operator reconciliation required")
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("test_application_removed_and_guild_feature_checked")
 }
 const watchdog = setTimeout(() => {
     console.error(
-        JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: existsSync(journalPath) }),
+        JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: journalFile.exists() }),
     )
     process.exit(1)
 }, 120_000).unref()
 try {
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    const env = { ...parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8")), ...process.env }
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token)
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
+    lock = acquireLock()
+    const sandbox = loadSandboxEnvironment({ processOverrides: true })
+    const { env } = sandbox
+    token = sandbox.token
+    guildId = sandbox.guildId
     stage = "sandbox_identity"
-    const app = await api("GET", "/applications/@me"),
-        self = await api("GET", "/users/@me")
-    assert.equal(app.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(app.bot?.id, self.id)
-    assert.equal(self.bot, true)
-    botId = self.id
-    const guild = await api("GET", `/guilds/${guildId}`)
-    assert.equal(guild.id, guildId)
+    const identity = await verifySandboxIdentity((path) => api("GET", path), sandbox)
+    botId = identity.botId
+    const { guild } = identity
     verified = true
     report(stage)
-    if (existsSync(journalPath)) {
+    if (journalFile.exists()) {
         assert.ok(
-            mutate && env.FLUXER_TEST_DISCOVERY_MUTATIONS === "1",
+            mutate && processAuthorized("FLUXER_TEST_DISCOVERY_MUTATIONS"),
             "Explicit mutation authorization required for recovery",
         )
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+        journal = journalFile.read()
         await cleanup()
     }
     const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
-    if (mode === "default") client = sdk.createClient({ token, cache: { guilds: true } })._unsafeUnwrap()
+    if (mode === "default") client = sdk.createClient({ token, cache: { guilds: true } })
     else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(
@@ -161,7 +150,10 @@ try {
         )
     } else {
         stage = "manual_public_submission_preflight"
-        assert.equal(env.FLUXER_TEST_DISCOVERY_MUTATIONS, "1", "Explicit public-submission authorization required")
+        assert.ok(
+            processAuthorized("FLUXER_TEST_DISCOVERY_MUTATIONS"),
+            "Explicit public-submission authorization required",
+        )
         const current = await status()
         assert.equal(current.application, null, "Existing applications and listings must not be altered")
         assert.equal(current.eligible, true, "Server must be eligible and discovery enabled")
@@ -214,7 +206,7 @@ try {
         assert.equal(failure?.outcome, "unknown")
         assert.equal(attempts, 1)
         const local = client.guilds.get(guildId)
-        assert.equal(Effect.isEffect(local) ? await Effect.runPromise(local) : local._unsafeUnwrap(), undefined)
+        assert.equal(Effect.isEffect(local) ? await Effect.runPromise(local) : local, undefined)
         const created = (await value(client.discovery.fetchStatus(guildId))).application
         assert.equal(created?.description, journal.marker)
         assert.equal(created?.appliedAt, journal.appliedAt)
@@ -252,57 +244,44 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({
-                mode,
-                stage: "client_cleanup",
-                passed: false,
-                finalizer,
-                journalRetained: journal !== undefined,
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exitCode = 1
+    const shutdown = async () => {
+        const closed = client.shutdown()
+        if (Effect.isEffect(closed)) await Effect.runPromise(closed)
+        else await closed
     }
-    if (client)
-        try {
-            const closed = client.shutdown()
-            if (Effect.isEffect(closed)) await Effect.runPromise(closed)
-            else await closed
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            await cleanup()
-        } catch {
-            console.error(
-                JSON.stringify({
-                    mode,
-                    stage: "resource_cleanup",
-                    passed: false,
-                    journalRetained: journal !== undefined,
-                }),
-            )
+    // Keep the journal, lock and deadline if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            client && ["client_shutdown", shutdown],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup,
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            if (finalizer === "cleanup")
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "resource_cleanup",
+                        passed: false,
+                        journalRetained: journal !== undefined,
+                    }),
+                )
+            else if (finalizer === "sandbox_lock")
+                console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
+            else
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "client_cleanup",
+                        passed: false,
+                        finalizer,
+                        journalRetained: journal !== undefined,
+                        lockRetained: lock !== undefined,
+                    }),
+                )
             process.exitCode = 1
-        }
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
-            process.exitCode = 1
-        }
-    }
-    if (quiescent) clearTimeout(watchdog)
+        },
+    })
 }

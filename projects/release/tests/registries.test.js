@@ -1,8 +1,7 @@
 import assert from "node:assert/strict"
-import { createHash } from "node:crypto"
 import test from "node:test"
 import { exactFiles } from "../content.js"
-import { createRegistries } from "../registries.js"
+import { createRegistries, sha512Integrity } from "../registries.js"
 import { packages, tarball } from "./helpers.js"
 
 const name = "@neontechspace/fluxerly"
@@ -10,33 +9,36 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), { stat
 
 test("npm inventory requests only the official package metadata", async () => {
     const calls = []
+    const dist = { tarball: "https://registry.npmjs.org/sdk.tgz", integrity: "sha512-AAAA" }
     const registries = createRegistries({ fetchImpl: async url => {
         calls.push(String(url))
         assert.equal(url.origin, "https://registry.npmjs.org")
         assert.equal(url.pathname, "/%40neontechspace%2Ffluxerly")
-        return json({ name, versions: { "1000.0.0": {} }, "dist-tags": { latest: "1000.0.0" } })
+        return json({ name, versions: { "1000.0.0": { dist } }, "dist-tags": { latest: "1000.0.0" } })
     } })
     assert.deepEqual(await registries.inventory(name), {
         npmVersions: ["1000.0.0"],
         npmTags: { latest: "1000.0.0" },
+        npmDist: { "1000.0.0": dist },
         absent: { npm: false },
     })
     assert.equal(calls.length, 1)
 })
 
-test("Official npm package 404 requires explicit bootstrap, other failures never establish absence", async () => {
+test("Official npm package 404 reads as absent only when permitted, other failures never establish absence", async () => {
     const registries = createRegistries({ fetchImpl: async () => json({ error: "Not found" }, 404) })
     await assert.rejects(registries.inventory(name), /HTTP 404/)
-    assert.deepEqual(await registries.inventory(name, { bootstrap: true }), {
+    assert.deepEqual(await registries.inventory(name, { allowMissing: true }), {
         npmVersions: [],
         npmTags: {},
+        npmDist: {},
         absent: { npm: true },
     })
     for (const status of [403, 429, 500])
         await assert.rejects(
             createRegistries({ fetchImpl: async () => json({ privateBody: "Do not expose" }, status) }).inventory(
                 name,
-                { bootstrap: true },
+                { allowMissing: true },
             ),
             new RegExp(`HTTP ${status}`),
         )
@@ -45,7 +47,7 @@ test("Official npm package 404 requires explicit bootstrap, other failures never
             fetchImpl: async () => {
                 throw new Error("Network failed with private data")
             },
-        }).inventory(name, { bootstrap: true }),
+        }).inventory(name, { allowMissing: true }),
         /Registry request failed/,
     )
 })
@@ -60,16 +62,30 @@ test("npm metadata and integrity lead to actual archive file verification", asyn
                 : json({
                       name,
                       version: "1000.0.0-canary.0",
-                      dist: {
-                          tarball: "https://registry.npmjs.org/sdk.tgz",
-                          integrity: `sha512-${createHash("sha512").update(compressed).digest("base64")}`,
-                      },
+                      dist: { tarball: "https://registry.npmjs.org/sdk.tgz", integrity: sha512Integrity(compressed) },
                   }),
     })
     assert.deepEqual(exactFiles(await registries.npmFiles(name, "1000.0.0-canary.0")), exactFiles(files))
     const wrongOrigin = createRegistries({
         fetchImpl: async () =>
-            json({ name, version: "1000.0.0-canary.0", dist: { tarball: "https://example.com/sdk.tgz" } }),
+            json({
+                name,
+                version: "1000.0.0-canary.0",
+                dist: { tarball: "https://example.com/sdk.tgz", integrity: sha512Integrity(compressed) },
+            }),
     })
     await assert.rejects(wrongOrigin.npmFiles(name, "1000.0.0-canary.0"), /official npm registry/)
+})
+
+test("Served tarballs must match the registry's SHA-512 integrity, which must be present", async () => {
+    const compressed = tarball(packages("1000.0.0-canary.0"))
+    const registries = createRegistries({ fetchImpl: async () => new Response(compressed) })
+    const url = "https://registry.npmjs.org/sdk.tgz"
+    assert.deepEqual(await registries.npmTarball({ tarball: url, integrity: sha512Integrity(compressed) }), compressed)
+    await assert.rejects(
+        registries.npmTarball({ tarball: url, integrity: sha512Integrity(Buffer.from("other")) }),
+        /integrity does not match/,
+    )
+    await assert.rejects(registries.npmTarball(undefined), /no SHA-512 tarball integrity/)
+    await assert.rejects(registries.npmTarball({ tarball: url, integrity: "sha1-AAAA" }), /no SHA-512/)
 })

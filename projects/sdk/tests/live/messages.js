@@ -1,29 +1,64 @@
+// SDK message receive and reply with independent readback, plus the scenario selected by the second argument.
+// Journal `.env.test.messages.local`, or `.env.test.messages-<scenario>.local` for a scenario flag such as
+// `--reactions`, records the server ID, a unique channel marker and the returned channel ID, never message bodies.
+// Reaction, guild and channel scenarios add their emoji, role, category and child markers with returned IDs, and
+// moderation adds its target and exact timeout or ban marker.
+// An existing journal is reconciled before any resource is created: the channel and its messages are removed, emoji
+// identity and absence are verified, remaining test roles must have zero permissions, and children are removed before
+// categories. Emoji absence does not prove image-blob erasure. Moderation recovery refuses to remove unrelated timeout
+// or ban state
 import assert from "node:assert/strict"
 import { randomUUID, createHash } from "node:crypto"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import WebSocket from "ws"
-import { Cause, Logger } from "effect"
-import { fromEffectLogger } from "@neontechspace/fluxerly/effect"
+import { Cause, Logger, References } from "effect"
 import { observeUploads, safeFailure } from "./upload-diagnostics.mjs"
-import { createGuildChannelFixture, cleanupGuildChannelFixtures } from "./channel-fixture.mjs"
+import {
+    cleanupGuildChannelFixtures,
+    cleanupMainTestChannel,
+    createGuildChannelFixture,
+    createMainTestChannel,
+} from "./channel-fixture.mjs"
 import { createReactionEmoji, cleanupReactionEmoji } from "./reaction-fixture.mjs"
 import { createGuildTestRole, cleanupGuildTestRole } from "./guild-fixture.mjs"
 import { cleanupModeration } from "./moderation-fixture.mjs"
 import { verifyAttachmentSources } from "./attachment-sources.mjs"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    shutdownDefaultClient,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { closeScenarioScope } from "./support/scenario-scope.js"
+import { createOutcomeReporter } from "./support/reporting.js"
+import { anyStatus, createSandboxApi } from "./support/sandbox-api.js"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
 const recover = process.argv[3] === "--recover"
 const diagnosticRecords = []
 let diagnosticOverflow = false
-const diagnosticLogger = Logger.make((entry) => {
-    if (diagnosticRecords.length >= 100) {
+// Both APIs are normalized to code, message and facts so the recovery check reads one shape
+const pushDiagnostic = (record) => {
+    if (diagnosticRecords.length >= 200) {
         diagnosticOverflow = true
         return
     }
-    diagnosticRecords.push({ message: entry.message, cause: entry.cause })
+    diagnosticRecords.push(record)
+}
+const diagnosticSink = (record) =>
+    pushDiagnostic({ code: record.code, message: record.message, mode: record.fields?.mode, delayMs: record.delayMs })
+const diagnosticLogger = Logger.make((entry) => {
+    const annotations = entry.fiber.getRef(References.CurrentLogAnnotations)
+    if (annotations["fluxerly.code"] === undefined) return
+    pushDiagnostic({
+        code: annotations["fluxerly.code"],
+        message: String(entry.message),
+        mode: annotations["fluxerly.mode"],
+        delayMs: annotations["fluxerly.delayMs"],
+    })
 })
 const manage = process.argv[3] === "--manage"
 const changes = process.argv[3] === "--events"
@@ -47,11 +82,12 @@ const optionalTools = process.argv[3] === "--optional-tools"
 const nonceOnly = process.argv[3] === "--nonce-only"
 // This probe verifies outbound REST lifetime through both APIs, not delivery of the bot's own typing notices
 const typing = process.argv[3] === "--typing"
+const plainRun = process.argv.length === 3
 let moderationUserId = process.env.FLUXER_TEST_MODERATION_USER_ID
 const forceRecovery = recover || cache || collectors || attachments || reactions || pins || guilds || channels
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.messages.local", import.meta.url)
-const report = (check, passed) => console.log(JSON.stringify({ mode, check, passed }))
+// Each scenario keeps its own journal, so scenarios can run together while a rerun of one still finds its journal
+const journalFile = openJournal(process.argv[3] ? `messages-${process.argv[3].replace(/^--/, "")}` : "messages")
+const report = createOutcomeReporter({ mode })
 const auditActions = Object.freeze({
     channelCreate: 10,
     channelUpdate: 11,
@@ -159,59 +195,43 @@ function observeGateway() {
     }
 }
 
+// Direct sandbox readback must not share the SDK's temporary fetch observation in cache mode
+const sandboxApi = createSandboxApi({ fetch: rawFetch, token: () => token, accept: anyStatus, timeoutMs: 10_000 })
+
 async function api(method, path, body) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-        // Direct sandbox readback must not share the SDK's temporary fetch observation in cache mode
-        const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-            method,
-            redirect: "error",
-            signal: AbortSignal.timeout(10_000),
-            headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        })
-        const data = response.status === 204 ? null : await response.json().catch(() => null)
-        if (response.status === 429 && attempt < 2) {
-            const delay =
-                Math.max(Number(response.headers.get("retry-after")) || 0, Number(data?.retry_after) || 0) * 1000
-            assert.ok(Number.isFinite(delay) && delay > 0 && delay <= 10_000)
-            await sleep(delay)
-            continue
-        }
-        if (reactions && !response.ok && response.status !== 404) {
-            const known = new Set([
-                "INVALID_BASE64_FORMAT",
-                "BASE64_LENGTH_INVALID",
-                "INVALID_IMAGE_FORMAT",
-                "IMAGE_SIZE_EXCEEDS_LIMIT",
-                "FAILED_TO_UPLOAD_IMAGE",
-                "STRING_LENGTH_INVALID",
-            ])
-            const validation = Array.isArray(data?.errors)
-                ? data.errors.slice(0, 8).map((error) => ({
-                      field: ["image", "name"].includes(error?.path) ? error.path : "unclassified",
-                      code: known.has(error?.code)
-                          ? error.code
-                          : known.has(error?.message)
-                            ? error.message
-                            : "unclassified",
-                  }))
-                : []
-            console.log(JSON.stringify({ mode, check: stage, method, status: response.status, validation }))
-        }
-        if (!response.ok && response.status !== 404)
-            throw Object.assign(new Error("Sandbox HTTP request failed"), {
-                status: response.status,
-                ...(data?.code === "INVALID_FORM_BODY" ? { code: "INVALID_FORM_BODY" } : {}),
-            })
-        return { status: response.status, data }
+    const { status, data } = await sandboxApi(method, path, body)
+    if ((status >= 200 && status <= 299) || status === 404) return { status, data }
+    if (reactions) {
+        const known = new Set([
+            "INVALID_BASE64_FORMAT",
+            "BASE64_LENGTH_INVALID",
+            "INVALID_IMAGE_FORMAT",
+            "IMAGE_SIZE_EXCEEDS_LIMIT",
+            "FAILED_TO_UPLOAD_IMAGE",
+            "STRING_LENGTH_INVALID",
+        ])
+        const validation = Array.isArray(data?.errors)
+            ? data.errors.slice(0, 8).map((error) => ({
+                  field: ["image", "name"].includes(error?.path) ? error.path : "unclassified",
+                  code: known.has(error?.code)
+                      ? error.code
+                      : known.has(error?.message)
+                        ? error.message
+                        : "unclassified",
+              }))
+            : []
+        console.log(JSON.stringify({ mode, check: stage, method, status, validation }))
     }
-    throw new Error("Sandbox request budget exhausted")
+    throw Object.assign(new Error("Sandbox HTTP request failed"), {
+        status,
+        ...(data?.code === "INVALID_FORM_BODY" ? { code: "INVALID_FORM_BODY" } : {}),
+    })
 }
 
 function prepareAuditMarker() {
     journal.auditMarker ??= `fluxerly-sdk-audit-${randomUUID().replaceAll("-", "")}`
     assert.match(journal.auditMarker, /^fluxerly-sdk-audit-[a-f0-9]{32}$/)
-    writeFileSync(journalPath, JSON.stringify(journal))
+    journalFile.save(journal)
 }
 
 function auditOptions(operation) {
@@ -272,7 +292,7 @@ async function verifyOptionalTools(ops, channelId, botId) {
     const response = ops.builders
         .message()
         .content(responseContent)
-        .embed(ops.builders.embed().title(embedTitle).field("Mode", "live", true))
+        .embed(ops.builders.embed().title(embedTitle).field("Mode", "live", { inline: true }))
         .build()
     const claims = []
     const executions = []
@@ -364,7 +384,7 @@ async function verifyOptionalTools(ops, channelId, botId) {
         await waitForCondition(() => unmatchedReplies.length === 1, "Unknown-command feedback deadline")
         assert.equal(unmatched[0].messageId, unknown.id)
         assert.deepEqual(unmatched[0].outcome, { _tag: "CommandUnknownName", name: `unknown-${marker}` })
-        const malformed = await ops.send({ content: `${prefix}${commandName} \"unterminated` })
+        const malformed = await ops.send({ content: `${prefix}${commandName} "unterminated` })
         await waitForCondition(() => unmatchedReplies.length === 2, "Parser-rejection feedback deadline")
         assert.equal(unmatched[1].messageId, malformed.id)
         assert.deepEqual(unmatched[1].outcome, { _tag: "CommandParserRejected" })
@@ -447,7 +467,7 @@ async function verifyGuildMembers(ops, channelId, botId, interrupt) {
     const roleId = await createGuildTestRole(
         api,
         journal,
-        () => writeFileSync(journalPath, JSON.stringify(journal)),
+        () => journalFile.save(journal),
         (input) => ops.createRole(input, firstRoleCreate),
     )
     await waitForAuditEntry(botId, auditActions.roleCreate, roleId, firstRoleCreate.auditReason)
@@ -487,11 +507,15 @@ async function verifyGuildMembers(ops, channelId, botId, interrupt) {
         await waitRole(false)
         report(stage, true)
         await verifyGuildCache(ops, target, roleId, botId)
+        // A successful Resume replays every missed dispatch, so guild-scoped cache entries stay across it
+        const retained = async () => [await ops.getGuild(), await ops.getMember(target), await ops.getRole(roleId)]
+        const beforeResume = await retained()
+        assert.ok(beforeResume.every((value) => value !== undefined))
         await interrupt()
-        assert.equal(await ops.getGuild(), undefined)
-        assert.equal(await ops.getMember(target), undefined)
-        assert.equal(await ops.getRole(roleId), undefined)
-        report("guild_cache_gap_clear", true)
+        // The Resume wait leaves its own stage name, so a failed comparison names this check instead
+        stage = "guild_cache_kept_across_resume"
+        assert.deepEqual(await retained(), beforeResume)
+        report(stage, true)
         stage = "member_role_after_resume"
         await ops.add(target, roleId, auditOptions("member-role-add-after-resume"))
         await waitRole(true)
@@ -600,7 +624,7 @@ async function verifyGuildRoles(ops, roleId, botId) {
         const secondId = await createGuildTestRole(
             api,
             journal.secondRole,
-            () => writeFileSync(journalPath, JSON.stringify(journal)),
+            () => journalFile.save(journal),
             (input) => ops.createRole(input, secondRoleCreate),
         )
         stage = "role_create_event"
@@ -786,12 +810,7 @@ async function verifyGuildRoles(ops, roleId, botId) {
 
 async function verifyReactions(ops, channelId, botId, interrupt) {
     stage = "reaction_custom_emoji_prerequisite"
-    const emoji = await createReactionEmoji(
-        api,
-        journal,
-        () => writeFileSync(journalPath, JSON.stringify(journal)),
-        botId,
-    )
+    const emoji = await createReactionEmoji(api, journal, () => journalFile.save(journal), botId)
     const customPath = encodeURIComponent(`${emoji.name}:${emoji.id}`)
     const staticMarkup = `<:${emoji.name}:${emoji.id}>`
     const animatedMarkup = `<a:${emoji.name}:${emoji.id}>`
@@ -1611,7 +1630,7 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         const options = auditOptions(`channel-create-${key}`)
         const created = await createGuildChannelFixture(
             journal,
-            () => writeFileSync(journalPath, JSON.stringify(journal)),
+            () => journalFile.save(journal),
             key,
             input,
             (input) => ops.create(guildId, input, options),
@@ -1896,11 +1915,15 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         assert.equal((await ops.get(explicit.id))?.name, uncertainName)
         report(stage, true)
 
-        stage = "channel_cache_recovery_gap"
+        stage = "channel_cache_kept_across_resume"
         await ops.fetch(categoryA.id)
-        assert.equal((await ops.get(categoryA.id))?.id, categoryA.id)
+        const beforeResume = await ops.get(categoryA.id)
+        assert.equal(beforeResume?.id, categoryA.id)
         await interrupt()
-        assert.equal(await ops.get(categoryA.id), undefined)
+        // A successful Resume replays every missed dispatch, so guild channel entries stay across it. The Resume wait
+        // leaves its own stage name, so a failed comparison names this check instead
+        stage = "channel_cache_kept_across_resume"
+        assert.deepEqual(await ops.get(categoryA.id), beforeResume)
         report(stage, true)
 
         stage = "channel_after_resume"
@@ -1947,7 +1970,7 @@ async function cleanup() {
     if (!journal) return
     assert.equal(journal.guildId, guildId)
     assert.match(journal.name, /^fluxerly-sdk-test-[a-f0-9]{32}$/)
-    const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+    const save = () => journalFile.save(journal)
     let moderationFailure
     try {
         await cleanupModeration(api, journal, moderationUserId)
@@ -1976,41 +1999,13 @@ async function cleanup() {
     } catch (error) {
         channelFixtureFailure = error
     }
-    const listed = await api("GET", `/guilds/${guildId}/channels`)
-    assert.ok(Array.isArray(listed.data))
-    // A returned ID is authoritative. Marker lookup is only safe while creation never returned an ID
-    const matches =
-        journal.channelId === undefined ? listed.data.filter((channel) => channel.name === journal.name) : []
-    assert.ok(matches.length <= 1)
-    let channel = matches[0]
-    if (journal.channelId !== undefined) {
-        const recorded = await api("GET", `/channels/${journal.channelId}`)
-        if (recorded.status !== 404) channel = recorded.data
-    }
-    if (journal.channelId === undefined) assert.ok(channel, "Unresolved channel creation retains its journal")
-    if (channel) {
-        assert.match(channel.id, /^\d+$/)
-        if (journal.channelId !== undefined) assert.equal(channel.id, journal.channelId)
-        assert.equal(channel.guild_id, guildId)
-        assert.equal(channel.type, 0)
-        assert.equal(channel.name, journal.name)
-        const current = await api("GET", `/channels/${channel.id}`)
-        assert.equal(current.data?.id, channel.id)
-        assert.equal(current.data?.name, journal.name)
-        assert.equal(current.data?.guild_id, guildId)
-        journal.channelId = channel.id
-        save()
-        await api("DELETE", `/channels/${channel.id}`)
-        assert.equal((await api("GET", `/channels/${channel.id}`)).status, 404)
-    }
-    const after = await api("GET", `/guilds/${guildId}/channels`)
-    assert.ok(Array.isArray(after.data) && !after.data.some((channel) => channel.name === journal.name))
+    await cleanupMainTestChannel(api, journal, save)
     report("test_channel_and_messages_removed", true)
     if (moderationFailure) throw moderationFailure
     if (emojiFailure) throw emojiFailure
     if (roleFailure) throw roleFailure
     if (channelFixtureFailure) throw channelFixtureFailure
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
 }
 
@@ -2034,7 +2029,7 @@ async function verifyModeration(ops, botId) {
     assert.ok(!(await ops.bans()).some((ban) => ban.userId === moderationUserId))
     assert.equal((await api("GET", `/guilds/${guildId}/audit-logs?user_id=${botId}&limit=10`)).status, 200)
     journal.moderation = { userId: moderationUserId, botId, reason: `${journal.name}-moderation` }
-    const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+    const save = () => journalFile.save(journal)
     save()
     const notices = []
     const stops = []
@@ -2112,7 +2107,7 @@ async function verifyModeration(ops, botId) {
         await waitFor(() => notices.some((n) => n.event === "guildMemberRemove"))
         report(stage, true)
         stage = "moderation_temporary_ban_expiry"
-        await ops.ban(target, { reason: journal.moderation.reason, durationSeconds: 60 })
+        await ops.ban(target, { reason: journal.moderation.reason, durationMs: 60_000 })
         const listed = (await ops.bans()).find((ban) => ban.userId === moderationUserId)
         assert.equal(listed?.reason, journal.moderation.reason)
         assert.ok(Date.parse(listed?.expiresAt) > Date.now())
@@ -2853,6 +2848,78 @@ async function prepareHistory(channelId, botId) {
     }
 }
 
+// One text-to-speech message in the temporary channel, removed with the channel during cleanup.
+// The sandbox bot holds Send TTS Messages, so the send response must report tts true. Only a provider permission
+// rejection, or a false response while a fresh permission read shows the bot lacks Send TTS Messages, is reported
+// and skipped. Fluxer does not store tts, so the readback value is recorded as information and never fails the run.
+// sendOutcome resolves to { ok: true, value } or { ok: false, error }, and botPermissions resolves to the bot's
+// permission bits in the channel
+async function verifyTextToSpeech(sendOutcome, botPermissions, channelId) {
+    try {
+        await textToSpeechStep(sendOutcome, botPermissions, channelId)
+    } catch (error) {
+        // Plain runs print no failure detail, so report a sanitized classification for this optional provider feature
+        const detail = safeFailure(error)
+        const apiErrorCode = typeof error?.apiError?.code === "string" ? error.apiError.code : undefined
+        const assertion =
+            error?.code === "ERR_ASSERTION" && ["boolean", "undefined"].includes(typeof error.actual)
+                ? { actual: error.actual ?? null, expected: error.expected ?? null }
+                : undefined
+        console.log(JSON.stringify({ mode, check: stage, ...detail, apiErrorCode, assertion }))
+        throw error
+    }
+}
+
+const sendTtsMessagesBit = 1n << 12n
+
+async function textToSpeechStep(sendOutcome, botPermissions, channelId) {
+    stage = "tts_send"
+    const outcome = await sendOutcome(channelId, { content: `tts-${randomUUID()}`, tts: true })
+    if (!outcome.ok) {
+        const error = outcome.error
+        if (error?.reason === "rejected" && (error.status === 403 || error.apiError?.code === "missingPermissions")) {
+            console.log(
+                JSON.stringify({ mode, check: stage, passed: true, skipped: true, reason: "tts_permission_rejected" }),
+            )
+            stage = "sdk_receive_and_reply"
+            return
+        }
+        throw error
+    }
+    const sent = outcome.value
+    assert.equal(typeof sent.tts, "boolean")
+    if (sent.tts !== true) {
+        // In a guild, Fluxer silently sends a normal message when the sender lacks Send TTS Messages
+        stage = "tts_permission_read"
+        const permissions = await botPermissions(channelId)
+        assert.equal(typeof permissions, "bigint")
+        assert.equal(
+            (permissions & sendTtsMessagesBit) === 0n,
+            true,
+            "The send response reported tts false although the bot holds Send TTS Messages in the channel",
+        )
+        console.log(
+            JSON.stringify({
+                mode,
+                check: "tts_send",
+                passed: true,
+                skipped: true,
+                reason: "tts_forced_false_without_send_tts_messages",
+            }),
+        )
+        stage = "sdk_receive_and_reply"
+        return
+    }
+    stage = "tts_readback"
+    const readback = await api("GET", `/channels/${channelId}/messages/${sent.id}`)
+    assert.equal(readback.status, 200)
+    assert.equal(readback.data?.id, sent.id)
+    // Fluxer echoes tts only in the create response and MESSAGE_CREATE, so a later read is expected to report false
+    console.log(JSON.stringify({ mode, check: stage, informational: true, readbackTts: readback.data?.tts ?? null }))
+    report("tts_send", true)
+    stage = "sdk_receive_and_reply"
+}
+
 async function verifyNonce(ops, channelId) {
     const marker = randomUUID().replaceAll("-", "").slice(0, 8)
     const selected = `${marker}-s`
@@ -2915,7 +2982,7 @@ async function verifyNonce(ops, channelId) {
     try {
         const failure = await ops.sendUnknown({ content: lostContent, nonce: lostNonce })
         assert.equal(failure?._tag, "MessageError")
-        assert.equal(failure?.delivery, "unknown")
+        assert.equal(failure?.outcome, "unknown")
     } finally {
         globalThis.fetch = originalFetch
     }
@@ -3212,41 +3279,28 @@ try {
                     typing)),
     )
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
     stage = "configuration"
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    moderationUserId ??= env.FLUXER_TEST_MODERATION_USER_ID
+    const sandbox = loadSandboxEnvironment()
+    moderationUserId ??= sandbox.env.FLUXER_TEST_MODERATION_USER_ID
     if (moderation) assert.match(moderationUserId ?? "", /^[1-9][0-9]*$/)
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^\d+$/)
-    assert.match(applicationId ?? "", /^\d+$/)
+    token = sandbox.token
+    guildId = sandbox.guildId
     stage = "sandbox_identity"
-    const application = (await api("GET", "/applications/@me")).data
-    const user = (await api("GET", "/users/@me")).data
-    assert.equal(application?.id, applicationId)
-    assert.equal(user?.bot, true)
-    assert.equal(application?.bot?.id, user.id)
-    assert.equal((await api("GET", `/guilds/${guildId}`)).data?.id, guildId)
+    const { user } = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)
     verified = true
     report(stage, true)
     stage = "recover_prior_test"
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
     }
-    journal = { guildId, name: `fluxerly-sdk-test-${randomUUID().replaceAll("-", "")}` }
-    writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+    journal = { guildId }
     stage = "create_test_channel"
-    const channel = (await api("POST", `/guilds/${guildId}/channels`, { name: journal.name, type: 0 })).data
-    assert.match(channel?.id ?? "", /^\d+$/)
-    assert.equal(channel.guild_id, guildId)
-    assert.equal(channel.name, journal.name)
-    journal.channelId = channel.id
-    writeFileSync(journalPath, JSON.stringify(journal))
+    const channel = await createMainTestChannel(api, journal, {
+        create: () => journalFile.create(journal),
+        save: () => journalFile.save(journal),
+    })
     let typingCacheTarget
     if (typing) {
         stage = "typing_cache_seed"
@@ -3287,24 +3341,20 @@ try {
     stage = "sdk_receive_and_reply"
     if (mode === "default") {
         const { builders, commands, createClient, format } = await import("@neontechspace/fluxerly")
-        const created = createClient({
+        client = createClient({
             token,
             ...(cache || typing || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
             ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
             ...(channels ? { cache: { channels: true } } : {}),
             ...(moderation ? { cache: { members: true } } : {}),
-            ...(recover ? { logging: { development: true, logger: fromEffectLogger(diagnosticLogger) } } : {}),
+            ...(recover ? { logging: { sink: diagnosticSink } } : {}),
         })
-        assert.ok(created.isOk())
-        client = created.value
         let stopState
         let timer
         try {
             const cacheGet = async (target) => {
                 if (!cache && !typing && !search) return undefined
-                const cached = client.messages.get(target)
-                assert.ok(cached.isOk())
-                return cached.value
+                return client.messages.get(target)
             }
             const cacheSend = async (channelId, input) => {
                 const sent = await client.messages.send(channelId, input)
@@ -3533,6 +3583,19 @@ try {
                 report(stage, true)
                 stage = "sdk_receive_and_reply"
             }
+            if (plainRun)
+                await verifyTextToSpeech(
+                    async (target, input) => {
+                        const result = await client.messages.send(target, input)
+                        return result.isOk() ? { ok: true, value: result.value } : { ok: false, error: result.error }
+                    },
+                    async (target) => {
+                        const result = await client.permissions.fetch({ guildId, userId: user.id, channelId: target })
+                        if (result.isErr()) throw result.error
+                        return result.value
+                    },
+                    channel.id,
+                )
             const registered = client.on("messageCreate", async (message, signal) => {
                 if (message.channelId !== channel.id || message.author.id !== user.id || message.content !== ping)
                     return
@@ -3540,8 +3603,7 @@ try {
                 const sent = await client.messages.reply(message, { content: pong }, { signal })
                 done.resolve(sent)
             })
-            assert.ok(registered.isOk())
-            const terminal = registered.value.waitForClose().then(
+            const terminal = registered.waitForClose().then(
                 (result) => {
                     if (result.isErr()) done.resolve(result)
                 },
@@ -3559,15 +3621,15 @@ try {
                         timeout: (target, duration, options) => run(client.members.timeout(target, duration, options)),
                         clearTimeout: (target) => run(client.members.clearTimeout(target)),
                         fetch: (target) => run(client.members.fetch(target)),
-                        get: (target) => run(client.members.get(target)),
+                        get: async (target) => client.members.get(target),
                         kick: (target, options) => run(client.members.kick(target, options)),
-                        ban: (target, input, options) => run(client.guilds.ban(target, input, options)),
-                        unban: (target, options) => run(client.guilds.unban(target, options)),
-                        bans: () => run(client.guilds.fetchBans(guildId)),
+                        ban: (target, input, options) => run(client.members.ban(target, input, options)),
+                        unban: (target, options) => run(client.members.unban(target, options)),
+                        bans: () => run(client.members.fetchBans(guildId)),
                         on: async (event, handler) => {
-                            const subscription = await run(client.on(event, handler))
+                            const subscription = client.on(event, handler)
                             return async () => {
-                                subscription.unsubscribe()
+                                subscription.close()
                                 await run(subscription.waitForClose())
                             }
                         },
@@ -3584,12 +3646,12 @@ try {
                 await verifyBatchDeletion(
                     {
                         send: (input) => run(client.messages.send(channel.id, input)),
-                        get: (target) => run(client.messages.get(target)),
+                        get: async (target) => client.messages.get(target),
                         deleteMany: (ids) => run(client.messages.deleteMany(channel.id, ids)),
                         on: async (handler) => {
-                            const subscription = await run(client.on("messageDeleteBulk", handler))
+                            const subscription = client.on("messageDeleteBulk", handler)
                             return async () => {
-                                subscription.unsubscribe()
+                                subscription.close()
                                 await run(subscription.waitForClose())
                             }
                         },
@@ -3607,7 +3669,7 @@ try {
                 await verifyWorkflowReads(
                     {
                         guildList: () => run(client.guilds.fetchPage({ withCounts: true })),
-                        hierarchy: (target) => run(client.members.fetchHierarchyCheck(target)),
+                        hierarchy: (target) => run(client.members.fetchCanManage(target)),
                     },
                     user.id,
                 )
@@ -3632,18 +3694,18 @@ try {
                         builders,
                         parseQuoted: commands.parseQuoted,
                         assertConnected: async () => assert.equal(client.state, "Connected"),
-                        create: (options) => run(Promise.resolve(commands.create(options))),
-                        register: (router, command) => run(Promise.resolve(router.register(command))),
-                        attach: (router) => run(Promise.resolve(router.attach(client))),
+                        create: async (options) => commands.create(options),
+                        register: async (router, command) => router.register(command),
+                        attach: async (router) => router.attach(client),
                         send: (input) => run(client.messages.send(channel.id, input)),
                         reply: (message, input) => run(client.messages.reply(message, input)),
                         cooldowns: async (claims) => {
-                            const store = await run(Promise.resolve(commands.memoryCooldowns({ maxEntries: 4 })))
+                            const store = commands.memoryCooldowns({ maxEntries: 4 })
                             return {
                                 store: {
                                     claim(input) {
                                         const claim = store.claim(input)
-                                        if (claim.isOk()) claims.push(claim.value)
+                                        claims.push(claim)
                                         return claim
                                     },
                                 },
@@ -3661,14 +3723,14 @@ try {
                             ({ message }, rejection) =>
                                 onReject(message, rejection),
                         close: async (subscription) => {
-                            subscription.unsubscribe()
+                            subscription.close()
                             await run(subscription.waitForClose())
                         },
                         observe: async (receive) => {
-                            const observer = await run(client.on("messageCreate", receive))
+                            const observer = client.on("messageCreate", receive)
                             return {
                                 close: async () => {
-                                    observer.unsubscribe()
+                                    observer.close()
                                     await run(observer.waitForClose())
                                 },
                             }
@@ -3687,9 +3749,9 @@ try {
                 await verifyGuildMembers(
                     {
                         guild: () => run(client.guilds.fetch(guildId)),
-                        getGuild: () => run(client.guilds.get(guildId)),
-                        getMember: (target) => run(client.members.get(target)),
-                        getRole: (id) => run(client.roles.get({ guildId, id })),
+                        getGuild: async () => client.guilds.get(guildId),
+                        getMember: async (target) => client.members.get(target),
+                        getRole: async (id) => client.roles.get({ guildId, id }),
                         roles: () => run(client.roles.fetchAll(guildId)),
                         createRole: (input, options) => run(client.roles.create(guildId, input, options)),
                         editRole: (id, input, options) => run(client.roles.edit({ guildId, id }, input, options)),
@@ -3706,25 +3768,23 @@ try {
                             run(client.messages.send(channel.id, { content: "SDK reaction role verification" })),
                         react: (target) => run(client.messages.addReaction(target, "✅")),
                         collect: async (message, target, roleId, options) => {
-                            const collector = await run(
-                                client.messages.collectReactions(message, {
-                                    emoji: "✅",
-                                    timeoutMs: 10_000,
-                                    filter: (reaction) => reaction.userId === user.id,
-                                    onReaction: async (_reaction, signal) => {
-                                        await run(client.members.addRole(target, roleId, { ...options, signal }))
-                                        await run(
-                                            client.messages.edit(message, { content: "SDK role assigned" }, { signal }),
-                                        )
-                                    },
-                                }),
-                            )
-                            return { wait: () => run(collector.waitForClose()), stop: () => collector.stop() }
+                            const collector = client.messages.collectReactions(message, {
+                                emoji: "✅",
+                                timeoutMs: 10_000,
+                                filter: (reaction) => reaction.userId === user.id,
+                                onReaction: async (_reaction, signal) => {
+                                    await run(client.members.addRole(target, roleId, { ...options, signal }))
+                                    await run(
+                                        client.messages.edit(message, { content: "SDK role assigned" }, { signal }),
+                                    )
+                                },
+                            })
+                            return { wait: () => run(collector.result()), stop: () => collector.close() }
                         },
                         on: async (event, handler) => {
-                            const subscription = await run(client.on(event, handler))
+                            const subscription = client.on(event, handler)
                             return async () => {
-                                subscription.unsubscribe()
+                                subscription.close()
                                 await run(subscription.waitForClose())
                             }
                         },
@@ -3742,7 +3802,7 @@ try {
                 }
                 await verifyChannels(
                     {
-                        get: (id) => run(client.channels.get(id)),
+                        get: async (id) => client.channels.get(id),
                         fetch: (id) => run(client.channels.fetch(id)),
                         fetchAll: (id) => run(client.channels.fetchAll(id)),
                         create: (id, input, options) => run(client.channels.create(id, input, options)),
@@ -3754,9 +3814,9 @@ try {
                         removePermissionOverwrite: (id, targetId, options) =>
                             run(client.channels.removePermissionOverwrite(id, targetId, options)),
                         on: async (event, handler) => {
-                            const subscription = await run(client.on(event, handler))
+                            const subscription = client.on(event, handler)
                             return async () => {
-                                subscription.unsubscribe()
+                                subscription.close()
                                 await run(subscription.waitForClose())
                             }
                         },
@@ -3779,9 +3839,9 @@ try {
                         unpin: (target) => run(client.messages.unpin(target)),
                         pins: (query) => run(client.messages.fetchPins(channel.id, query)),
                         on: async (event, handler) => {
-                            const subscription = await run(client.on(event, handler))
+                            const subscription = client.on(event, handler)
                             return async () => {
-                                subscription.unsubscribe()
+                                subscription.close()
                                 await run(subscription.waitForClose())
                             }
                         },
@@ -3808,11 +3868,7 @@ try {
                         clearAll: (target) => unwrap(client.messages.clearReactions(target)),
                         fetchEmojis: () => unwrap(client.emojis.fetchAll(guildId)),
                         fetchEmojiMetadata: (id) => unwrap(client.emojis.fetchMetadata(id)),
-                        parseCustomEmoji: (value) => {
-                            const parsed = format.parseCustomEmoji(value)
-                            assert.ok(parsed.isOk())
-                            return parsed.value
-                        },
+                        parseCustomEmoji: async (value) => format.parseCustomEmoji(value),
                         reads: async (target) => ({
                             message: await unwrap(client.messages.fetch(target)),
                             history: await unwrap(
@@ -3823,42 +3879,40 @@ try {
                         collect: async (target, options) => {
                             const { progressEdit, progressFailure, progressWait, onProgress, ...settings } = options
                             let count = 0
-                            const collector = await unwrap(
-                                client.messages.collectReactions(target, {
-                                    ...settings,
-                                    ...(progressEdit || progressWait
-                                        ? {
-                                              onReaction: async (_reaction, signal) => {
-                                                  onProgress?.("started")
-                                                  try {
-                                                      if (progressWait)
-                                                          await new Promise((resolve) => {
-                                                              if (signal.aborted) resolve()
-                                                              else
-                                                                  signal.addEventListener("abort", resolve, {
-                                                                      once: true,
-                                                                  })
-                                                          })
-                                                      else
-                                                          await unwrap(
-                                                              client.messages.edit(
-                                                                  progressFailure ? { ...target, id: "1" } : target,
-                                                                  { content: `${progressEdit} ${++count}` },
-                                                                  { signal },
-                                                              ),
-                                                          )
-                                                  } finally {
-                                                      onProgress?.("cleaned")
-                                                  }
-                                              },
-                                          }
-                                        : {}),
-                                }),
-                            )
+                            const collector = client.messages.collectReactions(target, {
+                                ...settings,
+                                ...(progressEdit || progressWait
+                                    ? {
+                                          onReaction: async (_reaction, signal) => {
+                                              onProgress?.("started")
+                                              try {
+                                                  if (progressWait)
+                                                      await new Promise((resolve) => {
+                                                          if (signal.aborted) resolve()
+                                                          else
+                                                              signal.addEventListener("abort", resolve, {
+                                                                  once: true,
+                                                              })
+                                                      })
+                                                  else
+                                                      await unwrap(
+                                                          client.messages.edit(
+                                                              progressFailure ? { ...target, id: "1" } : target,
+                                                              { content: `${progressEdit} ${++count}` },
+                                                              { signal },
+                                                          ),
+                                                      )
+                                              } finally {
+                                                  onProgress?.("cleaned")
+                                              }
+                                          },
+                                      }
+                                    : {}),
+                            })
                             return {
-                                stop: async () => collector.stop(),
+                                stop: async () => collector.close(),
                                 wait: async () => {
-                                    const result = await collector.waitForClose()
+                                    const result = await collector.result()
                                     if (result.isErr()) throw result.error
                                     return result.value
                                 },
@@ -3870,9 +3924,9 @@ try {
                             return result.value
                         },
                         on: async (event, handler) => {
-                            const subscription = await unwrap(client.on(event, handler))
+                            const subscription = client.on(event, handler)
                             return async () => {
-                                subscription.unsubscribe()
+                                subscription.close()
                                 await unwrap(subscription.waitForClose())
                             }
                         },
@@ -3905,10 +3959,10 @@ try {
                     },
                     fetch: (target) => unwrap(client.messages.fetch(target)),
                     history: () => unwrap(client.messages.fetchHistory(channel.id)),
-                    get: (target) => unwrap(client.messages.get(target)),
+                    get: async (target) => client.messages.get(target),
                     collect: async (options) => {
-                        const collector = await unwrap(client.messages.collect(channel.id, options))
-                        return () => unwrap(collector.waitForClose())
+                        const collector = client.messages.collect(channel.id, options)
+                        return () => unwrap(collector.result())
                     },
                     refreshUrls: async (urls, options) => {
                         const result = await client.attachments.refreshUrls(urls, options)
@@ -3998,10 +4052,9 @@ try {
                                       }
                                     : {}),
                             })
-                            assert.ok(opened.isOk())
                             return {
-                                wait: () => opened.value.waitForClose(),
-                                stop: () => opened.value.stop(),
+                                wait: () => opened.result(),
+                                stop: () => opened.close(),
                                 ...(cancellation ? { cancel: () => cancellation.abort(), cancelKind: "signal" } : {}),
                             }
                         },
@@ -4027,8 +4080,8 @@ try {
             const replied = await done.promise
             assert.ok(replied?.isOk())
             reply = replied.value
-            registered.value.unsubscribe()
-            assert.ok((await registered.value.waitForClose()).isOk())
+            registered.close()
+            assert.ok((await registered.waitForClose()).isOk())
             await terminal
             if (cache) {
                 await verifyCacheGatewayRebuild(cacheGet, channel.id)
@@ -4046,10 +4099,8 @@ try {
             if (changes || cache) {
                 const probe = observeMessageChanges(channel.id)
                 const updates = client.on("messageUpdate", (message) => probe.receive("messageUpdate", message))
-                assert.ok(updates.isOk())
-                const deletion = client.events("messageDelete")
-                const bulk = client.events("messageDeleteBulk")
-                assert.ok(deletion.isOk() && bulk.isOk())
+                const deletion = client.subscribe("messageDelete")
+                const bulk = client.subscribe("messageDeleteBulk")
                 const consume = async (event, subscription) => {
                     while (true) {
                         const result = await subscription.next()
@@ -4058,29 +4109,24 @@ try {
                         probe.receive(event, result.value)
                     }
                 }
-                const readers = [consume("messageDelete", deletion.value), consume("messageDeleteBulk", bulk.value)]
+                const readers = [consume("messageDelete", deletion), consume("messageDeleteBulk", bulk)]
                 const readsDone = Promise.allSettled(readers)
                 try {
                     await probe.exercise(user.id, cache ? cacheGet : undefined)
                 } finally {
-                    updates.value.unsubscribe()
-                    deletion.value.unsubscribe()
-                    bulk.value.unsubscribe()
-                    assert.ok((await updates.value.waitForClose()).isOk())
+                    updates.close()
+                    deletion.close()
+                    bulk.close()
+                    assert.ok((await updates.waitForClose()).isOk())
                     assert.ok((await readsDone).every((result) => result.status === "fulfilled"))
                 }
             }
         } finally {
             clearTimeout(timer)
-            try {
-                const shutdown = await client.shutdown()
-                if (shutdown.isErr()) quiescent = false
-                assert.ok(shutdown.isOk())
-            } catch (error) {
+            // An unproven shutdown may leave a writer alive, so the journal and lock stay for recovery
+            if (!(await shutdownDefaultClient(client, () => stopState?.close()))) {
                 quiescent = false
-                throw error
-            } finally {
-                stopState?.()
+                assert.fail("Client shutdown was not proven")
             }
         }
     } else {
@@ -4099,7 +4145,7 @@ try {
                         ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
                         ...(channels ? { cache: { channels: true } } : {}),
                         ...(moderation ? { cache: { members: true } } : {}),
-                        ...(recover ? { logging: { development: true } } : {}),
+                        ...(recover ? { logging: { level: "info" } } : {}),
                     })
                     const cacheGet = async (target) => {
                         if (!cache && !search) return undefined
@@ -4313,6 +4359,25 @@ try {
                                 }),
                             ),
                         )
+                    if (plainRun)
+                        yield* Effect.promise(() =>
+                            verifyTextToSpeech(
+                                (target, input) =>
+                                    Effect.runPromise(
+                                        client.messages.send(target, input).pipe(
+                                            Effect.match({
+                                                onFailure: (error) => ({ ok: false, error }),
+                                                onSuccess: (value) => ({ ok: true, value }),
+                                            }),
+                                        ),
+                                    ),
+                                (target) =>
+                                    Effect.runPromise(
+                                        client.permissions.fetch({ guildId, userId: user.id, channelId: target }),
+                                    ),
+                                channel.id,
+                            ),
+                        )
                     const done = yield* Deferred.make()
                     const subscription = yield* client.on("messageCreate", (message) =>
                         Effect.gen(function* () {
@@ -4343,9 +4408,9 @@ try {
                                     fetch: (target) => run(client.members.fetch(target)),
                                     get: (target) => run(client.members.get(target)),
                                     kick: (target, options) => run(client.members.kick(target, options)),
-                                    ban: (target, input, options) => run(client.guilds.ban(target, input, options)),
-                                    unban: (target, options) => run(client.guilds.unban(target, options)),
-                                    bans: () => run(client.guilds.fetchBans(guildId)),
+                                    ban: (target, input, options) => run(client.members.ban(target, input, options)),
+                                    unban: (target, options) => run(client.members.unban(target, options)),
+                                    bans: () => run(client.members.fetchBans(guildId)),
                                     on: async (event, handler) => {
                                         const subscription = await run(
                                             client
@@ -4353,7 +4418,7 @@ try {
                                                 .pipe(Scope.provide(scope)),
                                         )
                                         return async () => {
-                                            await run(subscription.unsubscribe())
+                                            await run(subscription.close())
                                             await run(subscription.waitForClose())
                                         }
                                     },
@@ -4382,7 +4447,7 @@ try {
                                                 .pipe(Scope.provide(scope)),
                                         )
                                         return async () => {
-                                            await run(subscription.unsubscribe())
+                                            await run(subscription.close())
                                             await run(subscription.waitForClose())
                                         }
                                     },
@@ -4402,7 +4467,7 @@ try {
                             verifyWorkflowReads(
                                 {
                                     guildList: () => run(client.guilds.fetchPage({ withCounts: true })),
-                                    hierarchy: (target) => run(client.members.fetchHierarchyCheck(target)),
+                                    hierarchy: (target) => run(client.members.fetchCanManage(target)),
                                 },
                                 user.id,
                             ),
@@ -4432,13 +4497,13 @@ try {
                                     builders,
                                     parseQuoted: commands.parseQuoted,
                                     assertConnected: async () => assert.equal(client.state, "Connected"),
-                                    create: (options) => run(commands.create(options)),
-                                    register: (router, command) => run(router.register(command)),
+                                    create: async (options) => commands.create(options),
+                                    register: async (router, command) => router.register(command),
                                     attach: (router) => run(router.attach(client).pipe(Scope.provide(scope))),
                                     send: (input) => run(client.messages.send(channel.id, input)),
                                     reply: (message, input) => run(client.messages.reply(message, input)),
                                     cooldowns: async (claims) => {
-                                        const store = await run(commands.memoryCooldowns({ maxEntries: 4 }))
+                                        const store = commands.memoryCooldowns({ maxEntries: 4 })
                                         const recordClaim = (claim) => Effect.sync(() => claims.push(claim))
                                         return {
                                             store: {
@@ -4460,7 +4525,7 @@ try {
                                     close: (subscription) =>
                                         run(
                                             Effect.gen(function* () {
-                                                yield* subscription.unsubscribe()
+                                                yield* subscription.close()
                                                 yield* subscription.waitForClose()
                                             }),
                                         ),
@@ -4474,7 +4539,7 @@ try {
                                             close: () =>
                                                 run(
                                                     Effect.gen(function* () {
-                                                        yield* observer.unsubscribe()
+                                                        yield* observer.close()
                                                         yield* observer.waitForClose()
                                                     }),
                                                 ),
@@ -4541,8 +4606,8 @@ try {
                                                 .pipe(Scope.provide(scope)),
                                         )
                                         return {
-                                            wait: () => run(collector.waitForClose()),
-                                            stop: () => run(collector.stop()),
+                                            wait: () => run(collector.result()),
+                                            stop: () => run(collector.close()),
                                         }
                                     },
                                     on: async (event, handler) => {
@@ -4552,7 +4617,7 @@ try {
                                                 .pipe(Scope.provide(scope)),
                                         )
                                         return async () => {
-                                            await run(subscription.unsubscribe())
+                                            await run(subscription.close())
                                             await run(subscription.waitForClose())
                                         }
                                     },
@@ -4592,7 +4657,7 @@ try {
                                                 .pipe(Scope.provide(scope)),
                                         )
                                         return async () => {
-                                            await run(subscription.unsubscribe())
+                                            await run(subscription.close())
                                             await run(subscription.waitForClose())
                                         }
                                     },
@@ -4624,7 +4689,7 @@ try {
                                                 .pipe(Scope.provide(scope)),
                                         )
                                         return async () => {
-                                            await run(subscription.unsubscribe())
+                                            await run(subscription.close())
                                             await run(subscription.waitForClose())
                                         }
                                     },
@@ -4654,7 +4719,7 @@ try {
                                     clearAll: (target) => run(client.messages.clearReactions(target)),
                                     fetchEmojis: () => run(client.emojis.fetchAll(guildId)),
                                     fetchEmojiMetadata: (id) => run(client.emojis.fetchMetadata(id)),
-                                    parseCustomEmoji: (value) => run(format.parseCustomEmoji(value)),
+                                    parseCustomEmoji: async (value) => format.parseCustomEmoji(value),
                                     reads: async (target) => ({
                                         message: await run(client.messages.fetch(target)),
                                         history: await run(
@@ -4697,10 +4762,10 @@ try {
                                                 .pipe(Scope.provide(scope)),
                                         )
                                         return {
-                                            stop: () => run(collector.stop()),
+                                            stop: () => run(collector.close()),
                                             wait: async () => {
                                                 const result = await Effect.runPromise(
-                                                    Effect.result(collector.waitForClose()),
+                                                    Effect.result(collector.result()),
                                                 )
                                                 if (result._tag === "Failure") throw result.failure
                                                 return result.success
@@ -4721,7 +4786,7 @@ try {
                                                 .pipe(Scope.provide(scope)),
                                         )
                                         return async () => {
-                                            await run(subscription.unsubscribe())
+                                            await run(subscription.close())
                                             await run(subscription.waitForClose())
                                         }
                                     },
@@ -4760,7 +4825,7 @@ try {
                                 const collector = await run(
                                     client.messages.collect(channel.id, options).pipe(Scope.provide(scope)),
                                 )
-                                return () => Effect.runPromise(collector.waitForClose())
+                                return () => Effect.runPromise(collector.result())
                             },
                             refreshUrls: async (urls, options) => {
                                 const result = await Effect.runPromise(
@@ -4876,14 +4941,14 @@ try {
                                         return {
                                             wait: () =>
                                                 Effect.runPromise(
-                                                    opened.waitForClose().pipe(
+                                                    opened.result().pipe(
                                                         Effect.match({
                                                             onSuccess: (value) => ({ value }),
                                                             onFailure: (error) => ({ error }),
                                                         }),
                                                     ),
                                                 ),
-                                            stop: () => Effect.runPromise(opened.stop()),
+                                            stop: () => Effect.runPromise(opened.close()),
                                             close: () => Effect.runPromise(Scope.close(collectorScope, Exit.void)),
                                             ...(progressCancel
                                                 ? {
@@ -4914,7 +4979,7 @@ try {
                     }
                     seed = yield* client.messages.send(channel.id, { content: ping })
                     reply = yield* Deferred.await(done).pipe(Effect.timeout(20_000))
-                    yield* subscription.unsubscribe()
+                    yield* subscription.close()
                     yield* subscription.waitForClose()
                     if (cache) {
                         yield* Effect.promise(() => verifyCacheGatewayRebuild(cacheGet, channel.id))
@@ -4936,7 +5001,7 @@ try {
                                 )
                                 for (const event of ["messageDelete", "messageDeleteBulk"]) {
                                     yield* Effect.forkScoped(
-                                        Stream.runForEach(client.events(event), (message) =>
+                                        Stream.runForEach(client.subscribe(event), (message) =>
                                             Effect.sync(() => probe.receive(event, message)),
                                         ),
                                     )
@@ -4954,15 +5019,12 @@ try {
                     ),
             )
         } finally {
-            const scenarioExit = exit ?? Exit.void
-            const scopeExit = await Effect.runPromiseExit(Scope.close(effectScope, scenarioExit))
-            if (Exit.isFailure(scopeExit)) {
+            const closed = await closeScenarioScope(effectScope, exit)
+            exit = closed.exit
+            if (!closed.closed) {
                 quiescent = false
                 process.exitCode = 1
                 report("scope_cleanup", false)
-                exit = Exit.isFailure(scenarioExit)
-                    ? Exit.failCause(Cause.combine(scenarioExit.cause, scopeExit.cause))
-                    : scopeExit
             }
         }
         if ((attachments || attachmentSources) && Exit.isFailure(exit))
@@ -4977,23 +5039,20 @@ try {
     if (recover) {
         stage = "recovery_diagnostics"
         assert.equal(diagnosticOverflow, false)
-        assert.ok(diagnosticRecords.every((entry) => entry.cause.reasons.length === 0))
-        const records = diagnosticRecords.map((entry) => entry.message[1])
-        for (const event of ["connecting", "attempt", "connected", "connectionLost", "retry", "closing", "closed"])
-            assert.ok(records.some((entry) => entry.event === event))
-        assert.ok(
-            records.some(
-                (entry) => entry.event === "connected" && entry.mode === "resume" && entry.phase === "recovery",
-            ),
-        )
-        assert.ok(records.some((entry) => entry.event === "retry" && Number.isFinite(entry.delayMs)))
-        assert.ok(
-            records.every((entry) =>
-                Object.keys(entry).every((key) =>
-                    ["event", "phase", "attempt", "delayMs", "mode", "failure"].includes(key),
-                ),
-            ),
-        )
+        const records = diagnosticRecords
+        for (const code of [
+            "lifecycle.starting",
+            "lifecycle.ready",
+            "lifecycle.connectionLost",
+            "lifecycle.shutdown",
+            "lifecycle.shutdownComplete",
+        ])
+            assert.ok(
+                records.some((entry) => entry.code === code),
+                `Missing ${code} in ${JSON.stringify(records.map((entry) => entry.code))}`,
+            )
+        assert.ok(records.some((entry) => entry.code === "lifecycle.ready" && entry.mode === "resume"))
+        assert.ok(records.some((entry) => entry.code === "lifecycle.connectionLost" && Number.isFinite(entry.delayMs)))
         assert.ok(!JSON.stringify(diagnosticRecords).includes(token))
         report("recovery_diagnostics", true)
     }
@@ -5022,16 +5081,19 @@ try {
 } finally {
     gatewayProbe?.restore()
     globalThis.fetch = rawFetch
-    if (quiescent && verified && journal) {
-        try {
-            await cleanup()
-        } catch {
-            report("cleanup_failed_journal_retained", false)
+    // The scenario's client and scope closures decide quiescence; an unproven closure keeps the journal and lock
+    const failures = {
+        sdk_quiescence: "sdk_not_quiescent_lock_retained",
+        cleanup: "cleanup_failed_journal_retained",
+        sandbox_lock: "sandbox_lock_cleanup",
+    }
+    await finalizeOwned({
+        checks: [["sdk_quiescence", () => assert.ok(quiescent)]],
+        cleanup: verified && journal ? cleanup : undefined,
+        lock,
+        onFailure: (finalizer) => {
+            report(failures[finalizer], false)
             process.exitCode = 1
-        }
-    }
-    if (quiescent && lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
-    }
+        },
+    })
 }

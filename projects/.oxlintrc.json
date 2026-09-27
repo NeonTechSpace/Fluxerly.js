@@ -1,0 +1,99 @@
+{
+    "$schema": "./node_modules/oxlint/configuration_schema.json",
+    // Type-aware rules run through oxlint-tsgolint. Each file uses the nearest tsconfig.json that includes it
+    "options": {
+        "typeAware": true,
+        "reportUnusedDisableDirectives": "error"
+    },
+    "categories": {
+        "correctness": "error"
+    },
+    // Packed consumer fixtures resolve only against the packed SDK and are compiled and run by the package check
+    "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/.vitest/**", "sdk/tests/packaging/consumers/**"],
+    "rules": {
+        "typescript/no-floating-promises": "error",
+        "typescript/no-misused-promises": "error",
+        "typescript/switch-exhaustiveness-check": "error",
+        "max-params": ["warn", { "max": 4 }],
+        // Flat decoder and validator chains reach 20-30 through their conditions alone, so 30 isolates branching logic
+        "complexity": ["warn", { "max": 30 }],
+        // Effect.gen bodies are generator functions, which cannot be arrow functions, so they reach the owner through a named alias
+        "typescript/no-this-alias": "off"
+    },
+    "overrides": [
+        {
+            // Only the transport seam reaches the network, so a caller transport option replaces every request and socket.
+            // The "effect" barrel loads every Effect module at startup, so source imports each module from its own subpath
+            "files": ["sdk/src/**"],
+            "rules": {
+                "no-restricted-imports": [
+                    "error",
+                    {
+                        "paths": [
+                            { "name": "ws", "message": "Open sockets through internal/transport/socket.ts" },
+                            { "name": "effect", "message": "Import Effect modules from subpaths such as effect/Effect" }
+                        ]
+                    }
+                ],
+                "no-restricted-globals": [
+                    "error",
+                    { "name": "fetch", "message": "Send requests through internal/transport/http.ts" }
+                ],
+                "no-restricted-properties": [
+                    "error",
+                    {
+                        "object": "globalThis",
+                        "property": "fetch",
+                        "message": "Send requests through internal/transport/http.ts"
+                    }
+                ]
+            }
+        },
+        {
+            "files": ["sdk/src/internal/transport/socket.ts"],
+            "rules": {
+                "no-restricted-imports": [
+                    "error",
+                    {
+                        "paths": [
+                            { "name": "effect", "message": "Import Effect modules from subpaths such as effect/Effect" }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "files": ["sdk/src/internal/transport/http.ts"],
+            "rules": { "no-restricted-globals": "off", "no-restricted-properties": "off" }
+        },
+        {
+            // Test bodies and fixtures are measured by the behavior they check, not by size or parameter count.
+            // Tests also capture prototype methods deliberately so they can patch and restore them
+            "files": ["sdk/tests/**", "release/tests/**", "web/tests/**"],
+            "rules": {
+                "max-params": "off",
+                "complexity": "off",
+                "typescript/unbound-method": "off",
+                // Fixtures interpolate unknown payloads into failure messages and bodies, and sort string IDs for order-free comparison
+                "typescript/no-base-to-string": "off",
+                "typescript/require-array-sort-compare": "off",
+                // Fixtures build fixed-length arrays, snapshot collections before mutating them and mark discarded values with void
+                "unicorn/no-new-array": "off",
+                "unicorn/no-useless-spread": "off",
+                "typescript/no-meaningless-void-operator": "off",
+                // Tests await plain values to yield a microtask between steps
+                "typescript/await-thenable": "off",
+                // Loopback fixtures pass async request and socket handlers to Node callbacks. Vitest reports their rejections
+                "typescript/no-misused-promises": ["error", { "checksVoidReturn": false }],
+                // Live harness validators count Unicode code points, and their cleanup can replace a result from finally
+                "typescript/no-misused-spread": "off",
+                "no-unsafe-finally": "off"
+            }
+        },
+        {
+            // The node:test runner awaits the promise that each test() call returns
+            "files": ["web/tests/**"],
+            "rules": { "typescript/no-floating-promises": "off" }
+        }
+    ]
+}

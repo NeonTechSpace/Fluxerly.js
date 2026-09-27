@@ -1,3 +1,5 @@
+// @ts-check
+
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { sha256 } from "./content.js"
@@ -26,12 +28,14 @@ export async function readSourcePlan(workspace, options) {
     const pending = fragments.filter((fragment) => !fragment.id.startsWith("pre/"))
     const current = parseVersion(sdk.packageJson.version)
     const state = await assertSourceReleaseState(workspace, current, fragments)
+    /** @type {any} */
     const preState =
         options.channel === "stable"
             ? current.channel === "stable"
                 ? undefined
                 : { mode: "exit", tag: current.channel }
             : { mode: "pre", tag: options.channel }
+    /** @type {any} */
     const releasePlan = assembleReleasePlan(fragments, packages, configResult.config, preState)
     if (releasePlan.releases.some((release) => release.name !== sdk.packageJson.name))
         throw new Error("Changesets attempted to release a non-SDK package")
@@ -71,8 +75,7 @@ export async function readSourcePlan(workspace, options) {
         plan: {
             ...plan,
             fragments: fragmentHashes,
-            noPendingChanges:
-                pending.length === 0 && current.channel === options.channel && sdk.packageJson.version !== "0.0.0",
+            noPendingChanges: pending.length === 0 && current.channel === options.channel,
         },
         releasePlan,
         packages,
@@ -93,7 +96,8 @@ export async function assertSourceReleaseState(workspace, current, fragments) {
     try {
         state = JSON.parse(await readFile(join(workspace, ".changeset", "pre.json"), "utf8"))
     } catch (error) {
-        if (error.code !== "ENOENT") throw new Error("Changesets prerelease state cannot be read")
+        if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ENOENT")
+            throw new Error("Changesets prerelease state cannot be read")
     }
     if (current.channel === "stable") {
         if (state || fragments.some((fragment) => fragment.id.startsWith("pre/")))
@@ -106,6 +110,11 @@ export async function assertSourceReleaseState(workspace, current, fragments) {
     return state
 }
 
+/**
+ * @param {string} workspace
+ * @param {any} options
+ * @param {any} [prepared]
+ */
 export async function applySourcePlan(workspace, options, prepared) {
     const result = await readSourcePlan(workspace, options)
     if (
@@ -114,11 +123,11 @@ export async function applySourcePlan(workspace, options, prepared) {
             JSON.stringify(prepared.config) !== JSON.stringify(result.config) ||
             JSON.stringify(
                 prepared.packages.packages.find((item) => item.packageJson.name === "@neontechspace/fluxerly")
-                    .packageJson,
+                    ?.packageJson,
             ) !==
                 JSON.stringify(
                     result.packages.packages.find((item) => item.packageJson.name === "@neontechspace/fluxerly")
-                        .packageJson,
+                        ?.packageJson,
                 ))
     )
         throw new Error("Release source inputs changed during the content guard, no version or fragment was consumed")
@@ -136,31 +145,11 @@ export async function applySourcePlan(workspace, options, prepared) {
     return result.plan
 }
 
-async function writeInitialCanaryNote(workspace) {
-    const path = join(workspace, ".changeset", "initial-canary.md")
-    const bytes = Buffer.from(
-        '---\n"@neontechspace/fluxerly": patch\n---\n\nInitial canary release of Fluxerly.js for testing and feedback\n',
-    )
-    try {
-        await writeFile(path, bytes, { flag: "wx" })
-        return bytes
-    } catch (error) {
-        if (error.code === "EEXIST")
-            throw new Error("Initial canary Changeset already exists, inspect it before retrying the release version action")
-        throw error
-    }
-}
-
 export async function versionSource({ workspace, options, registries, stage }) {
     const guardedOptions = { ...options, allowNoChanges: true }
     const prepared = await readSourcePlan(workspace, guardedOptions)
     const { guardVersionContent } = await import("./candidate.js")
-    const guard = await guardVersionContent({
-        plan: prepared.plan,
-        bootstrap: options.bootstrap ?? false,
-        registries,
-        stage,
-    })
+    const guard = await guardVersionContent({ plan: prepared.plan, registries, stage })
     if (guard?.skipped)
         return {
             ...guard,
@@ -172,20 +161,6 @@ export async function versionSource({ workspace, options, registries, stage }) {
         throw new Error(
             "Publishable SDK bytes changed or lack a baseline, but no pending Changesets fragment describes this release",
         )
-    if (
-        prepared.plan.currentVersion === "0.0.0" &&
-        prepared.plan.channel === "canary" &&
-        Object.keys(prepared.plan.fragments).length === 0
-    ) {
-        const bytes = await writeInitialCanaryNote(workspace)
-        return applySourcePlan(workspace, guardedOptions, {
-            ...prepared,
-            plan: {
-                ...prepared.plan,
-                fragments: { ...prepared.plan.fragments, "initial-canary": sha256(bytes) },
-            },
-        })
-    }
     return applySourcePlan(workspace, guardedOptions, prepared)
 }
 

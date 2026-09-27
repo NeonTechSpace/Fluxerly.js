@@ -10,34 +10,32 @@ on:
         description: Externally reviewed candidate.json SHA256 from the preparation summary
         required: true
         type: string
-      operation:
-        description: Publish npm then reconcile GitHub, or only reconcile an already-published npm version
-        required: true
-        default: publish
-        type: choice
-        options: [publish, reconcile]
 permissions:
   contents: read
   actions: read
+cache-mode: read
+# Every job checks out this workflow's own commit, so release tooling never runs from the candidate source.
+# The candidate commit is data: It must be reachable from main and becomes the GitHub tag target
 jobs:
   inspect:
+    name: Inspect the reviewed candidate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       artifact_id: ${{ steps.preparation.outputs.artifactId }}
       source_commit: ${{ steps.preparation.outputs.sourceCommit }}
+      version: ${{ steps.inspect.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         id: setup
-      - name: Require supported registry contracts before requesting credentials
-        id: support
-        working-directory: projects
-        run: pnpm release:check
-      - name: Verify successful preparation and selected-source provenance
+        with:
+          install: 'false'
+          cache: 'false'
+      - name: Verify successful preparation and a candidate source reachable from main
         id: preparation
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,24 +56,18 @@ jobs:
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
           CANDIDATE_SOURCE_COMMIT: ${{ steps.preparation.outputs.sourceCommit }}
         run: node projects/release/github.js inspect
-      - name: Summarize protected-release inspection
+      - name: Summarize candidate inspection
         if: always()
-        shell: bash
-        env:
-          SUMMARY_KIND: inspect
-          SUMMARY_STEPS: ${{ toJSON(steps) }}
-          SUMMARY_DETAILS: >-
-            {"preparationRunId": ${{ toJSON(inputs.preparation_run_id) }}, "checksum": ${{ toJSON(inputs.candidate_checksum) }}}
-        run: |
-          if [ -f .github/scripts/workflow-summary.mjs ]; then
-            node .github/scripts/workflow-summary.mjs
-          else
-            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+        uses: $/.github/actions/summary
+        with:
+          title: Release provenance and candidate inspection
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Preparation run ID": ${{ toJSON(inputs.preparation_run_id) }}, "Reviewed checksum input": ${{ toJSON(inputs.candidate_checksum) }}, "Candidate source": ${{ toJSON(steps.preparation.outputs.sourceCommit) }}, "Candidate version": ${{ toJSON(steps.inspect.outputs.version) }}, "Candidate artifact ID": ${{ toJSON(steps.preparation.outputs.artifactId) }}}
+          next: Protected publication proceeds only after this inspection succeeds
   publish:
-    needs: inspect
-    if: inputs.operation == 'publish'
     name: Publish npm version
+    needs: inspect
     concurrency:
       group: package-release-publish-npm
       cancel-in-progress: false
@@ -91,10 +83,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
-          ref: ${{ needs.inspect.outputs.source_commit }}
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      # Publishing a prebuilt tarball needs Node and pnpm, not the workspace dependencies
+      - uses: $/.github/actions/setup
         id: setup
+        with:
+          install: 'false'
+          cache: 'false'
       - name: Download only the inspected preparation candidate
         id: download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -110,37 +105,61 @@ jobs:
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
           CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
         run: node projects/release/github.js inspect
-      - name: Publish the npm version
+      - name: Publish the npm version, or confirm the reviewed bytes are already published
         id: publish
         working-directory: projects
         env:
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
-        run: pnpm release:publish "$CANDIDATE_DIRECTORY" --checksum "$CANDIDATE_CHECKSUM"
-      - name: Confirm the npm version is available
-        id: verify
-        working-directory: projects
-        env:
-          CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
-          CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
-        run: pnpm release:verify "$CANDIDATE_DIRECTORY" --checksum "$CANDIDATE_CHECKSUM"
+        run: node release/cli.js publish "$CANDIDATE_DIRECTORY" --checksum "$CANDIDATE_CHECKSUM"
       - name: Summarize npm publication
         if: always()
-        shell: bash
-        env:
-          SUMMARY_KIND: publish-npm
-          SUMMARY_STEPS: ${{ toJSON(steps) }}
-          SUMMARY_DETAILS: >-
-            {"preparationRunId": ${{ toJSON(inputs.preparation_run_id) }}, "checksum": ${{ toJSON(inputs.candidate_checksum) }}, "sourceCommit": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "artifactId": ${{ toJSON(needs.inspect.outputs.artifact_id) }}}
-        run: |
-          if [ -f .github/scripts/workflow-summary.mjs ]; then
-            node .github/scripts/workflow-summary.mjs
-          else
-            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-  reconcile:
+        uses: $/.github/actions/summary
+        with:
+          title: npm version publication
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Candidate version": ${{ toJSON(needs.inspect.outputs.version) }}, "Candidate source": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "Reviewed checksum input": ${{ toJSON(inputs.candidate_checksum) }}}
+          next: The registry install checks run next. Rerun this workflow with the same inputs after any failure, publication reads npm before uploading
+  smoke:
+    name: ${{ matrix.name }}
     needs: [inspect, publish]
-    if: ${{ always() && !cancelled() && needs.inspect.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime-policy: development
+            name: Registry install on the development Node version
+          - runtime-policy: consumer-floor
+            name: Registry install on the declared Node floor
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup
+        id: setup
+        with:
+          runtime-policy: ${{ matrix.runtime-policy }}
+      - name: Install the published version from npm and import every public entry point
+        id: smoke
+        working-directory: projects
+        env:
+          RELEASE_VERSION: ${{ needs.inspect.outputs.version }}
+        run: node release/smoke.js --version "$RELEASE_VERSION"
+      - name: Summarize the registry install check
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: ${{ matrix.name }}
+          steps: ${{ toJSON(steps) }}
+          details: '{"Package version": ${{ toJSON(needs.inspect.outputs.version) }}, "Node runtime policy": ${{ toJSON(matrix.runtime-policy) }}}'
+          next: Both registry install checks must pass before the GitHub release is announced
+  reconcile:
+    name: Announce the GitHub release
+    needs: [inspect, publish, smoke]
     concurrency:
       group: package-release-reconcile
       cancel-in-progress: false
@@ -151,16 +170,16 @@ jobs:
     permissions:
       contents: read
       actions: read
-    outputs:
-      complete: ${{ steps.status.outputs.complete }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
-          ref: ${{ needs.inspect.outputs.source_commit }}
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         id: setup
+        with:
+          install: 'false'
+          cache: 'false'
       - name: Download only the inspected preparation candidate
         id: download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -169,33 +188,22 @@ jobs:
           run-id: ${{ inputs.preparation_run_id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/release-candidate
-      - name: Reinspect the externally reviewed candidate before final reconciliation
+      - name: Reinspect the externally reviewed candidate before announcement
         id: inspect
         env:
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
           CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
         run: node projects/release/github.js inspect
-      - name: Read npm version availability
-        id: status
+      - name: Confirm npm serves the reviewed tarball before requesting the release token
+        id: verify
         working-directory: projects
         env:
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
-        run: |
-          status="$(pnpm release:status "$CANDIDATE_DIRECTORY" --checksum "$CANDIDATE_CHECKSUM")"
-          printf '%s\n' "$status"
-          node --input-type=module --eval '
-          const status = JSON.parse(process.argv[1].trim().split(/\r?\n/).at(-1))
-          if (!["published", "missing"].includes(status.npm))
-              throw new Error("Release status must report npm version availability")
-          if (status.complete !== (status.npm === "published"))
-              throw new Error("Release status completeness does not match npm availability")
-          process.stdout.write(`complete=${status.complete}\nnpm=${status.npm}\n`)
-          ' "$status" >> "$GITHUB_OUTPUT"
+        run: node release/cli.js verify "$CANDIDATE_DIRECTORY" --checksum "$CANDIDATE_CHECKSUM"
       - name: Create the repository-scoped release App token
         id: release_token
-        if: steps.status.outputs.complete == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
@@ -203,34 +211,26 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
-      - name: Announce the exact-source GitHub release when the npm version is available
+      - name: Announce the exact-source GitHub release
         id: announce
-        if: steps.status.outputs.complete == 'true'
         env:
           GH_TOKEN: ${{ steps.release_token.outputs.token }}
           CANDIDATE_DIRECTORY: ${{ runner.temp }}/release-candidate
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
           CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
         run: node projects/release/github.js announce
-      - name: Summarize final reconciliation
+      - name: Summarize the GitHub release
         if: always()
-        shell: bash
-        env:
-          SUMMARY_KIND: reconcile
-          SUMMARY_STEPS: ${{ toJSON(steps) }}
-          SUMMARY_DETAILS: >-
-            {"operation": ${{ toJSON(inputs.operation) }}, "publishResult": ${{ toJSON(needs.publish.result) }}, "npm": ${{ toJSON(steps.status.outputs.npm) }}, "complete": ${{ toJSON(steps.status.outputs.complete) }}, "preparationRunId": ${{ toJSON(inputs.preparation_run_id) }}, "checksum": ${{ toJSON(inputs.candidate_checksum) }}, "sourceCommit": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "artifactId": ${{ toJSON(needs.inspect.outputs.artifact_id) }}}
-        run: |
-          if [ -f .github/scripts/workflow-summary.mjs ]; then
-            node .github/scripts/workflow-summary.mjs
-          else
-            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+        uses: $/.github/actions/summary
+        with:
+          title: GitHub release reconciliation
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Candidate version": ${{ toJSON(needs.inspect.outputs.version) }}, "Tag target": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "Preparation run ID": ${{ toJSON(inputs.preparation_run_id) }}}
+          next: Docs preview runs next. Registry publication does not establish Preview delivery
   docs-preview:
     needs: reconcile
-    if: ${{ !cancelled() && needs.reconcile.result == 'success' && needs.reconcile.outputs.complete == 'true' }}
     permissions:
       contents: read
       actions: read
-    uses: ./.github/workflows/docs-preview.yml
-    secrets: inherit
+    uses: $/.github/workflows/docs-preview.yml

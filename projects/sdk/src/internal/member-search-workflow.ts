@@ -1,4 +1,9 @@
-import { Effect } from "effect"
+/**
+ * Member search workflows: Bounded traversal over member search pages.
+ * Invariant: Traversal combines existing page operations with bounded work and retains no roster.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
+import * as Effect from "effect/Effect"
 import { GuildOperationError, Permissions, type GuildOperationOptions } from "#sdk/guilds"
 import type { MemberSearchQuery, MemberSearchIterationLimits } from "#sdk/member-search"
 import { PaginationError } from "#sdk/pagination"
@@ -7,52 +12,61 @@ import { guildFetch, memberSelf, roleList } from "./guilds.js"
 import { calculatePermissions } from "./permissions.js"
 import { encodeMemberSearchQuery, memberSearch } from "./member-search.js"
 import { Pagination } from "./pagination.js"
-import { identifier, record } from "./message.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { suspendInput } from "./defects.js"
+import { identifier, record } from "./decode/primitives.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
 const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
 
 /** Search may enqueue indexing, so the shared REST owner's POST retry policy remains unchanged */
 export function searchMembers(
-    owner: Pick<ClientOwner, "guild" | "logical">,
+    owner: Pick<ClientOwner, "guild" | "logical"> & { readonly defaultTimeoutMs?: number },
     guildId: string,
     query?: MemberSearchQuery,
     options?: GuildOperationOptions,
 ) {
-    return Effect.gen(function* () {
-        const invalid = (failure: InputValidationFailure) =>
-            new GuildOperationError("members.search", "input", "notDispatched", null, null, null, failure.detail)
+    const invalid = (failure: InputValidationFailure) =>
+        Effect.fail(
+            new GuildOperationError({
+                operation: "members.search",
+                reason: "input",
+                outcome: "notDispatched",
+                inputValidation: failure.detail,
+            }),
+        )
+    // Reading and validating the caller query and options is marked as application input
+    return suspendInput(() => {
         const request = memberSearch(guildId, query)
-        if (request instanceof InputValidationFailure)
-            return yield* Effect.fail(
-                new GuildOperationError("members.search", "input", "notDispatched", null, null, null, request.detail),
-            )
+        if (request instanceof InputValidationFailure) return invalid(request)
         if (options !== undefined && !record(options))
-            return yield* Effect.fail(
-                invalid(inputValidationFailure("options", "type", "Member search options must be an object")),
-            )
-        if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs" && key !== "signal"))
-            return yield* Effect.fail(
-                invalid(
-                    inputValidationFailure(
-                        "options",
-                        "allowedFields",
-                        "Member search options may contain only timeoutMs and signal",
-                    ),
-                ),
-            )
-        const timeout = options?.timeoutMs === undefined ? 30_000 : options.timeoutMs
+            return invalid(inputValidationFailure("options", "type", "Member search options must be an object"))
+        const unsupported = record(options)
+            ? unsupportedKeyFailure(options, ["timeoutMs", "signal"], "options", "the member search options")
+            : undefined
+        if (unsupported) return invalid(unsupported)
+        const timeoutInput = options?.timeoutMs
+        const timeout = timeoutInput === undefined ? (owner.defaultTimeoutMs ?? 30_000) : timeoutInput
         if (!positive(timeout) || timeout > 2_147_483_647)
-            return yield* Effect.fail(
-                invalid(
-                    inputValidationFailure(
-                        "options.timeoutMs",
-                        "range",
-                        "Member search timeout must be a positive safe integer no greater than 2,147,483,647",
-                    ),
+            return invalid(
+                inputValidationFailure(
+                    "options.timeoutMs",
+                    "range",
+                    "Member search timeout must be an integer from 1 through 2,147,483,647 ms",
                 ),
             )
+        return Effect.succeed([request, timeout] as const)
+    }).pipe(Effect.flatMap(([request, timeout]) => searchValidated(owner, guildId, request, timeout)))
+}
+
+/** Run one validated member search, checking Manage Guild first when the filters select sensitive join sources */
+function searchValidated(
+    owner: Pick<ClientOwner, "guild" | "logical">,
+    guildId: string,
+    request: Exclude<ReturnType<typeof memberSearch>, InputValidationFailure>,
+    timeout: number,
+) {
+    return Effect.gen(function* () {
         const body = JSON.parse(request.json!) as { join_source_type?: unknown[]; source_invite_code?: unknown[] }
         const sensitive = (body.join_source_type?.length ?? 0) > 0 || (body.source_invite_code?.length ?? 0) > 0
         const now = () => owner.logical.now()
@@ -62,7 +76,13 @@ export function searchMembers(
                 const left = Math.ceil(deadline - now())
                 return left > 0
                     ? Effect.succeed({ timeoutMs: left })
-                    : Effect.fail(new GuildOperationError("members.search", "timeout", "notDispatched"))
+                    : Effect.fail(
+                          new GuildOperationError({
+                              operation: "members.search",
+                              reason: "timeout",
+                              outcome: "notDispatched",
+                          }),
+                      )
             })
         if (sensitive) {
             const [member, guild, roles] = yield* Effect.all(
@@ -83,22 +103,35 @@ export function searchMembers(
             )
             const bits = yield* calculatePermissions({ guild, member, roles })
             if ((bits & Permissions.ManageGuild) !== Permissions.ManageGuild)
-                return yield* Effect.fail(new GuildOperationError("members.search", "rejected", "notDispatched"))
+                return yield* Effect.fail(
+                    new GuildOperationError({
+                        operation: "members.search",
+                        reason: "rejected",
+                        outcome: "notDispatched",
+                    }),
+                )
         }
         return yield* owner.guild("members.search", () => request, yield* remaining())
     })
 }
 
 export function searchMemberPagination(
-    owner: Pick<ClientOwner, "guild" | "logical" | "subscribe" | "state">,
+    owner: Pick<ClientOwner, "guild" | "logical" | "subscribe" | "state"> & { readonly defaultTimeoutMs?: number },
     guildId: string,
     filters: Omit<MemberSearchQuery, "limit">,
     limits: MemberSearchIterationLimits,
     options?: GuildOperationOptions,
 ) {
-    return Effect.suspend(() => {
+    // Reading and validating the caller filters, limits and options is marked as application input
+    return suspendInput(() => {
         const invalid = (failure: InputValidationFailure) =>
-            Effect.fail(new PaginationError("members.iterateSearch", "input", failure.detail))
+            Effect.fail(
+                new PaginationError({
+                    operation: "members.iterateSearch",
+                    reason: "input",
+                    inputValidation: failure.detail,
+                }),
+            )
         if (!record(filters))
             return invalid(inputValidationFailure("filters", "type", "Member search filters must be an object"))
         if ("limit" in filters)
@@ -111,28 +144,29 @@ export function searchMemberPagination(
             )
         if (!record(limits))
             return invalid(inputValidationFailure("limits", "type", "Member search limits must be an object"))
-        if (Object.keys(limits).some((key) => !["maxItems", "maxPages", "pageSize"].includes(key)))
+        const unsupportedLimit = unsupportedKeyFailure(
+            limits,
+            ["maxItems", "maxPages", "pageSize"],
+            "limits",
+            "the member search limits",
+        )
+        if (unsupportedLimit) return invalid(unsupportedLimit)
+        const maxItems = limits.maxItems
+        if (!positive(maxItems))
             return invalid(
                 inputValidationFailure(
-                    "limits",
-                    "allowedFields",
-                    "Member search limits may contain only maxItems, maxPages, and pageSize",
+                    "limits.maxItems",
+                    "range",
+                    "The limit maxItems is required and must be a positive safe integer",
                 ),
-            )
-        if (!positive(limits.maxItems))
-            return invalid(
-                inputValidationFailure("limits.maxItems", "range", "maxItems must be a positive safe integer"),
             )
         if (options !== undefined && !record(options))
             return invalid(inputValidationFailure("options", "type", "Member search options must be an object"))
-        if (record(options) && Object.keys(options).some((key) => key !== "timeoutMs"))
-            return invalid(
-                inputValidationFailure(
-                    "options",
-                    "allowedFields",
-                    "Native member search options may contain only timeoutMs",
-                ),
-            )
+        // The native Effect API cancels by interruption, so its options have no signal
+        const unsupportedOption = record(options)
+            ? unsupportedKeyFailure(options, ["timeoutMs"], "options", "the member search options")
+            : undefined
+        if (unsupportedOption) return invalid(unsupportedOption)
         const pageSize = limits.pageSize === undefined ? 100 : limits.pageSize,
             maxPages = limits.maxPages === undefined ? 100 : limits.maxPages
         if (!positive(pageSize) || pageSize > 100)
@@ -140,19 +174,24 @@ export function searchMemberPagination(
                 inputValidationFailure(
                     "limits.pageSize",
                     "range",
-                    "pageSize must be a positive safe integer no greater than 100",
+                    "The limit pageSize must be an integer from 1 through 100",
                 ),
             )
         if (!positive(maxPages))
             return invalid(
-                inputValidationFailure("limits.maxPages", "range", "maxPages must be a positive safe integer"),
+                inputValidationFailure(
+                    "limits.maxPages",
+                    "range",
+                    "The limit maxPages must be a positive safe integer",
+                ),
             )
-        if (options?.timeoutMs !== undefined && (!positive(options.timeoutMs) || options.timeoutMs > 2_147_483_647))
+        const timeoutMs = options?.timeoutMs
+        if (timeoutMs !== undefined && (!positive(timeoutMs) || timeoutMs > 2_147_483_647))
             return invalid(
                 inputValidationFailure(
                     "options.timeoutMs",
                     "range",
-                    "Member search timeout must be a positive safe integer no greater than 2,147,483,647",
+                    "Member search timeout must be an integer from 1 through 2,147,483,647 ms",
                 ),
             )
         if (!identifier(guildId))
@@ -160,7 +199,7 @@ export function searchMemberPagination(
         const validated = encodeMemberSearchQuery(filters)
         if (validated instanceof InputValidationFailure) return invalid(validated)
         const copied = validated.query
-        const requestOptions = options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }
+        const requestOptions = timeoutMs === undefined ? {} : { timeoutMs }
         const source = {
             identity: (hit: import("#sdk/member-search").MemberSearchHit) => hit.userId,
             load: (cursor: string | undefined, limit: number) =>
@@ -168,26 +207,31 @@ export function searchMemberPagination(
                     const offset = cursor === undefined ? 0 : Number(cursor)
                     const page = yield* searchMembers(owner, guildId, { ...copied, offset, limit }, requestOptions)
                     if (page.indexing)
-                        return yield* Effect.fail(new PaginationError("members.iterateSearch", "indexing"))
+                        return yield* Effect.fail(
+                            new PaginationError({ operation: "members.iterateSearch", reason: "indexing" }),
+                        )
                     const next = offset + page.members.length
                     if (!Number.isSafeInteger(next) || (page.members.length === 0 && offset < page.totalResultCount))
-                        return yield* Effect.fail(new PaginationError("members.iterateSearch", "cursorStalled"))
+                        return yield* Effect.fail(
+                            new PaginationError({ operation: "members.iterateSearch", reason: "cursorStalled" }),
+                        )
                     return { items: page.members, next: next >= page.totalResultCount ? null : String(next) }
                 }),
         }
         return Effect.succeed(
-            new Pagination(
-                owner,
-                "members.iterateSearch",
-                {
-                    maxItems: limits.maxItems,
-                    maxPages,
-                    pageSize,
-                    cursor: String(copied.offset ?? 0),
-                    options: requestOptions,
-                },
-                source,
-            ),
+            () =>
+                new Pagination(
+                    owner,
+                    "members.iterateSearch",
+                    {
+                        maxItems,
+                        maxPages,
+                        pageSize,
+                        cursor: String(copied.offset ?? 0),
+                        options: requestOptions,
+                    },
+                    source,
+                ),
         )
-    })
+    }).pipe(Effect.map((create) => create()))
 }

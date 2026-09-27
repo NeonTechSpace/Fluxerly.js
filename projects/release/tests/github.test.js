@@ -3,7 +3,14 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import { reconcileRelease, validatePreparation } from "../github.js"
+import {
+    GitHubCommandError,
+    assertReachableFromMain,
+    commandFailure,
+    reconcileRelease,
+    releaseTrigger,
+    validatePreparation,
+} from "../github.js"
 
 const sourceCommit = "a".repeat(40)
 const workflowCommit = "b".repeat(40)
@@ -49,16 +56,23 @@ test("Failed, foreign, unexpected-workflow and ambiguous preparation artifacts a
         { head_repository: { full_name: "attacker/fork" } },
         { workflow_id: 99 },
     ])
-        assert.throws(() => validatePreparation({ ...run, ...patch }, [artifact], options))
-    assert.throws(() => validatePreparation(run, [artifact, { ...artifact, id: 41 }], options))
-    assert.throws(() => validatePreparation(run, [{ ...artifact, expired: true }], options))
-    assert.throws(() =>
-        validatePreparation(
-            run,
-            [{ ...artifact, workflow_run: { ...artifact.workflow_run, head_sha: sourceCommit } }],
-            options,
-        ),
+        assert.throws(
+            () => validatePreparation({ ...run, ...patch }, [artifact], options),
+            /not a successful manual run/,
+            JSON.stringify(patch),
+        )
+    assert.throws(
+        () => validatePreparation(run, [artifact, { ...artifact, id: 41 }], options),
+        /exactly one named candidate/,
     )
+    for (const unbound of [
+        { ...artifact, expired: true },
+        { ...artifact, workflow_run: { ...artifact.workflow_run, head_sha: sourceCommit } },
+    ])
+        assert.throws(
+            () => validatePreparation(run, [unbound], options),
+            /expired or has inconsistent preparation provenance/,
+        )
 })
 
 async function fixture(t, { version = "1000.0.0", existing, newer = false } = {}) {
@@ -266,11 +280,14 @@ test("Final tag verification waits for delayed Git ref visibility", async (t) =>
     const tagCommit = f.github.tagCommit
     f.github.tagCommit = async (...args) =>
         f.getRelease() && !f.getRelease().draft && missingReads-- > 0 ? null : tagCommit(...args)
-    await reconcileRelease(f.candidate, f.directory, f.github, {
+    const result = await reconcileRelease(f.candidate, f.directory, f.github, {
+        visibilityTimeout: 60_000,
         now: () => elapsed,
         wait: async (milliseconds) => { elapsed += milliseconds },
     })
-    assert.equal(elapsed, 10_000)
+    assert.deepEqual([result.tag, result.latest], ["v1000.0.0", true])
+    assert.equal(missingReads < 0, true, "Both missing tag reads were observed")
+    assert.ok(elapsed > 0 && elapsed < 60_000, `Waited ${elapsed} ms`)
 })
 
 test("An unconfirmed publish update stops at the deadline without repeating the update", async (t) => {
@@ -366,6 +383,79 @@ test("An interrupted asset upload leaves a draft and retry resumes only missing 
     await reconcileRelease(f.candidate, f.directory, f.github)
     assert.equal(f.mutations.filter((value) => value === "upload:notes.md").length, 1)
     assert.equal(f.getRelease().draft, false)
+})
+
+test("GitHub command failures carry the HTTP status reported by gh", () => {
+    assert.equal(commandFailure("gh: Validation Failed (HTTP 422)").status, 422)
+    assert.equal(commandFailure("HTTP 502: Bad Gateway (https://uploads.github.com/)").status, 502)
+    assert.equal(commandFailure("connect ETIMEDOUT").status, undefined)
+})
+
+test("A definite 4xx rejection stops reconciliation, while network and 5xx failures fall back to readback", async (t) => {
+    for (const [operation, patch] of [
+        ["release creation", (f) => { f.github.create = async () => { f.mutations.push("create"); throw new GitHubCommandError("Rejected", 403) } }],
+        ["notes.md asset upload", (f) => { f.github.upload = async () => { f.mutations.push("upload"); throw new GitHubCommandError("Rejected", 422) } }],
+        ["release publication update", (f) => { f.github.update = async () => { f.mutations.push("publish"); throw new GitHubCommandError("Rejected", 422) } }],
+    ]) {
+        const f = await fixture(t)
+        patch(f)
+        let elapsed = 0
+        await assert.rejects(
+            reconcileRelease(f.candidate, f.directory, f.github, {
+                now: () => elapsed,
+                wait: async (milliseconds) => { elapsed += milliseconds },
+            }),
+            new RegExp(`rejected the ${String(operation)} with HTTP 4\\d\\d`),
+        )
+        assert.equal(elapsed, 0, "A definite rejection must not wait for readback")
+    }
+    const f = await fixture(t)
+    const create = f.github.create
+    f.github.create = async (input) => {
+        await create(input)
+        throw new GitHubCommandError("Server error", 502)
+    }
+    assert.equal((await reconcileRelease(f.candidate, f.directory, f.github)).tag, "v1000.0.0")
+    assert.equal(f.mutations.filter((value) => value === "create").length, 1)
+})
+
+test("Candidate sources must be reachable from main through a read-only comparison", async () => {
+    const reads = []
+    const github = (comparison) => ({
+        api: async (path) => {
+            reads.push(path)
+            if (comparison instanceof Error) throw comparison
+            return comparison
+        },
+    })
+    await assertReachableFromMain(github({ status: "behind", ahead_by: 0 }), sourceCommit)
+    await assertReachableFromMain(github({ status: "identical", ahead_by: 0 }), sourceCommit)
+    assert.deepEqual(reads, [`compare/main...${sourceCommit}`, `compare/main...${sourceCommit}`])
+    for (const comparison of [{ status: "ahead", ahead_by: 1 }, { status: "diverged", ahead_by: 2 }, {}])
+        await assert.rejects(assertReachableFromMain(github(comparison), sourceCommit), /not reachable from main/)
+    await assert.rejects(assertReachableFromMain(github(new Error("HTTP 404")), sourceCommit), /could not be verified/)
+    await assert.rejects(assertReachableFromMain(github({ status: "identical", ahead_by: 0 }), "main"), /exact commit/)
+})
+
+test("Pushes prepare a candidate only when they change the SDK version to one npm lacks", async () => {
+    const before = "c".repeat(40)
+    const trigger = (versions, npmVersions = []) =>
+        releaseTrigger({
+            before,
+            after: sourceCommit,
+            readVersion: async (commit) => versions[commit],
+            registries: { inventory: async () => ({ npmVersions }) },
+        })
+    assert.equal((await trigger({ [before]: "1000.0.0-rc.0", [sourceCommit]: "1000.0.0" })).prepare, true)
+    assert.equal((await trigger({ [before]: "1000.0.0", [sourceCommit]: "1000.0.0" })).prepare, false)
+    assert.equal((await trigger({ [before]: "1000.0.0-rc.0", [sourceCommit]: "1000.0.0" }, ["1000.0.0"])).prepare, false)
+    const created = await releaseTrigger({
+        before: "0".repeat(40),
+        after: sourceCommit,
+        readVersion: async () => "1000.0.1",
+        registries: { inventory: async () => ({ npmVersions: [] }) },
+    })
+    assert.deepEqual([created.prepare, created.version], [true, "1000.0.1"])
 })
 
 test("A conflicting preexisting tag is rejected before creating any release", async (t) => {

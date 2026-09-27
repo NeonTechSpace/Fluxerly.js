@@ -30,6 +30,8 @@
  * } satisfies EmbedInput
  * ```
  * Pass this object in the embeds array of send, reply or edit. The example URLs are placeholders
+ *
+ * @category Messages
  */
 export interface EmbedInput {
     /** Heading text, up to 256 normalized UTF-16 code units. Supply url to make it a link */
@@ -56,7 +58,11 @@ export interface EmbedInput {
     readonly fields?: readonly EmbedFieldInput[]
 }
 
-/** Label above the embed body, with optional links for its name and icon */
+/**
+ * Label above the embed body, with optional links for its name and icon
+ *
+ * @category Messages
+ */
 export interface EmbedAuthorInput {
     /** Required author name, 1–256 normalized UTF-16 code units */
     readonly name: string
@@ -66,7 +72,11 @@ export interface EmbedAuthorInput {
     readonly iconUrl?: string
 }
 
-/** Text beneath the embed body, with an optional icon */
+/**
+ * Text beneath the embed body, with an optional icon
+ *
+ * @category Messages
+ */
 export interface EmbedFooterInput {
     /** Required footer text, 1–2,048 normalized UTF-16 code units */
     readonly text: string
@@ -76,6 +86,8 @@ export interface EmbedFooterInput {
 
 /** An image or thumbnail to show in a rich card. Use an HTTP(S) URL or attachment://filename for a new image uploaded with the same message.
  * The SDK neither uploads through this object nor fetches remote or retained attachment bytes
+ *
+ * @category Messages
  */
 export interface EmbedMediaInput {
     /** Required HTTP(S) image URL or attachment://filename for image and thumbnail fields */
@@ -84,7 +96,11 @@ export interface EmbedMediaInput {
     readonly description?: string
 }
 
-/** One heading and body pair within an embed, such as a Status field with value Passed */
+/**
+ * One heading and body pair within an embed, such as a Status field with value Passed
+ *
+ * @category Messages
+ */
 export interface EmbedFieldInput {
     /** Required heading, 1–256 normalized UTF-16 code units */
     readonly name: string
@@ -94,7 +110,11 @@ export interface EmbedFieldInput {
     readonly inline?: boolean
 }
 
-/** Author or preview-provider information received with a message. The object is frozen, missing or null server fields become omitted properties */
+/**
+ * Author or preview-provider information received with a message. The object is frozen, missing or null server fields become omitted properties
+ *
+ * @category Messages
+ */
 export interface EmbedAuthor {
     /** Server-provided label */
     readonly name: string
@@ -106,7 +126,11 @@ export interface EmbedAuthor {
     readonly proxyIconUrl?: string
 }
 
-/** Footer information received with a message. The object is frozen, missing or null server fields become omitted properties */
+/**
+ * Footer information received with a message. The object is frozen, missing or null server fields become omitted properties
+ *
+ * @category Messages
+ */
 export interface EmbedFooter {
     /** Server-provided label */
     readonly text: string
@@ -118,6 +142,8 @@ export interface EmbedFooter {
 
 /** Information about an embed image, video or audio file, not downloaded bytes.
  * The object is frozen, missing or null server fields become omitted properties. Reading these fields does not download or play media
+ *
+ * @category Messages
  */
 export interface EmbedMedia {
     /** Original media location */
@@ -142,7 +168,11 @@ export interface EmbedMedia {
     readonly flags: number
 }
 
-/** A heading and body pair received within an embed. This object is frozen */
+/**
+ * A heading and body pair received within an embed. This object is frozen
+ *
+ * @category Messages
+ */
 export interface EmbedField {
     /** Server-provided heading */
     readonly name: string
@@ -155,6 +185,8 @@ export interface EmbedField {
 /** One received card or link preview, without its optional child previews.
  * This frozen object cannot be changed. Missing or null server fields are omitted.
  * Use `EmbedInput` to send a card. A received card can include server-generated fields, but unknown fields are omitted
+ *
+ * @category Messages
  */
 export interface EmbedChild {
     /** Server-provided type, including types unknown to this SDK */
@@ -197,6 +229,8 @@ export interface EmbedChild {
 
 /** A rich card or generated link preview received with a message, including any child preview.
  * This object is frozen, but later message observations may contain different media-processing results
+ *
+ * @category Messages
  */
 export interface Embed extends EmbedChild {
     /** At most one server-generated child, with no further nesting */

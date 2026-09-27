@@ -1,147 +1,225 @@
-import { adaptStructuredLogger } from "#sdk/internal/logging"
-
-declare const loggerBrand: unique symbol
-
-/** A logger adapted for a default-API client's logging.logger setting.
- * Create one with fromStructuredLogger from the default entry point or fromEffectLogger from the Effect entry point
+/**
+ * Severity of an SDK log record, from most to least verbose
+ *
+ * @category Logging and diagnostics
  */
-export interface DefaultLogger {
-    /** Type-only marker that prevents constructing an integration without the SDK adapter */
-    readonly [loggerBrand]: true
-}
-
-/** The severity attached to a structured SDK log record */
-export type SdkLogLevel = "All" | "Trace" | "Debug" | "Info" | "Warn" | "Error" | "Fatal" | "None"
-
-/** Stable connection events emitted when development logging is enabled */
-export type SdkLifecycleEvent =
-    | "connecting"
-    | "attempt"
-    | "connected"
-    | "connectionLost"
-    | "retry"
-    | "sessionReset"
-    | "connectionEnded"
-    | "closing"
-    | "closed"
-
-/** Fields shared by every structured SDK log record */
-export interface SdkLogRecordBase {
-    /** Identifies records created by this SDK */
-    readonly source: "fluxerly"
-    /** ISO 8601 wall-clock time at which the SDK emitted the record */
-    readonly timestamp: string
-    /** Severity selected by the SDK before the configured minimum-level filter */
-    readonly level: SdkLogLevel
-}
-
-/** A connection log record with a fixed set of SDK event names and bounded diagnostic fields, emitted when development logging is enabled */
-export interface SdkLifecycleLogRecord extends SdkLogRecordBase {
-    readonly category: "lifecycle"
-    readonly event: SdkLifecycleEvent
-    readonly phase?: "startup" | "recovery"
-    readonly attempt?: number
-    readonly delayMs?: number
-    readonly mode?: "identify" | "resume"
-    readonly failure?: string
-    /** This client's local shard identifier, not whole-bot or cross-process state */
-    readonly shardId?: number
-}
-
-/** Stable measurement operations available to SDK instrumentation */
-export type SdkMeasurementOperation = "gateway.connection" | "rest.request" | "event.handler"
-
-/** Stable stages that divide an operation without exposing a URL, payload or resource identifier */
-export type SdkMeasurementStage = "queue" | "network" | "decode" | "handler"
-
-/** A timing log record with a fixed set of SDK operation and stage names, emitted when measurements are enabled */
-export interface SdkMeasurementLogRecord extends SdkLogRecordBase {
-    readonly category: "measurement"
-    readonly event: "measurement"
-    readonly operation: SdkMeasurementOperation
-    readonly stage: SdkMeasurementStage
-    /** Elapsed monotonic time in milliseconds */
-    readonly durationMs: number
-    readonly outcome: "success" | "failure" | "cancelled"
-    readonly retryCount?: number
-}
-
-/** A safe operational-error record. Failure objects, causes and application data are not included */
-export interface SdkOperationalLogRecord extends SdkLogRecordBase {
-    readonly category: "operation"
-    readonly event: "stateObserverFailed" | "eventSubscriptionFailed" | "operationFailed"
-    readonly subscriptionEvent?: string
-    readonly failureKind?: "handler" | "overflow"
-    readonly reporterFailed?: boolean
-}
-
-/** A structured SDK record containing only SDK-owned, bounded diagnostic fields */
-export type SdkLogRecord = SdkLifecycleLogRecord | SdkMeasurementLogRecord | SdkOperationalLogRecord
-
-/** A synchronous callback for one structured SDK log record */
-export type StructuredLogger = (record: SdkLogRecord) => void
+export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal"
 
 /**
- * Adapt a plain JavaScript callback for logging.logger on a default-API client.
- * The callback receives frozen (read-only) records without credentials, private payloads, URLs, Effect causes or application annotations.
- * Delivery is synchronous and the callback's return value is ignored. Thrown callback errors are swallowed without retry.
- * The SDK does not wait for a returned Promise or thenable, and discards its rejection. Blocking work can delay SDK work.
- * The application owns any intentional asynchronous delivery, buffering, flushing and persistence.
- * Settings and records remain local to the client that receives the returned adapter
- * @throws ConfigurationError with field logger when logger is not a function
- * @example
- * ```ts
- * import { createClient, fromStructuredLogger } from "@neontechspace/fluxerly"
+ * A minimum severity for SDK log output, or silent to emit nothing
  *
- * const records = []
- * const client = createClient({
- *     token: "YOUR_BOT_TOKEN",
- *     logging: { development: true, logger: fromStructuredLogger((record) => records.push(record)) },
- * })
- * ```
+ * @category Logging and diagnostics
  */
-export function fromStructuredLogger(logger: StructuredLogger): DefaultLogger {
-    return adaptStructuredLogger(logger)
+export type LogThreshold = LogLevel | "silent"
+
+/** The SDK area that produced a log record. Use it with categories and debug to adjust output for one area.
+ * The lifecycle category covers startup, readiness, connection loss and shutdown, gateway covers protocol traffic,
+ * rest covers HTTP requests and retries, ratelimit covers rate-limit waits, and cache covers cache policy and expiry.
+ * The events category covers subscriptions, handlers and dropped events, commands covers prefix commands,
+ * collectors covers message and reaction collectors, supervisor covers child processes, and sdk covers the logger itself
+ *
+ * @category Logging and diagnostics
+ */
+export type LogCategory =
+    | "lifecycle"
+    | "gateway"
+    | "rest"
+    | "ratelimit"
+    | "cache"
+    | "events"
+    | "commands"
+    | "collectors"
+    | "supervisor"
+    | "sdk"
+
+/** Readable facts about an error attached to a log record or failure report.
+ * Application errors keep their full message, stack and cause chain. SDK errors add their stable code and hint.
+ * Credentials are masked in every string
+ *
+ * @category Logging and diagnostics
+ */
+export interface ErrorInfo {
+    /** Where the failure came from. The value application marks values thrown by application callbacks, provider marks Fluxer rejections and sdk marks SDK failures */
+    readonly origin: "application" | "sdk" | "provider"
+    /** Error name, such as TypeError or GuildOperationError, or Non-Error value (string) for a thrown value that is not an Error */
+    readonly name: string
+    /** Error message, or a text form of a thrown non-Error value */
+    readonly message: string
+    /** Stable SDK error code, or a string code property of an application error */
+    readonly code?: string
+    /** Suggested next step from an SDK error */
+    readonly hint?: string
+    /** Stack trace, when the value had one */
+    readonly stack?: string
+    /** The next error in the cause chain, limited to a few levels */
+    readonly cause?: ErrorInfo
+    /** Safe structured facts from an SDK error */
+    readonly details?: Readonly<Record<string, unknown>>
 }
 
-/** Opt into SDK diagnostics without enabling or disabling operational error reports.
- * Native clients use the executing Effect context's logger, minimum level, annotations and spans, not default-API logger settings
+/** One structured SDK log record, delivered frozen to sinks and printed by the built-in console output.
+ * Records never contain tokens, Authorization headers, client secrets or invite codes.
+ * Message payload bodies appear only in explicit unsafe payload mode
+ *
+ * @category Logging and diagnostics
+ */
+export interface LogRecord {
+    /** ISO 8601 wall-clock time when the SDK created the record */
+    readonly time: string
+    /** Record severity */
+    readonly level: LogLevel
+    /** SDK area that produced the record */
+    readonly category: LogCategory
+    /** Stable dotted identifier, such as lifecycle.ready, ratelimit.wait or events.dropped. Match on this rather than message */
+    readonly code: string
+    /** Readable sentence describing what happened, which can change between releases */
+    readonly message: string
+    /** Local shard that the record concerns */
+    readonly shardId?: number
+    /** REST route template with IDs replaced by placeholders, such as /channels/:id/messages */
+    readonly route?: string
+    /** Event name that the record concerns, such as messageCreate */
+    readonly event?: string
+    /** Prefix command name that the record concerns */
+    readonly command?: string
+    /** Identifier of the event subscription that the record concerns */
+    readonly subscriptionId?: string
+    /** Elapsed milliseconds for the described work */
+    readonly durationMs?: number
+    /** One-based attempt number for retried work */
+    readonly attempt?: number
+    /** Milliseconds until the next attempt or the end of a wait */
+    readonly delayMs?: number
+    /** HTTP status */
+    readonly status?: number
+    /** WebSocket close code */
+    readonly closeCode?: number
+    /** Other safe facts, such as counts, opcodes and dispatch types */
+    readonly fields?: Readonly<Record<string, string | number | boolean | null>>
+    /** The error that the record describes */
+    readonly error?: ErrorInfo
+}
+
+/** A synchronous callback that receives each emitted SDK record.
+ * Return values are ignored and promises are not awaited. A thrown error or rejected promise is counted in
+ * diagnostics().counters.sinkFailures and reported once on standard error, without stopping SDK work or other sinks
+ *
+ * @category Logging and diagnostics
+ */
+export type LogSink = (record: LogRecord) => void
+
+/**
+ * Configure what the SDK logs and where the output goes. Both entry points accept the same settings.
+ * With no settings, the SDK prints Info and higher records, including startup, readiness, connection loss,
+ * rate-limit waits of at least one second, shutdown and full application errors.
+ * The FLUXERLY_DEBUG environment variable, read when the client is created, enables Debug records:
+ * 1, true or * for every category, or a comma-separated list such as gateway,rest.
+ * Logging never changes operation results, and records never contain credentials
+ *
+ * @category Logging and diagnostics
  */
 export interface LoggingOptions {
-    /**
-     * Log connection attempts, readiness, loss, retry waits, session resets and shutdown at Info level.
-     * Defaults to false, even when the Effect runtime enables Debug output.
-     * The configured minimum log level can still suppress these records.
-     * Records contain SDK event and phase names, attempt counts, millisecond delays and safe failure categories, not credentials or private payloads.
-     * Multi-shard records identify this client's local shard, not other processes or whole-bot state.
-     * Output is best-effort, not a lossless history or confirmation that a sink stored the record
+    /** Minimum severity to emit, default info. The value silent emits nothing, including application error reports without
+     * a hook and unsafe payload records
      */
-    readonly development?: boolean
-    /**
-     * Emit queue, network, decode and handler timing records with fixed SDK operation and outcome names at Info level.
-     * Defaults to false. Records use stable SDK operation and outcome names without URLs, payloads, credentials or resource identifiers.
-     * Durations use the executing Effect runtime's monotonic clock, including a caller-provided Clock service for native clients.
-     * Measurements use the existing logger synchronously and add no telemetry service, exporter, queue or persistence.
-     * The configured logger and minimum level can still suppress or redirect them
+    readonly level?: LogThreshold
+    /** Per-category minimum severity that replaces level for that category, such as { rest: "debug", cache: "warn" } */
+    readonly categories?: Readonly<Partial<Record<LogCategory, LogThreshold>>>
+    /** Enable Debug records for every category with true, or for the listed categories.
+     * Adds to FLUXERLY_DEBUG and lowers, never raises, the configured threshold
      */
-    readonly measurements?: boolean
+    readonly debug?: boolean | readonly LogCategory[]
+    /** Built-in console output format. The value pretty prints readable single lines with indented stacks, and json prints one LogRecord per line.
+     * Info and lower records go to standard output and Warn and higher to standard error, and each stream decides its own default.
+     * The default is pretty when that stream is a terminal and json otherwise.
+     * Without this setting, the FLUXERLY_LOG_FORMAT environment variable, pretty or json, read when the client is created,
+     * chooses the format for both streams, and FLUXERLY_LOG_COLOR forces color on with 1, true, yes or on, and off with
+     * 0, false, no or off, for pretty output. Another nonempty value of either variable is ignored with one
+     * sdk.unknownEnvironmentValue Warn at startup. NO_COLOR still disables color. A supervisor sets both variables for children whose output it forwards.
+     * Native clients without sink or format send records to the Effect logger instead, and the environment variables do not change that
+     */
+    readonly format?: "pretty" | "json"
+    /** Receive records instead of the built-in console output. Pass one function or an array of them.
+     * Each sink is called synchronously in order for every emitted record
+     */
+    readonly sink?: LogSink | readonly LogSink[]
+    /** Collapse repeated identical Warn, Error and Fatal records within a window.
+     * The next identical record after the window reports how many were suppressed in fields.repeated and as "(repeated N× since last shown)" in its message,
+     * and shutdown reports any remainder the same way. When more than 512 distinct records are tracked, the oldest one's window ends early and its count is reported then.
+     * Default { windowMs: 60000 }. A false value or a windowMs of 0 disables collapsing
+     */
+    readonly dedupe?:
+        | {
+              /** Milliseconds during which identical records are collapsed, default 60,000. 0 disables collapsing */
+              readonly windowMs?: number
+          }
+        | false
+    /** Print received and sent payload bodies at Trace level for debugging, for all categories or the listed ones.
+     * Payload records bypass the level setting, except that a category set to silent prints no payloads.
+     * Payloads can contain private message content, so the SDK prints a Warn banner once, at startup or before the first
+     * payload record, whichever comes first, even when the level would hide Warn records.
+     * Received REST bodies show at most their first 65,536 bytes.
+     * Tokens, Authorization headers, client secrets and invite codes stay masked even in this mode
+     */
+    readonly unsafe?: {
+        /** Must be true to acknowledge that payload bodies can contain private content */
+        readonly payloads: true
+        /** Print payloads only for these categories, such as gateway or rest. Omit for every category */
+        readonly categories?: readonly LogCategory[]
+    }
 }
 
-/** Choose the default-API client's minimum log level and optional custom logger.
- * Settings are copied when this client is created and do not configure any other client or Effect runtime
+/**
+ * Running totals for one client since creation, returned by diagnostics().counters. Values only increase
+ *
+ * @category Logging and diagnostics
  */
-export interface DefaultLoggingOptions extends LoggingOptions {
-    /** Lowest SDK log level to emit, including operational error reports.
-     * Defaults to Info, while None explicitly suppresses output
+export interface ClientCounters {
+    /** Event handler and command callbacks that threw or rejected */
+    readonly handlerFailures: number
+    /** Failed onError hooks, which threw or rejected while reporting a failure */
+    readonly hookFailures: number
+    /** Failure reports that could not be queued for a busy hook and were logged instead */
+    readonly reportsDropped: number
+    /** Events not delivered to a subscription, by reason. The reason overflow is a full queue, malformed is a rejected dispatch,
+     * and collector is a full collector buffer
      */
-    readonly minimumLevel?: SdkLogLevel
-    /**
-     * Send this client's SDK records to a logger adapted with fromStructuredLogger or fromEffectLogger.
-     * Omission uses Effect's readable default logger without extra setup.
-     * A supplied integration replaces only this client's logger and does not inherit an unrelated application's Effect runtime.
-     * The SDK invokes the sink synchronously and isolates thrown sink errors from SDK outcomes.
-     * Returned promises or thenables are not awaited, and their rejections are discarded.
-     * A blocking sink can still delay execution, and flushing or asynchronous delivery remains the application's responsibility
+    readonly eventsDropped: {
+        /** Events dropped because a subscription queue was full */
+        readonly overflow: number
+        /** Gateway dispatches skipped because they failed validation */
+        readonly malformed: number
+        /** Messages or reactions dropped because a collector buffer was full */
+        readonly collector: number
+    }
+    /** Gateway messages rejected as invalid protocol data, including skipped malformed dispatches */
+    readonly protocolFailures: number
+    /** Dispatch types the SDK does not handle */
+    readonly unknownDispatches: number
+    /** Gateway opcodes the SDK does not handle */
+    readonly unknownOpcodes: number
+    /** Automatic REST request retries */
+    readonly restRetries: number
+    /** REST rate-limit waits that took place. A limit whose wait would pass the request deadline fails the request
+     * without waiting, logs ratelimit.deadline and is not counted here
      */
-    readonly logger?: DefaultLogger
+    readonly rateLimitWaits: number
+    /** REST requests that failed with reason busy before sending, because the REST queue or the upload byte budget was
+     * full. The first such failure in a minute also logs rest.busy at Warn
+     */
+    readonly restBusy: number
+    /** Gateway reconnection attempts after an established connection was lost */
+    readonly reconnects: number
+    /** Successful session resumes */
+    readonly resumes: number
+    /** Log output failures: Sink and observe calls that threw or rejected, console or Effect logger output that failed,
+     * and failure reports that could not be formatted. The first one is described on standard error
+     */
+    readonly sinkFailures: number
+    /** Shutdown or subscription cleanup steps that failed */
+    readonly cleanupFailures: number
+    /** Prefix commands rejected by a guard, cooldown or argument parser */
+    readonly commandRejections: number
+    /** Messages with the command prefix that matched no command */
+    readonly unmatchedCommands: number
 }

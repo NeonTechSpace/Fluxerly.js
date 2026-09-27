@@ -17,13 +17,8 @@ on:
       line:
         description: Optional expected major.minor release line
         type: string
-      bootstrap:
-        description: Explicitly allow a channel with no published baseline
-        default: false
-        type: boolean
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 cache-mode: read
 concurrency:
   # Version PR branch names are shared across source branches
@@ -32,20 +27,21 @@ concurrency:
   queue: max
 jobs:
   version:
+    name: Prepare the source version
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      skipped: ${{ steps.version.outputs.skipped }}
+      version: ${{ steps.version.outputs.version }}
+      source_commit: ${{ steps.change.outputs.source_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         id: setup
-      - name: Require supported registry contracts before source or release effects
-        id: support
-        working-directory: projects
-        run: pnpm release:check
       - name: Build prospective publishable SDK content
         id: build
         working-directory: projects
@@ -57,7 +53,6 @@ jobs:
           RELEASE_CHANNEL: ${{ inputs.channel }}
           RELEASE_EPOCH: ${{ inputs.epoch }}
           RELEASE_LINE: ${{ inputs.line }}
-          RELEASE_BOOTSTRAP: ${{ inputs.bootstrap }}
         run: |
           node --input-type=module <<'NODE'
           import { execFileSync } from 'node:child_process'
@@ -66,14 +61,13 @@ jobs:
           for (const [name, value] of [['epoch', process.env.RELEASE_EPOCH], ['line', process.env.RELEASE_LINE]]) {
             if (value) args.push(`--${name}`, value)
           }
-          if (process.env.RELEASE_BOOTSTRAP === 'true') args.push('--bootstrap')
           const output = execFileSync('pnpm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 600000 })
           process.stdout.write(output)
           const result = JSON.parse(output.trim().split('\n').at(-1))
           appendFileSync(process.env.GITHUB_OUTPUT, `skipped=${result.skipped === true}\n`)
-          if (result.skipped === true) appendFileSync(process.env.GITHUB_OUTPUT, `reason_json=${JSON.stringify(result.reason ?? 'No content change')}\n`)
+          if (result.skipped === true) appendFileSync(process.env.GITHUB_OUTPUT, `reason=${String(result.reason ?? 'No content change').replace(/[\r\n]/g, ' ')}\n`)
           const { version } = JSON.parse(readFileSync('sdk/package.json', 'utf8'))
-          appendFileSync(process.env.GITHUB_ENV, `RELEASE_VERSION=${version}\n`)
+          if (!/^\d+\.\d+\.\d+(?:-(?:canary|rc)\.\d+)?$/.test(version)) throw new Error('Unexpected SDK version format')
           appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`)
           NODE
       - name: Format the generated SDK changelog
@@ -81,34 +75,95 @@ jobs:
         if: steps.version.outputs.skipped != 'true'
         working-directory: projects
         run: pnpm --filter @neontechspace/fluxerly exec prettier --write CHANGELOG.md
+      - name: Package the reviewed version change
+        id: change
+        if: steps.version.outputs.skipped != 'true'
+        run: |
+          git add --all -- projects/sdk/package.json projects/sdk/CHANGELOG.md projects/.changeset projects/pnpm-lock.yaml
+          git diff --cached --binary > "$RUNNER_TEMP/version-change.patch"
+          printf 'source_commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Retain the version change for the pull request job
+        id: artifact
+        if: steps.version.outputs.skipped != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: version-change
+          path: ${{ runner.temp }}/version-change.patch
+          if-no-files-found: error
+          retention-days: 1
+      - name: Summarize the source version
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Source version preparation
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Source manifest version": ${{ toJSON(steps.version.outputs.version) }}, "Source commit": ${{ toJSON(steps.change.outputs.source_commit) }}, "No-change reason": ${{ toJSON(steps.version.outputs.reason) }}}
+          next: The pull request job opens or updates the version PR from this packaged change
+  pull_request:
+    name: Open the version pull request
+    needs: version
+    if: needs.version.outputs.skipped == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - name: Require the source commit that produced the version change
+        id: source
+        env:
+          EXPECTED_SOURCE: ${{ needs.version.outputs.source_commit }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$EXPECTED_SOURCE" ]; then
+            printf 'The source branch moved after version preparation, rerun Release version PR\n' >&2
+            exit 1
+          fi
+      - name: Download the packaged version change
+        id: download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: version-change
+          path: ${{ runner.temp }}/version-change
+      - name: Apply the version change
+        id: apply
+        run: git apply "$RUNNER_TEMP/version-change/version-change.patch"
       - name: Open the version PR for review
         id: pull_request
-        if: steps.version.outputs.skipped != 'true'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           base: ${{ inputs.source_ref }}
-          branch: release/version-${{ env.RELEASE_VERSION }}
-          title: Release ${{ env.RELEASE_VERSION }}
-          commit-message: Prepare release ${{ env.RELEASE_VERSION }}
+          branch: release/version-${{ needs.version.outputs.version }}
+          title: Release ${{ needs.version.outputs.version }}
+          commit-message: Prepare release ${{ needs.version.outputs.version }}
           body: |
             Review the SDK version, changelog and consumed Changesets
-            Select Approve workflows to run in the PR merge box and require passing checks before merging
-            PRs created or updated with GITHUB_TOKEN require approval before their pull-request workflows run
-            After merging, run Release prepare on the reviewed merged source
+            The workflow dispatches Check on this branch, require it to pass before merging
+            After merging, Release prepare runs automatically for the merged source when npm lacks the version
           add-paths: |
             projects/sdk/package.json
             projects/sdk/CHANGELOG.md
             projects/.changeset/**
             projects/pnpm-lock.yaml
-      - name: Summarize version review
-        if: always()
-        shell: bash
+      - name: Run Check on the version branch
+        id: check
+        if: steps.pull_request.outputs.pull-request-operation == 'created' || steps.pull_request.outputs.pull-request-operation == 'updated'
         env:
-          SUMMARY_KIND: version
-          SUMMARY_STEPS: ${{ toJSON(steps) }}
-        run: |
-          if [ -f .github/scripts/workflow-summary.mjs ]; then
-            node .github/scripts/workflow-summary.mjs
-          else
-            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          GH_TOKEN: ${{ github.token }}
+          VERSION_BRANCH: release/version-${{ needs.version.outputs.version }}
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$VERSION_BRANCH"
+      - name: Summarize the version pull request
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Source version pull request
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Source manifest version": ${{ toJSON(needs.version.outputs.version) }}, "PR operation": ${{ toJSON(steps.pull_request.outputs.pull-request-operation) }}, "PR number": ${{ toJSON(steps.pull_request.outputs.pull-request-number) }}, "PR URL": ${{ toJSON(steps.pull_request.outputs.pull-request-url) }}}
+          next: Review the version, changelog and consumed Changesets, and wait for the dispatched Check before merging

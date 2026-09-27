@@ -1,3 +1,5 @@
+// @ts-check
+
 import { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs"
 import { join } from "node:path"
 
@@ -13,7 +15,11 @@ function removeInheritedAuthentication(env) {
 }
 
 function cleanup(config, directory) {
-    try { unlinkSync(config) } catch (error) { if (error.code !== "ENOENT") throw error }
+    try {
+        unlinkSync(config)
+    } catch (error) {
+        if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ENOENT") throw error
+    }
     rmdirSync(directory)
 }
 

@@ -13,9 +13,13 @@ import {
 import { useDocsSearch } from "fumadocs-core/search/client"
 import { staticClient } from "fumadocs-core/search/client/orama-static"
 import { useMemo, useRef } from "react"
+import { rankResults, searchOptions } from "../lib/search-options"
 
-export default function Search({ version, ...props }: SharedProps & { version: string }) {
-    const client = useMemo(() => staticClient({ from: `/api/search/${version}.json` }), [version])
+export default function Search({ version, from, ...props }: SharedProps & { version: string; from: string }) {
+    const client = useMemo(() => {
+        const base = staticClient({ from, search: searchOptions })
+        return { ...base, search: async (query: string) => rankResults(query, await base.search(query)) }
+    }, [from])
     const { search, setSearch, query } = useDocsSearch({ client })
     const returnFocus = useRef<HTMLElement | null>(null)
     return (
@@ -35,7 +39,7 @@ export default function Search({ version, ...props }: SharedProps & { version: s
                 <SearchDialogHeader>
                     <SearchDialogIcon />
                     <SearchDialogInput
-                        aria-label={`Search ${version === "latest" ? "latest" : version === "preview" ? "source preview" : version === "rc" ? "RC" : version === "canary" ? "Canary" : version} documentation`}
+                        aria-label={`Search ${version === "preview" ? "source preview" : version === "rc" ? "RC" : version === "canary" ? "Canary" : version} documentation`}
                     />
                     <SearchDialogClose />
                 </SearchDialogHeader>

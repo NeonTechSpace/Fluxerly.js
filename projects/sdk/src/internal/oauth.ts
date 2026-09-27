@@ -1,4 +1,12 @@
-import { Clock, Deferred, Effect, Scope } from "effect"
+/**
+ * OAuth client operations: Authorization URLs, code exchange, refresh, revocation, introspection and authorized reads.
+ * Invariant: Consent, storage and refresh coordination stay application-owned, credentials never appear in errors or logs, and
+ * every request goes through the HTTP transport seam. Implements [SDK contracts: Results and failures](/docs/SDK-CONTRACTS.md#results-and-failures)
+ */
+import * as Clock from "effect/Clock"
+import * as Deferred from "effect/Deferred"
+import * as Effect from "effect/Effect"
+import * as Scope from "effect/Scope"
 import type {
     OAuthAuthorizationInput,
     OAuthCodeExchangeInput,
@@ -11,15 +19,25 @@ import type {
     OAuthOperationOptions,
     OAuthTokens,
 } from "#sdk/oauth"
-import { OAuthOperationError as OAuthError } from "#sdk/oauth"
-import { apiErrorDetail } from "#sdk/api-errors"
+import { OAuthOperationError as OAuthError, oauthCredential } from "#sdk/oauth"
+import { loggingConfiguration, type ClientLogger } from "#sdk/internal/logging"
+import type * as Context from "effect/Context"
+import { apiErrorDetail, unrecognizedProviderCode } from "#sdk/api-errors"
 import { ClientClosedError, ConfigurationError, RateLimitError } from "#sdk/errors"
 import { mapFailureCause, withDeadline } from "#sdk/internal/effect-failures"
+import { nowMs } from "#sdk/internal/clock"
+import { defaultHttpTransport, type HttpTransport } from "#sdk/internal/transport/index"
 import { InstanceResolver, instanceConfiguration } from "#sdk/internal/instance"
 import { guildList } from "#sdk/internal/guild-lifecycle"
-import { identifier, record } from "#sdk/internal/message"
+import { identifier, record } from "#sdk/internal/decode/primitives"
+import { readCaller, suspendInput, suspendMarked } from "#sdk/internal/defects"
 import type { GuildListQuery, GuildListSummary } from "#sdk/guilds"
-import { InputValidationFailure, inputValidationFailure, type InputValidationConstraint } from "#sdk/input-validation"
+import {
+    InputValidationFailure,
+    inputValidationFailure,
+    unsupportedKeyFailure,
+    type InputValidationConstraint,
+} from "#sdk/input-validation"
 
 const maximumResponseBytes = 1_048_576
 const maximumConcurrentRequests = 8
@@ -27,24 +45,18 @@ const defaultTimeoutMs = 30_000
 const maximumPermissionBits = (1n << 64n) - 1n
 const maximumInt32 = 2_147_483_647
 
-/** Carries no upstream text, payload, credential, or cause into either public boundary */
-class OAuthResponseCleanupDefect extends Error {
-    constructor() {
-        super("OAuth response cleanup failed")
-    }
-}
-
 function text(value: unknown): value is string {
     return typeof value === "string" && value.length > 0
 }
 
 // Fluxer OAuth form/query strings use createStringType(1), capped at 256 UTF-16 units.
-// Reject normalization changes rather than changing opaque state, credentials or redirects.
+// Reject normalization changes rather than changing opaque state, credentials or redirects
 function canonicalText(value: unknown): value is string {
     return (
         text(value) &&
         value.length <= 256 &&
         value.isWellFormed() &&
+        // oxlint-disable-next-line no-control-regex -- the provider strips form feed before validating text
         value === value.replace(/[\u000c\u202e]/g, "").trim()
     )
 }
@@ -68,6 +80,7 @@ function redirectUri(value: unknown): value is string {
         )
     } catch {
         return false
+        // allow-silent: An unparsable redirect URI is rejected as invalid input
     }
 }
 
@@ -118,7 +131,7 @@ function identity(value: unknown): OAuthIdentity | undefined {
         id: value.id,
         username: value.username,
         discriminator: value.discriminator,
-        globalName: value.global_name,
+        displayName: value.global_name,
         avatar: value.avatar,
         ...(value.email === undefined ? {} : { email: value.email }),
         ...(value.verified === undefined ? {} : { verified: value.verified }),
@@ -185,26 +198,28 @@ function introspection(value: unknown): OAuthIntrospection | undefined {
     })
 }
 
+/** The input failure for an unsupported key in an OAuth input object */
+function unsupportedInput(operation: OAuthOperation, failure: InputValidationFailure): OAuthOperationError {
+    return new OAuthError({ operation, reason: "input", outcome: "notDispatched", inputValidation: failure.detail })
+}
+
 function inputError(
     operation: OAuthOperation,
     path: string,
     constraint: InputValidationConstraint,
     explanation: string,
 ): OAuthOperationError {
-    return new OAuthError(
+    return new OAuthError({
         operation,
-        "input",
-        "notDispatched",
-        null,
-        null,
-        null,
-        inputValidationFailure(path, constraint, explanation).detail,
-    )
+        reason: "input",
+        outcome: "notDispatched",
+        inputValidation: inputValidationFailure(path, constraint, explanation).detail,
+    })
 }
 
 function responseError(operation: OAuthOperation, status: number): OAuthOperationError {
     const mutation = operation === "oauth.exchangeCode" || operation === "oauth.refresh" || operation === "oauth.revoke"
-    return new OAuthError(operation, "response", mutation ? "unknown" : "rejected", status)
+    return new OAuthError({ operation, reason: "response", outcome: mutation ? "unknown" : "rejected", status })
 }
 
 function operationError(
@@ -214,6 +229,7 @@ function operationError(
     body?: unknown,
 ): OAuthOperationError {
     const apiError = apiErrorDetail(body)
+    const providerCode = unrecognizedProviderCode(body)
     const oauthError =
         record(body) &&
         typeof body.error === "string" &&
@@ -227,29 +243,28 @@ function operationError(
         ].includes(body.error)
             ? body.error
             : null
-    if (!response) return new OAuthError(operation, "network", cause)
+    if (!response) return new OAuthError({ operation, reason: "network", outcome: cause })
     if (response.status === 429)
-        return new OAuthError(
+        return new OAuthError({
             operation,
-            "rateLimit",
-            "rejected",
-            response.status,
-            retryAfter(response),
+            reason: "rateLimit",
+            outcome: "rejected",
+            status: response.status,
+            retryAfterMs: retryAfter(response),
             oauthError,
-            null,
             apiError,
-        )
+            providerCode,
+        })
     const mutation = operation === "oauth.exchangeCode" || operation === "oauth.refresh" || operation === "oauth.revoke"
-    return new OAuthError(
+    return new OAuthError({
         operation,
-        "rejected",
-        mutation && response.status >= 500 ? "unknown" : "rejected",
-        response.status,
-        null,
+        reason: "rejected",
+        outcome: mutation && response.status >= 500 ? "unknown" : "rejected",
+        status: response.status,
         oauthError,
-        null,
         apiError,
-    )
+        providerCode,
+    })
 }
 
 async function body(
@@ -293,6 +308,7 @@ export class OAuthOwner {
     #secret: string | undefined
     readonly #controllers = new Set<AbortController>()
     readonly #operations = new Set<Deferred.Deferred<void>>()
+    readonly #http: HttpTransport
     readonly instance: InstanceResolver
 
     constructor(
@@ -300,9 +316,18 @@ export class OAuthOwner {
         secret: string,
         configuration: ReturnType<typeof instanceConfiguration>,
         scope: Scope.Scope,
+        readonly logging: ClientLogger,
+        http: HttpTransport = defaultHttpTransport,
     ) {
         this.#secret = secret
-        this.instance = new InstanceResolver(configuration as Exclude<typeof configuration, ConfigurationError>, scope)
+        this.#http = http
+        this.instance = new InstanceResolver(
+            configuration as Exclude<typeof configuration, ConfigurationError>,
+            scope,
+            {
+                http,
+            },
+        )
     }
 
     shutdown(): Effect.Effect<void> {
@@ -321,8 +346,41 @@ export class OAuthOwner {
                         }),
                     ],
                     { concurrency: "unbounded", discard: true },
+                ).pipe(
+                    Effect.ensuring(Effect.withFiber((fiber) => Effect.sync(() => this.logging.flush(fiber.context)))),
                 )
             }),
+        )
+    }
+
+    /**
+     * Log a rejected client ID and secret once per operation and code, even when the application handles the failure,
+     * because it persists until someone changes the configuration. A rejected user access token concerns one user, so
+     * it is only returned
+     */
+    #logRejection(error: unknown, context: Context.Context<never>) {
+        if (
+            !(error instanceof OAuthError) ||
+            error.reason !== "rejected" ||
+            !(error.status === 401 || error.status === 403 || error.oauthError === "invalid_client") ||
+            oauthCredential(error.operation, error.oauthError) !== "oauthClient"
+        )
+            return
+        this.logging.log(
+            {
+                level: "warn",
+                category: "rest",
+                code: "rest.rejected",
+                message: error.message,
+                ...(error.status === null ? {} : { status: error.status }),
+                fields: {
+                    operation: error.operation,
+                    oauthError: error.oauthError ?? undefined,
+                    apiError: error.apiError?.providerCode,
+                    hint: error.hint,
+                },
+            },
+            context,
         )
     }
 
@@ -337,26 +395,33 @@ export class OAuthOwner {
         ) => Effect.Effect<A, OAuthOperationError>,
     ): Effect.Effect<A, OAuthOperationError | ClientClosedError> {
         return Clock.clockWith((clock) =>
-            Effect.suspend<A, OAuthOperationError | ClientClosedError, never>(() => {
-                if (
-                    options !== undefined &&
-                    (typeof options !== "object" || options === null || Array.isArray(options))
-                )
-                    return Effect.fail(
-                        inputError(
-                            operation,
-                            "options",
-                            "format",
-                            "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
-                        ),
+            suspendMarked<A, OAuthOperationError | ClientClosedError, never>(() => {
+                // Only reading the caller options is marked, so a throw from their getters is an application fault
+                const limit = readCaller(() => {
+                    if (
+                        options !== undefined &&
+                        (typeof options !== "object" || options === null || Array.isArray(options))
                     )
-                const timeoutMs = options?.timeoutMs
-                const limit = timeout(timeoutMs)
-                if (
-                    options !== undefined &&
-                    (Object.keys(options).some((key) => key !== "timeoutMs") ||
-                        (timeoutMs !== undefined && limit === undefined))
-                )
+                        return "invalid"
+                    const unsupported =
+                        options === undefined
+                            ? undefined
+                            : unsupportedKeyFailure(options, ["timeoutMs"], "options", "the OAuth operation options")
+                    if (unsupported) return unsupported
+                    const timeoutMs = options?.timeoutMs
+                    const limit = timeout(timeoutMs)
+                    return timeoutMs !== undefined && limit === undefined ? "invalid" : limit
+                })
+                if (limit instanceof InputValidationFailure)
+                    return Effect.fail(
+                        new OAuthError({
+                            operation,
+                            reason: "input",
+                            outcome: "notDispatched",
+                            inputValidation: limit.detail,
+                        }),
+                    )
+                if (limit === "invalid")
                     return Effect.fail(
                         inputError(
                             operation,
@@ -367,40 +432,49 @@ export class OAuthOwner {
                     )
                 if (this.#closed || !this.#secret) return Effect.fail(new ClientClosedError())
                 if (this.#active >= maximumConcurrentRequests)
-                    return Effect.fail(new OAuthError(operation, "busy", "notDispatched"))
+                    return Effect.fail(new OAuthError({ operation, reason: "busy", outcome: "notDispatched" }))
                 this.#active += 1
                 const completed = Deferred.makeUnsafe<void>()
                 this.#operations.add(completed)
                 const deadline = limit ?? defaultTimeoutMs
-                const started = clock.monotonicTimeNanosUnsafe()
+                const started = nowMs(clock)
                 const progress: { knownResponseFailure: OAuthOperationError | undefined } = {
                     knownResponseFailure: undefined,
                 }
                 return this.instance.resolve().pipe(
-                    withDeadline(deadline, () => new OAuthError(operation, "timeout", "notDispatched")),
+                    withDeadline(
+                        deadline,
+                        () => new OAuthError({ operation, reason: "timeout", outcome: "notDispatched" }),
+                    ),
                     mapFailureCause((error) =>
                         error instanceof OAuthError || error instanceof ClientClosedError
                             ? error
                             : this.#closed
                               ? new ClientClosedError()
                               : error instanceof RateLimitError
-                                ? new OAuthError(operation, "rateLimit", "notDispatched", 429, error.retryAfterMs)
-                                : new OAuthError(operation, "network", "notDispatched"),
+                                ? new OAuthError({
+                                      operation,
+                                      reason: "rateLimit",
+                                      outcome: "notDispatched",
+                                      status: 429,
+                                      retryAfterMs: error.retryAfterMs,
+                                  })
+                                : new OAuthError({ operation, reason: "network", outcome: "notDispatched" }),
                     ),
                     Effect.flatMap((endpoints): Effect.Effect<A, OAuthOperationError | ClientClosedError> =>
                         this.#closed || !this.#secret
                             ? Effect.fail(new ClientClosedError())
                             : task(endpoints.apiPublic, endpoints.webapp, this.#secret, progress).pipe(
                                   withDeadline(
-                                      Math.max(
-                                          1,
-                                          deadline - Number(clock.monotonicTimeNanosUnsafe() - started) / 1_000_000,
-                                      ),
+                                      Math.max(1, deadline - (nowMs(clock) - started)),
                                       () =>
                                           progress.knownResponseFailure ??
-                                          new OAuthError(operation, "timeout", "unknown"),
+                                          new OAuthError({ operation, reason: "timeout", outcome: "unknown" }),
                                   ),
                               ),
+                    ),
+                    Effect.tapError((error) =>
+                        Effect.withFiber((fiber) => Effect.sync(() => this.#logRejection(error, fiber.context))),
                     ),
                     Effect.ensuring(
                         Effect.sync(() => {
@@ -418,7 +492,7 @@ export class OAuthOwner {
         input: OAuthAuthorizationInput,
         options?: OAuthOperationOptions,
     ): Effect.Effect<string, OAuthOperationError | ClientClosedError> {
-        return Effect.suspend(() => {
+        return suspendInput(() => {
             if (!record(input))
                 return Effect.fail(
                     inputError(
@@ -428,6 +502,22 @@ export class OAuthOwner {
                         "OAuth authorization input must be an object",
                     ),
                 )
+            const unsupported = unsupportedKeyFailure(
+                input,
+                [
+                    "redirectUri",
+                    "scopes",
+                    "state",
+                    "codeChallenge",
+                    "guildId",
+                    "channelId",
+                    "permissions",
+                    "disableGuildSelect",
+                ],
+                "input",
+                "the OAuth authorization input",
+            )
+            if (unsupported) return Effect.fail(unsupportedInput("oauth.authorizationUrl", unsupported))
             const redirectUriValue = input.redirectUri
             if (!redirectUri(redirectUriValue))
                 return Effect.fail(
@@ -445,7 +535,7 @@ export class OAuthOwner {
                         "oauth.authorizationUrl",
                         "state",
                         "format",
-                        "OAuth state must contain 1 through 256 canonical UTF-16 units",
+                        "OAuth state must contain 1 through 256 UTF-16 code units without leading or trailing whitespace",
                     ),
                 )
             const codeChallenge = input.codeChallenge
@@ -537,7 +627,7 @@ export class OAuthOwner {
                         "oauth.authorizationUrl",
                         "disableGuildSelect",
                         "type",
-                        "disableGuildSelect must be a boolean",
+                        "The option disableGuildSelect must be a boolean",
                     ),
                 )
             const request = {
@@ -622,7 +712,7 @@ export class OAuthOwner {
                             let response: Response | undefined
                             try {
                                 state.dispatched = true
-                                response = await fetch(`${api}${path}`, {
+                                response = await this.#http(`${api}${path}`, {
                                     ...init,
                                     redirect: "error",
                                     signal: state.controller.signal,
@@ -660,6 +750,7 @@ export class OAuthOwner {
                                 state.settleResponse()
                             }
                         })()
+                        // allow-silent: The work promise itself is returned and its rejection observed by the caller, so this only records settlement
                         state.settled = work.then(
                             () => undefined,
                             () => undefined,
@@ -671,6 +762,7 @@ export class OAuthOwner {
                                     reject(state.knownResponseFailure ?? new Error("OAuth request aborted"))
                                 if (state.controller.signal.aborted) abort()
                                 else state.controller.signal.addEventListener("abort", abort, { once: true })
+                                // allow-silent: The work promise is raced and returned below, so its rejection reaches the caller. This only removes the listener
                                 void work.then(
                                     () => state.controller.signal.removeEventListener("abort", abort),
                                     () => state.controller.signal.removeEventListener("abort", abort),
@@ -679,7 +771,9 @@ export class OAuthOwner {
                         ])
                     },
                     catch: (error) =>
-                        error instanceof OAuthError ? error : new OAuthError(operation, "network", "unknown"),
+                        error instanceof OAuthError
+                            ? error
+                            : new OAuthError({ operation, reason: "network", outcome: "unknown" }),
                 }),
             (state) =>
                 Effect.promise(async () => {
@@ -709,7 +803,10 @@ export class OAuthOwner {
                         }
                     }
                     await state.settled
-                    if (failures.length) throw new OAuthResponseCleanupDefect()
+                    // Cleanup faults keep their original values, as REST and discovery cleanup faults do. Error rendering
+                    // masks credentials, and the response body never becomes part of a cleanup fault
+                    if (failures.length === 1) throw failures[0]
+                    if (failures.length > 1) throw new AggregateError(failures, "OAuth response cleanup failed")
                 }),
         )
     }
@@ -718,11 +815,18 @@ export class OAuthOwner {
         input: OAuthCodeExchangeInput,
         options?: OAuthOperationOptions,
     ): Effect.Effect<OAuthTokens, OAuthOperationError | ClientClosedError> {
-        return Effect.suspend(() => {
+        return suspendInput(() => {
             if (!record(input))
                 return Effect.fail(
                     inputError("oauth.exchangeCode", "input", "type", "OAuth code exchange input must be an object"),
                 )
+            const unsupported = unsupportedKeyFailure(
+                input,
+                ["code", "redirectUri", "codeVerifier"],
+                "input",
+                "the OAuth code exchange input",
+            )
+            if (unsupported) return Effect.fail(unsupportedInput("oauth.exchangeCode", unsupported))
             const code = input.code
             if (!canonicalText(code))
                 return Effect.fail(
@@ -730,7 +834,7 @@ export class OAuthOwner {
                         "oauth.exchangeCode",
                         "code",
                         "format",
-                        "Authorization code must contain 1 through 256 canonical UTF-16 units",
+                        "Authorization code must contain 1 through 256 UTF-16 code units without leading or trailing whitespace",
                     ),
                 )
             const redirectUriValue = input.redirectUri
@@ -789,7 +893,7 @@ export class OAuthOwner {
                     "oauth.refresh",
                     "refreshToken",
                     "format",
-                    "Refresh token must contain 1 through 256 canonical UTF-16 units",
+                    "Refresh token must contain 1 through 256 UTF-16 code units without leading or trailing whitespace",
                 ),
             )
         return this.#run("oauth.refresh", options, (api, _webapp, secret, progress) =>
@@ -818,9 +922,16 @@ export class OAuthOwner {
         value: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
         options?: OAuthOperationOptions,
     ): Effect.Effect<void, OAuthOperationError | ClientClosedError> {
-        return Effect.suspend(() => {
+        return suspendInput(() => {
             if (!record(value))
                 return Effect.fail(inputError("oauth.revoke", "input", "type", "OAuth revoke input must be an object"))
+            const unsupported = unsupportedKeyFailure(
+                value,
+                ["token", "tokenTypeHint"],
+                "input",
+                "the OAuth revoke input",
+            )
+            if (unsupported) return Effect.fail(unsupportedInput("oauth.revoke", unsupported))
             const token = value.token
             if (!canonicalText(token))
                 return Effect.fail(
@@ -828,7 +939,7 @@ export class OAuthOwner {
                         "oauth.revoke",
                         "token",
                         "format",
-                        "Revoked token must contain 1 through 256 canonical UTF-16 units",
+                        "Revoked token must contain 1 through 256 UTF-16 code units without leading or trailing whitespace",
                     ),
                 )
             const tokenTypeHint = value.tokenTypeHint
@@ -891,7 +1002,7 @@ export class OAuthOwner {
         query: GuildListQuery = {},
         options?: OAuthOperationOptions,
     ): Effect.Effect<readonly GuildListSummary[], OAuthOperationError | ClientClosedError> {
-        return Effect.suspend(() => {
+        return suspendInput(() => {
             const request = guildList(query)
             if (!text(accessToken))
                 return Effect.fail(
@@ -904,7 +1015,12 @@ export class OAuthOwner {
                 )
             if (request instanceof InputValidationFailure)
                 return Effect.fail(
-                    new OAuthError("oauth.fetchGuilds", "input", "notDispatched", null, null, null, request.detail),
+                    new OAuthError({
+                        operation: "oauth.fetchGuilds",
+                        reason: "input",
+                        outcome: "notDispatched",
+                        inputValidation: request.detail,
+                    }),
                 )
             return this.#run("oauth.fetchGuilds", options, (api, _webapp, _secret, progress) =>
                 this.#request(
@@ -954,7 +1070,7 @@ export class OAuthOwner {
                     "oauth.introspect",
                     "token",
                     "format",
-                    "Inspected token must contain 1 through 256 canonical UTF-16 units",
+                    "Inspected token must contain 1 through 256 UTF-16 code units without leading or trailing whitespace",
                 ),
             )
         return this.#run("oauth.introspect", options, (api, _webapp, secret, progress) =>
@@ -977,16 +1093,19 @@ export class OAuthOwner {
     }
 }
 
-export function makeOAuthOwner(config: OAuthConfig, scope: Scope.Scope): Effect.Effect<OAuthOwner, ConfigurationError> {
-    return Effect.suspend(() => {
-        if (
-            !record(config) ||
-            Object.keys(config).some((key) => key !== "clientId" && key !== "clientSecret" && key !== "instance")
-        )
+const oauthConfigKeys = ["clientId", "clientSecret", "instance", "logging"]
+
+export function makeOAuthOwner(
+    config: OAuthConfig,
+    scope: Scope.Scope,
+    native = false,
+): Effect.Effect<OAuthOwner, ConfigurationError> {
+    return suspendInput(() => {
+        if (!record(config) || Object.keys(config).some((key) => !oauthConfigKeys.includes(key)))
             return Effect.fail(
                 new ConfigurationError(
                     "configuration",
-                    "OAuth configuration requires a decimal clientId and nonempty clientSecret",
+                    "OAuth configuration must be an object with only clientId, clientSecret, instance, and logging",
                 ),
             )
         const clientId = config.clientId
@@ -1001,6 +1120,13 @@ export function makeOAuthOwner(config: OAuthConfig, scope: Scope.Scope): Effect.
         const instance = config.instance
         const configuration = instanceConfiguration(instance)
         if (configuration instanceof ConfigurationError) return Effect.fail(configuration)
-        return Effect.sync(() => new OAuthOwner(clientId, clientSecret, configuration, scope))
+        const logging = loggingConfiguration(config.logging, native)
+        if (logging instanceof ConfigurationError) return Effect.fail(logging)
+        logging.addSecret(clientSecret)
+        return Effect.withFiber((fiber) => {
+            // Native records outside an operation use the creating fiber's logger and annotations
+            if (native) logging.context = fiber.context
+            return Effect.succeed(new OAuthOwner(clientId, clientSecret, configuration, scope, logging))
+        })
     })
 }

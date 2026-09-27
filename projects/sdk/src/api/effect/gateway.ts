@@ -1,0 +1,57 @@
+import type * as Effect from "effect/Effect"
+import type { GatewaySendFailure } from "#sdk/gateway"
+
+/**
+ * Send gateway commands that have no SDK method, on this client's ready shards.
+ * This is an advanced escape hatch: The SDK validates the frame locally but does not know the command's meaning,
+ * and Fluxer closes the connection, ending the client, for commands it rejects.
+ * Observe replies to these commands through the raw event, subscribing before sending
+ *
+ * @category Client and lifecycle
+ */
+export interface GatewayCommands {
+    /**
+     * Send one command frame { op, d } on a Connected local shard.
+     * The data is copied through JSON encoding when the operation starts, so later changes to it have no effect, and the
+     * encoded frame must be at most 4,096 UTF-8 bytes, Fluxer's message limit. Undefined data is invalid. Pass null instead.
+     * Data JSON cannot encode, such as a cycle or a BigInt, fails with reason input.
+     * Heartbeat, Identify, Resume and server-only opcodes fail with reason reserved.
+     * Commands share the shard's outbound pacing with presence and request commands: At most 500 paced commands per
+     * rolling 60 seconds per connection, sent in call order, while heartbeats, Identify and Resume are never delayed.
+     * Completion means the frame was handed to the connection, not that Fluxer received or accepted it.
+     * Fluxer answers an opcode it does not define, missing data or invalid command fields with close code 4001 or 4002.
+     * The SDK treats both as permanent, so the client ends. Data must match Fluxer's command schema exactly.
+     * Observe any reply through the raw event, which receives every dispatch the session accepts.
+     * A shard that loses its connection before sending fails a waiting command with reason notReady, and the SDK never
+     * replays it after reconnecting. Each sent command is logged at Debug with code gateway.commandSent
+     *
+     * @remarks
+     * Interrupting the Effect withdraws a command that is still waiting for the pacing budget.
+     * A command already handed to the connection cannot be withdrawn. A throw from the data's own getters or toJSON
+     * dies with the thrown value, and other unexpected defects remain in the Effect cause
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, RawDispatch } from "@neontechspace/fluxerly/effect"
+     * // Commands with an SDK method, such as community counts through client.guilds.fetchCounts, use that method instead
+     * export function sendCustomCommand(
+     *     client: Client,
+     *     command: { op: number; data: unknown; replyType: string },
+     *     onReply: (reply: RawDispatch) => void,
+     * ) {
+     *     return Effect.gen(function* () {
+     *         // Subscribe before sending so the raw reply cannot be missed. The enclosing Scope closes it
+     *         const replies = yield* client.on("raw", (dispatch) =>
+     *             Effect.sync(() => {
+     *                 if (dispatch.t === command.replyType) onReply(dispatch)
+     *             }),
+     *         )
+     *         yield* client.gateway.send(0, command.op, command.data)
+     *         return replies
+     *     })
+     * }
+     * ```
+     */
+    send(shardId: number, op: number, d: unknown): Effect.Effect<void, GatewaySendFailure>
+}

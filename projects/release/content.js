@@ -1,7 +1,10 @@
+// @ts-check
+
 import { createHash } from "node:crypto"
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { gunzipSync } from "node:zlib"
+import { parseVersion } from "./planning.js"
 
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex")
 const comparePaths = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
@@ -58,8 +61,11 @@ function normalizeVersion(path, bytes) {
 }
 
 function parsePackageVersion(version) {
-    if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-(canary|rc)\.\d+)?$/.test(version))
+    try {
+        parseVersion(version)
+    } catch {
         throw new Error("Invalid staged package version")
+    }
 }
 
 export function contentFingerprint(files) {

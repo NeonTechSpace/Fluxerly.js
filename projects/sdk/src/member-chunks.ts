@@ -1,20 +1,26 @@
+import { FluxerlyError, operationDetails } from "./errors.js"
 import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
-import { operationErrorMessage } from "./api-errors.js"
+import { operationErrorMessage, operationFailureHint } from "./api-errors.js"
 import type { PresenceUpdate } from "./events.js"
 import type { GuildMember } from "./guilds.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** Choose the members to request through one guild's gateway shard.
+/** Choose the members to request through one community's gateway shard.
  * Supply exactly one of all, userIds or query, with an optional presences flag.
- * The SDK requests a response when the stream is consumed. It does not subscribe to future changes, fetch REST pages or keep a guild member list
+ * The SDK requests a response when the stream is consumed. It does not subscribe to future changes, fetch REST pages or keep a community member list
+ *
+ * @category Guilds and members
  */
 export type MemberChunkQuery = (
     | {
           /** Request Fluxer's full-list mode, capped by the provider at 100,000 members and subject to gateway rate limits */
           readonly all: true
+          /** Not accepted with all. Choose one selection mode */
           readonly userIds?: never
+          /** Not accepted with all. Choose one selection mode */
           readonly query?: never
+          /** Not accepted with all, which uses the provider's full-list cap */
           readonly limit?: never
       }
     | {
@@ -22,8 +28,11 @@ export type MemberChunkQuery = (
            * Missing IDs are omitted without an explanation
            */
           readonly userIds: readonly string[]
+          /** Not accepted with userIds. Choose one selection mode */
           readonly all?: never
+          /** Not accepted with userIds. Choose one selection mode */
           readonly query?: never
+          /** Not accepted with userIds, whose length already bounds the request */
           readonly limit?: never
       }
     | {
@@ -34,7 +43,9 @@ export type MemberChunkQuery = (
           readonly query: string
           /** Maximum matching members, integer 1–100, default 25 */
           readonly limit?: number
+          /** Not accepted with query. Choose one selection mode */
           readonly all?: never
+          /** Not accepted with query. Choose one selection mode */
           readonly userIds?: never
       }
 ) & {
@@ -44,14 +55,16 @@ export type MemberChunkQuery = (
 
 /** One batch yielded by members.iterateChunks, with frozen member observations and optional visible presences.
  * Batches arrive in Fluxer's order. The SDK does not combine them into a single snapshot or store them in the member cache.
- * Already yielded batches remain available to your application if a later batch fails
+ * Already yielded batches remain available to the application if a later batch fails
+ *
+ * @category Guilds and members
  */
 export interface MemberChunk {
     /** Requested guild ID as a positive decimal string with no leading zeroes, within the unsigned 64-bit range */
     readonly guildId: string
     /** Zero-based batch index, delivered in provider order without gaps or duplicate indices */
     readonly index: number
-    /** Number of batches advertised for this response, from 1 through 100. It does not prove a complete guild roster */
+    /** Number of batches advertised for this response, from 1 through 100. It does not prove a complete community roster */
     readonly count: number
     /** Up to 1,000 frozen member observations. An empty response is one batch with an empty array */
     readonly members: readonly GuildMember[]
@@ -69,6 +82,8 @@ export interface MemberChunk {
  * The SDK checks and copies these settings when consumption starts, not when the iterator or native Stream is created.
  * One client admits one member stream across its local shards, sharing four request slots with count calls.
  * Ending the stream early releases the SDK's local request slot but cannot stop work Fluxer has already started
+ *
+ * @category Guilds and members
  */
 export interface MemberChunkOptions {
     /** Total milliseconds from dispatch until the final batch arrives, integer 1–2,147,483,647, default 30,000.
@@ -82,52 +97,84 @@ export interface MemberChunkOptions {
     readonly maxPendingBytes?: number
 }
 
-/** Stream options for the default API. Abort releases local intake even while consumption is paused, not remote provider work */
+/**
+ * Stream options for the default API. Abort releases local intake even while consumption is paused, not remote provider work
+ *
+ * @category Guilds and members
+ */
 export interface DefaultMemberChunkOptions extends MemberChunkOptions, OperationOptions {}
 
 /** A member stream stopped before it could return every batch.
  * The SDK releases local intake and does not automatically resend the request.
  * Already yielded batches are not undone, but unread batches are discarded when intake fails.
  * Metadata contains no requested IDs, member data, correlation nonce or provider payload
+ *
+ * @category Errors
  */
-export class MemberChunkError extends Error {
+export class MemberChunkError extends FluxerlyError {
     /** Stable expected-failure discriminator */
     readonly _tag = "MemberChunkError"
     /** Public operation that failed */
     readonly operation = "members.iterateChunks"
     /** SDK-owned local input detail, or null for non-input failures */
     readonly inputValidation: InputValidationDetail | null
+    /** Failure category.
+     * The reason input means invalid selection or settings, and notConnected means the community's shard is absent or not ready.
+     * The reason busy means a member stream or shared request slot is already occupied.
+     * The reason response means malformed or out-of-order batches, and overflow means the unread byte budget was exceeded.
+     * The reason timeout means the complete response missed its deadline, and connectionLost means its shard lost the connection.
+     * The reason rateLimit means Fluxer confirmed a request rate limit
+     */
+    readonly reason:
+        "input" | "notConnected" | "busy" | "response" | "overflow" | "timeout" | "connectionLost" | "rateLimit"
+    /** Fluxer's confirmed retry delay in milliseconds for rateLimit, otherwise null. The SDK never retries automatically */
+    readonly retryAfterMs: number | null
 
-    constructor(
-        /** input means invalid selection or settings, and notConnected means the guild's shard is absent or not ready.
-         * busy means a member stream or shared request slot is already occupied.
-         * response means malformed or out-of-order batches, and overflow means the unread byte budget was exceeded.
-         * timeout means the complete response missed its deadline, and connectionLost means its shard lost the connection.
-         * rateLimit means the provider confirmed a request rate limit
-         */
-        readonly reason:
-            "input" | "notConnected" | "busy" | "response" | "overflow" | "timeout" | "connectionLost" | "rateLimit",
-        /** Confirmed provider retry delay in milliseconds for rateLimit, otherwise null. The SDK never retries automatically */
-        readonly retryAfterMs: number | null = null,
-        /** Safe local input detail. It never retains rejected values, caller keys, credentials, or provider data */
-        inputValidation: InputValidationDetail | null = null,
-    ) {
+    /** Describe a member-stream failure. Construction sends no request and does not stop or resend a stream */
+    constructor(options: {
+        /** Failure category, as described on the reason field */
+        readonly reason: MemberChunkError["reason"]
+        /** Fluxer's confirmed retry delay in milliseconds for rateLimit. Defaults to null */
+        readonly retryAfterMs?: number | null | undefined
+        /** Safe local input detail. It never retains rejected values, credentials, or Fluxer data, and names an unsupported key only when it looks like a field name. Defaults to null */
+        readonly inputValidation?: InputValidationDetail | null | undefined
+        /** Underlying failure retained as the error's cause */
+        readonly cause?: unknown
+    }) {
+        const { reason, retryAfterMs = null, inputValidation = null } = options
         super(
-            operationErrorMessage(
-                "Member chunks",
-                "iterate",
+            operationErrorMessage({
+                subject: "Member chunk",
+                operation: "request",
                 reason,
-                "unknown",
-                null,
-                null,
-                inputValidation?.explanation ?? null,
+                outcome: reason === "input" ? "notDispatched" : "unknown",
+                inputExplanation: inputValidation?.explanation ?? null,
                 retryAfterMs,
-            ),
+                facts: { read: true },
+            }),
+            {
+                code: `memberChunks.${reason}`,
+                hint: operationFailureHint({
+                    reason,
+                    outcome: reason === "input" ? "notDispatched" : "unknown",
+                    retryAfterMs,
+                    read: true,
+                    inputPath: inputValidation?.path ?? null,
+                }),
+                cause: options.cause,
+                details: operationDetails({ reason, retryAfterMs }),
+            },
         )
         this.name = this._tag
         this.inputValidation = freezeInputValidationDetail(inputValidation)
+        this.reason = reason
+        this.retryAfterMs = retryAfterMs
     }
 }
 
-/** Expected stream failure. Native interruption and CancelledError in the default API remain separate */
+/**
+ * Expected stream failure. Native interruption and CancelledError in the default API remain separate
+ *
+ * @category Errors
+ */
 export type MemberChunkFailure = MemberChunkError | ClientClosedError

@@ -1,3 +1,5 @@
+// @ts-check
+
 import { execFile } from "node:child_process"
 import { appendFile, readFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
@@ -5,17 +7,85 @@ import { fileURLToPath } from "node:url"
 import { readCandidate } from "./candidate.js"
 import { sha256 } from "./content.js"
 import { compareVersions, parseVersion } from "./planning.js"
+import { redact } from "./redact.js"
 import { inspectPublished } from "./recovery.js"
 import { createRegistries } from "./registries.js"
 
 const commitPattern = /^[a-f0-9]{40}$/
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const assetNames = ["notes.md", "docs.json", "candidate.json", "checksum.txt", "sdk.tgz"]
+const sdkName = "@neontechspace/fluxerly"
+
+// A GitHub request failure. HTTP 4xx responses definitely rejected the request, while network failures, timeouts and
+// 5xx responses leave its outcome uncertain
+export class GitHubCommandError extends Error {
+    /**
+     * @param {string} message
+     * @param {number} [status]
+     */
+    constructor(message, status) {
+        super(message)
+        this.status = status
+    }
+}
+
+/** @param {unknown} error */
+export function isDefiniteRejection(error) {
+    return error instanceof GitHubCommandError && error.status !== undefined && error.status >= 400 && error.status < 500
+}
+
+/**
+ * @param {unknown} error
+ * @param {string} operation
+ */
+function rejected(error, operation) {
+    return new Error(
+        `GitHub rejected the ${operation} with HTTP ${/** @type {GitHubCommandError} */ (error).status}. The request made no change. Resolve the cause, such as App permissions or tag rules, then rerun Release publish with the same candidate`,
+    )
+}
 
 export async function announceRelease(candidate, directory, github, registries = createRegistries()) {
     const status = await inspectPublished(candidate, registries)
-    if (!status.complete) throw new Error("npm version must be published before announcing the release")
+    if (!status.complete)
+        throw new Error(
+            status.npm === "different"
+                ? "npm serves different bytes than the reviewed candidate, the release is not announced"
+                : "npm version must be published before announcing the release",
+        )
     return reconcileRelease(candidate, directory, github)
+}
+
+/**
+ * Fails unless the commit is main or one of its ancestors, using a read-only comparison
+ * @param {{ api(path: string): Promise<any> }} github
+ * @param {string} commit
+ */
+export async function assertReachableFromMain(github, commit) {
+    if (!commitPattern.test(commit)) throw new Error("Candidate source must be an exact commit")
+    let comparison
+    try {
+        comparison = await github.api(`compare/main...${commit}`)
+    } catch {
+        throw new Error("Candidate source reachability from main could not be verified")
+    }
+    if (!["behind", "identical"].includes(comparison?.status) || comparison.ahead_by !== 0)
+        throw new Error("Candidate source is not reachable from main, prepare a candidate from merged main source")
+}
+
+/**
+ * Decides whether a push to main should prepare a candidate: The SDK version changed in the push and npm does not
+ * have it yet
+ * @param {{ before: string | undefined, after: string, readVersion: (commit: string) => Promise<string>, registries: any }} options
+ */
+export async function releaseTrigger({ before, after, readVersion, registries }) {
+    if (!commitPattern.test(after)) throw new Error("Pushed commit must be an exact commit")
+    const version = await readVersion(after)
+    if (parseVersion(version).major < 1000) return { prepare: false, version, reason: "Not a public release version" }
+    const previous = before && commitPattern.test(before) && !/^0+$/.test(before) ? await readVersion(before) : null
+    if (previous === version) return { prepare: false, version, reason: "The push did not change the SDK version" }
+    const inventory = await registries.inventory(sdkName, { allowMissing: true })
+    if (inventory.npmVersions.includes(version)) return { prepare: false, version, reason: "npm already has this version" }
+    return { prepare: true, version, reason: "The push changed the SDK version to one that npm does not have" }
 }
 
 export function validatePreparation(run, artifacts, { repository, runId, workflow }) {
@@ -70,13 +140,20 @@ export async function reconcileRelease(
     parseVersion(candidate.version)
     const tag = `v${candidate.version}`
     const notes = await readFile(join(directory, "notes.md"), "utf8")
+    /** @type {Map<string, Buffer>} */
     const expected = new Map(
-        await Promise.all(assetNames.map(async (name) => [name, await readFile(join(directory, name))])),
+        await Promise.all(
+            assetNames.map(async (name) => /** @type {[string, Buffer]} */ ([name, await readFile(join(directory, name))])),
+        ),
     )
     async function readRelease(id) {
         const byId = id === undefined ? null : await github.releaseById(id)
         return byId ?? github.release(tag)
     }
+    /**
+     * @param {number | undefined} id
+     * @param {(release: any) => boolean} [matches]
+     */
     async function awaitVisibility(id, matches = () => true) {
         const started = now()
         for (;;) {
@@ -125,11 +202,15 @@ export async function reconcileRelease(
                 prerelease: candidate.channel !== "stable",
                 make_latest: "false",
             })
-        } catch {
-            // A failed response can follow a completed creation. Never create again here
+        } catch (error) {
+            if (isDefiniteRejection(error)) throw rejected(error, "release creation")
+            // A network or server failure can follow a completed creation. Never create again here, read back instead
         }
         release = await awaitVisibility(created?.id)
-        if (!release) throw new Error("GitHub release creation is unconfirmed, retry the same candidate")
+        if (!release)
+            throw new Error(
+                "GitHub release creation is unconfirmed after a network or server failure, rerun Release publish with the same candidate to reconcile it",
+            )
         createdHere = true
     }
     const taggedCommit = await github.tagCommit(tag)
@@ -146,7 +227,7 @@ export async function reconcileRelease(
     if (createdHere) {
         const tagVisible = await awaitVisibility(undefined, (item) => item.id === release.id)
         if (tagVisible?.id !== release.id)
-            throw new Error("GitHub release tag is not visible for asset upload, retry the same candidate")
+            throw new Error("GitHub release tag is not visible for asset upload, rerun Release publish with the same candidate")
     }
     for (const asset of release.assets) {
         if (!expected.has(asset.name)) throw new Error("Existing GitHub release contains an unexpected asset")
@@ -157,14 +238,17 @@ export async function reconcileRelease(
         if (!matches.length) {
             try {
                 await github.upload(tag, join(directory, name))
-            } catch {
+            } catch (error) {
+                if (isDefiniteRejection(error)) throw rejected(error, `${name} asset upload`)
                 // Do not clobber an existing asset after an uncertain upload result
             }
             release = await awaitVisibility(release.id, (item) =>
                 item.assets.some((asset) => asset.name === name && asset.state === "uploaded"),
             )
             if (!release)
-                throw new Error("GitHub release asset contents are unconfirmed or conflicting, retry the same candidate")
+                throw new Error(
+                    "GitHub release asset contents are unconfirmed or conflicting, rerun Release publish with the same candidate",
+                )
         }
         const assets = release.assets.filter((asset) => asset.name === name)
         if (
@@ -173,7 +257,7 @@ export async function reconcileRelease(
             assets[0].size !== bytes.length ||
             sha256(await github.download(assets[0].id)) !== sha256(bytes)
         )
-            throw new Error("GitHub release asset contents are unconfirmed or conflicting, retry the same candidate")
+            throw new Error("GitHub release asset contents are unconfirmed or conflicting, rerun Release publish with the same candidate")
     }
     const versions = (await github.releases())
         .filter((item) => !item.draft && !item.prerelease)
@@ -195,13 +279,15 @@ export async function reconcileRelease(
                 target_commitish: candidate.sourceCommit,
                 make_latest: latest ? "true" : "false",
             })
-        } catch {
-            // A failed response can follow a completed update. Reconcile without repeating it
+        } catch (error) {
+            if (isDefiniteRejection(error)) throw rejected(error, "release publication update")
+            // A network or server failure can follow a completed update. Reconcile without repeating it
         }
     } else if (latest && (await github.latest())?.tag_name !== tag) {
         try {
             await github.update(release.id, { make_latest: "true" })
-        } catch {
+        } catch (error) {
+            if (isDefiniteRejection(error)) throw rejected(error, "latest-release update")
             // Confirm the latest-release state without issuing a second update
         }
     }
@@ -226,10 +312,27 @@ export async function reconcileRelease(
             throw new Error("GitHub release final asset readback does not match this candidate")
     }
     if (latest && !(await awaitLatest()))
-        throw new Error("GitHub latest-release readback failed, retry this candidate")
+        throw new Error("GitHub latest-release readback failed, rerun Release publish with the same candidate")
     return { tag, sourceCommit: candidate.sourceCommit, url: final.html_url, latest }
 }
 
+/**
+ * Classifies a failed gh command from its redacted stderr
+ * @param {string} stderr
+ */
+export function commandFailure(stderr) {
+    const status = /\bHTTP (\d{3})\b/.exec(stderr)?.[1]
+    return status
+        ? new GitHubCommandError(`GitHub request failed with HTTP ${status}`, Number(status))
+        : new GitHubCommandError("GitHub command failed or exceeded its deadline")
+}
+
+/**
+ * Runs gh and surfaces its redacted stderr, so failures remain diagnosable without exposing tokens
+ * @param {string[]} args
+ * @param {{ input?: unknown, binary?: boolean, allowMissing?: boolean }} [options]
+ * @returns {Promise<any>}
+ */
 function command(args, { input, binary = false, allowMissing = false } = {}) {
     return new Promise((resolve_, reject) => {
         const child = execFile(
@@ -237,25 +340,34 @@ function command(args, { input, binary = false, allowMissing = false } = {}) {
             args,
             { encoding: binary ? "buffer" : "utf8", timeout: 60_000, maxBuffer: 128 * 1024 * 1024, windowsHide: true },
             (error, stdout, stderr) => {
-                if (error) {
-                    if (allowMissing && /\(HTTP 404\)/.test(String(stderr))) resolve_(null)
-                    else reject(new Error("GitHub command failed or exceeded its deadline"))
+                const diagnostics = redact(String(stderr ?? "")).trim()
+                const failure = error ? commandFailure(diagnostics) : undefined
+                const missing = allowMissing && failure?.status === 404
+                if (diagnostics && !missing) process.stderr.write(`${diagnostics}\n`)
+                if (failure) {
+                    if (missing) resolve_(null)
+                    else reject(failure)
                 } else {
                     try {
-                        resolve_(binary ? stdout : JSON.parse(stdout))
+                        resolve_(binary ? stdout : JSON.parse(String(stdout)))
                     } catch {
                         reject(new Error("GitHub command returned invalid JSON"))
                     }
                 }
             },
         )
-        if (input !== undefined) child.stdin.end(JSON.stringify(input))
+        if (input !== undefined) child.stdin?.end(JSON.stringify(input))
     })
 }
 
+/** @param {string | undefined} repository */
 export function createGithub(repository) {
-    if (!repositoryPattern.test(repository)) throw new Error("Invalid GitHub repository")
+    if (!repository || !repositoryPattern.test(repository)) throw new Error("Invalid GitHub repository")
     const root = `repos/${repository}`
+    /**
+     * @param {string} path
+     * @param {{ input?: unknown, method?: string, binary?: boolean, allowMissing?: boolean }} [options]
+     */
     function api(path, { input, method, binary, allowMissing } = {}) {
         const args = ["api", `${root}/${path}`, "-H", "X-GitHub-Api-Version: 2022-11-28"]
         if (method) args.push("--method", method)
@@ -263,6 +375,10 @@ export function createGithub(repository) {
         if (binary) args.push("-H", "Accept: application/octet-stream")
         return command(args, { input, binary, allowMissing })
     }
+    /**
+     * @param {string} path
+     * @param {string} [key]
+     */
     async function pages(path, key) {
         const result = []
         for (let page = 1; page <= 100; page++) {
@@ -276,7 +392,9 @@ export function createGithub(repository) {
     }
     return {
         api,
+        /** @param {string} runId */
         artifacts: (runId) => pages(`actions/runs/${runId}/artifacts`, "artifacts"),
+        /** @param {string} tag */
         async release(tag) {
             const published = await api(`releases/tags/${encodeURIComponent(tag)}`, { allowMissing: true })
             if (published) return published
@@ -285,11 +403,18 @@ export function createGithub(repository) {
             if (matches.length > 1) throw new Error("GitHub has ambiguous releases for this tag")
             return matches[0] ?? null
         },
+        /** @param {number} id */
         releaseById: (id) => api(`releases/${id}`, { allowMissing: true }),
+        /** @param {object} input */
         create: (input) => api("releases", { method: "POST", input }),
+        /**
+         * @param {number} id
+         * @param {object} input
+         */
         update: (id, input) => api(`releases/${id}`, { method: "PATCH", input }),
         releases: () => pages("releases"),
         latest: () => api("releases/latest", { allowMissing: true }),
+        /** @param {string} tag */
         async tagCommit(tag) {
             const ref = await api(`git/ref/tags/${encodeURIComponent(tag)}`, { allowMissing: true })
             if (!ref) return null
@@ -300,41 +425,87 @@ export function createGithub(repository) {
                 throw new Error("Release tag does not resolve to a commit")
             return object.sha
         },
+        /** @param {string} commit */
+        async sdkVersion(commit) {
+            const file = await api(`contents/projects/sdk/package.json?ref=${commit}`)
+            if (file?.encoding !== "base64" || typeof file.content !== "string")
+                throw new Error("SDK manifest could not be read from GitHub")
+            const version = JSON.parse(Buffer.from(file.content, "base64").toString("utf8")).version
+            if (typeof version !== "string") throw new Error("SDK manifest has no version")
+            return version
+        },
+        /** @param {number} id */
         download: (id) => api(`releases/assets/${id}`, { binary: true }),
+        /**
+         * @param {string} tag
+         * @param {string} path
+         */
         upload: (tag, path) => command(["release", "upload", tag, path, "--repo", repository], { binary: true }),
     }
+}
+
+/**
+ * @param {Record<string, string | number | boolean>} values
+ */
+async function writeOutputs(values) {
+    const path = process.env.GITHUB_OUTPUT
+    if (!path) return
+    for (const [name, value] of Object.entries(values)) {
+        const text = String(value)
+        if (/[\r\n]/.test(text)) throw new Error("Workflow output values must be single lines")
+        await appendFile(path, `${name}=${text}\n`)
+    }
+}
+
+/** @param {string | undefined} name */
+function environment(name) {
+    const value = name ? process.env[name] : undefined
+    if (!value) throw new Error(`${name} is required`)
+    return value
 }
 
 async function main() {
     const github = createGithub(process.env.GITHUB_REPOSITORY)
     const action = process.argv[2]
     if (action === "preparation") {
-        const runId = process.env.PREPARATION_RUN_ID
-        if (!/^[1-9]\d*$/.test(runId ?? "")) throw new Error("Preparation needs a numeric run ID")
+        const runId = process.env.PREPARATION_RUN_ID ?? ""
+        if (!/^[1-9]\d*$/.test(runId)) throw new Error("Preparation needs a numeric run ID")
         const run = await github.api(`actions/runs/${runId}`)
         const workflow = await github.api("actions/workflows/release-prepare.yml")
         const result = validatePreparation(run, await github.artifacts(runId), {
-            repository: process.env.GITHUB_REPOSITORY,
+            repository: environment("GITHUB_REPOSITORY"),
             runId,
             workflow,
         })
         if ((await github.api(`commits/${result.sourceCommit}`)).sha !== result.sourceCommit)
             throw new Error("Selected candidate source does not resolve in this repository")
-        for (const [name, value] of Object.entries(result))
-            await appendFile(process.env.GITHUB_OUTPUT, `${name}=${value}\n`)
-    } else if (["inspect", "announce"].includes(action)) {
-        const directory = resolve(process.env.CANDIDATE_DIRECTORY)
-        const checksum = process.env.CANDIDATE_CHECKSUM
-        if (!/^[a-f0-9]{64}$/.test(checksum ?? "")) throw new Error("Externally reviewed checksum is required")
+        // The candidate commit is data for the tag target, so it must already be part of main
+        await assertReachableFromMain(github, result.sourceCommit)
+        await writeOutputs(result)
+    } else if (action === "inspect" || action === "announce") {
+        const directory = resolve(environment("CANDIDATE_DIRECTORY"))
+        const checksum = process.env.CANDIDATE_CHECKSUM ?? ""
+        if (!/^[a-f0-9]{64}$/.test(checksum)) throw new Error("Externally reviewed checksum is required")
         const candidate = await readCandidate(directory, { checksum })
         if (candidate.sourceCommit !== process.env.CANDIDATE_SOURCE_COMMIT || !candidate.docs)
             throw new Error("Candidate source does not match its preparation artifact")
         if (action === "announce") {
             const result = await announceRelease(candidate, directory, github)
             console.log(JSON.stringify(result))
-        } else
+        } else {
             console.log(JSON.stringify({ version: candidate.version, sourceCommit: candidate.sourceCommit, checksum }))
-    } else throw new Error("Use preparation, inspect or announce")
+            await writeOutputs({ version: candidate.version })
+        }
+    } else if (action === "prepare-trigger") {
+        const result = await releaseTrigger({
+            before: process.env.BEFORE_SHA,
+            after: environment("AFTER_SHA"),
+            readVersion: (commit) => github.sdkVersion(commit),
+            registries: createRegistries(),
+        })
+        console.log(JSON.stringify(result))
+        await writeOutputs({ prepare: result.prepare, version: result.version })
+    } else throw new Error("Use preparation, inspect, announce or prepare-trigger")
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))

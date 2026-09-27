@@ -1,0 +1,916 @@
+import type {
+    MessageSearchContext,
+    MessageSearchIterationLimits,
+    MessageSearchPage,
+    MessageSearchQuery,
+} from "#sdk/message-search"
+import type * as Effect from "effect/Effect"
+import type * as Scope from "effect/Scope"
+import type * as Stream from "effect/Stream"
+import type { PaginationError, HistoryIterationQuery, UserIterationQuery, PinIterationQuery } from "#sdk/pagination"
+import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "#sdk/reactions"
+import type { MessagePinsQuery, MessagePinsPage } from "#sdk/pins"
+import type { MessageOperationFailure, SendError } from "#sdk/message-errors"
+import type {
+    MessageCleanupFailure,
+    MessageCleanupOptions,
+    MessageCleanupPlan,
+    MessageCleanupReport,
+    MessageCleanupSelection,
+} from "#sdk/message-cleanup"
+import type {
+    EditMessageInput,
+    ForwardMessageInput,
+    MessageHistoryQuery,
+    Message,
+    MessageCore,
+    MessageReference,
+    MessageInput,
+    MessageOperationOptions,
+    OwnMessageDeletionOptions,
+    ReplyInput,
+    SendOptions,
+} from "#sdk/messages"
+import type { ReactionCollectorOptions, CollectorOptions, Collector, ReactionCollector } from "./collectors.js"
+
+/**
+ * Send, read, edit or delete messages, collect future replies and reactions, or inspect indexed search results.
+ * Methods return Effects or Streams. HTTP requests and local lookups do not require a gateway connection
+ *
+ * Results use the messageFields chosen at client creation, or full Message objects by default. Nested results, callbacks and cached snapshots use the same selection
+ *
+ * A collector with guildId requires that community's local shard to be ready. A channel-only collector requires the client to be Connected. Closing or Closed clients reject new work
+ *
+ * By default up to four REST or upload requests run at once across this client, regardless of shard, and attachment downloads have four separate slots. The shared queue holds at most 256 requests or 4 MiB of JSON bodies by default. The rest client option changes these limits.
+ * Each remote call has a total deadline of rest.defaultTimeoutMs by default (30,000 ms unless configured). Queue, retry and rate-limit waits count toward it. Cleanup is awaited afterward
+ *
+ * The fetch, fetchHistory, fetchReactionUsers and fetchPins methods retry transport failures and HTTP 500/502/503/504 at most twice.
+ * Retry delays are jittered 125–250 ms then 250–500 ms, or a valid longer Retry-After. Retries never reset the deadline. When a retry could not start before the deadline, the received failure is returned at once.
+ * A retry reads the same target and query, but does not guarantee an unchanged snapshot. Other rejections and malformed successes never retry.
+ * Confirmed HTTP 429 responses use the applicable route or client-wide rate-limit wait. They do not count against the two transient-read retries
+ *
+ * Writes retry only confirmed rate-limit rejections, never requests whose outcome is unknown
+ *
+ * Successful REST JSON responses are limited to 16 MiB before parsing. This is not a total memory limit. Oversized or malformed responses fail with reason response and do not retry.
+ * If a response fails after a write was sent, the write may still have applied. The SDK does not assume rollback
+ *
+ * Expected failures use Effect's error channel. Defects, interruption and cleanup failures remain in Cause, even when several happen together.
+ * Interruption or client closure waits for SDK-owned cleanup but cannot undo a write already sent
+ *
+ * @category Messages
+ */
+
+export interface Messages<M extends MessageCore = Message> {
+    /**
+     * Read older messages newest first, without connecting the gateway.
+     * The maxItems option is required, and pageSize and maxPages use the limits in PaginationQuery.
+     * Creating the result makes no request.
+     * Each consumption copies the inputs and has independent progress.
+     * The SDK keeps one page at a time and fetches the next only when needed.
+     * Items are frozen message snapshots.
+     * The timeoutMs option applies to each page, not to the whole scan.
+     * Remote errors identify fetchHistory, and PaginationError reports invalid input, cursorStalled or pageLimit.
+     * An empty page or maxItems ends the scan, while a short page does not, and pages are not a consistent snapshot.
+     * If message caching is enabled, page reads can populate it as fetchHistory does.
+     * Client closure releases the buffer and fails the next pull.
+     * Messages already delivered to the caller are not rolled back, and caller processing is not retried
+     *
+     * @remarks
+     * The returned Stream reads pages only while it is consumed.
+     * Failures end the Stream in its error channel.
+     * Interruption waits for request cleanup, and ending consumption releases the buffered page.
+     * The Stream uses the caller's services without a separate SDK runtime, and defects keep their Cause, including cleanup failures
+     *
+     * @example
+     * ```ts
+     * import { Effect, Stream } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const paginationHistoryExample = (client: Client, channelId: string) =>
+     *     client.messages.iterateHistory(channelId, { maxItems: 500 }).pipe(
+     *         Stream.runForEach(message => Effect.sync(() => message.content.length)),
+     *     )
+     * ```
+     */
+    iterateHistory(
+        channelId: string,
+        query: HistoryIterationQuery,
+        options?: MessageOperationOptions,
+    ): Stream.Stream<M, MessageOperationFailure | PaginationError>
+    /**
+     * Search messages in one explicit community or channel and return one page from Fluxer's search index.
+     * The SDK always sends the current search scope (`scope: "current"`).
+     * It neither connects the gateway nor reads or fills a cache
+     *
+     * The result is a frozen page or an indexing state.
+     * The indexing result means Fluxer accepted the search but is not ready, and the SDK never polls.
+     * The caller decides whether and when to search again.
+     * Use page numbers from 1 through 400 for later requests, keeping limit unchanged.
+     * Fluxer does not honor returned cursors, so the SDK exposes no cursor continuation
+     *
+     * Recognized query fields, including inherited and nonenumerable fields, are read and their arrays copied when execution starts.
+     * The results and their channel context can change and are not a stable snapshot.
+     * Invalid input, POST failure or malformed success fails with MessageOperationError operation search.
+     * Search does not use the transient read retries described for this namespace, but confirmed rate-limit handling still applies within the deadline.
+     * Cancellation releases only this request
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const messageSearchPageExample = (client: Client, channelId: string) => Effect.gen(function* () {
+     *     return yield* client.messages.search({ channelId }, { content: "release notes" })
+     * })
+     * ```
+     */
+    search(
+        context: MessageSearchContext,
+        query?: MessageSearchQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<MessageSearchPage<M>, MessageOperationFailure>
+    /**
+     * Read indexed search hits from the supplied community or channel context, following numbered pages without polling, prefetching or cache population.
+     * The maxItems option is required, pageSize accepts 1–25, and maxPages defaults to 100.
+     * Each consumption copies the filters, including recognized inherited and nonenumerable fields and their arrays, and holds one page at a time.
+     * Request capacity stays at the smaller of pageSize and maxItems throughout the scan, and at most maxItems hits are delivered.
+     * Reaching maxPages or Fluxer's 400-page ceiling with more matches fails with PaginationError pageLimit.
+     * An unexpected echoed page number or capacity fails with cursorStalled, and index changes can still skip or repeat observations.
+     * An indexing response fails with PaginationError indexing rather than polling or claiming an empty result.
+     * Search hits do not trigger full-message fetches.
+     * Delivered hits remain with the caller after a later failure
+     *
+     * @remarks
+     * The returned Stream reads pages only while it is consumed.
+     * Failures end the Stream in its error channel.
+     * Interruption waits for request cleanup, and ending consumption releases the buffered page
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const messageSearchTraversalExample = (client: Client, guildId: string) =>
+     *     client.messages.iterateSearch({ guildId }, { content: "todo" }, { maxItems: 100 })
+     * ```
+     */
+    iterateSearch(
+        context: MessageSearchContext,
+        filters: Omit<MessageSearchQuery, "limit" | "page">,
+        limits: MessageSearchIterationLimits,
+        options?: MessageOperationOptions,
+    ): Stream.Stream<M, MessageOperationFailure | PaginationError>
+    /**
+     * Read users who reacted with one selected emoji, in ascending user-ID order.
+     * Pass a literal Unicode emoji or custom emoji input, plus maxItems to bound the scan.
+     * Like iterateHistory, this is lazy and keeps bounded results.
+     * The timeoutMs option applies to each fetchReactionUsers page, and remote errors keep that operation.
+     * The scan ends at maxItems or hasMore false, without caching reactors or fetching members.
+     * Reactions may change during the scan.
+     * Not finding a user within the bound does not prove the user never reacted
+     *
+     * @remarks
+     * The returned Stream reads pages only while it is consumed.
+     * Failures end the Stream in its error channel.
+     * Interruption waits for request cleanup, and ending consumption releases the buffered page
+     *
+     * @example
+     * ```ts
+     * import { Stream } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const paginationReactionExample = (client: Client, message: MessageReference, userId: string) =>
+     *     client.messages.iterateReactionUsers(message, "👍", { maxItems: 500 }).pipe(
+     *         Stream.filter(user => user.id === userId), Stream.take(1), Stream.runCollect,
+     *     )
+     * ```
+     */
+    iterateReactionUsers(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        query: UserIterationQuery,
+        options?: MessageOperationOptions,
+    ): Stream.Stream<import("#sdk/reactions").ReactionUser, MessageOperationFailure | PaginationError>
+    /**
+     * Read pinned messages newest pin first, without adding message cache entries.
+     * Pass maxItems to bound the scan, and PinIterationQuery defines the remaining limits.
+     * Like iterateHistory, this is lazy, with timeoutMs applying to each fetchPins page, and remote errors keep that operation.
+     * At most maxItems IDs are kept to skip duplicates.
+     * Valid items on a stalled page can be delivered before cursorStalled on the next pull.
+     * The scan stops at maxItems or hasMore false.
+     * Pins with equal timestamps can prevent a complete scan even without concurrent edits
+     *
+     * @remarks
+     * The returned Stream reads pages only while it is consumed.
+     * Failures end the Stream in its error channel.
+     * Interruption waits for request cleanup, and ending consumption releases the buffered page
+     *
+     * @example
+     * ```ts
+     * import { Stream } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const paginationPinsExample = (client: Client, channelId: string) =>
+     *     client.messages.iteratePins(channelId, { maxItems: 20 }).pipe(
+     *         Stream.map(pin => pin.message.id), Stream.runCollect,
+     *     )
+     * ```
+     */
+    iteratePins(
+        channelId: string,
+        query: PinIterationQuery,
+        options?: MessageOperationOptions,
+    ): Stream.Stream<import("#sdk/pins").MessagePin<M>, MessageOperationFailure | PaginationError>
+    /**
+     * Pin a message using its decimal id and channelId.
+     * Success follows HTTP 204, not gateway notification.
+     * No gateway connection is required
+     *
+     * Fluxer checks channel access and PIN_MESSAGES for community pins.
+     * A new pin creates a system message and notifications.
+     * An already-pinned message stays unchanged.
+     * The pin, unpin and fetchPins methods share the per-channel pins rate limit and the client's request limits.
+     * The default deadline is the client's rest.defaultTimeoutMs, 30,000 ms unless configured, and only confirmed HTTP 429 rejections are retried
+     *
+     * Expected failures use MessageOperationError operation pin, or ClientClosedError after shutdown.
+     * Invalid local input fails with outcome notDispatched.
+     * Cancellation or a lost response after sending the request can leave the pin applied.
+     * Successful writes and writes with unknown outcomes remove the cached target without guessing its new pinned status.
+     * The SDK does not fetch to confirm, create events itself, unpin automatically or roll back the change.
+     * The example's steps are separate operations, not a transaction
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     *
+     * export const pinsExample = (client: Client, message: MessageReference) => Effect.gen(function* () {
+     *     yield* client.messages.pin(message)
+     *     const page = yield* client.messages.fetchPins(message.channelId, { limit: 25 })
+     *     yield* client.messages.unpin(message)
+     *     return page
+     * })
+     * ```
+     */
+    pin(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Remove a pin without deleting the message or its pin-created system message.
+     * Supply a decimal message id and channelId.
+     * Fluxer checks the same permissions as pin.
+     * Success follows HTTP 204, including when the message is already unpinned.
+     * The last-pin timestamp is not reset.
+     * The pin method's request limits, deadline, rate-limit retries, cancellation and cache removal also apply.
+     * Expected failures identify operation unpin, and client closure fails with ClientClosedError.
+     * No gateway connection, confirmation fetch, event synthesis or automatic rollback is performed
+     */
+    unpin(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Fetch one frozen page of pinned messages in descending pin-time order.
+     * Use a decimal channel ID.
+     * The limit option defaults to 50 and accepts 1–50.
+     * The before option is an ISO timestamp and defaults to the server's current time
+     *
+     * Use nextBefore for the next page and pinnedAt for each pin's time.
+     * Equal timestamps can repeat messages, so skip duplicate IDs and stop if the cursor does not advance.
+     * This call neither traverses further pages nor reads or populates the message cache.
+     * Visibility and history permissions can limit the page, so an empty page does not prove there are no pins.
+     * Returned messages are snapshots, not live state
+     *
+     * The call uses the pins rate limit, the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured) and the namespace's bounded read retries.
+     * Invalid input or malformed responses fail with MessageOperationError operation fetchPins, not a partial page.
+     * Client closure fails with ClientClosedError, and cancellation affects this request only
+     */
+    fetchPins(
+        channelId: string,
+        query?: MessagePinsQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<MessagePinsPage<M>, MessageOperationFailure>
+    /**
+     * Remove one user's reaction for one emoji, leaving other users and emoji groups unchanged.
+     * The userId input is required as a decimal string, and the bot's own ID removes its reaction.
+     * Accepts the same ReactionEmojiInput forms as addReaction
+     *
+     * Fluxer checks visibility and history access.
+     * For another user, the bot must have authored the message or have MANAGE_MESSAGES in its community.
+     * Success follows HTTP 204, whether the reaction was present or already absent, without waiting for or synthesizing events.
+     * The call uses addReaction's request limits, deadline, confirmed rate-limit retries and cancellation rules.
+     * Expected failures identify removeUserReaction.
+     * No reaction cache is changed or retained
+     *
+     * After dispatch, cancellation or a lost response can leave the reaction removed, and an unknown outcome is not replayed.
+     * The bot cannot restore another user's reaction as that user, and no restoration is attempted
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const reactionModerationExample = (client: Client, message: MessageReference, userId: string) =>
+     *     Effect.gen(function* () {
+     *         yield* client.messages.removeUserReaction(message, "👍", userId)
+     *         yield* client.messages.clearReaction(message, "👍")
+     *         yield* client.messages.clearReactions(message)
+     *     })
+     * ```
+     */
+    removeUserReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        userId: string,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Remove all users' reactions for one emoji on the message.
+     * Other emoji groups remain.
+     * Success follows HTTP 204, even if no matching reactions existed.
+     * The removeUserReaction method's permissions, request limits, deadline, failure and cleanup rules apply.
+     * Expected failures identify clearReaction.
+     * Fluxer emits a clear-emoji event, not individual removals, and the SDK does not create or wait for that event.
+     * Other users' reactions cannot be restored by the bot as those users
+     */
+    clearReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Remove all users' reactions for all emoji on the message, without deleting the message.
+     * No emoji selector is needed.
+     * Success follows HTTP 204, whether reactions existed or not.
+     * The clearReaction method's permissions, request limits, deadline, failure and cleanup rules apply.
+     * Expected failures identify clearReactions.
+     * Fluxer emits one clear-all event, and the SDK does not create per-emoji or per-user events or wait for notification.
+     * Other users' reactions cannot be restored by the bot as those users
+     */
+    clearReactions(
+        message: MessageReference,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Fetch one page of users who currently have a selected reaction on the message.
+     * Accepts the same ReactionEmojiInput forms as addReaction.
+     * The limit option defaults to 25 and accepts 1–100.
+     * The after option is an exclusive user-ID cursor.
+     * Users are ordered by ascending ID, not reaction time.
+     * Use nextAfter for another page
+     *
+     * An empty reaction produces an empty terminal page.
+     * No automatic page traversal, user cache or message cache update is performed.
+     * Pages can change between requests, so they are not a stable voter list.
+     * This call shares the channel reaction rate limit and the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured), which timeoutMs overrides.
+     * The namespace's bounded read retries apply within the original deadline
+     *
+     * Invalid input, malformed pages, HTTP failures and timeout fail with MessageOperationError for fetchReactionUsers.
+     * HTTP 404 is notFound.
+     * Fluxer decides visibility and history access.
+     * No gateway connection is needed, and cancellation waits for request cleanup
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const reactionUsersExample = (client: Client, message: MessageReference) =>
+     *     Effect.gen(function* () {
+     *         const page = yield* client.messages.fetchReactionUsers(message, "👍", { limit: 25 })
+     *         if (page.nextAfter !== null)
+     *             return yield* client.messages.fetchReactionUsers(message, "👍", { after: page.nextAfter })
+     *         return page
+     *     })
+     * ```
+     */
+    fetchReactionUsers(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        query?: ReactionUsersQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<ReactionUsersPage, MessageOperationFailure>
+    /**
+     * Add the bot's own reaction to a message.
+     * Pass Unicode such as "👍", custom markup such as "<a:party:123>", a parsed custom emoji, or a received emoji snapshot.
+     * ReactionEmojiInput defines accepted identities and local validation, and custom emoji are encoded as name:id.
+     * Fluxer decides emoji availability and permissions.
+     * Adding the same own reaction again leaves it present.
+     * Success follows HTTP 204, without waiting for or synthesizing a gateway event, and no gateway connection is required.
+     * The request uses a per-channel reaction rate limit separate from message operations, the client's request limits and the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured).
+     * Only confirmed rate-limit rejections retry, and unknown outcomes are never retried.
+     * Cancellation after dispatch cannot undo the reaction.
+     * Expected failures use MessageOperationError, or ClientClosedError after closure.
+     * The SDK does not retain reaction state, counts or reactor lists
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const reactionExample = (client: Client, message: MessageReference) =>
+     *     Effect.gen(function* () {
+     *         yield* client.messages.addReaction(message, "👍")
+     *         yield* client.messages.removeReaction(message, "👍")
+     *     })
+     * ```
+     */
+    addReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Remove only the bot's own reaction for the selected emoji.
+     * Other users' reactions stay unchanged.
+     * Success follows HTTP 204, even if the bot had not reacted, so it does not prove the reaction existed.
+     * The addReaction method's emoji inputs, request limits, deadline, retry, failure and cancellation rules apply.
+     * Neither this operation nor gateway reaction events change the message cache
+     */
+    removeReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Collect a bounded set of future messageCreate events from one channel.
+     * Register before sending a prompt.
+     * It does not fetch history, read the cache, connect the client or match replies to a prompt automatically.
+     * With guildId, only that community's ready shard assigned to this client can feed the collector, and events with a known conflicting community are discarded without a channel lookup.
+     * Without guildId, the client must be Connected, and any gateway gap ends collection because the community is unknown.
+     * A gap fails with CollectorError connectionLost, even if the client later resumes, and collection is not restarted
+     *
+     * Defaults are one accepted message, a 30,000 ms lifetime and 4 MiB of retained selected-message JSON.
+     * After channel selection and before filtering, the pending queue allows 256 payloads or 4 MiB of source JSON.
+     * Options are copied at registration.
+     * Budgets must be positive safe integers, and timeoutMs and optional idleMs must be at most 2,147,483,647 ms
+     *
+     * The total timeout starts at registration and never resets.
+     * The idleMs timer also starts at registration, then resets after each newly accepted message ID, before its callback.
+     * Rejected, queued or duplicate messages do not reset idleMs.
+     * Callback time counts toward both deadlines.
+     * The earlier deadline wins, with timeout winning ties.
+     * Messages processed at or after the deadline are excluded, including slow filter returns.
+     * Each accepted ID counts once, and later edits and deletions do not change collected snapshots
+     *
+     * The synchronous filter decides acceptance.
+     * Filter failure or queue or retained-byte overflow ends this collector with a failure, without partial messages.
+     * A slow synchronous filter blocks JavaScript and cannot be preempted.
+     * Optional onMessage runs sequentially after filtering, duplicate removal and the retained-byte check.
+     * Reaching maxMessages waits for the final callback, and later messages are ignored while it completes.
+     * Idle, timeout or stop can retain a message whose callback was cancelled.
+     * Pending budgets exclude the active message.
+     * Callback failure ends collection with CollectorError reason handler.
+     * Callbacks are not retried and their effects are not undone.
+     * Filter the bot out when callbacks send acknowledgements, to avoid collecting those acknowledgements
+     *
+     * Invalid options are misuse: The default API throws ConfigurationError and the native API dies with it.
+     * A client that is not ready returns a collector whose result is CollectorError notConnected, and a client that began
+     * shutting down, such as when a handler still running during shutdown registers, returns one whose result is
+     * ClientClosedError.
+     * A timeout can succeed with no messages.
+     * The application still manages the client's lifetime
+     *
+     * @remarks
+     * Collection belongs to the Scope that executes this Effect.
+     * Callbacks run with the services available at registration.
+     * Closing the registration Scope stops the collector with partial replies, and client shutdown fails it with ClientClosedError.
+     * Interrupting a waiter does not stop collection, and there is no AbortSignal option.
+     * Scope closure and client shutdown await callback cleanup, and terminal cleanup defects keep their Cause
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     *
+     * export const askName = (client: Client, channelId: string, userId: string) => Effect.scoped(
+     *     Effect.gen(function* () {
+     *         const collector = yield* client.messages.collect(channelId, { filter: message => message.author.id === userId })
+     *         yield* client.messages.send(channelId, { content: "What name should the bot use?" })
+     *         return yield* collector.result()
+     *     }),
+     * )
+     * ```
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     *
+     * export const messageCollectorProgressExample = (client: Client, channelId: string, userId: string) => Effect.scoped(
+     *     Effect.gen(function* () {
+     *         const collector = yield* client.messages.collect(channelId, {
+     *             filter: message => message.author.id === userId,
+     *             maxMessages: 3,
+     *             idleMs: 5_000,
+     *             onMessage: message => client.messages.reply(message, { content: "Reply received" }),
+     *         })
+     *         return yield* collector.result()
+     *     }),
+     * )
+     * ```
+     */
+    collect<E = never, R = never>(
+        channelId: string,
+        options?: CollectorOptions<E, R, M>,
+    ): Effect.Effect<Collector<M>, never, Scope.Scope | R>
+    /**
+     * Collect future reaction additions for one message.
+     * Use decimal id and channelId, and register before the expected reaction.
+     * This does not fetch existing reactors, verify the message remotely, read the cache or connect the client.
+     * With guildId, only that community's ready shard assigned to this client feeds the collector, and known conflicting event communities are discarded without a membership lookup.
+     * Without guildId, the client must be Connected and any gateway gap ends collection with connectionLost, without restarting it
+     *
+     * Defaults are one accepted addition, a 30,000 ms lifetime and 4 MiB of retained reaction JSON.
+     * The target and options are copied at registration.
+     * After message selection, the pending queue allows 256 payloads or 4 MiB of full source JSON.
+     * Optional emoji uses addReaction's input shape and is checked after queueing, before the synchronous filter.
+     * Unicode emoji match exact text without a custom ID, and custom emoji match by ID, ignoring name changes.
+     * An invalid emoji selector fails with ConfigurationError for emoji
+     *
+     * Single events and batch entries follow receive order.
+     * A batch uses one pending slot and its entries count individually.
+     * Repeated user and emoji pairs count again, and no batching flag is enabled.
+     * Removals, clears and message deletion neither undo additions nor stop collection, so this is not a vote tally
+     *
+     * The total timeout starts at registration and never resets, and excludes additions processed at or after it, including slow filter returns.
+     * Optional idleMs starts then too and resets after each accepted addition, before its callback.
+     * Rejected, queued and unprocessed batch entries do not reset it.
+     * Callback time counts, and the earlier deadline wins, with timeout winning ties.
+     * The timeoutMs and idleMs values must be integers from 1 through 2,147,483,647 ms
+     *
+     * Optional onReaction runs sequentially after acceptance and the retained-byte check.
+     * Limit completion waits for the final callback.
+     * Idle, timeout or stop can retain an addition whose callback was cancelled.
+     * Pending budgets exclude the active payload and its unprocessed batch entries.
+     * Callback failure ends collection with CollectorError reason handler, and no callback is retried or earlier effect undone.
+     * Filter or overflow failure ends with CollectorError without partial results.
+     * An invalid target or options are misuse: The default API throws ConfigurationError and the native API dies with it.
+     * A client that is not ready returns a collector whose result is CollectorError notConnected, and a client that began
+     * shutting down, such as when a handler still running during shutdown registers, returns one whose result is
+     * ClientClosedError.
+     * The example needs a connected client and an existing message, and idle or timeout may succeed with no reactions
+     *
+     * @remarks
+     * Collection belongs to the Scope that executes this Effect.
+     * Callbacks run with the services available at registration.
+     * Closing the registration Scope stops collection with partial results, and client shutdown fails it with ClientClosedError.
+     * Interrupting a waiter does not stop collection, and there is no AbortSignal option.
+     * Terminal cleanup defects keep their Cause
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     *
+     * export const reactionCollectorExample = (client: Client, message: MessageReference, userId: string) => Effect.scoped(
+     *     Effect.gen(function* () {
+     *         const collector = yield* client.messages.collectReactions(message, {
+     *             maxReactions: 3,
+     *             idleMs: 5_000,
+     *             emoji: "✅",
+     *             filter: reaction => reaction.userId === userId,
+     *             onReaction: reaction => client.messages.edit(message, { content: `Accepted addition by ${reaction.userId}` }),
+     *         })
+     *         return yield* collector.result()
+     *     }),
+     * )
+     * ```
+     */
+    collectReactions<E = never, R = never>(
+        message: MessageReference,
+        options?: ReactionCollectorOptions<E, R>,
+    ): Effect.Effect<ReactionCollector, never, Scope.Scope | R>
+    /**
+     * Look up a message in this client's cache, without an HTTP request.
+     * Pass decimal id and channelId, or an existing message with those fields.
+     * The result is undefined when caching is disabled or the entry is absent, expired, evicted or in a different channel.
+     * It does not mean Fluxer has no such message, so use fetch for a remote read.
+     * A hit is a frozen snapshot that can be stale.
+     * Lookup makes it more recently used without extending its age.
+     * An invalid reference is misuse: The default API throws MessageOperationError with operation messages.get and reason input, and the native API dies with it.
+     * A closing or closed client has no cache, so the result is undefined
+     */
+    get(message: MessageReference): Effect.Effect<M | undefined>
+    /**
+     * Send text, embeds, files or stickers to a channel and return the created message.
+     * A plain string sends only that text, as shorthand for `{ content }`, and embeds accept plain objects or EmbedBuilder instances.
+     * Success follows the decoded HTTP response, not gateway notification or recipient acknowledgement, and no gateway connection is needed.
+     * Mentions are disabled by default, and allowedMentions opts in.
+     * Embed image and thumbnail URLs can use attachment://filename for a matching new image upload.
+     * The flags input accepts only MessageFlags' non-voice bits.
+     * Suppressing previews is different from omitting embeds
+     *
+     * Each attachment uses exactly one source: Bytes in data, a sized Blob or File source, or a finite stream with its exact byte count.
+     * Data bytes are copied when execution starts, before any wait.
+     * File and stream bytes are read when uploading starts, after upload planning, without copying or spooling.
+     * Keep a file source stable while it is read.
+     * A finite stream is consumed at most once and must match its declared size.
+     * A path string or URL alone is not accepted, and the SDK owns only the readers it acquires
+     *
+     * All sources have a 50 MiB per-file maximum and share the client uploads.maxBytes reservation budget.
+     * A full upload or request queue fails with busy before copying or reading.
+     * Fluxer can impose lower limits.
+     * Uploads use presigned planning or an inline multipart fallback.
+     * Cleanup releases copied bytes and cancels and releases acquired readers on failure.
+     * Failed uploads can leave temporary server data, without a guarantee of physical erasure.
+     * Eligible created messages can enter an enabled cache, independently of send completion
+     *
+     * The default total deadline, rest.defaultTimeoutMs (30,000 ms unless configured), includes waiting for request capacity and rate limits.
+     * The request uses the shared limits and failure rules of this namespace.
+     * By default one client admits four REST and upload requests plus four independent attachment downloads, and both pools share at most 256 pending requests or 4 MiB of pending JSON. The rest client option changes these limits.
+     * Only confirmed rate-limit rejections can retry automatically, and sends with unknown outcomes never retry.
+     * With inline multipart uploads, a confirmed HTTP 429 can replay copied data bytes only, while file and stream inputs fail with rateLimit instead of being read again
+     *
+     * The nonce input can be a 1–32 character string or a nonnegative safe integer.
+     * If omitted, the SDK creates one nonce per send execution, and the same nonce is reused for confirmed rate-limit retries.
+     * Fluxer tries to suppress duplicate sends for five minutes after saving a message.
+     * This does not guarantee that a repeated or concurrent send posts only one message.
+     * A lost response or cancellation after dispatch can leave a message posted, and the SDK neither retries nor rolls it back
+     */
+    send(channelId: string, input: MessageInput | string, options?: SendOptions): Effect.Effect<M, SendError>
+    /**
+     * Copy an accessible source message into the destination channel and return the new message.
+     * Pass the source reference in input.source.
+     * No source fetch or cache lookup is performed, and no gateway connection is required.
+     * Optional media selections must belong to the source.
+     * Extra content, files, mentions and flags are rejected.
+     * The result's messageSnapshots are frozen copies, not live views of later source edits
+     *
+     * Fluxer checks source access and destination permissions.
+     * This uses send's shared request limits, the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured) and optional destination-message caching.
+     * The nonce input follows send's accepted values, generated default and reuse on confirmed rate-limit retries.
+     * Fluxer's five-minute duplicate suppression is best effort, not exactly-once delivery.
+     * Success follows HTTP, not recipient acknowledgement.
+     * A lost response or cancellation can leave the forward posted.
+     * Only confirmed rate-limit rejection retries, and no write with an unknown outcome is replayed or rolled back.
+     * Expected failures are MessageError or ClientClosedError
+     *
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export function forwardExample(client: Client, destinationId: string, source: MessageReference) {
+     *     return client.messages.forward(destinationId, { source })
+     * }
+     * ```
+     */
+    forward(channelId: string, input: ForwardMessageInput, options?: SendOptions): Effect.Effect<M, SendError>
+    /**
+     * Show this bot's temporary typing indicator in a channel.
+     * Pass a decimal channel ID.
+     * Success follows HTTP 204, without waiting for another client to see it.
+     * No gateway connection, cache entry, local typing state or presence change is made.
+     * Fluxer decides delivery and when the indicator expires.
+     * This uses the client's request limits, a dedicated per-channel typing rate limit and the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured).
+     * Only confirmed rate-limit rejection retries.
+     * A lost response, timeout or cancellation can leave the notice shown.
+     * Input, capacity and HTTP failures use MessageOperationError operation typing, and client closure fails with ClientClosedError.
+     * Cancellation waits for request cleanup
+     */
+    typing(channelId: string, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Keep the bot's typing indicator active while a task runs, returning the task's value.
+     * The first typing request must succeed before the task starts, and an initial failure prevents the task from running.
+     * Refreshes run no sooner than every 8,000 ms until the task settles, below Fluxer's documented limit of 20 requests per 10 seconds per channel.
+     * A later typing or client-close failure stops refreshes without interrupting the task, and is reported after the task settles.
+     * Client shutdown stops and waits for the helper's refresh work, not arbitrary application work.
+     * No detached refresh loop, cache entry, presence change or gateway state change is created
+     *
+     * @remarks
+     * The task is an Effect that runs with the caller's services, and its scope, services and errors stay with the caller.
+     * A retained refresh failure combines with the task's Cause.
+     * Interruption stops and awaits the helper
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const typingExample = (client: Client, channelId: string) =>
+     *     client.messages.keepTyping(channelId, Effect.sleep(2_000).pipe(Effect.as("prepared")))
+     * ```
+     */
+    keepTyping<A, E, R>(
+        channelId: string,
+        task: Effect.Effect<A, E, R>,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<A, E | MessageOperationFailure, R>
+    /**
+     * Send a reply that references an existing message and return the new reply.
+     * A plain string replies with only that text, as shorthand for `{ content }`.
+     * Pass the target's id and channelId, plus the reply content or files.
+     * A missing target fails instead of silently sending an unreferenced message.
+     * Target and explicit reference checks run first, and after client-closure checks, body validation follows send.
+     * Author notifications are off by default.
+     * The send method's mention defaults, attachment source handling, size limits, deadline, nonce and retry rules apply, and inline multipart 429 responses do not replay file or stream sources.
+     * Eligible replies can enter the message cache.
+     * A lost response can leave the reply posted, and the SDK does not replay a send with an unknown outcome
+     */
+    reply(message: MessageReference, input: ReplyInput | string, options?: SendOptions): Effect.Effect<M, SendError>
+    /**
+     * Fetch one message from Fluxer, rather than reading the cache.
+     * Pass a reference with id and channelId, or an existing Message.
+     * The result is a frozen snapshot after response decoding and target-ID checks.
+     * A missing target fails with MessageOperationError reason notFound, not an empty value.
+     * An enabled cache can retain eligible results, but a full cache does not prevent the read from succeeding.
+     * The namespace's bounded read retries apply, so no caller retry loop is needed for eligible transient failures.
+     * Cancellation stops this request only and waits for cleanup
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const readExample = (client: Client, message: MessageReference) => Effect.gen(function* () {
+     *     const result = yield* client.messages.fetch(message, { timeoutMs: 2_000 })
+     *     return result.content
+     * })
+     * ```
+     */
+    fetch(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<M, MessageOperationFailure>
+    /**
+     * Fetch one page of channel messages from Fluxer, newest first.
+     * Pass a decimal channel ID.
+     * With no query, this reads the latest 50 messages.
+     * The limit option accepts 1–100.
+     * Choose at most one before, after or around message-ID cursor.
+     * Use the oldest returned ID as before to request an older page
+     *
+     * The entire page is validated before returning a frozen array of frozen snapshots.
+     * No gateway connection, cache read, automatic traversal or prefetch is required.
+     * An empty or short page describes currently accessible results, not necessarily complete history.
+     * Pages are separate observations, not a consistent point-in-time snapshot.
+     * An enabled cache receives eligible messages oldest first, so tight limits keep the newest
+     *
+     * Invalid input, malformed pages or HTTP failures fail with MessageOperationError for fetchHistory, and HTTP 404 remains notFound.
+     * The namespace's shared limits, default deadline and bounded read retries apply.
+     * Cancellation affects only this request and waits for cleanup, and client closure fails with ClientClosedError
+     */
+    fetchHistory(
+        channelId: string,
+        query?: MessageHistoryQuery,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<readonly M[], MessageOperationFailure>
+    /**
+     * Preview a bounded message-deletion selection without deleting anything.
+     * Pass authorId, a synchronous filter, or both.
+     * When both are supplied, a message must match both.
+     * The maxScanned and maxSelected values are required integers from 1 through 10,000.
+     * History is scanned newest first until an empty page or either bound, without prefetch, and a short page does not end the scan.
+     * History reads can populate an enabled message cache
+     *
+     * The result is an in-memory plan with frozen selected messages, usable once by this client only.
+     * It cannot be reconstructed from JSON or given to another client.
+     * A thrown filter, non-boolean return or promise-like return fails with MessageCleanupError before deletion.
+     * A blocking synchronous filter cannot be interrupted.
+     * One default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers the history scan.
+     * Cancellation submits no deletion.
+     * No gateway connection or cache reread is needed
+     */
+    previewCleanup(
+        channelId: string,
+        selection: MessageCleanupSelection<M>,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<MessageCleanupPlan<M>, MessageCleanupFailure>
+    /**
+     * Delete the exact IDs in a plan returned by previewCleanup, in sequential batches of at most 100.
+     * No history reread or filter rerun is performed.
+     * Each batch has the ManageMessages and two-factor authentication requirements of deleteMany.
+     * A plan is single-use even when cleanup fails or is cancelled, preventing accidental replay.
+     * To resolve an unknown outcome, preview again or call deleteMany with separately recorded IDs
+     *
+     * One default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers all batch submissions.
+     * The submittedBatches field records only earlier HTTP-success submissions, in the report or MessageCleanupError.
+     * The rejected or unknown terminal batch is reported separately.
+     * These records do not prove each deletion, a deletion count, atomicity or that retrying is safe
+     *
+     * The onProgress callback runs synchronously and cleanup continues after it fails.
+     * A throw, a rejected promise or a returned or resolved Err result goes to the client-level onError as a progress
+     * FailureReport, or is logged at Error.
+     * A returned Effect is not run and is reported the same way as a TypeError, so run Effect work explicitly inside the callback.
+     * Cancellation can leave the batch being submitted with an unknown outcome.
+     * Batches retry only confirmed rate-limit rejections as deleteMany does, never an unknown outcome
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const cleanupWorkflowExample = (client: Client, channelId: string, authorId: string) => Effect.gen(function* () {
+     *     const plan = yield* client.messages.previewCleanup(channelId, {
+     *         authorId,
+     *         filter: message => message.attachments.length > 0,
+     *         maxScanned: 500,
+     *         maxSelected: 200,
+     *     })
+     *     return yield* client.messages.cleanup(plan)
+     * })
+     * ```
+     */
+    cleanup(
+        plan: MessageCleanupPlan<M>,
+        options?: MessageCleanupOptions,
+    ): Effect.Effect<MessageCleanupReport, MessageCleanupFailure>
+    /**
+     * Change a message's supplied fields and return its frozen updated snapshot after HTTP, without waiting for a gateway event.
+     * A plain string replaces only the text, as shorthand for `{ content }`.
+     * Omitted fields remain unchanged.
+     * No hidden fetch or cache merge is performed.
+     * Mentions default off.
+     * Existing stickers are preserved and cannot be replaced here.
+     * An empty content string requests removal of text, subject to Fluxer's validation.
+     * To remove embeds, send nonempty content with embeds: [].
+     * An otherwise empty edit is rejected by Fluxer.
+     * Omitted rich embeds remain, but link previews may be regenerated
+     *
+     * To keep existing files while adding new uploads, include their IDs in attachments.
+     * The supplied list replaces the old one.
+     * [] clears files when nonempty text or embeds remain.
+     * Retained file title or description can be replaced or cleared with null.
+     * Unknown IDs may be ignored, and a stale list can remove concurrent additions.
+     * An attachment:// image or thumbnail URL must match a new image upload, not a retained attachment.
+     * New uploads use send's copying, attachment source, size, budget and cleanup rules, and inline multipart 429 responses do not replay file or stream sources.
+     * Failed edits may leave temporary server data, without physical-erasure guarantees.
+     * A flags-only edit is allowed.
+     * Omission preserves flags, supplied flags replace writable bits, and 0 clears both non-voice bits
+     *
+     * Eligible responses can enter the cache.
+     * A dispatched edit with an unknown outcome removes the old cached copy.
+     * A missing message fails with notFound.
+     * A lost response, timeout, cancellation or closure can leave the edit applied.
+     * The SDK does not automatically retry edits with unknown outcomes
+     */
+    edit(
+        message: MessageReference,
+        input: EditMessageInput | string,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<M, MessageOperationFailure>
+    /**
+     * Delete one message, succeeding with no value after HTTP 204.
+     * Deleting another author's message requires ManageMessages, and Fluxer rejects that deletion with HTTP 400 and apiError.code twoFactorRequired in a community whose mfaLevel is GuildMfaLevels.Elevated, unless the bot owns the community or its application owner has two-factor authentication enabled.
+     * No gateway notification is awaited.
+     * A missing message fails with MessageOperationError reason notFound, including a repeated delete.
+     * Successful deletions and deletions with unknown outcomes remove the cached message.
+     * A lost response, timeout, cancellation or closure can leave the deletion applied.
+     * Request cleanup is awaited, but the deletion cannot be undone.
+     * Deletes with unknown outcomes are never retried automatically
+     */
+    delete(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Delete one attachment by its decimal ID from a message authored by this bot.
+     * The target is copied when execution starts, and the attachment list is neither fetched nor replaced.
+     * No gateway connection is needed.
+     * Success follows HTTP 204, without waiting for an event.
+     * If the last attachment is removed, Fluxer can also delete a message it considers otherwise empty.
+     * Successful deletions and deletions with unknown outcomes remove this message's cached copy, and no events are created locally.
+     * A notFound failure can mean the attachment is missing without proving the message is absent.
+     * Message request limits and deadlines apply, and only confirmed HTTP 429 rejection retries.
+     * Storage removal and message updates are separate changes, so a lost response can leave either applied.
+     * Cancellation waits for cleanup but cannot undo deletion or guarantee physical erasure
+     *
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export function attachmentDeleteExample(client: Client, message: MessageReference, attachmentId: string) {
+     *     return client.messages.deleteAttachment(message, attachmentId)
+     * }
+     * ```
+     */
+    deleteAttachment(
+        message: MessageReference,
+        attachmentId: string,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Delete 1–100 distinct decimal message IDs from one community channel.
+     * Fluxer requires ManageMessages, even for the bot's own messages.
+     * Fluxer rejects the request with HTTP 400 and apiError.code twoFactorRequired in a community whose mfaLevel is GuildMfaLevels.Elevated, unless the bot owns the community or its application owner has two-factor authentication enabled.
+     * IDs are copied once when execution starts, and that copy is validated and sent, so an entry that changes between reads
+     * cannot pass validation with one value and be sent with another.
+     * Success follows HTTP 204, not a deletion count or proof that each ID existed, and missing messages are ignored.
+     * No gateway connection, automatic selection, chunking, age filter or audit reason is added.
+     * Dispatched requests remove selected cache entries even on rejection, because partial deletion is possible.
+     * Only confirmed rate-limit rejection retries.
+     * A lost response, timeout, cancellation or closure can leave deletions applied.
+     * Input, capacity and HTTP failures use MessageOperationError, and cancellation waits for request cleanup
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * const cleanupExample = (client: Client, channelId: string, selectedIds: readonly string[]) =>
+     *     client.messages.deleteMany(channelId, selectedIds)
+     * ```
+     */
+    deleteMany(
+        channelId: string,
+        messageIds: readonly string[],
+        options?: MessageOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+    /**
+     * Irreversibly delete this bot's entire authored message history in one channel.
+     * Use a decimal channel ID.
+     * Other authors' messages are preserved, and no gateway connection, community leave or role change is performed
+     *
+     * Success follows Fluxer's empty HTTP 202 response.
+     * It is not a completed-job report, deletion count, gateway event or proof the channel is empty.
+     * Deletion can be partial and can leave new or concurrent messages.
+     * There is no recovery token, automatic reconciliation or atomicity guarantee
+     *
+     * Bot credentials satisfy Fluxer's extra authentication checks, called sudo checks, and no extra sudo input is accepted.
+     * Fluxer handles attachment removal without guaranteeing physical provider-storage or CDN erasure.
+     * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), includes capacity and rate-limit waits.
+     * Only confirmed HTTP 429 rejection retries, and a 5xx or lost response never causes a replay.
+     * After dispatch, the entire enabled message cache is cleared and older pending reads cannot restore it.
+     * No gateway events are created locally.
+     * Cancellation or closure waits for request cleanup but cannot undo deletion.
+     * Options must include confirm: true. Without it, the call fails before any request with reason input and path options.confirm.
+     * Input, capacity and HTTP failures use MessageOperationError for deleteOwnMessages
+     */
+    deleteOwnMessages(
+        channelId: string,
+        options: OwnMessageDeletionOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
+}

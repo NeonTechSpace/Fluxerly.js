@@ -11,7 +11,23 @@ test("Starter documentation embeds the exact application file without rewriting 
 })
 
 test("Starter includes reject unknown files, traversal and incomplete markers", async () => {
-    for (const marker of ["{{starter:../package.json}}", "{{starter:missing.js}}", "{{starter:lifetime.js}}", "{{starter:lifetime-effect.ts}}", "{{starter:bot.js}"]) {
-        await assert.rejects(expandStarterExamples(marker))
-    }
+    for (const [marker, reason] of [
+        ["{{starter:../package.json}}", /Unknown starter example/],
+        ["{{starter:missing.js}}", /Unknown starter example/],
+        ["{{starter:lifetime.js}}", /Unknown starter example/],
+        ["{{starter:lifetime-effect.ts}}", /Unknown starter example/],
+        ["{{starter:bot.js}", /Incomplete starter example marker/],
+    ]) await assert.rejects(expandStarterExamples(marker), reason, marker)
+})
+
+test("Example includes embed a named example file and reject unsafe paths", async () => {
+    const source = await readFile(new URL("../../sdk/examples/small-bot/bot.ts", import.meta.url), "utf8")
+    assert.equal(await expandStarterExamples("{{example:small-bot/bot.ts}}"), source.trimEnd())
+    for (const [marker, reason] of [
+        ["{{example:../package.json}}", /Unknown example file/],
+        ["{{example:small-bot/../../package.json}}", /Unknown example file/],
+        ["{{example:starter/bot.js}}", /Unknown example file/],
+        ["{{example:small-bot/missing.ts}}", { code: "ENOENT" }],
+        ["{{example:small-bot/bot.ts}", /Incomplete example marker/],
+    ]) await assert.rejects(expandStarterExamples(marker), reason, marker)
 })

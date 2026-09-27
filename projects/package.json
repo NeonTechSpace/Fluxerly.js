@@ -2,6 +2,7 @@
     "private": true,
     "scripts": {
         "build": "pnpm --filter @neontechspace/fluxerly build && pnpm --filter fluxerly-docs build",
+        "lint": "pnpm --filter @neontechspace/fluxerly lint && pnpm --filter @fluxerly/release lint && pnpm --filter fluxerly-docs lint",
         "check": "pnpm --filter @neontechspace/fluxerly check && pnpm --filter @fluxerly/release test && pnpm --filter fluxerly-docs check",
         "changeset": "node release/cli.js changeset",
         "release:plan": "node release/cli.js plan",
@@ -12,7 +13,8 @@
         "release:prepare": "node release/cli.js prepare",
         "release:verify": "node release/cli.js verify",
         "release:publish": "node release/cli.js publish",
-        "docs:dev": "pnpm --filter @neontechspace/fluxerly build && pnpm --filter fluxerly-docs generate && pnpm --filter fluxerly-docs dev"
+        "docs:dev": "pnpm --filter @neontechspace/fluxerly build && pnpm run docs:dev:skip-build",
+        "docs:dev:skip-build": "pnpm --filter fluxerly-docs generate && pnpm --filter fluxerly-docs dev"
     },
     "devEngines": {
         "packageManager": {
@@ -20,5 +22,11 @@
             "version": ">=12 <13",
             "onFail": "download"
         }
+    },
+    "devDependencies": {
+        "cspell": "10.3.4",
+        "knip": "6.38.0",
+        "oxlint": "1.85.0",
+        "oxlint-tsgolint": "7.0.2003"
     }
 }

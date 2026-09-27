@@ -4,28 +4,15 @@ navTitle: Effect application testing
 description: Put the scoped client behind application services and replace those services in tests
 ---
 
-The native SDK client closes when the caller's Effect scope closes. An application Layer can provide that client alongside other services, so handlers can use both without starting another runtime
+An Effect application can provide the SDK client as a service, beside its own services. Handlers then use both without starting another runtime, and tests replace the application services without a Fluxer connection
 
 ## Define application services and handlers
 
 Keep the handler separate from the services it calls. In the running bot, the reply service uses the SDK client. In tests, replace that service without changing `handlePing`
 
 ```ts
-import { Context, Effect, Layer } from "effect";
-import {
-    createClient,
-    type Client,
-    type Message,
-} from "@neontechspace/fluxerly/effect";
-
-export class AppConfig extends Context.Service<
-    AppConfig,
-    { readonly token: string }
->()("example/AppConfig") {}
-
-export class BotClient extends Context.Service<BotClient, Client>()(
-    "example/BotClient",
-) {}
+import { Config, Context, Effect, Layer } from "effect";
+import { FluxerClient, type Message } from "@neontechspace/fluxerly/effect";
 
 export class GreetingStore extends Context.Service<
     GreetingStore,
@@ -54,27 +41,35 @@ export const handlePing = (message: Message) =>
         );
     });
 
-export const clientLayer = Layer.effect(
-    BotClient,
-    AppConfig.use((config) => createClient({ token: config.token })),
-);
+export const clientLayer = FluxerClient.layerConfig({
+    token: Config.Redacted("FLUXER_BOT_TOKEN"),
+});
 
 export const repliesLayer = Layer.effect(
     BotReplies,
-    BotClient.use((client) =>
+    FluxerClient.use((client) =>
         Effect.succeed({
             reply: (message: Message, content: string) =>
-                client.messages.reply(message, { content }).pipe(Effect.asVoid),
+                client.messages.reply(message, content).pipe(Effect.asVoid),
         }),
     ),
-);
+).pipe(Layer.provideMerge(clientLayer));
 ```
 
-`Layer.effect` creates the client inside the Layer's scope. Closing the application scope closes the client once. `BotReplies` lets the handler send replies without depending directly on SDK methods or starting another connection
+The `FluxerClient` service holds one native client. `FluxerClient.layerConfig` reads the token from the `FLUXER_BOT_TOKEN` environment variable through Effect `Config`, keeps it redacted and creates the client inside the Layer's scope, without connecting. Closing the application scope shuts the client down once. `BotReplies` lets the handler send replies without depending directly on SDK methods
+
+<details>
+<summary>Layer failures and other ways to build the client service</summary>
+
+A missing `FLUXER_BOT_TOKEN` fails the Layer with `ConfigError` before any client exists. A blank token or another invalid setting is misuse, so the Layer dies with `ConfigurationError`. `FluxerClient.layer(options)` takes the same settings as `createClient` without reading `Config`. Each build of a Layer creates its own client, so provide one Layer value to share it. For a `messageFields` selection, call `createClient` directly instead. The next example shows that form
+
+</details>
 
 ## Assemble the live program
 
-The worker Layer needs a client, which must stay available until the worker stops. `Layer.provideMerge` keeps both services available, and Layer memoization makes them share one client
+A bot that needs no custom Layer assembly can use `runBot` from the Effect entry point. Its handlers can require application services, and it watches its subscriptions and connection itself. See [first Effect bot](/docs/{{version}}/effect-first-bot/)
+
+For full control, a worker service registers the handlers and runs the client. The worker Layer needs a client, which must stay available until the worker stops. `Layer.provideMerge` keeps both services available, and Layer memoization makes them share one client. This version creates its client service with `createClient` from a token argument
 
 ```ts
 import { Context, Effect, Layer } from "effect";
@@ -122,7 +117,7 @@ export const liveApplication = (token: string) => {
                                         .pipe(
                                             Effect.flatMap((content) =>
                                                 client.messages
-                                                    .reply(message, { content })
+                                                    .reply(message, content)
                                                     .pipe(Effect.asVoid),
                                             ),
                                         ),
@@ -154,9 +149,16 @@ export const liveApplication = (token: string) => {
 };
 ```
 
-This example includes its own handler so it can be copied alone. An application can import `handlePing` from the previous section instead
+This example includes its own handler and client service so it can be copied alone. An application can import `handlePing` from the previous section instead, and use `FluxerClient` with `clientLayer` in place of `BotClient`
 
-Run `subscription.waitForClose()` and `client.run()` together for every subscription the bot needs, stopping when either finishes. If a subscription closes unexpectedly without an error, report `CriticalWorkerStopped`. A typed subscription error remains the application failure. `Effect.raceFirst` stops the other operation and the surrounding scope runs cleanup. A failed subscription must either stop the bot or trigger a restart with a limit on attempts. Effect does not replay failed event handlers
+Run `subscription.waitForClose()` and `client.run()` together for every subscription the bot needs, stopping when either finishes. `Effect.raceFirst` stops the other operation and the surrounding scope runs cleanup
+
+<details>
+<summary>When a subscription stops</summary>
+
+If a subscription closes unexpectedly without an error, report `CriticalWorkerStopped`. A typed subscription error remains the application failure. A failed subscription must either stop the bot or trigger a restart with a limit on attempts. Effect does not replay failed event handlers
+
+</details>
 
 ## Replace application services in a deterministic test
 
@@ -215,8 +217,81 @@ export function testPing(message: Message, replies: Array<string>) {
 }
 ```
 
-The test does not open a gateway or replace SDK internals. It replaces the application services used by the handler. Provider protocol scenarios still need the repository's controlled gateway fixtures or a separately designed public transport interface
+The test does not open a gateway or replace SDK internals. It replaces the application services used by the handler
+
+## Test a runBot bot against an in-memory Fluxer
+
+To check the requests a bot really sends, pass its native `runBot` options to `createTestBot` from `@neontechspace/fluxerly/effect/testing`. It creates a real native client connected to an in-memory Fluxer, owned by the test's Scope, and registers the bot's events, commands and setup as `runBot` would. The unset token falls back to a test token
+
+```ts
+import { Effect } from "effect"
+import { createTestBot } from "@neontechspace/fluxerly/effect/testing"
+
+export const pingTest = Effect.scoped(
+    Effect.gen(function* () {
+        const bot = yield* createTestBot({
+            token: process.env.FLUXER_BOT_TOKEN,
+            events: {
+                messageCreate: ({ message, reply }) =>
+                    message.author.isBot || message.content !== "!ping" ? Effect.void : reply("Pong!"),
+            },
+        })
+        const replies = bot.rest.respond("POST /channels/:id/messages", {
+            body: bot.fixtures.message({ content: "Pong!" }),
+        })
+        yield* bot.ready()
+
+        yield* bot.emit("MESSAGE_CREATE", bot.fixtures.message({ content: "!ping" }))
+        const reply = yield* replies.next()
+
+        yield* bot.emit("MESSAGE_CREATE", bot.fixtures.message({ content: "hello" }))
+        yield* bot.idle()
+        return { content: (reply.body as { content?: unknown }).content, replies: replies.requests().length }
+    }),
+)
+```
+
+Running `pingTest` with `Effect.runPromise` succeeds with the reply's content `"Pong!"` and one reply in total. The `rest.respond` call tells the fake Fluxer API how to answer a request, and `emit` delivers a gateway event as Fluxer would send it. Handlers run after `emit` on their own schedule, so the test waits: The route's `next()` waits for the next request it answers, and `idle()` waits until the bot has stopped working, which shows that `hello` got no reply. Both fail with `TestTimeoutError` after 2 seconds instead of hanging
+
+The `failures()` method returns handler and command failures that no `onError` hook received, including a failed SDK call such as a rejected reply. Closing the Scope dies with `UnhandledTestFailuresError` when such a failure happened and the test did not read it from `failures()`, so a broken handler fails the test. For code that registers handlers with `client.on`, `createTestClient` creates the same test client without bot options. See [Test a bot without Fluxer](/docs/{{version}}/testing/) and the [Effect testing reference](/docs/{{version}}/api/modules/Effect-testing/)
+
+<details>
+<summary>Control SDK time with TestClock</summary>
 
 A native client captures the provided Effect `Clock` when `createClient` runs. Create the client inside the same provided Clock and Scope context when a test needs logical SDK time. `TestClock` can then advance event waits, message and reaction collectors, member-chunk timeouts, native command cooldowns, queued REST admission and deadlines, cache expiry, and presence or member-subscription pacing without real waiting
 
-`TestClock` does not control protocol timestamps such as an HTTP-date `Retry-After`, external I/O including WebSockets, or process shutdown watchdogs. Those cases still need controlled transport fixtures or tests using real time
+`TestClock` does not control protocol timestamps such as an HTTP-date `Retry-After`, external I/O including WebSockets, or process shutdown watchdogs. Those cases still need controlled transport responses or tests using real time
+
+Fake timers from a test runner, such as Vitest's `vi.useFakeTimers()`, work differently from `TestClock`. The `next()` and `idle()` timeouts use real timers, so faking the global timers does not change them. The SDK runs its work on `setImmediate`, so fake timers must leave `setImmediate` real, as in `vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] })`. When `setImmediate` is faked, no handler can run, and `idle()` dies with `ConfigurationError` instead of settling
+
+</details>
+
+## Provide the test client as the FluxerClient service
+
+Code that reads its client from the `FluxerClient` service, like `repliesLayer` in the first section, runs against the in-memory Fluxer unchanged. `FluxerTestClient.layer()` from `@neontechspace/fluxerly/effect/testing` creates a test client and provides its client as `FluxerClient`. The same Layer provides the whole test client as `FluxerTestClient`, whose controls drive the test
+
+```ts
+import { Effect } from "effect"
+import { FluxerClient } from "@neontechspace/fluxerly/effect"
+import { FluxerTestClient } from "@neontechspace/fluxerly/effect/testing"
+
+const registerPing = Effect.gen(function* () {
+    const client = yield* FluxerClient
+    yield* client.on("messageCreate", (message) =>
+        message.content === "!ping" ? client.messages.reply(message, "Pong!") : Effect.void,
+    )
+})
+
+export const serviceTest = Effect.gen(function* () {
+    yield* registerPing
+    const test = yield* FluxerTestClient
+    const replies = test.rest.respond("POST /channels/:id/messages", {
+        body: test.fixtures.message({ content: "Pong!" }),
+    })
+    yield* test.ready()
+    yield* test.emit("MESSAGE_CREATE", test.fixtures.message({ content: "!ping" }))
+    return yield* replies.next()
+}).pipe(Effect.scoped, Effect.provide(FluxerTestClient.layer()))
+```
+
+Running `serviceTest` succeeds with the reply request that `registerPing` sent. The `FluxerTestClient.layer(options)` method accepts the options of `createTestClient` except `messageFields`, because `FluxerClient` holds full messages. Closing the Layer's scope shuts the client down, as the live Layer does, and dies with `UnhandledTestFailuresError` for a handler failure the test did not read from `failures()`

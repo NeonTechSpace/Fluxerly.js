@@ -3,19 +3,23 @@ import type { Message, MessageCore } from "./messages.js"
 /** Choose one page of pins for messages.fetchPins.
  * Pages are ordered by when messages were pinned, not when they were created. Use iteratePins for bounded multi-page traversal.
  * Fields are captured once. Invalid timestamps, limits and unknown properties are rejected before the request
+ *
+ * @category Messages
  */
 export interface MessagePinsQuery {
     /** Maximum pins requested in this page, an integer from 1 through 50, default 50 */
     readonly limit?: number
-    /** Pin-time cursor as an ISO 8601 timestamp with a timezone, such as "2026-01-01T00:00:00Z".
-     * Select older pin times. Omit to use Fluxer's current-time default.
-     * Impossible calendar dates are rejected before dispatch
+    /** Pin-time cursor as an ISO 8601 timestamp with seconds and a Z or ±hh:mm offset, such as "2026-01-01T00:00:00Z".
+     * Any fraction length is accepted and the value is sent unchanged. Select older pin times. Omit to use Fluxer's
+     * current-time default. Other forms and impossible calendar dates are rejected before dispatch
      */
     readonly before?: string
 }
 
 /** One pin observed by a request, pairing a message snapshot with the time it was pinned.
  * Later unpins, repins and message edits do not update this frozen object
+ *
+ * @category Messages
  */
 export interface MessagePin<M extends MessageCore = Message> {
     /** Message as returned by this page, using the client's messageFields selection */
@@ -27,6 +31,8 @@ export interface MessagePin<M extends MessageCore = Message> {
 /** One frozen page of pins, ordered newest pin time first.
  * Pins added or removed during traversal, or pins with the same timestamp, can cause a multi-page list to miss messages.
  * A message can recur on later timestamp pages, even though IDs are unique within one page
+ *
+ * @category Messages
  */
 export interface MessagePinsPage<M extends MessageCore = Message> {
     /** Pins in Fluxer's received order, with no more entries than the requested limit */
@@ -41,11 +47,13 @@ export interface MessagePinsPage<M extends MessageCore = Message> {
 
 /** Notice that a channel's pins changed, without identifying the pinned or unpinned message.
  * Fetch pins explicitly for the current list. This event does not fetch it automatically
+ *
+ * @category Events and collectors
  */
 export interface ChannelPinsUpdate {
     /** Affected channel ID as a decimal string */
     readonly channelId: string
-    /** Guild ID when Fluxer supplies it. Omission means no guild context was supplied, not a confirmed private channel.
+    /** Community ID when Fluxer supplies it. Omission means no community context was supplied, not a confirmed private channel.
      * No channel lookup or cache inference supplies this field
      */
     readonly guildId?: string

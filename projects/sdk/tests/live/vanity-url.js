@@ -1,47 +1,38 @@
+// Custom invite code reads with independent readback and transient read recovery, and a rejected write on a server
+// without the feature. The manual mutation mode sets, replaces with a lost response and removes custom codes in an
+// initially empty slot.
+// Journal `.env.test.vanity.local` records sandbox and bot identity, the empty initial code, SHA-256 hashes of the two
+// test codes, never the codes, and whether a provider write is unresolved. An existing journal is recovered before a
+// new run only with mutation authorization: only a matching test-owned code is removed and concurrent replacements
+// are refused. An uncertain partial write keeps the journal, even if the custom-code slot is empty
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { readFileSync, writeFileSync, openSync, closeSync, writeSync, existsSync, unlinkSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { Effect, Scope, Exit } from "effect"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    processAuthorized,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
 assert.ok(process.argv.slice(3).every((arg) => arg === "--mutate"))
 const mutate = process.argv.includes("--mutate")
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.vanity.local", import.meta.url)
+const journalFile = openJournal("vanity")
 let lock, client, scope, token, guildId, botId, journal
 let verified = false,
     stage = "configuration"
 const hash = (code) => createHash("sha256").update(code).digest("hex")
-const report = (check) => console.log(JSON.stringify({ mode, check, passed: true }))
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
-async function value(operation) {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
-async function api(method, path, body) {
-    const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-        method,
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: {
-            Authorization: `Bot ${token}`,
-            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    })
-    const data = await response.json().catch(() => null)
-    assert.ok(response.ok || response.status === 404, `Sandbox HTTP ${response.status}`)
-    return { status: response.status, data }
-}
+const report = createReporter({ mode }, { passed: true })
+const save = () => journalFile.save(journal)
+const api = createSandboxApi({ fetch: rawFetch, token: () => token, accept: successOrNotFound })
 async function state() {
     const guild = (await api("GET", `/guilds/${guildId}`)).data
     assert.equal(guild.id, guildId)
@@ -66,46 +57,39 @@ async function cleanup() {
     // An interrupted provider write can leave an invite detached from the guild's code pointer
     // Retain the journal on an unresolved request rather than claiming rollback from an empty slot
     assert.equal(journal.pending, false, "Unresolved provider mutation; operator reconciliation required")
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("initially_empty_custom_invite_slot_restored")
 }
 const watchdog = setTimeout(() => {
     console.error(
-        JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: existsSync(journalPath) }),
+        JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: journalFile.exists() }),
     )
     process.exit(1)
 }, 120_000).unref()
 try {
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    const env = { ...parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8")), ...process.env }
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token)
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
+    lock = acquireLock()
+    const sandbox = loadSandboxEnvironment({ processOverrides: true })
+    const { env } = sandbox
+    token = sandbox.token
+    guildId = sandbox.guildId
     stage = "sandbox_identity"
-    const app = await api("GET", "/applications/@me"),
-        self = await api("GET", "/users/@me")
-    assert.equal(app.data.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(app.data.bot?.id, self.data.id)
-    assert.equal(self.data.bot, true)
-    botId = self.data.id
-    const guild = (await api("GET", `/guilds/${guildId}`)).data
-    assert.equal(guild.id, guildId)
+    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)
+    botId = identity.botId
+    const { guild } = identity
     assert.ok(Array.isArray(guild.features))
     verified = true
     report(stage)
-    if (existsSync(journalPath)) {
+    if (journalFile.exists()) {
         assert.ok(
-            mutate && process.env.FLUXER_TEST_VANITY_MUTATIONS === "1",
+            mutate && processAuthorized("FLUXER_TEST_VANITY_MUTATIONS"),
             "Manual recovery requires mutation authorization",
         )
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+        journal = journalFile.read()
         await cleanup()
     }
     const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
-    if (mode === "default") client = sdk.createClient({ token, cache: { guilds: true } })._unsafeUnwrap()
+    if (mode === "default") client = sdk.createClient({ token, cache: { guilds: true } })
     else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(
@@ -156,7 +140,7 @@ try {
         )
     } else {
         stage = "manual_mutation_preflight"
-        assert.equal(process.env.FLUXER_TEST_VANITY_MUTATIONS, "1", "Set explicit mutation authorization")
+        assert.ok(processAuthorized("FLUXER_TEST_VANITY_MUTATIONS"), "Set explicit mutation authorization")
         assert.ok(guild.features.includes("VANITY_URL"), "Server needs VANITY_URL")
         assert.equal(before.code, null, "Existing custom codes must never be replaced by this test")
         const codes = [env.FLUXER_TEST_VANITY_CODE, env.FLUXER_TEST_VANITY_SECOND_CODE]
@@ -215,7 +199,7 @@ try {
                 assert.equal(failure?.reason, "network")
                 assert.equal(failure?.outcome, "unknown")
                 const local = client.guilds.get(guildId)
-                assert.equal(Effect.isEffect(local) ? await Effect.runPromise(local) : local._unsafeUnwrap(), undefined)
+                assert.equal(Effect.isEffect(local) ? await Effect.runPromise(local) : local, undefined)
             }
             globalThis.fetch = rawFetch
             assert.equal(attempts, 1)
@@ -248,57 +232,44 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({
-                mode,
-                stage: "client_cleanup",
-                passed: false,
-                finalizer,
-                journalRetained: journal !== undefined,
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exitCode = 1
+    const shutdown = async () => {
+        const closed = client.shutdown()
+        if (Effect.isEffect(closed)) await Effect.runPromise(closed)
+        else await closed
     }
-    if (client)
-        try {
-            const closed = client.shutdown()
-            if (Effect.isEffect(closed)) await Effect.runPromise(closed)
-            else await closed
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            await cleanup()
-        } catch {
-            console.error(
-                JSON.stringify({
-                    mode,
-                    stage: "resource_cleanup",
-                    passed: false,
-                    journalRetained: journal !== undefined,
-                }),
-            )
+    // Keep the journal, lock and deadline if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            client && ["client_shutdown", shutdown],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup,
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            if (finalizer === "cleanup")
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "resource_cleanup",
+                        passed: false,
+                        journalRetained: journal !== undefined,
+                    }),
+                )
+            else if (finalizer === "sandbox_lock")
+                console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
+            else
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: "client_cleanup",
+                        passed: false,
+                        finalizer,
+                        journalRetained: journal !== undefined,
+                        lockRetained: lock !== undefined,
+                    }),
+                )
             process.exitCode = 1
-        }
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
-            process.exitCode = 1
-        }
-    }
-    if (quiescent) clearTimeout(watchdog)
+        },
+    })
 }

@@ -1,12 +1,24 @@
+/**
+ * Optional message cache: Retained message observations, in-flight request guards and connection-gap invalidation.
+ * Invariant: Fluxer is the source of truth. Intake updates stored data from REST responses and gateway events before subscribers
+ * see them, retained data and conflict metadata stay bounded, and pre-gap observations are cleared even after session resumption.
+ * A gap on a guild with a known shard invalidates only that shard's data, private-conversation data belongs to shard zero, and
+ * unknown ownership stays conservative, including channel-only in-flight reads, without an unbounded channel-to-guild index.
+ * Pre-gap requests neither repopulate invalid snapshots nor evict healthy post-gap observations on late completion. A callback
+ * that throws or returns an invalid value is reported with kind cache and the message IDs, and neither retention nor reporting
+ * failure changes a successful REST result or event delivery. Every applied store, removal and whole-cache clear is recorded
+ * to the client's change hub after it is applied, a replacement counting as one store. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import { isDeepStrictEqual } from "node:util"
 import type { CacheDiagnostic } from "#sdk/client"
 import type { Message, MessageCore, MessageReference } from "#sdk/messages"
-import type { CachePolicyErrorReport } from "#sdk/cache"
 import { validAge, type CacheConfiguration } from "./configuration.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
-import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
+import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
+import type { LogicalScheduler } from "./logical-scheduler.js"
+import type { CacheChangeHub } from "./cache-changes.js"
 
-type Entry<M extends MessageCore> = { message: M; bytes: number; storedAt: number; age: number | null }
+type Entry<M extends MessageCore> = { message: M; bytes: number; expires: number | null }
 export type CacheRequest = {
     readonly channel: string
     readonly id: string | undefined
@@ -15,22 +27,49 @@ export type CacheRequest = {
     invalid: boolean
 }
 
+/**
+ * Whether an overlapping response describes the same message state as the retained snapshot.
+ * Fluxer omits guild_id from message HTTP responses while gateway events include it, so a guild ID present on only
+ * one side is unknown context rather than a conflicting change
+ */
+function sameObservation<M extends MessageCore>(retained: M, incoming: M) {
+    if (isDeepStrictEqual(retained, incoming)) return true
+    if ((retained.guildId === undefined) === (incoming.guildId === undefined)) return false
+    const { guildId: _retainedGuild, ...retainedState } = retained
+    const { guildId: _incomingGuild, ...incomingState } = incoming
+    return isDeepStrictEqual(retainedState, incomingState)
+}
+
+/** A message's cache change key: Its channel and message IDs */
+const changeKey = (message: MessageReference) => `${message.channelId}:${message.id}`
+
 /** One client's retained observations and bounded in-flight guards, never a server-state replica */
 export class MessageCache<M extends MessageCore = Message> {
     #entries = new Map<string, Entry<M>>()
     #requests = new Set<CacheRequest>()
     #bytes = 0
     #generation = 0
-    #timer: ReturnType<typeof setTimeout> | LogicalTimer | undefined
+    #expiry = new ExpiryQueue<Entry<M> & { expires: number }>((entry) => this.#entries.get(entry.message.id) === entry)
+    #timer: ExpiryTimer
     #closed = false
     readonly #limits: { readonly maxEntries: number; readonly maxBytes: number } | undefined
 
     constructor(
         private settings: CacheConfiguration<M> | undefined,
-        private report: (report: CachePolicyErrorReport) => void,
+        private report: (error: unknown, message: MessageCore) => void,
         private readonly now: () => number,
-        private readonly logical?: LogicalScheduler,
+        logical?: LogicalScheduler,
+        readonly changes?: CacheChangeHub,
     ) {
+        this.#timer = new ExpiryTimer(
+            "message cache",
+            now,
+            () => {
+                this.#purge()
+                this.#schedule()
+            },
+            logical,
+        )
         this.#limits = settings && Object.freeze({ maxEntries: settings.maxEntries, maxBytes: settings.maxBytes })
     }
 
@@ -78,18 +117,21 @@ export class MessageCache<M extends MessageCore = Message> {
     #peek(target: MessageReference) {
         const entry = this.#entries.get(target.id)
         if (!entry || entry.message.channelId !== target.channelId) return undefined
-        if (entry.age !== null && this.now() - entry.storedAt >= entry.age) {
+        if (entry.expires !== null && entry.expires <= this.now()) {
             this.#remove(target)
             return undefined
         }
         return entry
     }
 
-    #remove(target: MessageReference) {
+    /** Remove one retained message, reporting the deletion unless the caller replaces it. Returns whether one was removed */
+    #remove(target: MessageReference, notify = true): boolean {
         const entry = this.#entries.get(target.id)
-        if (entry?.message.channelId !== target.channelId) return
+        if (entry?.message.channelId !== target.channelId) return false
         this.#entries.delete(target.id)
         this.#bytes -= entry.bytes
+        if (notify && this.changes?.active) this.changes.record("messages", "delete", changeKey(entry.message))
+        return true
     }
 
     #invalidate(target: MessageReference, except?: CacheRequest) {
@@ -124,7 +166,7 @@ export class MessageCache<M extends MessageCore = Message> {
             const message = messages[index]!
             if (request.invalid) {
                 const entry = this.#peek(message)
-                if (entry && !isDeepStrictEqual(entry.message, message)) {
+                if (entry && !sameObservation(entry.message, message)) {
                     this.#remove(message)
                     this.#invalidate(message, request)
                 }
@@ -139,9 +181,9 @@ export class MessageCache<M extends MessageCore = Message> {
         let age: unknown = this.settings.maxAgeMs ?? null
         try {
             if (typeof age === "function") age = age(message)
-        } catch {
+        } catch (error) {
             this.#remove(message)
-            this.report(Object.freeze({ reason: "threw" }))
+            this.report(error, message)
             this.#schedule()
             return
         }
@@ -149,21 +191,31 @@ export class MessageCache<M extends MessageCore = Message> {
         if (!validAge(age)) {
             discardInvalidCallbackReturn(age)
             this.#remove(message)
-            this.report(Object.freeze({ reason: "invalidReturn" }))
+            this.report(
+                new TypeError(
+                    // oxlint-disable-next-line typescript/no-base-to-string -- object and function values take the preceding branch
+                    `The message cache maxAgeMs callback returned ${age === undefined ? "undefined" : typeof age === "object" || typeof age === "function" ? "a non-number value" : String(age)}, but it must return null or a nonnegative safe integer, so the message was not cached`,
+                ),
+                message,
+            )
             this.#schedule()
             return
         }
         const bytes = age === 0 ? 0 : Buffer.byteLength(JSON.stringify(message))
-        this.#remove(message)
+        // A replacement reports one set, while an older copy that the new one cannot replace reports a delete
+        const replaced = this.#remove(message, false)
         if (age !== 0 && bytes <= this.settings.maxBytes) {
             this.#purge()
             while (this.#entries.size >= this.settings.maxEntries || this.#bytes > this.settings.maxBytes - bytes) {
                 const oldest = this.#entries.values().next().value!
                 this.#remove(oldest.message)
             }
-            this.#entries.set(message.id, { message, bytes, storedAt: this.now(), age })
+            const entry: Entry<M> = { message, bytes, expires: age === null ? null : this.now() + age }
+            this.#entries.set(message.id, entry)
             this.#bytes += bytes
-        }
+            if (entry.expires !== null) this.#expiry.push(entry as Entry<M> & { expires: number })
+            if (this.changes?.active) this.changes.record("messages", "set", changeKey(message))
+        } else if (replaced && this.changes?.active) this.changes.record("messages", "delete", changeKey(message))
         this.#schedule()
     }
 
@@ -171,6 +223,16 @@ export class MessageCache<M extends MessageCore = Message> {
         if (this.#closed) return
         this.#invalidate(target, except)
         this.#remove(target)
+        this.#schedule()
+    }
+
+    /** Remove one message by ID when its channel is unknown, and block reads already in flight from restoring it */
+    deleteId(id: string) {
+        if (this.#closed) return
+        this.#generation++
+        for (const request of this.#requests) if (request.id === undefined || request.id === id) request.invalid = true
+        const entry = this.#entries.get(id)
+        if (entry) this.#remove(entry.message)
         this.#schedule()
     }
 
@@ -205,8 +267,11 @@ export class MessageCache<M extends MessageCore = Message> {
             for (const request of this.#requests) request.invalid = true
         }
         if (!affects) {
+            const held = this.#entries.size > 0
             this.#entries.clear()
             this.#bytes = 0
+            this.#expiry.clear()
+            if (held && this.changes?.active) this.changes.record("messages", "clear", null)
         } else {
             for (const entry of this.#entries.values()) if (affects(entry.message.guildId)) this.#remove(entry.message)
         }
@@ -214,35 +279,17 @@ export class MessageCache<M extends MessageCore = Message> {
     }
 
     #purge() {
-        const now = this.now()
-        for (const entry of this.#entries.values())
-            if (entry.age !== null && now - entry.storedAt >= entry.age) this.#remove(entry.message)
+        this.#expiry.purge(this.now(), (entry) => this.#remove(entry.message))
     }
 
     #schedule() {
-        if (this.#timer !== undefined)
-            if (this.logical) this.logical.clear(this.#timer as LogicalTimer)
-            else clearTimeout(this.#timer as ReturnType<typeof setTimeout>)
-        this.#timer = undefined
-        if (this.#closed) return
-        const now = this.now()
-        let remaining = Infinity
-        for (const entry of this.#entries.values())
-            if (entry.age !== null) remaining = Math.min(remaining, entry.age - (now - entry.storedAt))
-        if (remaining !== Infinity) {
-            const callback = () => {
-                this.#timer = undefined
-                this.#purge()
-                this.#schedule()
-            }
-            const delay = Math.min(2_147_483_647, Math.max(1, Math.ceil(remaining)))
-            if (this.logical) this.#timer = this.logical.set(callback, delay, "message cache")
-            else {
-                const timer = setTimeout(callback, delay)
-                timer.unref()
-                this.#timer = timer
-            }
+        if (this.#closed) {
+            this.#timer.cancel()
+            this.#expiry.clear()
+            return
         }
+        this.#expiry.compact(this.#entries.size)
+        this.#timer.set(this.#expiry.next())
     }
 
     close() {

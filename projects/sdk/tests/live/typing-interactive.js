@@ -1,47 +1,45 @@
+// Interactive typing check in both API modes: inbound typing from one currently authorized member, outbound
+// keep-typing refresh confirmed by a human or browser observation, and refresh stop.
+// Journal `.env.test.typing.local` records the sandbox and bot identity and the unique marker and returned ID of
+// one test channel. An existing journal is cleaned up before a new run by deleting only the journaled channel
 import assert from "node:assert/strict"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
 import { createInterface } from "node:readline"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import { createGuildChannelFixture, cleanupGuildChannelFixtures } from "./channel-fixture.mjs"
+import {
+    acquireLock,
+    checkSandboxIdentity,
+    loadSandboxEnvironment,
+    openJournal,
+    processValue,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
 
-const targetId = process.env.FLUXER_TEST_TYPING_USER_ID
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.typing.local", import.meta.url)
+const journalFile = openJournal("typing")
 const rawFetch = globalThis.fetch
 let stage = "configuration"
 let mode = "setup"
-let lock, token, guildId, botId, journal, terminal
+let lock, token, guildId, botId, journal, terminal, targetId
 let verified = false
 let confirmedMode
 let confirmationSource
 let stopped = false
 let quiescent = true
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...details }))
+const report = createReporter(() => ({ mode }), { passed: true })
 
-async function api(method, path, body) {
-    const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-        method,
-        headers: {
-            Authorization: `Bot ${token}`,
-            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-    })
-    const data = response.status === 204 ? (await response.body?.cancel(), null) : await response.json()
-    assert.ok(response.ok || (method === "GET" && response.status === 404))
-    return { status: response.status, data }
-}
+const writeApi = createSandboxApi({ fetch: rawFetch, token: () => token, timeoutMs: 10_000 })
+const readApi = createSandboxApi({ fetch: rawFetch, token: () => token, timeoutMs: 10_000, accept: successOrNotFound })
+// Only a read may resolve a 404
+const api = (method, path, body) => (method === "GET" ? readApi : writeApi)(method, path, body)
 
 async function cleanup() {
     if (!verified || !journal) return
     assert.equal(journal.kind, "interactive-typing")
     assert.equal(journal.guildId, guildId)
     assert.equal(journal.botId, botId)
-    await cleanupGuildChannelFixtures(api, journal, () => writeFileSync(journalPath, JSON.stringify(journal)))
-    unlinkSync(journalPath)
+    await cleanupGuildChannelFixtures(api, journal, () => journalFile.save(journal))
+    journalFile.remove()
     journal = undefined
     report("test_channel_removed")
 }
@@ -71,7 +69,7 @@ async function runMode(channel) {
     confirmationSource = undefined
     try {
         const creating = sdk.createClient({ token })
-        client = await value(scope ? creating.pipe(Scope.provide(scope)) : creating)
+        client = scope ? await value(creating.pipe(Scope.provide(scope))) : creating
         const on = (event, receive) => {
             const options = {
                 maxPendingMessages: 16,
@@ -91,7 +89,7 @@ async function runMode(channel) {
                 mode === "default" ? receive : (item) => Effect.sync(() => receive(item)),
                 options,
             )
-            return value(scope ? registered.pipe(Scope.provide(scope)) : registered)
+            return scope ? value(registered.pipe(Scope.provide(scope))) : registered
         }
         await on("guildCreate", (event) => {
             if (event.id === guildId) ready = true
@@ -185,16 +183,13 @@ const watchdog = setTimeout(() => {
 
 try {
     assert.equal(process.argv.length, 2)
-    assert.match(targetId ?? "", /^[1-9][0-9]{0,19}$/)
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    guildId = env.FLUXER_TEST_GUILD_ID
-    token = env.FLUXER_TEST_BOT_TOKEN
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^[1-9][0-9]{0,19}$/)
-    assert.match(env.FLUXER_TEST_APPLICATION_ID ?? "", /^[1-9][0-9]{0,19}$/)
+    // A stored participant is not current authorization for an interactive check
+    targetId = processValue("FLUXER_TEST_TYPING_USER_ID")
+    const sandbox = loadSandboxEnvironment()
+    guildId = sandbox.guildId
+    token = sandbox.token
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
     stage = "sandbox_identity"
     const [application, self, guild, member] = await Promise.all([
         api("GET", "/oauth2/applications/@me"),
@@ -202,26 +197,22 @@ try {
         api("GET", `/guilds/${guildId}`),
         api("GET", `/guilds/${guildId}/members/${targetId}`),
     ])
-    assert.equal(application.data.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(application.data.bot?.id, self.data.id)
-    assert.equal(self.data.bot, true)
-    assert.equal(guild.data.id, guildId)
+    botId = checkSandboxIdentity({ application: application.data, user: self.data, guild: guild.data }, sandbox)
     assert.equal(member.data.user?.id, targetId)
     assert.notEqual(member.data.user.bot, true)
-    assert.notEqual(targetId, self.data.id)
-    botId = self.data.id
+    assert.notEqual(targetId, botId)
     verified = true
     report(stage)
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
     }
     journal = { kind: "interactive-typing", guildId, botId }
-    writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+    journalFile.create(journal)
     stage = "create_test_channel"
     const channel = await createGuildChannelFixture(
         journal,
-        () => writeFileSync(journalPath, JSON.stringify(journal)),
+        () => journalFile.save(journal),
         "explicitChild",
         { type: 0 },
         async (input) => {
@@ -255,9 +246,9 @@ try {
             process.exitCode = 1
         }
         clearTimeout(watchdog)
-        if (lock !== undefined) {
-            closeSync(lock)
-            unlinkSync(lockPath)
+        if (lock !== undefined && !lock.release()) {
+            console.error(JSON.stringify({ mode, check: "sandbox_lock_cleanup", passed: false, lockRetained: true }))
+            process.exitCode = 1
         }
     }
 }

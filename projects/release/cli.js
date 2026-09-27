@@ -1,11 +1,13 @@
+// @ts-check
+
 import { spawn, spawnSync } from "node:child_process"
-import { open, readFile, unlink } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { withReleaseAuthentication } from "./authentication.js"
 import { prepareCandidate, readCandidate } from "./candidate.js"
-import { npmChannelTag, selectBaseline } from "./planning.js"
+import { selectBaseline } from "./planning.js"
+import { forwardRedacted } from "./redact.js"
 import { createRegistries } from "./registries.js"
 import { inspectPublished, publishCandidate } from "./recovery.js"
 import { readSourcePlan, versionSource } from "./source.js"
@@ -15,18 +17,21 @@ const workspace = resolve(import.meta.dirname, "..")
 const require = createRequire(import.meta.url)
 const registries = createRegistries()
 
+/**
+ * @param {string[]} args
+ * @param {string[]} allowed
+ * @returns {Record<string, any>}
+ */
 function arguments_(args, allowed) {
+    /** @type {Record<string, any>} */
     const result = {}
     for (let index = 0; index < args.length; index++) {
         const key = args[index].replace(/^--/, "")
         if (!args[index].startsWith("--") || !allowed.includes(key) || key in result)
             throw new Error("Unknown or duplicate release option")
-        if (key === "bootstrap") result[key] = true
-        else {
-            if (index + 1 >= args.length || args[index + 1].startsWith("--"))
-                throw new Error("Release option needs a value")
-            result[key] = args[++index]
-        }
+        if (index + 1 >= args.length || args[index + 1].startsWith("--"))
+            throw new Error("Release option needs a value")
+        result[key] = args[++index]
     }
     if (result.epoch !== undefined) {
         if (!/^\d+$/.test(result.epoch)) throw new Error("Epoch must be a number")
@@ -35,20 +40,29 @@ function arguments_(args, allowed) {
     return result
 }
 
-function command(
-    executable,
-    args,
-    { cwd = workspace, interactive = false, timeout = 300_000, env = process.env } = {},
-) {
+/**
+ * Runs a provider command. Non-interactive output is forwarded to stderr with token-like values redacted, so that
+ * stdout keeps only the command's JSON result
+ * @param {string} executable
+ * @param {string[]} args
+ * @param {{ cwd?: string, interactive?: boolean, timeout?: number, env?: NodeJS.ProcessEnv }} [options]
+ * @returns {Promise<void>}
+ */
+function command(executable, args, { cwd = workspace, interactive = false, timeout = 300_000, env = process.env } = {}) {
     return new Promise((resolve_, reject) => {
         const child = spawn(executable, args, {
             cwd,
             env,
             windowsHide: true,
-            stdio: interactive ? "inherit" : "ignore",
+            stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
             detached: process.platform !== "win32",
         })
+        if (!interactive) {
+            forwardRedacted(child.stdout, process.stderr, env)
+            forwardRedacted(child.stderr, process.stderr, env)
+        }
         const timer = setTimeout(() => {
+            if (child.pid === undefined) return
             if (process.platform === "win32")
                 spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
             else {
@@ -64,51 +78,31 @@ function command(
         child.once("close", (code) => {
             clearTimeout(timer)
             if (code === 0) resolve_()
-            else reject(new Error("Release provider command failed or exceeded its deadline"))
+            else reject(new Error("Release provider command failed or exceeded its deadline, inspect its output above"))
         })
     })
 }
 
+/**
+ * @param {string[]} args
+ * @param {string} cwd
+ * @param {NodeJS.ProcessEnv} [env]
+ */
 function pnpm(args, cwd, env = process.env) {
     const path = env.npm_execpath
-    if (!path) throw new Error("Run release commands through pnpm")
-    return /\.[cm]?js$/.test(path)
-        ? command(process.execPath, [path, ...args], { cwd, env })
-        : command(path, args, { cwd, env })
+    if (path && /\.[cm]?js$/.test(path)) return command(process.execPath, [path, ...args], { cwd, env })
+    return command(path || "pnpm", args, { cwd, env })
 }
 
 async function stage(options) {
-    const { stageRelease } = await import("../sdk/scripts/packages.js")
+    // Resolved at runtime so that type checking stays within the release tooling
+    const { stageRelease } = await import(new URL("../sdk/scripts/packages.js", import.meta.url).href)
     return stageRelease(options)
 }
 
-async function lockPublication(run) {
-    const path = join(workspace, ".release-publish-npm.lock")
-    let handle
-    try {
-        handle = await open(path, "wx")
-    } catch {
-        throw new Error("Publication lock exists, verify no publisher is active before removing the stale lock")
-    }
-    const owner = JSON.stringify({ pid: process.pid })
-    try {
-        await handle.writeFile(owner)
-        await handle.close()
-        return await run()
-    } finally {
-        await handle.close().catch(() => {})
-        if ((await readFile(path, "utf8")) === owner) await unlink(path)
-    }
-}
-
 async function assertBaseline(candidate) {
-    const inventory = await registries.inventory(candidate.name, { bootstrap: candidate.bootstrap })
-    const version = selectBaseline({
-        ...inventory,
-        version: candidate.version,
-        channel: candidate.channel,
-        bootstrap: candidate.bootstrap,
-    })
+    const inventory = await registries.inventory(candidate.name)
+    const version = selectBaseline({ ...inventory, version: candidate.version, channel: candidate.channel })
     if (version !== (candidate.baseline?.version ?? null))
         throw new Error(
             "Published baseline changed since review, prepare a new candidate without changing an existing version",
@@ -119,32 +113,24 @@ async function assertBaseline(candidate) {
 async function publish(directory, candidate, env) {
     if (!candidate.docs || !/^[a-f0-9]{40}$/.test(candidate.sourceCommit))
         throw new Error("Publication requires a bound same-source documentation snapshot")
-    const result = await lockPublication(async () => {
-        const initialInventory = await assertBaseline(candidate)
-        const channel = npmChannelTag(candidate, initialInventory.npmTags)
-        const publicationTag = channel.advance ? channel.tag : `${candidate.channel}-${candidate.line.replaceAll(".", "-")}`
-        const status = await publishCandidate(candidate, {
-            registries,
-            publisher: () =>
-                pnpm(
-                    [
-                        "publish",
-                        join(directory, "sdk.tgz"),
-                        "--access",
-                        "public",
-                        "--tag",
-                        publicationTag,
-                        "--no-git-checks",
-                        "--provenance",
-                    ],
-                    workspace,
-                    env,
-                ),
-        })
-        const updated = await registries.inventory(candidate.name)
-        if (updated.npmTags[channel.tag] !== channel.expectedVersion)
-            throw new Error("npm version is published but channel tag readback failed, inspect the tag without republishing")
-        return { ...status, tag: channel.tag, tagVersion: channel.expectedVersion }
+    const result = await publishCandidate(candidate, {
+        registries,
+        assertBaseline: () => assertBaseline(candidate),
+        publisher: (tag) =>
+            pnpm(
+                [
+                    "publish",
+                    join(directory, "sdk.tgz"),
+                    "--access",
+                    "public",
+                    "--tag",
+                    tag,
+                    "--no-git-checks",
+                    "--provenance",
+                ],
+                workspace,
+                env,
+            ),
     })
     console.log(JSON.stringify({ ...summary(directory, candidate), ...result }))
 }
@@ -176,20 +162,27 @@ async function main() {
         if (args.includes("--empty"))
             throw new Error("Website-only changes need no SDK fragment, empty release fragments are not used")
         await command(process.execPath, [require.resolve("@changesets/cli/bin.js"), ...args], { interactive: true })
-    } else if (["plan", "version"].includes(action)) {
-        const options = arguments_(args, ["channel", "epoch", "line", "bootstrap"])
+    } else if (action === "plan" || action === "version") {
+        const options = arguments_(args, ["channel", "epoch", "line"])
         if (action === "version") {
             console.log(JSON.stringify(await versionSource({ workspace, options, registries, stage })))
         } else console.log(JSON.stringify((await readSourcePlan(workspace, options)).plan))
     } else if (action === "prepare") {
-        const options = arguments_(args, ["output", "line", "bootstrap", "docs"])
+        const options = arguments_(args, ["output", "line", "docs"])
         if (!options.output) throw new Error("Prepare needs --output NEW_ABSOLUTE_DIRECTORY")
         console.log(
             JSON.stringify(
-                await prepareCandidate({ workspace, ...options, output: resolve(options.output), registries, stage }),
+                await prepareCandidate({
+                    workspace,
+                    line: options.line,
+                    docs: options.docs,
+                    output: resolve(options.output),
+                    registries,
+                    stage,
+                }),
             ),
         )
-    } else if (["inspect", "verify", "publish", "status"].includes(action)) {
+    } else if (action === "inspect" || action === "verify" || action === "publish" || action === "status") {
         if (!args[0] || args[0].startsWith("--")) throw new Error("Candidate command needs a candidate directory")
         const options = arguments_(args.slice(1), ["checksum"])
         if (action !== "inspect" && !options.checksum)
@@ -197,9 +190,12 @@ async function main() {
         const directory = resolve(args[0])
         const candidate = await readCandidate(directory, options)
         if (action === "publish") await withReleaseAuthentication(process.env, (env) => publish(directory, candidate, env))
-        else if (action === "inspect") console.log(JSON.stringify({ ...summary(directory, candidate), scope: "local-candidate-only" }))
+        else if (action === "inspect")
+            console.log(JSON.stringify({ ...summary(directory, candidate), scope: "local-candidate-only" }))
         else {
             const status = await inspectPublished(candidate, registries)
+            if (action === "verify" && status.npm === "different")
+                throw new Error("npm serves different bytes for this version than the reviewed candidate")
             if (action === "verify" && !status.complete) throw new Error("npm version is not published")
             console.log(JSON.stringify({ ...summary(directory, candidate), ...status }))
         }

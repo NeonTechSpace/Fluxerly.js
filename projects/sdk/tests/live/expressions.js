@@ -1,20 +1,32 @@
+// Emoji and sticker lifecycle, source-guild reads, gateway updates, partial batches and sticker messages.
+// Journal `.env.test.expressions.local` records sandbox and bot identity, a marker, the test-owned expressions,
+// channel and webhook. An existing journal is cleaned up before a new run: the webhook and channel are deleted
+// after creator and destination checks, then every marker-owned expression is deleted without media purging
+// and its absence verified
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { readFileSync, writeFileSync, openSync, closeSync, writeSync, existsSync, unlinkSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { crc32, deflateSync } from "node:zlib"
 import { Effect, Scope, Exit } from "effect"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.expressions.local", import.meta.url)
-let lock, journal, client, webhookClient, scope, token, guildId, botId
+const journalFile = openJournal("expressions")
+let lock, journal, client, webhookClient, scope, token, guildId, botId, sandboxGuild
 let verified = false,
     stage = "configuration"
-const report = (check) => console.log(JSON.stringify({ mode, check, passed: true }))
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+const report = createReporter({ mode }, { passed: true })
+const save = () => journalFile.save(journal)
 const observations = { emojis: { sequence: 0, value: undefined }, stickers: { sequence: 0, value: undefined } }
 const incompleteChecks = []
 async function expressionEvent(kind, predicate, after = -1) {
@@ -26,31 +38,7 @@ async function expressionEvent(kind, predicate, after = -1) {
     }
     throw new Error("Timed out waiting for test-owned expression event")
 }
-const value = async (operation) => {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
-async function api(method, path, body) {
-    const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-        method,
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: {
-            Authorization: `Bot ${token}`,
-            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    })
-    const data = await response.json().catch(() => null)
-    assert.ok(response.ok || response.status === 404, `Sandbox HTTP ${response.status}`)
-    return { status: response.status, data }
-}
+const api = createSandboxApi({ fetch: rawFetch, token: () => token, accept: successOrNotFound })
 
 // Authored solid-color 128px PNG; no remote image or user file enters the fixture
 function image() {
@@ -146,7 +134,7 @@ async function cleanup() {
             ),
         )
     }
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("test_channel_messages_and_expressions_removed_without_purging")
 }
@@ -156,25 +144,18 @@ const watchdog = setTimeout(() => {
     process.exit(1)
 }, 240_000).unref()
 try {
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token)
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
+    lock = acquireLock()
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
     stage = "sandbox_identity"
-    const app = await api("GET", "/applications/@me"),
-        self = await api("GET", "/users/@me")
-    assert.equal(app.data.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(app.data.bot?.id, self.data.id)
-    assert.equal(self.data.bot, true)
-    assert.equal((await api("GET", `/guilds/${guildId}`)).data.id, guildId)
-    botId = self.data.id
+    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)
+    botId = identity.botId
+    sandboxGuild = identity.guild
     verified = true
     report(stage)
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
     }
     journal = {
@@ -187,7 +168,7 @@ try {
     save()
     const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
     const options = { token, cache: { emojis: true, stickers: true, messages: true } }
-    if (mode === "default") client = sdk.createClient(options)._unsafeUnwrap()
+    if (mode === "default") client = sdk.createClient(options)
     else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(sdk.createClient(options).pipe(Scope.provide(scope)))
@@ -207,7 +188,7 @@ try {
             observations[kind].sequence++
             observations[kind].value = snapshot
         }
-        if (mode === "default") await value(client.on(event, observe))
+        if (mode === "default") client.on(event, observe)
         else
             await Effect.runPromise(
                 client.on(event, (snapshot) => Effect.sync(() => observe(snapshot))).pipe(Scope.provide(scope)),
@@ -235,6 +216,15 @@ try {
         assert.equal(remote.name, entry.name)
         assert.equal(remote.user?.id, botId)
         assert.equal((await value(client[kind].fetchMetadata(created.id))).guildId, guildId)
+        stage = `${kind}_source_guild`
+        // Read-only source-guild lookup for the test-owned expression, compared with the verified sandbox guild
+        const source = await value(client[kind].fetchSource(created.id))
+        assert.equal(source.id, guildId)
+        assert.equal(source.name, sandboxGuild.name)
+        assert.equal(source.icon, sandboxGuild.icon ?? null)
+        assert.ok(Array.isArray(source.features) && source.features.every((item) => typeof item === "string"))
+        report(stage)
+        stage = `${kind}_create_list_metadata_edit`
         assert.ok((await value(client[kind].fetchAll(guildId))).some((item) => item.id === created.id))
         const edit =
             kind === "stickers"
@@ -371,7 +361,7 @@ try {
     const hook = await value(client.webhooks.create(channel.id, { name: journal.marker }))
     journal.webhook.id = hook.webhook.id
     save()
-    if (mode === "default") webhookClient = sdk.createWebhookClient(hook.credentials)._unsafeUnwrap()
+    if (mode === "default") webhookClient = sdk.createWebhookClient(hook.credentials)
     else webhookClient = await Effect.runPromise(sdk.createWebhookClient(hook.credentials).pipe(Scope.provide(scope)))
     const posted = await value(webhookClient.send({ stickerIds: [sticker.id] }))
     assert.equal(posted.stickers[0]?.id, sticker.id)
@@ -403,57 +393,35 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({
-                mode,
-                stage: "cleanup",
-                passed: false,
-                finalizer,
-                journalRetained: journal !== undefined,
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exitCode = 1
+    const shutdown = (ownedClient) => async () => {
+        const closed = ownedClient.shutdown()
+        if (Effect.isEffect(closed)) await Effect.runPromise(closed)
+        else await closed
     }
-    for (const [finalizer, ownedClient] of [
-        ["webhook_client_shutdown", webhookClient],
-        ["client_shutdown", client],
-    ])
-        if (ownedClient)
-            try {
-                const closed = ownedClient.shutdown()
-                if (Effect.isEffect(closed)) await Effect.runPromise(closed)
-                else await closed
-            } catch {
-                retainEvidence(finalizer)
-            }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            await cleanup()
-        } catch {
+    // Keep the journal, lock and deadline if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            webhookClient && ["webhook_client_shutdown", shutdown(webhookClient)],
+            client && ["client_shutdown", shutdown(client)],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup,
+        lock,
+        watchdog,
+        onFailure: (finalizer, error) => {
             console.error(
-                JSON.stringify({ mode, stage: "cleanup", passed: false, journalRetained: journal !== undefined }),
+                JSON.stringify({
+                    mode,
+                    stage: "cleanup",
+                    passed: false,
+                    finalizer,
+                    status: Number.isSafeInteger(error?.status) ? error.status : null,
+                    journalRetained: journal !== undefined,
+                    // A cleanup failure is reported before the lock release, which reports its own failure
+                    lockRetained: finalizer !== "cleanup",
+                }),
             )
             process.exitCode = 1
-        }
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
-            process.exitCode = 1
-        }
-    }
-    // Keep the deadline if a failed owned finalizer may have left a writer alive
-    if (quiescent) clearTimeout(watchdog)
+        },
+    })
 }

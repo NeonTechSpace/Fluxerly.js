@@ -1,16 +1,26 @@
+// Public consumer features: user profiles, attachment-backed embeds, forwards, attachment metadata edits and
+// suppress flags, creating only a journaled test channel and its messages.
+// Journal `.env.test.consumer-features.local` records the server ID and the test channel's unique marker and returned
+// ID. An existing journal is recovered before a new run: the channel is matched by its marker, deleted and its
+// removal verified
 import assert from "node:assert/strict"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
-import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import { Effect, Exit, Scope } from "effect"
 import { createGuildChannelFixture, cleanupGuildChannelFixtures } from "./channel-fixture.mjs"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createOutcomeReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { createRetryingSandboxApi } from "./support/sandbox-api.js"
 
-// Opt-in coverage for public consumer features that create only a journaled test channel and its messages
 const mode = process.argv[2]
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.consumer-features.local", import.meta.url)
-const report = (check, passed = true, details = {}) => console.log(JSON.stringify({ mode, check, passed, ...details }))
+const journalFile = openJournal("consumer-features")
+const report = createOutcomeReporter({ mode })
 let stage = "configuration"
 let lock
 let token
@@ -21,53 +31,17 @@ let client
 let scope
 let verified = false
 
-async function api(method, path, body) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-            method,
-            redirect: "error",
-            signal: AbortSignal.timeout(15_000),
-            headers: {
-                Authorization: `Bot ${token}`,
-                ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-            },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        })
-        const data = response.status === 204 ? null : await response.json().catch(() => null)
-        if (response.status === 429 && attempt < 2) {
-            const delay =
-                Math.max(Number(response.headers.get("retry-after")) || 0, Number(data?.retry_after) || 0) * 1_000
-            assert.ok(Number.isFinite(delay) && delay > 0 && delay <= 10_000)
-            await sleep(delay)
-            continue
-        }
-        if (!response.ok && response.status !== 404)
-            throw Object.assign(new Error("Sandbox HTTP request failed"), { status: response.status })
-        return { status: response.status, data }
-    }
-    throw new Error("Sandbox HTTP request budget exhausted")
-}
+const api = createRetryingSandboxApi({ fetch: rawFetch, token: () => token, allowNotFound: true })
 
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+const save = () => journalFile.save(journal)
 
 async function cleanup() {
     if (!journal) return
     assert.equal(journal.guildId, guildId)
     await cleanupGuildChannelFixtures(api, journal, save)
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("test_channel_and_messages_removed")
-}
-
-async function value(operation) {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
 }
 
 async function failure(operation) {
@@ -299,7 +273,7 @@ async function verifyConsumerMessages(ops, MessageFlags, channelId) {
         const rejected = await failure(() => ops.forwardFailure(channelId, { source, attachmentIds: ["invalid"] }))
         assert.equal(rejected?._tag, "MessageError")
         assert.equal(rejected?.reason, "input")
-        assert.equal(rejected?.delivery, "notSent")
+        assert.equal(rejected?.outcome, "notDispatched")
     } finally {
         globalThis.fetch = rawFetch
     }
@@ -343,40 +317,28 @@ try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
     stage = "configuration"
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
-    assert.match(applicationId ?? "", /^[1-9][0-9]*$/)
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
 
     stage = "sandbox_identity"
-    const application = await api("GET", "/oauth2/applications/@me")
-    const bot = await api("GET", "/users/@me")
-    const guild = await api("GET", `/guilds/${guildId}`)
-    assert.equal(application.status, 200)
-    assert.equal(application.data?.id, applicationId)
-    assert.equal(bot.status, 200)
-    assert.equal(bot.data?.bot, true)
-    assert.match(bot.data?.id ?? "", /^[1-9][0-9]*$/)
-    assert.equal(application.data?.bot?.id, bot.data.id)
-    assert.equal(guild.status, 200)
-    assert.equal(guild.data?.id, guildId)
-    botId = bot.data.id
+    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, {
+        ...sandbox,
+        applicationPath: "/oauth2/applications/@me",
+    })
+    botId = identity.botId
     verified = true
     report(stage, true, { clientSecretUsed: false })
 
     stage = "recover_prior_test"
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
     }
     journal = { guildId }
-    writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+    journalFile.create(journal)
     stage = "create_test_channel"
     const channel = await createGuildChannelFixture(journal, save, "explicitChild", { type: 0 }, (input) =>
         api("POST", `/guilds/${guildId}/channels`, input).then((response) => {
@@ -393,11 +355,8 @@ try {
     report(stage)
 
     const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
-    if (mode === "default") {
-        const created = sdk.createClient({ token })
-        assert.ok(created.isOk())
-        client = created.value
-    } else {
+    if (mode === "default") client = sdk.createClient({ token })
+    else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(sdk.createClient({ token }).pipe(Effect.provideService(Scope.Scope, scope)))
     }
@@ -424,48 +383,32 @@ try {
             : {}),
         ...(typeof error?.status === "number" ? { httpStatus: error.status } : {}),
         ...(["MessageError", "MessageOperationError", "UserOperationError", "ClientClosedError"].includes(error?._tag)
-            ? { category: error._tag, reason: error.reason, outcome: error.outcome ?? error.delivery }
+            ? { category: error._tag, reason: error.reason, outcome: error.outcome }
             : { category: error?.code === "ERR_ASSERTION" ? "assertion" : "unexpected" }),
     })
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        report("cleanup", false, {
-            finalizer,
-            journalRetained: journal !== undefined,
-            lockRetained: lock !== undefined,
-        })
-        process.exitCode = 1
-    }
-    if (client && client.state !== "Closed")
-        try {
-            await value(client.shutdown())
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
+    // Keep the journal and lock if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            client && client.state !== "Closed" && ["client_shutdown", () => value(client.shutdown())],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup: async () => {
             if (verified && journal) await cleanup()
-        } catch {
-            report("cleanup", false, { journalRetained: journal !== undefined })
+        },
+        lock,
+        onFailure: (finalizer) => {
+            if (finalizer === "cleanup") report("cleanup", false, { journalRetained: journal !== undefined })
+            else if (finalizer === "sandbox_lock") report("lock_cleanup", false, { lockRetained: true })
+            else
+                report("cleanup", false, {
+                    finalizer,
+                    journalRetained: journal !== undefined,
+                    lockRetained: lock !== undefined,
+                })
             process.exitCode = 1
-        }
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            report("lock_cleanup", false, { lockRetained: true })
-            process.exitCode = 1
-        }
-    }
+        },
+    })
 }

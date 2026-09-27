@@ -1,9 +1,21 @@
+// Command conveniences selected by the second argument: event waits, typed arguments, generated help, command groups
+// and selected message fields, exercised in one test-owned text channel.
+// Journal `.env.test.command-conveniences-<feature>.local` records sandbox and bot identity, a unique marker and the
+// test channel with its creation and cleanup phases. An existing journal is recovered instead of running the checks: the channel is
+// reconciled by its marker, verified and deleted, and its absence confirmed
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import { Cause, Effect, Exit, Scope, Stream } from "effect"
+import {
+    acquireLock,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    verifySandboxIdentity,
+} from "./support/harness.js"
+import { createOutcomeReporter } from "./support/reporting.js"
+import { createDeadlineSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 const feature = process.argv[3]
@@ -12,8 +24,7 @@ assert.ok(["waits", "arguments", "help", "groups", "fields"].includes(feature))
 assert.equal(process.argv.length, 4)
 
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.command-conveniences.local", import.meta.url)
+const journalFile = openJournal(`command-conveniences-${feature}`)
 const operationDeadline = new AbortController()
 const deadlineTimer = setTimeout(() => operationDeadline.abort(), 150_000).unref()
 const watchdog = setTimeout(() => {
@@ -42,9 +53,8 @@ let verified = false
 let requestDeadline = operationDeadline.signal
 const fieldPolicyObservations = []
 
-const report = (check, passed = true, details = {}) =>
-    console.log(JSON.stringify({ mode, feature, check, passed, ...details }))
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+const report = createOutcomeReporter({ mode, feature })
+const save = () => journalFile.save(journal)
 
 async function value(operation, signal) {
     if (Effect.isEffect(operation)) {
@@ -57,33 +67,7 @@ async function value(operation, signal) {
     return result?.isOk?.() ? result.value : result
 }
 
-async function api(method, path, body) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-        const response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-            method,
-            redirect: "error",
-            signal: AbortSignal.any([requestDeadline, AbortSignal.timeout(15_000)]),
-            headers: {
-                Authorization: `Bot ${token}`,
-                ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-            },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        })
-        const data = response.status === 204 || response.status === 202 ? null : await response.json().catch(() => null)
-        if (response.status === 429 && attempt < 2) {
-            const retryAfter = Math.max(
-                Number(response.headers.get("retry-after")) || 0,
-                Number(data?.retry_after) || 0,
-            )
-            assert.ok(Number.isFinite(retryAfter) && retryAfter > 0 && retryAfter <= 10)
-            await sleep(retryAfter * 1_000, undefined, { signal: requestDeadline })
-            continue
-        }
-        assert.ok(response.ok || response.status === 404, `Sandbox HTTP ${response.status}`)
-        return { status: response.status, data }
-    }
-    throw new Error("Sandbox request budget exhausted")
-}
+const api = createDeadlineSandboxApi({ fetch: rawFetch, token: () => token, deadline: () => requestDeadline })
 
 async function waitForCondition(matches, message) {
     const deadline = performance.now() + 15_000
@@ -117,7 +101,14 @@ async function createOwnedChannel() {
     let created
     try {
         created = (await api("POST", `/guilds/${guildId}/channels`, { name: journal.marker, type: 0 })).data
-    } catch {
+    } catch (error) {
+        // Fluxer did not process a request it answered with 429, so the channel was never created and the journal
+        // returns to planned, which recovery removes once the channel is confirmed absent
+        if (error?.status === 429) {
+            journal.channel.phase = "planned"
+            save()
+            throw error
+        }
         // Durable intent and an exact unique name reconcile a lost creation response without replaying the POST
         created = await findOwnedChannel()
         assert.ok(created, "Unresolved test-channel creation")
@@ -141,7 +132,7 @@ async function cleanup() {
         const located = await findOwnedChannel()
         if (!located) {
             if (journal.channel.phase === "planned" && journal.channel.id === undefined) {
-                unlinkSync(journalPath)
+                journalFile.remove()
                 journal = undefined
                 report("planned_channel_creation_not_dispatched")
                 return
@@ -174,7 +165,7 @@ async function cleanup() {
         const remaining = await api("GET", `/guilds/${guildId}/channels`)
         assert.ok(Array.isArray(remaining.data))
         assert.ok(!remaining.data.some((channel) => channel?.type === 0 && channel?.name === journal.marker))
-        unlinkSync(journalPath)
+        journalFile.remove()
         journal = undefined
         report("test_owned_channel_removed")
     } finally {
@@ -290,39 +281,47 @@ async function verifyArguments(ops, channelId) {
     const claims = []
     const cooldown = await ops.cooldowns(claims)
     let router = await ops.create({ prefix: "!", ignoreBots: false })
-    router = await value(
-        router.registerMany({
-            [commandName]: {
-                description: "Live typed command arguments",
-                arguments: {
-                    count: { type: "integer" },
-                    mode: { type: "choice", choices: ["fast", "slow"] },
-                    note: { type: "text", optional: true },
-                },
-                guard: ops.guard((message) => message.channelId === channelId && message.author.id === botId),
-                cooldown: { store: cooldown.store, durationMs: 60_000 },
-                onReject:
-                    mode === "default"
-                        ? async (context, rejection) => {
+    router = router.registerMany({
+        [commandName]: {
+            description: "Live typed command arguments",
+            arguments: {
+                count: { type: "integer" },
+                mode: { type: "choice", choices: ["fast", "slow"] },
+                note: { type: "text", optional: true },
+            },
+            guard: ops.guard((message) => message.channelId === channelId && message.author.id === botId),
+            cooldown: { store: cooldown.store, durationMs: 60_000 },
+            onReject:
+                mode === "default"
+                    ? async (context, rejection) => {
+                          const message = context.message
+                          if (message.channelId !== channelId || message.author.id !== botId) return
+                          rejections.push({ id: message.id, hasValues: "values" in context, rejection })
+                          replies.push(
+                              await value(context.reply({ content: `${marker} rejected`, allowedMentions: {} })),
+                          )
+                      }
+                    : (context, rejection) =>
+                          Effect.gen(function* () {
                               const message = context.message
                               if (message.channelId !== channelId || message.author.id !== botId) return
                               rejections.push({ id: message.id, hasValues: "values" in context, rejection })
-                              replies.push(
-                                  await value(context.reply({ content: `${marker} rejected`, allowedMentions: {} })),
-                              )
-                          }
-                        : (context, rejection) =>
-                              Effect.gen(function* () {
-                                  const message = context.message
-                                  if (message.channelId !== channelId || message.author.id !== botId) return
-                                  rejections.push({ id: message.id, hasValues: "values" in context, rejection })
-                                  replies.push(
-                                      yield* context.reply({ content: `${marker} rejected`, allowedMentions: {} }),
-                                  )
-                              }),
-                execute:
-                    mode === "default"
-                        ? async ({ message, args, rawArgs, values, reply }) => {
+                              replies.push(yield* context.reply({ content: `${marker} rejected`, allowedMentions: {} }))
+                          }),
+            execute:
+                mode === "default"
+                    ? async ({ message, args, rawArgs, values, reply }) => {
+                          executions.push({
+                              id: message.id,
+                              args,
+                              rawArgs,
+                              values,
+                              frozen: Object.isFrozen(values),
+                          })
+                          replies.push(await value(reply({ content: `${marker} accepted`, allowedMentions: {} })))
+                      }
+                    : ({ message, args, rawArgs, values, reply }) =>
+                          Effect.gen(function* () {
                               executions.push({
                                   id: message.id,
                                   args,
@@ -330,22 +329,10 @@ async function verifyArguments(ops, channelId) {
                                   values,
                                   frozen: Object.isFrozen(values),
                               })
-                              replies.push(await value(reply({ content: `${marker} accepted`, allowedMentions: {} })))
-                          }
-                        : ({ message, args, rawArgs, values, reply }) =>
-                              Effect.gen(function* () {
-                                  executions.push({
-                                      id: message.id,
-                                      args,
-                                      rawArgs,
-                                      values,
-                                      frozen: Object.isFrozen(values),
-                                  })
-                                  replies.push(yield* reply({ content: `${marker} accepted`, allowedMentions: {} }))
-                              }),
-            },
-        }),
-    )
+                              replies.push(yield* reply({ content: `${marker} accepted`, allowedMentions: {} }))
+                          }),
+        },
+    })
     assert.deepEqual(router.commands[0]?.arguments, [
         { name: "count", type: "integer", optional: false, rest: false },
         { name: "mode", type: "choice", optional: false, rest: false, choices: ["fast", "slow"] },
@@ -799,7 +786,7 @@ async function verifyFields(ops, channelId) {
         report(stage)
     } finally {
         try {
-            if (collector) await collector.stop()
+            if (collector) await collector.close()
         } finally {
             await ops.close(subscription)
         }
@@ -902,19 +889,19 @@ async function createOps(sdk, channelId) {
               }
             : { token }
     if (mode === "default") {
-        client = sdk.createClient(clientOptions)._unsafeUnwrap()
+        client = sdk.createClient(clientOptions)
         return {
             connect: () => value(client.connect()),
             send: (input) => value(client.messages.send(channelId, input)),
             wait: (event, options) => value(client.waitFor(event, options)),
-            create: (options) => value(Promise.resolve(sdk.commands.create(options))),
-            register: (router, command, options) => value(Promise.resolve(router.register(command, options))),
-            registerGroup: (router, group, options) => value(Promise.resolve(router.registerGroup(group, options))),
+            create: async (options) => sdk.commands.create(options),
+            register: async (router, command, options) => router.register(command, options),
+            registerGroup: async (router, group, options) => router.registerGroup(group, options),
             parseQuoted: sdk.commands.parseQuoted,
-            help: (router, options) => value(Promise.resolve(router.help(options))),
-            attach: (router) => value(Promise.resolve(router.attach(client))),
+            help: async (router, options) => router.help(options),
+            attach: async (router) => router.attach(client),
             close: async (subscription) => {
-                subscription.unsubscribe()
+                subscription.close()
                 await value(subscription.waitForClose())
             },
             guard:
@@ -925,10 +912,10 @@ async function createOps(sdk, channelId) {
             reject: (handler) => (context, rejection) => handler(context, rejection),
             unmatched: (handler) => (context, outcome) => handler(context, outcome),
             reply: (message, input) => value(client.messages.reply(message, input)),
-            observe: (handler) => value(Promise.resolve(client.on("messageCreate", handler))),
+            observe: async (handler) => client.on("messageCreate", handler),
             fetch: (message) =>
                 value(client.messages.fetch(message, { timeoutMs: 10_000, signal: operationDeadline.signal })),
-            get: (message) => value(Promise.resolve(client.messages.get(message))),
+            get: async (message) => client.messages.get(message),
             history: () =>
                 value(
                     client.messages.fetchHistory(
@@ -972,23 +959,23 @@ async function createOps(sdk, channelId) {
                 return pins
             },
             collect: async (options) => {
-                const collector = await value(Promise.resolve(client.messages.collect(channelId, options)))
+                const collector = client.messages.collect(channelId, options)
                 return {
-                    wait: () => value(collector.waitForClose()),
-                    stop: async () => {
-                        collector.stop()
-                        await value(collector.waitForClose())
+                    wait: () => value(collector.result()),
+                    close: async () => {
+                        collector.close()
+                        await value(collector.result())
                     },
                 }
             },
             cooldowns: async (claims) => {
-                const store = await value(Promise.resolve(sdk.commands.memoryCooldowns({ maxEntries: 4 })))
+                const store = sdk.commands.memoryCooldowns({ maxEntries: 4 })
                 return {
                     store: {
                         claim(input) {
-                            const result = store.claim(input)
-                            if (result.isOk()) claims.push(result.value)
-                            return result
+                            const claim = store.claim(input)
+                            claims.push(claim)
+                            return claim
                         },
                     },
                 }
@@ -1010,16 +997,16 @@ async function createOps(sdk, channelId) {
             const operation = client.waitFor(event, nativeOptions)
             return signal === undefined ? value(operation) : Effect.runPromiseExit(operation, { signal })
         },
-        create: (options) => value(sdk.commands.create(options)),
-        register: (router, command, options) => value(router.register(command, options)),
-        registerGroup: (router, group, options) => value(router.registerGroup(group, options)),
+        create: async (options) => sdk.commands.create(options),
+        register: async (router, command, options) => router.register(command, options),
+        registerGroup: async (router, group, options) => router.registerGroup(group, options),
         parseQuoted: sdk.commands.parseQuoted,
-        help: (router, options) => value(router.help(options)),
+        help: async (router, options) => router.help(options),
         attach: (router) => value(router.attach(client).pipe(Scope.provide(scope))),
         close: (subscription) =>
             value(
                 Effect.gen(function* () {
-                    yield* subscription.unsubscribe()
+                    yield* subscription.close()
                     yield* subscription.waitForClose()
                 }),
             ),
@@ -1065,12 +1052,12 @@ async function createOps(sdk, channelId) {
         collect: async (options) => {
             const collector = await value(client.messages.collect(channelId, options).pipe(Scope.provide(scope)))
             return {
-                wait: () => value(collector.waitForClose()),
-                stop: () => value(collector.stop().pipe(Effect.andThen(collector.waitForClose()))),
+                wait: () => value(collector.result()),
+                close: () => value(collector.close().pipe(Effect.andThen(collector.result()))),
             }
         },
         cooldowns: async (claims) => {
-            const store = await value(sdk.commands.memoryCooldowns({ maxEntries: 4 }))
+            const store = sdk.commands.memoryCooldowns({ maxEntries: 4 })
             return {
                 store: {
                     claim: (input) =>
@@ -1087,23 +1074,15 @@ async function createOps(sdk, channelId) {
 
 try {
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
 
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^\d+$/)
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
 
     stage = "sandbox_identity"
-    const application = (await api("GET", "/applications/@me")).data
-    const self = (await api("GET", "/users/@me")).data
-    assert.equal(application?.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(application?.bot?.id, self?.id)
-    assert.equal(self?.bot, true)
-    assert.equal((await api("GET", `/guilds/${guildId}`)).data?.id, guildId)
-    botId = self.id
+    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)
+    botId = identity.botId
     const membership = await api("GET", `/guilds/${guildId}/members/${botId}`)
     assert.equal(membership.status, 200)
     assert.equal(membership.data?.user?.id, botId)
@@ -1111,8 +1090,8 @@ try {
     report(stage)
 
     stage = "recover_prior_test_channel"
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         await cleanup()
         report("recovery_only")
     } else {
@@ -1123,7 +1102,7 @@ try {
             marker,
             channel: { name: marker, type: 0, phase: "planned" },
         }
-        writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+        journalFile.create(journal)
         stage = "create_test_owned_channel"
         const channel = await createOwnedChannel()
         report(stage)
@@ -1162,40 +1141,33 @@ try {
     )
     process.exitCode = 1
 } finally {
-    let quiescent = true
-    try {
-        if (client) await value(client.shutdown())
-    } catch {
-        quiescent = false
-        console.error(JSON.stringify({ mode, feature, stage: "client_cleanup", passed: false }))
-        process.exitCode = 1
+    const failedStages = {
+        client_shutdown: "client_cleanup",
+        scope_close: "scope_cleanup",
+        cleanup: "resource_cleanup",
+        sandbox_lock: "lock_cleanup",
     }
-    try {
-        if (scope) await Effect.runPromise(Scope.close(scope, Exit.void))
-    } catch {
-        quiescent = false
-        console.error(JSON.stringify({ mode, feature, stage: "scope_cleanup", passed: false }))
-        process.exitCode = 1
-    }
-    if (quiescent) {
-        try {
-            await cleanup()
-        } catch {
+    // Keep the journal, lock and deadlines if a failed owned finalizer may have left a writer alive
+    const quiescent = await finalizeOwned({
+        writers: [
+            client && ["client_shutdown", () => value(client.shutdown())],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        cleanup,
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
             console.error(
-                JSON.stringify({ mode, feature, stage: "resource_cleanup", passed: false, journalRetained: true }),
+                JSON.stringify({
+                    mode,
+                    feature,
+                    stage: failedStages[finalizer],
+                    passed: false,
+                    ...(finalizer === "cleanup" ? { journalRetained: true } : {}),
+                }),
             )
             process.exitCode = 1
-        }
-        try {
-            if (lock !== undefined) {
-                closeSync(lock)
-                unlinkSync(lockPath)
-            }
-        } catch {
-            console.error(JSON.stringify({ mode, feature, stage: "lock_cleanup", passed: false }))
-            process.exitCode = 1
-        }
-        clearTimeout(deadlineTimer)
-        clearTimeout(watchdog)
-    }
+        },
+    })
+    if (quiescent) clearTimeout(deadlineTimer)
 }

@@ -1,20 +1,21 @@
+// Process supervisor child assignments, gateway connections and shutdown through an owned loopback proof endpoint.
+// Creates no journal and no remote resources; the sandbox reads and child gateway sessions are read-only
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
+import { acquireLock, finalizeOwned, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { readSandbox } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 const totalShards = 2
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, ...details }))
+const report = createReporter({ mode })
 let stage = "configuration"
 let lock
 let proofServer
 let supervisor
 let supervisorClosed = false
-let serverClosed = false
 let nativeEffect
 
 function isRecord(value) {
@@ -113,33 +114,18 @@ function openProofServer(secret) {
     }
 }
 
-async function api(path, token) {
-    const response = await fetch(`https://api.fluxer.app/v1${path}`, {
-        headers: { Authorization: `Bot ${token}` },
-        signal: AbortSignal.timeout(10_000),
-        redirect: "error",
-    })
-    if (!response.ok) {
-        await response.body?.cancel()
-        throw new Error("Sandbox identity request failed")
-    }
-    return response.json()
-}
+const api = (path, token) => readSandbox(path, token, { timeout: 10_000 })
 
 async function preflight(token, applicationId, guildId) {
-    const [application, bot, guild] = await Promise.all([
-        api("/oauth2/applications/@me", token),
-        api("/users/@me", token),
-        api(`/guilds/${guildId}`, token),
-    ])
-    assert.equal(application.id, applicationId)
-    assert.equal(bot.bot, true)
-    assert.equal(application.bot?.id, bot.id)
-    assert.equal(guild.id, guildId)
-    assert.match(bot.id, /^[1-9][0-9]*$/)
-    const member = await api(`/guilds/${guildId}/members/${bot.id}`, token)
-    assert.equal(member.user?.id, bot.id)
-    return bot.id
+    const { botId } = await verifySandboxIdentity((path) => api(path, token), {
+        applicationId,
+        guildId,
+        applicationPath: "/oauth2/applications/@me",
+        concurrent: true,
+    })
+    const member = await api(`/guilds/${guildId}/members/${botId}`, token)
+    assert.equal(member.user?.id, botId)
+    return botId
 }
 
 async function callSupervisor(operation, Effect) {
@@ -156,11 +142,7 @@ async function createSupervisor(sdk, Effect, options, token) {
     // Keep the credential only in the inherited child snapshot; childEnvironment carries proof configuration
     process.env.FLUXER_TEST_BOT_TOKEN = token
     try {
-        if (mode === "default") {
-            const created = sdk.supervisor.create(options)
-            assert.ok(created.isOk())
-            return created.value
-        }
+        if (mode === "default") return sdk.supervisor.create(options)
         return await Effect.runPromise(sdk.supervisor.create(options))
     } finally {
         if (previousToken === undefined) delete process.env.FLUXER_TEST_BOT_TOKEN
@@ -279,24 +261,6 @@ async function shutdown(Effect) {
     assert.equal(await terminal, true)
 }
 
-function releaseLock() {
-    if (lock === undefined) return true
-    const descriptor = lock
-    lock = undefined
-    try {
-        const owned = readFileSync(lockPath, "utf8") === String(process.pid)
-        closeSync(descriptor)
-        if (!owned) return false
-        unlinkSync(lockPath)
-        return !existsSync(lockPath)
-    } catch {
-        try {
-            closeSync(descriptor)
-        } catch {}
-        return false
-    }
-}
-
 const watchdog = setTimeout(() => {
     report(stage, { passed: false, category: "process_timeout", containmentOnly: true })
     process.exit(1)
@@ -306,16 +270,9 @@ try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
     stage = "configuration"
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    const token = env.FLUXER_TEST_BOT_TOKEN
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    const guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.match(applicationId ?? "", /^[1-9][0-9]*$/)
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
+    const { token, applicationId, guildId } = loadSandboxEnvironment()
 
     stage = "sandbox_identity"
     const botId = await preflight(token, applicationId, guildId)
@@ -389,23 +346,19 @@ try {
     })
     process.exitCode = 1
 } finally {
-    let cleanupSucceeded = true
-    try {
-        await shutdown(nativeEffect)
-    } catch {
-        cleanupSucceeded = false
-    }
-    try {
-        if (proofServer) await proofServer.close()
-        serverClosed = true
-    } catch {
-        cleanupSucceeded = false
-    }
-    const lockReleased = supervisorClosed && serverClosed ? releaseLock() : false
-    if (!lockReleased) cleanupSucceeded = false
-    if (supervisorClosed && serverClosed) clearTimeout(watchdog)
-    if (!cleanupSucceeded) {
-        report("cleanup", { passed: false, supervisorClosed, serverClosed, lockReleased })
+    // The lock and deadline stay unless both the supervisor and the proof server are proven closed
+    const failures = []
+    await finalizeOwned({
+        writers: [
+            ["supervisor_shutdown", () => shutdown(nativeEffect)],
+            proofServer && ["proof_server_close", () => proofServer.close()],
+        ],
+        lock,
+        watchdog,
+        onFailure: (finalizer) => failures.push(finalizer),
+    })
+    if (failures.length) {
+        report("cleanup", { passed: false, failures, lockRetained: lock?.held ?? false })
         process.exitCode = 1
     }
 }

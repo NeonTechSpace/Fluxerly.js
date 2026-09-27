@@ -10,10 +10,10 @@ Use [the repository guide](/docs/REPOSITORY.md) for setup and file locations
 | Package | `@neontechspace/fluxerly`, initially one published package with internal module boundaries |
 | Language | TypeScript 7 |
 | Module format | ECMAScript modules (ESM) |
-| Runtime | Node.js 24.11.0 minimum consumer version |
+| Runtime | Tested against Node.js 24.11 or newer |
 | Internal implementation | Effect 4 release-candidate line |
 | WebSocket transport | `ws`, kept behind internal SDK boundaries |
-| Public entry points | Default JavaScript/TypeScript and Effect-native, sharing one implementation |
+| Public entry points | Default JavaScript/TypeScript and Effect, sharing one implementation |
 | Public error results | neverthrow `Result` for default synchronous operations and `ResultAsync` for default async operations, typed Effect failures for the native API |
 | Initial build | TypeScript 7 compiler-only ESM output, public declarations and source maps |
 | Tests | Vitest runtime tests and separate TypeScript 7 consumer checks |
@@ -25,8 +25,14 @@ The SDK supports JavaScript and TypeScript 7.
 TypeScript 6 and earlier are outside the SDK's support policy.
 JavaScript consumers do not need a TypeScript installation
 
-The minimum is Node.js 24.11.0, the [first Node 24 LTS release](https://nodejs.org/en/blog/release/v24.11.0).
+Fluxerly is tested against Node.js 24.11 or newer, starting at the [first Node 24 LTS release](https://nodejs.org/en/blog/release/v24.11.0).
 Use current security updates within a supported Node.js release line. The development pin is maintained separately from this compatibility floor
+
+### Support policy
+
+- Raising the minimum Node.js version is a breaking change that increases MAJOR
+- A Node.js release line is dropped no sooner than six months after its end of life
+- The Effect peer version is exact. While Effect 4 remains in release-candidate status, changing it is a breaking change that increases MAJOR
 
 ### Versioning and release stages
 
@@ -54,7 +60,9 @@ Later cycles accumulate compatibility changes against their stable starting vers
 An increased compatibility impact can raise the target, but an already selected target never decreases. Preview-to-preview breaking changes still require migration notes
 
 Canary iterations allow experimentation. RC indicates an intended settled API under final validation.
-A changed target must pass through RC before Stable
+A patch or minor release can go straight to Stable. A new major version or epoch is published as an RC first, and Stable then publishes that RC's package content unchanged.
+While an RC is waiting for Stable, no other Stable at or above its version can be published. Canary releases are exempt from these rules.
+[Release stages](/docs/RELEASING.md#release-stages) lists the exact rules
 
 The first published preview starts at `1000.0.0-canary.0`, then moves through RC to Stable.
 The first stable public generation is called Epoch 1 and starts at `1000.0.0`, not `1.0.0`
@@ -72,7 +80,9 @@ The first stable public generation is called Epoch 1 and starts at `1000.0.0`, n
 These examples illustrate versioning, not the current release inventory.
 Use the [SDK source manifest](/projects/sdk/package.json) for the checkout's version and [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions.
 The only release channels are Canary, RC and Stable.
-npm maps them to `canary`, `rc` and `latest` distribution tags.
+Their npm distribution tags are `canary`, `rc` and `latest`, with `latest` meaning Stable from the first stable release.
+No stable version exists yet, so `latest` stays at `1000.0.0-rc.0` until the first Stable release.
+Release tooling moves only the published channel's tag, so previews never move `latest`.
 Release documentation snapshots use the matching exact package version, including its prerelease suffix
 
 ### Effect and diagnostics
@@ -124,20 +134,20 @@ The [SDK validation requirements](/docs/SDK-CONTRACTS.md#validation-requirements
 
 The current Effect and test-tool declarations require DOM and explicit-resource-management library types during SDK compilation.
 The SDK build includes `DOM` and `ESNext.Disposable` alongside `ES2024` without disabling dependency declaration checking.
-The default packed TypeScript consumer checks with `ES2024` alone and does not import Effect types.
+The default packed TypeScript consumer checks with `ES2024` and Node.js types, because handler signals are `AbortSignal` values and clients support `await using`. It does not import Effect types.
 The native packed TypeScript consumer includes the additional libraries required by Effect's declarations.
 These compiler libraries do not add browser runtime support
 
-### Transport experiment
+### Transport choice
 
-The built-in WebSocket candidate is test-only and must not be promoted on the strength of its characterization tests.
-It lacks bounded forced closure, which is required to release owned resources before shutdown completes.
+The default transport uses ws, not the runtime's built-in WebSocket or Effect's unstable HTTP/socket modules.
+The built-in WebSocket lacks bounded forced closure, which is required to release owned resources before shutdown completes, and the Effect adapter showed a cleanup limitation.
 Use the selected ws transport rather than abandoning a socket after a timeout
 
 #### Selected ws dependency
 
 Keep ws and its types behind internal boundaries, with Effect owning cancellation and cleanup.
-The [gateway implementation](/projects/sdk/src/internal/gateway.ts) owns production transport and protocol behavior
+Only the [socket transport](/projects/sdk/src/internal/transport/socket.ts) imports ws. The [gateway implementation](/projects/sdk/src/internal/gateway.ts) owns protocol behavior through that transport seam
 
 ## Documentation website
 
@@ -168,56 +178,9 @@ Generated reference files must not require manual link edits
 
 The generator and route integration are implemented in `projects/web/`
 
-The handwritten quickstart remains website source, and Changesets owns the package changelog rendered by the website and GitHub release notes
+Handwritten guides remain website source, and Changesets owns the package changelog rendered by the website and GitHub release notes
 
-#### Documentation placement
-
-Before adding or expanding documentation, choose its owner:
-
-| Content | Owner |
-| --- | --- |
-| Member signatures, defaults and caller-visible behavior | Public source comments, preserved in declarations for the website reference |
-| User guides, tutorials, examples and design explanations for SDK users | Documentation website |
-| Introduction, contributor setup, navigation, testing procedures and release policy | Repository Markdown |
-| Instructions for agents consuming the installed package | [Consumer agent guide](/projects/sdk/consumer/AGENTS.md), discovered through the package README |
-| Cross-component ownership, invariants and coordination that maintainers need beyond documented public members | Concise repository implementation contracts |
-
-Keep member behavior in source comments and handwritten guides in website source.
-Link to the relevant source comments, website pages or tests instead of repeating API reference, defaults, feature inventories or test assertions.
-Update repository docs only when the milestone changes a maintainer-facing rule, boundary, navigation or procedure
-
-Before completing a documentation change, inspect each added or expanded passage against this table.
-Retain repository prose only when its maintainer purpose is clear and an existing source does not already serve that purpose.
-For live checks, retain commands, prerequisites, outside effects and shared recovery instructions, while test implementations own detailed assertions.
-During read-only review, report misplaced or duplicated content rather than moving or deleting it
-
-#### Public API documentation completion gate
-
-Apply [documentation placement](/docs/TECHNOLOGY.md#documentation-placement) to accompanying prose
-
-For implementation or review of SDK public API changes, complete these steps before reporting completion:
-
-1. Inventory the affected public exports and members in both entry points, including shared types and behavior changes with unchanged signatures
-2. During implementation, write or update their source comments alongside the code.
-   Explain applicable inputs, defaults, units, completion, readiness, ownership, cancellation, expected failures, defects and observable side effects.
-   Describe caller-relevant behavior rather than restating the member name or type.
-   During read-only review, report missing or inaccurate comments as findings rather than editing them
-3. Compare those comments with the implementation and behavioral tests.
-   Check the default and native execution differences explicitly.
-   Retain a concise review record identifying the affected members, evidence and unresolved documentation gaps
-4. Run the [aggregate development check](/docs/REPOSITORY.md#development-checks).
-   Verify that each affected member's authored comments survive in the emitted and packed declarations.
-   Typecheck affected runnable examples against the public package exports, rather than a separately maintained copy
-5. Report the documentation review and verification results with the implementation result.
-   Unresolved gaps or skipped required checks mean the affected work is not complete
-
-Apply this gate to both development and release reference generation.
-Repository prose does not substitute for public source comments
-
-Comment-presence checks, successful compilation and declaration preservation cannot establish documentation accuracy.
-Review the described behavior against the code and tests even when automated checks pass
-
-This gate grants no implementation authority during a read-only review, and no website, dependency, publication or VCS authority
+Documentation placement and the public API documentation completion gate are in [documentation maintenance](/docs/DOCUMENTATION.md#documentation-placement)
 
 ## Shared development tooling
 
@@ -233,7 +196,7 @@ This gate grants no implementation authority during a read-only review, and no w
 The development Node version is pinned in `.node-version`, separately from the SDK's consumer minimum
 
 The workspace declares the pnpm range `>=12 <13` through `devEngines.packageManager` in [projects/package.json](/projects/package.json).
-pnpm records the resolved version in the shared lockfile and reuses it while it satisfies that range.
+The shared lockfile records the resolved pnpm version, which is reused while it satisfies that range.
 The `onFail: "download"` setting enables automatic download and version switching
 
 Updates within pnpm 12 are deliberate, not automatic on each run.
@@ -241,16 +204,27 @@ Run `pnpm self-update 12` from `projects/`, then `pnpm install --lockfile-only` 
 Review and commit the resulting manifest and lockfile changes together.
 Moving to pnpm 13 requires a separate decision
 
+Dependabot proposes weekly GitHub Actions and npm updates for the workspace, configured in [.github/dependabot.yml](/.github/dependabot.yml).
+It ignores `effect`, which changes only by decision as an exact public peer, and major `typescript` and `@types/node` updates.
+The SDK runtime dependencies `neverthrow` and `ws` are grouped into their own pull request, so their update can carry a Changeset
+
 Prettier is an SDK development dependency, with its version recorded in the manifest and lockfile.
 Its [configuration](/projects/sdk/.prettierrc.json) selects a 120-column target and no optional semicolons, with 4-space indentation and LF endings inherited from EditorConfig.
 Other formatting options use Prettier's stable defaults, without plugins or experimental formatting
 
-The [development checks](/docs/REPOSITORY.md#development-checks) include SDK formatting validation.
-Lint tooling and website formatting have not been selected
+The [development checks](/docs/REPOSITORY.md#development-checks) include SDK formatting validation and linting.
+Oxlint lints SDK source, scripts, examples and tests, release tooling and website scripts with type-aware rules through oxlint-tsgolint.
+Knip reports unused SDK files and exports, and CSpell checks SDK source comments, website guides and repository documents against the [project word list](/projects/cspell-words.txt).
+These tools are exact workspace development dependencies configured in [projects/](/projects/).
+In CI, actionlint lints the workflow files and zizmor audits them.
+Website formatting has not been selected.
+The Effect language service supports only TypeScript 5 and 6, so it is not used with the SDK's TypeScript 7 compiler
 
 The SDK build and test tools are installed and configured.
-The optional transitive `msgpackr-extract` install script is explicitly disabled in the workspace's `allowBuilds` policy.
+The workspace's `allowBuilds` policy enables the `esbuild` and `workerd` install scripts and explicitly disables the optional transitive `msgpackr-extract` script.
 Unreviewed dependency builds still fail installation rather than being enabled globally
 
-CI and manual version PR, candidate preparation, publication and Preview workflows are configured under [.github/workflows](/.github/workflows/).
-External authentication and Preview configuration remain prerequisites rather than established deployments
+Check, version PR, candidate preparation, publication, Preview and weekly upstream drift workflows are configured under [.github/workflows](/.github/workflows/).
+Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version. [Releasing](/docs/RELEASING.md) describes each trigger
+Preview releases are published to npm, and the Preview documentation website is live.
+Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for the published versions

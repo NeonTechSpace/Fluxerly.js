@@ -10,6 +10,8 @@ import type {
  * Each API's command type adds the callback that runs when this name or an alias matches.
  * Registration copies this data, so later edits do not change an existing router.
  * Individual and batch command registration read recognized fields once, including inherited and non-enumerable fields
+ *
+ * @category Commands
  */
 export interface PrefixCommandDefinition {
     /** Name without the prefix, such as `repeat`, beginning with an ASCII letter or digit and using only ASCII letters, digits, `_` or `-` */
@@ -22,12 +24,19 @@ export interface PrefixCommandDefinition {
     readonly usage?: string
     /** Named argument descriptors read in property order after the guard allows execution. Omit this to leave `args` unconverted and expose empty `values` */
     readonly arguments?: CommandArgumentSchema
+    /**
+     * Leave this command out of generated help and unknown-name suggestions, for example for owner-only tools. Defaults to false.
+     * A hidden command still runs when invoked by name or alias, so pair it with a guard to restrict who can use it
+     */
+    readonly hidden?: boolean
 }
 
 /**
  * Frozen command information for inspection and help generation.
  * Contains no callbacks, cooldown store or resource candidates.
  * Help visibility callbacks also receive group entries, identified by `kind: "group"`
+ *
+ * @category Commands
  */
 export interface PrefixCommandMetadata extends Omit<PrefixCommandDefinition, "arguments"> {
     /** Present for groups supplied to help visibility callbacks. Executable commands omit this property */
@@ -43,6 +52,8 @@ export interface PrefixCommandMetadata extends Omit<PrefixCommandDefinition, "ar
  * Register the group before adding children to its canonical path.
  * Groups organize lookup and help only, with no handler, argument conversion, guard or cooldown.
  * Each protected command needs its own guard
+ *
+ * @category Commands
  */
 export interface PrefixCommandGroupDefinition {
     /** Group name using command-name syntax. It must not collide with sibling command or group names and aliases */
@@ -51,9 +62,18 @@ export interface PrefixCommandGroupDefinition {
     readonly aliases?: readonly string[]
     /** Description shown below this group's help entry, without markup escaping or automatic delivery */
     readonly description?: string
+    /**
+     * Leave this group and everything inside it out of generated help and unknown-name suggestions. Defaults to false.
+     * Help treats a hidden group like a missing one. Its commands still run when invoked by name, so guard each one that needs it
+     */
+    readonly hidden?: boolean
 }
 
-/** Frozen group information copied at registration, including its registered-name path for adding children or selecting help */
+/**
+ * Frozen group information copied at registration, including its registered-name path for adding children or selecting help
+ *
+ * @category Commands
+ */
 export interface PrefixCommandGroupMetadata extends PrefixCommandGroupDefinition {
     /** Distinguishes this non-executable group from a command in help visibility callbacks */
     readonly kind: "group"
@@ -61,7 +81,11 @@ export interface PrefixCommandGroupMetadata extends PrefixCommandGroupDefinition
     readonly path: readonly string[]
 }
 
-/** Choose the existing parent group for a new command or child group */
+/**
+ * Choose the existing parent group for a new command or child group
+ *
+ * @category Commands
+ */
 export interface PrefixCommandRegistrationOptions {
     /** Registered parent names, not aliases, such as `["admin", "users"]`. Omit or use `[]` for root. Missing parents are not created */
     readonly group?: readonly string[]
@@ -70,24 +94,24 @@ export interface PrefixCommandRegistrationOptions {
 /**
  * Why a known command did not execute, passed as a frozen value to its optional `onReject` callback.
  * Inspect `_tag` to distinguish a denied guard, cooldown or invalid arguments.
- * The router sends no response and schedules no retry
+ * The router replies only when `onReject: "reply"` is selected, and it schedules no retry.
+ * That reply is limited: An active cooldown key is answered once until its `retryAtMs`, and a guard denial once per user
+ * and command every 5 seconds. Argument rejections are always answered
+ *
+ * @category Commands
  */
 export type PrefixCommandRejection =
     | {
-          /** The command's guard returned false, so its handler did not run */
+          /** A guard returned false or `{ deny }`, so the handler did not run */
           readonly _tag: "CommandGuardRejected"
+          /** The text a guard returned with `{ deny }`, suitable for a reply. Absent when a guard returned false */
+          readonly reason?: string
       }
     | {
           /** This command's cooldown key is still active */
           readonly _tag: "CommandCooldownActive"
           /** Unix epoch milliseconds when this key can claim again, not a wait duration */
           readonly retryAtMs: number
-      }
-    | {
-          /** The bounded cooldown store could not retain another key */
-          readonly _tag: "CommandCooldownCapacity"
-          /** Earliest known Unix epoch milliseconds that may free a store entry, or null if unknown. This is not a reserved retry */
-          readonly retryAtMs: number | null
       }
     | {
           /** Argument conversion rejected before a cooldown was claimed. This value does not include the rejected token */
@@ -104,6 +128,8 @@ export type PrefixCommandRejection =
  * A prefix matched but no executable command was selected.
  * Passed as a frozen value to the router's optional `onUnmatched` callback, without an automatic response.
  * Ignored bot messages and messages without a matching prefix do not produce this callback
+ *
+ * @category Commands
  */
 export type PrefixCommandUnmatched =
     | {
@@ -111,6 +137,11 @@ export type PrefixCommandUnmatched =
           readonly _tag: "CommandUnknownName"
           /** Name exactly as returned by the parser, before case-insensitive lookup */
           readonly name: string
+          /**
+           * The closest registered command or group name in the same parent, within a small edit distance, such as `ping` for `pong`.
+           * Absent when no name is close enough
+           */
+          readonly suggestion?: string
           /** Registered parent group names where lookup missed. Absent at root and does not include the unknown name */
           readonly path?: readonly string[]
       }
@@ -128,15 +159,29 @@ export type PrefixCommandUnmatched =
       }
 
 /**
+ * Prefix text selected for one message: One prefix, a list of accepted prefixes, or undefined to ignore the message
+ *
+ * @category Commands
+ */
+export type PrefixCommandPrefixValue = string | readonly string[] | undefined
+
+/**
  * Text that starts a command invocation, such as `!`, or a list of accepted prefixes.
- * A synchronous resolver can choose prefixes from each message and return undefined to ignore it.
+ * A resolver can choose prefixes from each message, for example from per-community settings, and may return a promise.
+ * Return undefined to ignore the message.
  * Prefixes must be nonempty strings, and arrays must be nonempty and contain no holes.
  * Matching is exact at the start of message content, with the longest matching prefix selected
+ *
+ * @category Commands
  */
 export type PrefixCommandPrefix<M extends MessageCore = Message> =
-    string | readonly string[] | ((message: M) => string | readonly string[] | undefined)
+    string | readonly string[] | ((message: M) => PrefixCommandPrefixValue | PromiseLike<PrefixCommandPrefixValue>)
 
-/** Frozen input given to a custom parser after prefix matching and any group lookup */
+/**
+ * Frozen input given to a custom parser after prefix matching and any group lookup
+ *
+ * @category Commands
+ */
 export interface PrefixCommandParseInput<M extends MessageCore = Message> {
     /** Incoming message with the attached client's selected fields. The router does not fetch omitted fields */
     readonly message: M
@@ -148,7 +193,11 @@ export interface PrefixCommandParseInput<M extends MessageCore = Message> {
     readonly path?: readonly string[]
 }
 
-/** Parser result copied and frozen by the router before command callbacks run */
+/**
+ * Parser result copied and frozen by the router before command callbacks run
+ *
+ * @category Commands
+ */
 export interface PrefixCommandParse {
     /** Command name or alias using command-name syntax in the selected parent. A returned group name does not enter that group */
     readonly name: string
@@ -209,10 +258,32 @@ export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
     return { name, rawArgs, args }
 }
 
-/** Configure how an attached router recognizes command messages, without connecting or subscribing during construction */
-export interface PrefixCommandsOptions<M extends MessageCore = Message> {
-    /** Prefix text, accepted-prefix list or synchronous per-message resolver. If several prefixes match, the longest wins */
+/**
+ * Configure how an attached router recognizes command messages, without connecting or subscribing during construction
+ *
+ * @category Commands
+ */
+export interface PrefixCommandsOptions<M extends MessageCore = Message> extends PrefixCommandParsing<M> {
+    /** Prefix text, accepted-prefix list or per-message resolver, which may return a promise. If several prefixes match, the longest wins */
     readonly prefix: PrefixCommandPrefix<M>
+}
+
+/**
+ * Parsing and cooldown settings shared by both API styles, apart from the prefix, which each API resolves in its own way
+ *
+ * @category Commands
+ */
+export interface PrefixCommandParsing<M extends MessageCore = Message> {
+    /**
+     * Also accept a mention of the bot, such as `@bot ping`, as a prefix. Defaults to false.
+     * Both mention forms, `<@id>` and `<@!id>`, are accepted.
+     * The bot's user ID comes from the user in the gateway's READY, so normally no request is needed.
+     * When READY did not supply a valid ID, the first message that starts with a mention triggers one users.fetchSelf
+     * read, which concurrent messages share. A failed read is logged at Warn in the commands category, and mentions are then treated
+     * as ordinary text without a new read for a backoff that starts at 5 seconds and doubles per consecutive failure up to
+     * 5 minutes, unless READY supplies the ID first
+     */
+    readonly mentionPrefix?: boolean
     /**
      * Split the command name and arguments, optionally using `commands.parseQuoted` for quoted words.
      * By default, leading whitespace is trimmed, the name must use command-name syntax and trimmed arguments are split on whitespace.
@@ -228,9 +299,22 @@ export interface PrefixCommandsOptions<M extends MessageCore = Message> {
     readonly ignoreBots?: boolean
     /** Require matching letter case for command and group names and aliases. Defaults to false. This does not change prefix or argument matching */
     readonly caseSensitive?: boolean
+    /**
+     * Size the router's own memory cooldown store, used by commands whose cooldown supplies no `store`, such as
+     * `{ maxEntries: 50_000 }`. Defaults to 10,000 keys, shared by every router derived from the same create.
+     * A full store never denies a new key: It removes expired keys first, then the reservation that expires soonest,
+     * which lets that key run again early.
+     * The same limit bounds the rejections `onReject: "reply"` remembers so that it does not repeat itself.
+     * Invalid options throw ConfigurationError when the router is created
+     */
+    readonly cooldowns?: MemoryCooldownOptions
 }
 
-/** Request to reserve a cooldown after successful guard and argument conversion, before command execution */
+/**
+ * Request to reserve a cooldown after successful guard and argument conversion, before command execution
+ *
+ * @category Commands
+ */
 export interface CommandCooldownRequest {
     /** Nonempty key combining command identity with the configured key suffix. Use the complete string as the store key */
     readonly key: string
@@ -243,6 +327,8 @@ export interface CommandCooldownRequest {
  * Only `CooldownAcquired` permits execution.
  * A denied claim may call `onReject`, but the router does not wait or retry.
  * Retry times are millisecond timestamps since 1970-01-01 UTC, not wait durations
+ *
+ * @category Commands
  */
 export type CommandCooldownClaim =
     | {
@@ -257,15 +343,37 @@ export type CommandCooldownClaim =
           /** Unix epoch milliseconds when this key can be claimed again */
           readonly retryAtMs: number
       }
+
+/**
+ * Whose invocations share one cooldown: The invoking user, the channel, or the guild.
+ * A guild cooldown in a direct message applies to that conversation
+ *
+ * @category Commands
+ */
+export type CommandCooldownPer = "user" | "channel" | "guild"
+
+/**
+ * A guard's decision: `true` allows the command, `false` denies it silently, and `{ deny }` denies it with a reason that
+ * `onReject: "reply"` sends to the user
+ *
+ * @category Commands
+ */
+export type PrefixCommandGuardResult =
+    | boolean
     | {
-          /** The store has no room for a new key. The built-in store does not evict active reservations */
-          readonly _tag: "CooldownCapacity"
-          /** Earliest known expiry in Unix epoch milliseconds, or null when unknown. Capacity is not reserved for a later attempt */
-          readonly retryAtMs: number | null
+          /** The reason the command was denied, sent to the user when rejection feedback is `"reply"` */
+          readonly deny: string
       }
 
-/** Limit the cooldown keys held by one memory store in one process. Keys are not saved or shared with other processes */
+/**
+ * Limit the cooldown keys held by one memory store in one process. Keys are not saved or shared with other processes
+ *
+ * @category Commands
+ */
 export interface MemoryCooldownOptions {
-    /** Positive safe integer key limit, defaulting to 1,024. Claims sweep expired keys before checking space and never evict active keys */
+    /**
+     * Positive safe integer key limit, defaulting to 10,000. A claim for a new key never fails for lack of space:
+     * A full store removes expired keys first, then the reservation that expires soonest, whose key can then claim again early
+     */
     readonly maxEntries?: number
 }

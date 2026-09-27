@@ -1,3 +1,8 @@
+/**
+ * Member search requests and page projection.
+ * Invariant: Queries are validated locally, and pages are decoded completely before any result is returned.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import {
     GuildMemberJoinSourceTypes,
     type GuildMemberJoinSourceType,
@@ -6,8 +11,8 @@ import {
     type MemberSearchQuery,
 } from "#sdk/member-search"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, record } from "./message.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { identifier, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
 const joinSourceTypeValues = new Set<number>(Object.values(GuildMemberJoinSourceTypes))
 const queryKeys = new Set([
@@ -33,23 +38,11 @@ interface EncodedMemberSearchQuery {
     readonly query: MemberSearchQuery
 }
 
-const nonNegativeInteger = (value: unknown): value is number =>
-    typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-
 const joinSourceType = (value: unknown): value is GuildMemberJoinSourceType =>
     typeof value === "number" && joinSourceTypeValues.has(value)
 
 const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
-
-function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
-    if (!Array.isArray(value)) return undefined
-    const count = value.length
-    if (count > maximum) return undefined
-    const items = new Array<unknown>(count)
-    for (let index = 0; index < count; index++) items[index] = value[index]
-    return Object.freeze(items)
-}
 
 function identifiers(value: unknown, maximum: number): readonly string[] | undefined {
     const items = snapshotArray(value, maximum)
@@ -75,8 +68,8 @@ function joinSourceTypes(value: unknown): readonly GuildMemberJoinSourceType[] |
 export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQuery | InputValidationFailure {
     const supplied = query === undefined ? {} : query
     if (!record(supplied)) return inputValidationFailure("query", "type", "Member search query must be an object")
-    if (Object.keys(supplied).some((key) => !queryKeys.has(key)))
-        return inputValidationFailure("query", "allowedFields", "Member search query contains an unsupported field")
+    const unsupported = unsupportedKeyFailure(supplied, [...queryKeys], "query", "the member search query")
+    if (unsupported) return unsupported
     // Read recognized properties once, regardless of ownership or enumerability
     const input = Object.fromEntries(Array.from(queryKeys, (key) => [key, supplied[key]]))
     const limit = input.limit === undefined ? 25 : input.limit
@@ -111,25 +104,25 @@ export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQue
         return inputValidationFailure(
             "query.joinedAtAfterSeconds",
             "range",
-            "Joined-after time must be a nonnegative safe integer",
+            "Joined-after time must be a nonnegative safe integer in Unix seconds",
         )
     if (input.joinedAtBeforeSeconds !== undefined && !nonNegativeInteger(input.joinedAtBeforeSeconds))
         return inputValidationFailure(
             "query.joinedAtBeforeSeconds",
             "range",
-            "Joined-before time must be a nonnegative safe integer",
+            "Joined-before time must be a nonnegative safe integer in Unix seconds",
         )
     if (input.userCreatedAtAfterSeconds !== undefined && !nonNegativeInteger(input.userCreatedAtAfterSeconds))
         return inputValidationFailure(
             "query.userCreatedAtAfterSeconds",
             "range",
-            "User-created-after time must be a nonnegative safe integer",
+            "User-created-after time must be a nonnegative safe integer in Unix seconds",
         )
     if (input.userCreatedAtBeforeSeconds !== undefined && !nonNegativeInteger(input.userCreatedAtBeforeSeconds))
         return inputValidationFailure(
             "query.userCreatedAtBeforeSeconds",
             "range",
-            "User-created-before time must be a nonnegative safe integer",
+            "User-created-before time must be a nonnegative safe integer in Unix seconds",
         )
     const sourceTypes = input.joinSourceTypes === undefined ? undefined : joinSourceTypes(input.joinSourceTypes)
     if (input.joinSourceTypes !== undefined && !sourceTypes)
@@ -148,11 +141,15 @@ export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQue
         )
     input.sourceInviteCodes = inviteCodes
     if (input.isBot !== undefined && typeof input.isBot !== "boolean")
-        return inputValidationFailure("query.isBot", "type", "isBot must be a boolean")
+        return inputValidationFailure("query.isBot", "type", "Member search filter isBot must be a boolean")
     if (input.sortBy !== undefined && input.sortBy !== "joinedAt" && input.sortBy !== "relevance")
-        return inputValidationFailure("query.sortBy", "allowedValue", "sortBy must be joinedAt or relevance")
+        return inputValidationFailure(
+            "query.sortBy",
+            "allowedValue",
+            "Member search sortBy must be joinedAt or relevance",
+        )
     if (input.sortOrder !== undefined && input.sortOrder !== "asc" && input.sortOrder !== "desc")
-        return inputValidationFailure("query.sortOrder", "allowedValue", "sortOrder must be asc or desc")
+        return inputValidationFailure("query.sortOrder", "allowedValue", "Member search sortOrder must be asc or desc")
     const body = {
         ...(input.query === undefined ? {} : { query: input.query }),
         limit,
@@ -208,7 +205,7 @@ function hit(value: unknown, guildId: string): MemberSearchHit | undefined {
         userId: value.user_id,
         username: value.username,
         discriminator: value.discriminator,
-        globalName: value.global_name,
+        displayName: value.global_name,
         nickname: value.nickname,
         roleIds,
         joinedAtSeconds: value.joined_at,
@@ -220,7 +217,7 @@ function hit(value: unknown, guildId: string): MemberSearchHit | undefined {
 }
 
 /** Decodes a complete provider page without admitting its partial indexed hits to the guild-member cache */
-export function decodeMemberSearchPage(
+function decodeMemberSearchPage(
     value: unknown,
     guildId: string,
     query: Pick<EncodedMemberSearchQuery, "limit">,

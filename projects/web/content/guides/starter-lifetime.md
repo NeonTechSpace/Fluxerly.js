@@ -1,36 +1,44 @@
 ---
 title: Run a bot with the SDK
 navTitle: Bot lifetime
-description: Let the SDK own connection and subscription cleanup while the application owns bot behavior
+description: What runBot does from start to stop, and what stays with the application
 ---
 
-The public `runBot` helper creates a client, installs handlers before connecting and watches the connection and required subscriptions. The [first bot](/docs/{{version}}/quick-start/) passes one configuration object with a token, signal handling and event handlers. There is no separate lifecycle file to copy
+The `runBot` function runs a whole bot from one options object. It creates the client, registers every handler and command before connecting, keeps the connection alive and stops cleanly. The [quick start](/docs/{{version}}/quick-start/) bot is a complete example, and no separate lifecycle file is needed
 
-## What the SDK and application handle
+## From start to stop
 
-The SDK reconnects after recoverable connection failures, watches subscriptions needed to keep the bot running and waits for SDK cleanup. A permanent connection failure or a failed or unexpectedly closed subscription stops the bot. A failed handler does not stop its subscription and is not retried automatically
+1. **Check.** The `runBot` call checks every option first. A missing token, an unknown event name or an invalid command throws `ConfigurationError` before anything connects, and a missing token's hint points at the unset environment variable
+2. **Register.** Event handlers and commands are registered, then the optional `setup(client)` callback runs for other startup work. A failed `setup` stops the bot before it connects
+3. **Connect.** The client connects to the gateway and handlers start receiving events
+4. **Run.** The SDK reconnects after a lost connection and keeps each [handler](/docs/{{version}}/glossary/#handler) running. A failed handler is not retried and does not stop the bot. Its error is logged in full, or sent to `onError` when one is set. If a handler's subscription closes while the bot is running, the bot stops with `CriticalWorkerStoppedError`
+5. **Stop.** With `processSignals: true`, Ctrl+C (SIGINT) and SIGTERM stop the bot. A `signal` option stops it from application code. Stopping accepts no new events and gives running handlers up to 5 seconds to finish, a time the `drainMs` option changes. Then it cancels the handlers still running through their `signal`, closes the connection and waits for the SDK's cleanup. The stop request and the shutdown duration are logged at Info, and a failed cleanup step is logged at Error and still reported by the run
+6. **Report.** After a failure the bot could not recover from, such as a rejected token, the runner logs that failure once and sets `process.exitCode` to 1. A normal stop reports nothing
+7. **Return.** The returned [Result](/docs/{{version}}/glossary/#result) is Ok after a normal stop, or an Err with the failure
 
-The application supplies the token and handlers, decides how to report errors and closes any resources outside the SDK. A missing token is a configuration failure. Track database writes and other Promises in application code, and wait for them when they must finish before exit. The runner does not drain arbitrary Promises started by handlers
+The [deploying guide](/docs/{{version}}/deploying/#what-happens-on-shutdown) lists each shutdown step. Importing the SDK adds no signal handlers, and `runBot` removes its own when the bot stops. It never exits the process
 
-Each configured handler receives `event` and `client`. The default API also supplies `signal`. A `messageCreate` handler receives `message` and `reply`. The `reply` helper accepts a `ReplyInput` and optional `SendOptions`. In the default API it applies the handler's cancellation signal, so await its Result. In the native API it returns an Effect. Return that Effect or compose it into the handler's Effect so the SDK can run and interrupt it
+## What each handler receives
 
-## Stop the bot
+In the default API, each event handler receives one context object with `event`, `client` and `signal`. Effect handlers receive `event` and `client` without a signal, because stopping the bot interrupts their Effect instead. A `messageCreate` handler also receives `message` and `reply`
 
-Set `processSignals: true` in the configuration object to handle Ctrl+C (SIGINT) and SIGTERM. Simply importing the SDK does not add signal handlers. The runner removes its handlers when the bot stops
+The `reply` helper accepts a string or full message content and already applies the handler's cancellation signal. Return its Result so a failed reply is reported like a thrown error, as [reliability](/docs/{{version}}/reliability/#return-the-replys-result) explains. In the Effect API, `reply` returns an Effect. Return it or compose it into the handler's Effect so the SDK can run and interrupt it
 
-Pass an `AbortSignal` as `signal` in the configuration object to stop the bot from application code. Stopping waits for cleanup. If cleanup fails, the run still reports that failure
+By default `messageCreate` handlers run up to eight at a time and other events one at a time. A burst that fills a handler's queue drops the oldest waiting event with a Warn record instead of stopping the bot. [Configuration](/docs/{{version}}/configuration/#events-and-the-gateway) shows how to change this for one event
+
+## What the application owns
+
+The application supplies the token and handlers and decides how to report errors. It also owns everything outside the SDK:
+
+- Promises started by handlers: The runner does not wait for them at shutdown. Track work that must finish, as shown in [application supervision](/docs/{{version}}/application-supervision/#drain-application-owned-work)
+- Other resources: Close database connections, timers and servers after `runBot` resolves, so the process can exit
+- Restarts: A process manager or a new `runBot` call starts a new client. Restarting does not replay missed events or failed handlers
+- Durable work: Store data and jobs that must survive a restart outside the SDK
 
 ## Choose the API
 
-The JavaScript and TypeScript runner returns a Result for expected failures. Catch unexpected defects in the bot's top-level code. The [first-bot example](/docs/{{version}}/quick-start/) reports a safe failure message and sets the process exit code
+The JavaScript and TypeScript `runBot` returns a Result for expected failures and reports them itself, so the [quick start](/docs/{{version}}/quick-start/) bot only awaits it. Invalid options still throw `ConfigurationError` at once, and an unexpected SDK defect rejects with `SdkDefect`. Set `reportFailure: false` when the application handles the returned failure and the exit status itself, for example to restart the bot in the same process
 
-The [Effect runner](/docs/{{version}}/effect-first-bot/) returns an Effect and keeps access to application services, scoped resources and failure causes. Run it once from the application's top-level code instead of starting a separate runtime inside handlers
+The [Effect `runBot`](/docs/{{version}}/effect-first-bot/) returns an Effect and keeps access to application services, scoped resources and failure causes. It reports a failure the same way, so running it with `Effect.runPromiseExit` is enough. Run it once from the application's top-level code instead of starting a separate runtime inside handlers
 
-For a custom startup flow, the advanced `runBot(options, install, runOptions)` form lets an installer return the subscriptions the runner must watch. Pass signal handling in `runOptions` with that form. The lower-level `createClient` and subscription APIs remain available for flows that need direct lifetime control. See [application supervision](/docs/{{version}}/application-supervision/) for tracking required subscriptions and waiting for work outside the SDK
-
-## Extend the application
-
-- Handle expected reply failures without blindly repeating writes after a lost response
-- Keep command rejection, cooldown feedback and user-facing messages in command definitions
-- Create a new client when restarting and limit how often the application retries. Restarting does not replay missed events or failed handlers
-- Limit how many subscriptions the application creates at runtime. Store data and jobs that must survive a restart outside the SDK
+For prefix commands, pass `commands`, as shown in [commands](/docs/{{version}}/commands/). The lower-level `createClient` and subscription APIs remain available for flows that need direct control of the client's lifetime. See [application supervision](/docs/{{version}}/application-supervision/) for watching required subscriptions in application code

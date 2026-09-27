@@ -1,21 +1,30 @@
-import { Application } from "typedoc"
+import { Application, ReflectionCategory } from "typedoc"
+import { existsSync } from "node:fs"
 import { readFile, writeFile, mkdir, readdir, rm } from "node:fs/promises"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { dirname, join, resolve } from "node:path"
 import { channelTargets, defaultVersion, parseVersion, publishedSnapshotFiles, retainedVersions, validateSnapshot } from "./versions.js"
-import { docsAliasFiles } from "./docs-alias.js"
+import { linkPlaceholder, materializeFiles, currentSnapshotSchema } from "./snapshot-schema.js"
+import { categoryAnchor, referenceRouter, taskIndexFor } from "./reference-theme.js"
 import { expandStarterExamples } from "./starter-examples.js"
+import { referenceEntries } from "./reference-entries.js"
+import { codePageSlug, generateCodeCatalogue } from "./code-catalogue.js"
 import { readSourcePlan } from "../../release/source.js"
 
 export const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdkRoot = resolve(webRoot, "../sdk")
 export const guidesRoot = join(webRoot, "content/guides")
 export const generatedRoot = join(webRoot, "content/docs")
+const partialsRoot = join(webRoot, "content/partials")
+// Effect's module reference pages share each re-exported namespace name
+const effectModules = ["Cause", "Clock", "Deferred", "Effect", "Exit", "Fiber", "Layer", "Logger", "LogLevel", "Option",
+    "Queue", "Redacted", "Schedule", "Scope", "Stream"]
+const effectReference = "https://effect.website/docs/v4/api/effect"
 const frontmatter = (title, navTitle) =>
     `---\ntitle: ${JSON.stringify(title)}\n${navTitle ? `navTitle: ${JSON.stringify(navTitle)}\n` : ""}---\n\n`
 const guideSlug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const separator = /^(?:---(?:\[[^\]]+\])?.+---|---)$/
-const generatedPages = new Set(["index", "api", "changelog"])
+const generatedPages = new Set(["index", "api", "changelog", codePageSlug])
 
 async function readGuideInventory(directory = guidesRoot) {
     const entries = await readdir(directory, { withFileTypes: true })
@@ -59,7 +68,7 @@ async function readGuideInventory(directory = guidesRoot) {
             throw new Error(`Authored guide navigation references a missing page: ${page}`)
     }
     const unlisted = [...guideFiles].filter((page) => !listed.has(page))
-    if (unlisted.length > 0) throw new Error(`Authored guide is not listed: ${unlisted.sort().join(", ")}.md`)
+    if (unlisted.length > 0) throw new Error(`Authored guide is not listed: ${unlisted.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join(", ")}.md`)
     const guides = await Promise.all(
         navigation
             .filter((slug) => guideFiles.has(slug))
@@ -90,18 +99,11 @@ export async function filesIn(directory, prefix = "") {
     return files.sort((a, b) => a.path.localeCompare(b.path))
 }
 
-export async function generateVersion(version, output, { plannedVersion } = {}) {
-    if (version !== "preview") parseVersion(version)
-    if (version === "preview" && plannedVersion) parseVersion(plannedVersion)
-    await mkdir(output, { recursive: true })
-    const { guides, navigation } = await readGuideInventory()
-    const manifest = JSON.parse(await readFile(join(sdkRoot, "package.json"), "utf8"))
-    const app = await Application.bootstrapWithPlugins({
+export function referenceOptions({ entryPoints, tsconfig, output, publicPath }) {
+    return {
         name: "Fluxerly API",
-        entryPoints: [join(sdkRoot, "dist/index.d.ts"), join(sdkRoot, "dist/effect.d.ts")].map((path) =>
-            path.replaceAll("\\", "/"),
-        ),
-        tsconfig: join(webRoot, "tsconfig.reference.json"),
+        entryPoints: entryPoints.map((path) => path.replaceAll("\\", "/")),
+        tsconfig,
         plugin: [
             "typedoc-plugin-markdown",
             "typedoc-plugin-frontmatter",
@@ -121,61 +123,151 @@ export async function generateVersion(version, output, { plannedVersion } = {}) 
         sanitizeComments: true,
         parametersFormat: "table",
         interfacePropertiesFormat: "table",
+        classPropertiesFormat: "table",
         typeAliasPropertiesFormat: "table",
-        publicPath: `/docs/${version}/api`,
-        router: "kind",
-        outputs: [{ name: "markdown", path: join(output, "api") }],
+        enumMembersFormat: "table",
+        typeDeclarationFormat: "table",
+        // The plugin omits columns without values. Sources are disabled, so their column is always hidden
+        tableColumnSettings: { hideSources: true },
+        categorizeByGroup: false,
+        defaultCategory: "Other",
+        navigation: { includeCategories: true, includeGroups: true },
+        externalSymbolLinkMappings: {
+            effect: Object.fromEntries([...effectModules.map((name) => [name, `${effectReference}/${name}`]), ["*", effectReference]]),
+        },
+        publicPath,
+        router: referenceRouter,
+        outputs: [{ name: "markdown", path: output }],
         entryFileName: "index",
+        includeHierarchySummary: false,
         treatWarningsAsErrors: true,
-        validation: { notExported: false },
-    })
+        validation: { notExported: true, invalidLink: true, notDocumented: true },
+    }
+}
+
+/**
+ * Give re-exported symbols the category of the declaration they point to.
+ * TypeDoc places re-exports in the default category because their category tag belongs to the other entry point
+ */
+export function categorizeReferences(entries) {
+    const categoryOf = new Map()
+    for (const entry of entries)
+        for (const category of entry.categories ?? [])
+            if (category.title !== "Other") for (const child of category.children) categoryOf.set(child.id, category.title)
+    for (const entry of entries) {
+        const other = entry.categories?.find((category) => category.title === "Other")
+        if (!other) continue
+        other.children = other.children.filter((child) => {
+            if (!child.isReference?.()) return true
+            const title = categoryOf.get(child.getTargetReflectionDeep().id)
+            if (!title) return true
+            let category = entry.categories.find((candidate) => candidate.title === title)
+            if (!category) {
+                category = new ReflectionCategory(title)
+                entry.categories.push(category)
+                // Keep the default category last, where TypeDoc places it
+                const rank = (item) => (item.title === "Other" ? 1 : 0)
+                entry.categories.sort((a, b) => rank(a) - rank(b) || (a.title < b.title ? -1 : a.title > b.title ? 1 : 0))
+            }
+            category.children.push(child)
+            category.children.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+            return false
+        })
+        if (other.children.length === 0) entry.categories = entry.categories.filter((category) => category !== other)
+    }
+}
+
+/**
+ * Convert public declarations to generated reference Markdown.
+ * Missing comments and unexported referenced types are reported as source documentation gaps.
+ * Every other diagnostic fails generation
+ */
+export async function renderReference({ entryPoints, tsconfig, output, publicPath, modules = referenceEntries }) {
+    const app = await Application.bootstrapWithPlugins(referenceOptions({ entryPoints, tsconfig, output, publicPath }))
     const project = await app.convert()
     if (!project || app.logger.hasErrors()) throw new Error("SDK reference conversion failed")
-    const defaultApi = project.children?.find((child) => child.name === "index")
-    const native = project.children?.find((child) => child.name === "effect")
-    if (!defaultApi || !native) throw new Error("The two public SDK entry points were not found")
-    defaultApi.name = "js-ts"
-    native.name = "Effect"
+    const entries = modules.map(({ module }) => project.children?.find((child) => child.name === module))
+    const missing = modules.filter((_, index) => !entries[index]).map(({ module }) => module)
+    if (missing.length) throw new Error(`Public SDK entry points were not found: ${missing.join(", ")}`)
+    // TypeDoc names modules after their declaration files. Pages and URLs use the reference names
+    entries.forEach((entry, index) => { entry.name = modules[index].name })
+    categorizeReferences(entries)
+    const gaps = { undocumented: [], notExported: [] }
+    const validationWarning = app.logger.validationWarning.bind(app.logger)
+    app.logger.validationWarning = (message, ...rest) => {
+        if (message.endsWith(" does not have any documentation")) gaps.undocumented.push(message)
+        else if (message.endsWith(" but not included in the documentation")) gaps.notExported.push(message)
+        else validationWarning(message, ...rest)
+    }
+    app.validate(project)
+    if (app.logger.hasErrors() || app.logger.hasWarnings())
+        throw new Error("SDK reference validation reported unresolved diagnostics")
     await app.generateOutputs(project)
     if (app.logger.hasErrors() || app.logger.hasWarnings())
         throw new Error("SDK reference generation reported unresolved diagnostics")
+    // Rendering can add categories. Read them after output so navigation matches the pages
+    const categories = Object.fromEntries(entries.map((entry) => [entry.name,
+        (entry.categories ?? []).map((category) => ({ title: category.title, anchor: categoryAnchor(category.title) }))]))
+    // TypeDoc percent-encodes placeholder braces in link destinations
+    const encoded = (value) => value.replaceAll("{", "%7B").replaceAll("}", "%7D")
+    for (const file of await filesIn(output))
+        if (file.content.includes(encoded(publicPath)))
+            await writeFile(join(output, file.path), file.content.replaceAll(encoded(publicPath), publicPath))
+    const tasks = taskIndexFor(app)?.replaceAll(encoded(publicPath), publicPath)
+    return { project, categories, gaps, tasks }
+}
+
+export async function generateVersion(version, output, { plannedVersion } = {}) {
+    if (version !== "preview") parseVersion(version)
+    if (version === "preview" && plannedVersion) parseVersion(plannedVersion)
+    await mkdir(output, { recursive: true })
+    const { guides, navigation } = await readGuideInventory()
+    const manifest = JSON.parse(await readFile(join(sdkRoot, "package.json"), "utf8"))
+    const declarations = referenceEntries.map((entry) => join(sdkRoot, "dist", entry.declarations))
+    const missing = declarations.filter((path) => !existsSync(path))
+    if (missing.length)
+        throw new Error(
+            `The SDK build is missing ${missing.map((path) => resolve(path)).join(", ")}. ` +
+                "Run pnpm docs:dev, which builds the SDK first, or run pnpm --filter @neontechspace/fluxerly build from projects/",
+        )
+    const { project, categories, gaps, tasks } = await renderReference({
+        entryPoints: declarations,
+        tsconfig: join(webRoot, "tsconfig.reference.json"),
+        output: join(output, "api"),
+        // Generated files keep a placeholder. Each served path fills it when the site is built
+        publicPath: `${linkPlaceholder}/api`,
+    })
+    const gapReport = Object.entries(gaps)
+        .filter(([, messages]) => messages.length)
+        .map(([kind, messages]) => `Reference source gaps (${kind}): ${messages.length}\n  ${messages.join("\n  ")}`)
+    // Fix gaps in SDK source comments or exports, not in generated output
+    if (gapReport.length) throw new Error(gapReport.join("\n"))
     const reflections = Object.values(project.reflections)
     for (const name of ["createClient", "Message", "SendOptions"])
         if (!reflections.some((reflection) => reflection.name === name))
             throw new Error(`Missing public reference: ${name}`)
-    for (const name of ["Rest", "Gateway", "validateMessageBody", "InternalClient"])
+    for (const name of ["RestRuntime", "RestOwner", "superviseShards", "routeDispatch"])
         if (reflections.some((reflection) => reflection.name === name))
             throw new Error(`Internal-only declaration escaped into reference: ${name}`)
-    const intro = `Fluxerly.js connects Node.js applications to Fluxer.
-It supports sending messages, responding to events and building bots in JavaScript or TypeScript
-
-${version === "preview" ? `These docs describe changes in development${plannedVersion ? ` for SDK **${plannedVersion}**` : ""}. This version has not been released and cannot be installed yet` : `These docs cover SDK **${version}**`}
-
-## Start a bot
-
-Follow the [quick start](/docs/${version}/quick-start/) to install the SDK and make a bot that replies to !ping.
-The [message guide](/docs/${version}/messages/) covers replies, embeds and files.
-For an Effect application, start with [the Effect bot guide](/docs/${version}/effect-first-bot/)
-
-## Find a method
-
-The [API reference](/docs/${version}/api/) lists the available methods and types.
-Use search to jump to a name such as \`createClient\`
-
-See the [changelog](/docs/${version}/changelog/) for version history
-`
-    await writeFile(join(output, "index.md"), frontmatter("Build a Fluxer bot", "Overview") + intro)
+    const releaseStatus = version === "preview"
+        ? `These docs describe changes in development${plannedVersion ? ` for SDK **${plannedVersion}**` : ""}. This version has not been released and cannot be installed yet`
+        : `These docs cover SDK **${version}**`
+    await writeFile(join(output, "index.md"),
+        (await readFile(join(partialsRoot, "overview.md"), "utf8")).replaceAll("{{release-status}}", releaseStatus))
     const installation = version === "preview"
         ? "This version is not available to install yet. Select a released version of the docs to follow this tutorial\n"
         : `This installs SDK **${version}**, matching these docs\n\n\`\`\`command\n${JSON.stringify({ kind: "install", package: manifest.name, version })}\n\`\`\`\n`
-    for (const guide of guides)
-        await writeFile(
-            join(output, `${guide.slug}.md`),
-            guide.content
-                .replaceAll("{{version}}", version)
-                .replaceAll("{{installation}}", installation)
-                .replaceAll("{{effect-version}}", manifest.peerDependencies.effect),
-        )
+    for (const guide of guides) {
+        // Guide links already use the snapshot link placeholder
+        const content = guide.content
+            .replaceAll("{{installation}}", installation)
+            .replaceAll("{{effect-version}}", manifest.peerDependencies.effect)
+        if (content.replaceAll(linkPlaceholder, "").includes("{{"))
+            throw new Error(`Guide ${guide.slug} contains an unknown placeholder`)
+        await writeFile(join(output, `${guide.slug}.md`), content)
+    }
+    // Generated from the SDK code catalogue, which fails here when a code has no entry
+    await writeFile(join(output, `${codePageSlug}.md`), await generateCodeCatalogue(sdkRoot))
     let changelog
     try {
         changelog = await readFile(join(sdkRoot, "CHANGELOG.md"), "utf8")
@@ -198,7 +290,17 @@ See the [changelog](/docs/${version}/changelog/) for version history
             pages: navigation,
         }),
     )
-    await writeFile(join(output, "api/meta.json"), JSON.stringify({ title: "API reference" }))
+    if (tasks) await writeFile(join(output, "api/tasks.md"),
+        (await readFile(join(partialsRoot, "api-tasks.md"), "utf8")).replace("{{task-index}}", () => tasks.trim()))
+    await writeFile(join(output, "api/meta.json"), JSON.stringify({ title: "API reference", categories }))
+}
+
+async function writeFiles(directory, files) {
+    for (const file of files) {
+        const target = join(directory, file.path)
+        await mkdir(dirname(target), { recursive: true })
+        await writeFile(target, file.content)
+    }
 }
 
 export async function generate({ releasesDirectory = join(webRoot, "released"), publicBuild = false, plannedVersion, previewChannel } = {}) {
@@ -221,22 +323,21 @@ export async function generate({ releasesDirectory = join(webRoot, "released"), 
     if (!publicBuild && plannedVersion === undefined) {
         const manifest = JSON.parse(await readFile(join(sdkRoot, "package.json"), "utf8"))
         const current = parseVersion(manifest.version)
-        const channel = previewChannel ?? (manifest.version === "0.0.0" ? "canary" : current.channel)
+        const channel = previewChannel ?? current.channel
         const plan = await readSourcePlan(resolve(webRoot, ".."), { channel, allowNoChanges: true })
         plannedVersion = plan.plan.noPendingChanges ? null : plan.plan.version
     }
     await rm(generatedRoot, { recursive: true, force: true })
-    if (!publicBuild) await generateVersion("preview", join(generatedRoot, "preview"), { plannedVersion })
+    if (!publicBuild) {
+        const preview = join(generatedRoot, "preview")
+        await generateVersion("preview", preview, { plannedVersion })
+        await writeFiles(preview, materializeFiles(await filesIn(preview), { schemaVersion: currentSnapshotSchema, path: "preview" }))
+    }
     for (const snapshot of snapshots.filter((snapshot) => versions.includes(snapshot.version))) {
         const channel = parseVersion(snapshot.version).channel
         const path = channel === "stable" ? snapshot.version : channel
-        const published = publishedSnapshotFiles(snapshot)
-        const files = channel === "stable" ? published : docsAliasFiles(published, snapshot.version, channel)
-        for (const file of files) {
-            const target = join(generatedRoot, path, file.path)
-            await mkdir(dirname(target), { recursive: true })
-            await writeFile(target, file.content)
-        }
+        await writeFiles(join(generatedRoot, path), materializeFiles(publishedSnapshotFiles(snapshot),
+            { schemaVersion: snapshot.schemaVersion, sourceVersion: snapshot.version, path }))
     }
     for (const { version, label, path } of targets) {
         const target = join(generatedRoot, path, "meta.json")
@@ -250,27 +351,22 @@ export async function generate({ releasesDirectory = join(webRoot, "released"), 
             }),
         )
     }
-    if (selectedVersion) {
-        const snapshot = snapshots.find((snapshot) => snapshot.version === selectedVersion)
-        for (const file of docsAliasFiles(publishedSnapshotFiles(snapshot), selectedVersion, "latest")) {
-            const target = join(generatedRoot, "latest", file.path)
-            await mkdir(dirname(target), { recursive: true })
-            await writeFile(target, file.content)
-        }
-    }
     const selected = new Set(targets.map((target) => target.version))
+    // Latest is an edge redirect to this path, not another generated copy
+    const latestPath = targets.find((target) => target.version === selectedVersion)?.path ?? null
     await writeFile(
         join(generatedRoot, "meta.json"),
         JSON.stringify({
-            pages: [...(selectedVersion ? ["latest"] : []), ...(!publicBuild ? ["preview"] : []), ...targets.map((target) => target.path), ...versions.filter((v) => !selected.has(v))],
+            pages: [...(!publicBuild ? ["preview"] : []), ...targets.map((target) => target.path), ...versions.filter((v) => !selected.has(v))],
         }),
     )
     await writeFile(
         join(webRoot, "content/versions.json"),
-        JSON.stringify({ versions, targets, defaultVersion: selectedVersion, previewVersion: publicBuild ? null : plannedVersion }, null, 2) + "\n",
+        JSON.stringify({ versions, targets, defaultVersion: selectedVersion, latestPath, previewVersion: publicBuild ? null : plannedVersion }, null, 2) + "\n",
     )
     console.log(`Generated ${publicBuild ? "public" : "local"} documentation with ${versions.length} released snapshots`)
 }
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
     const args = process.argv.slice(2)
     if (args.length === 0) await generate()

@@ -1,22 +1,23 @@
+/**
+ * Pin pages, pin updates and pin queries.
+ * Invariant: Pin times and cursors are preserved as received or supplied, and pages must be in descending pin-time order.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type { ChannelPinsUpdate, MessagePinsPage, MessagePin } from "#sdk/pins"
 import type { MessageCore } from "#sdk/messages"
 import type { MessageDecoder } from "./message-fields.js"
-import { inputValidationFailure } from "#sdk/input-validation"
-import { decodeMessage, identifier, record } from "./message.js"
-import { validCalendarTimestamp } from "./timestamp.js"
-
-const timestamp = (value: unknown): value is string =>
-    typeof value === "string" &&
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
-    validCalendarTimestamp(value)
+import { inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import { decodeMessage } from "./message.js"
+import { identifier, record } from "./decode/primitives.js"
+import { timestamp } from "./decode/timestamp.js"
 
 export function encodePinsQuery(channel: unknown, query: unknown) {
     const input = query === undefined ? {} : query
     if (!identifier(channel))
         return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
     if (!record(input)) return inputValidationFailure("query", "type", "Pin query must be an object")
-    if (Object.keys(input).some((key) => key !== "limit" && key !== "before"))
-        return inputValidationFailure("query", "allowedFields", "Pin query may contain only limit and before")
+    const unsupported = unsupportedKeyFailure(input, ["limit", "before"], "query", "the pin query")
+    if (unsupported) return unsupported
     const limitInput = input.limit
     const before = input.before
     const limit = limitInput === undefined ? 50 : limitInput

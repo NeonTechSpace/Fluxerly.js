@@ -1,8 +1,19 @@
+// @ts-check
+
 import { createHash } from "node:crypto"
 import { contentFingerprint, exactFiles, readNpmTarball } from "./content.js"
 
 const npmRegistry = "https://registry.npmjs.org"
 const maximumBytes = 128 * 1024 * 1024
+
+/** @typedef {{ tarball: string, integrity: string }} NpmDist */
+/**
+ * @typedef {object} NpmInventory
+ * @property {string[]} npmVersions
+ * @property {Record<string, string>} npmTags
+ * @property {Record<string, NpmDist | undefined>} npmDist
+ * @property {{ npm: boolean }} absent
+ */
 
 export function packageName(name) {
     if (!/^@[a-z0-9][a-z0-9_-]*\/[a-z0-9][a-z0-9._-]*$/.test(name))
@@ -10,7 +21,17 @@ export function packageName(name) {
     return name
 }
 
+export function sha512Integrity(bytes) {
+    return `sha512-${createHash("sha512").update(bytes).digest("base64")}`
+}
+
+/** @param {{ fetchImpl?: typeof fetch, timeout?: number }} [options] */
 export function createRegistries({ fetchImpl = fetch, timeout = 30_000 } = {}) {
+    /**
+     * @param {string} url
+     * @param {boolean} [allowMissing]
+     * @returns {Promise<Buffer | null>}
+     */
     async function request(url, allowMissing = false) {
         const target = new URL(url)
         if (target.origin !== npmRegistry || target.username || target.password)
@@ -52,6 +73,13 @@ export function createRegistries({ fetchImpl = fetch, timeout = 30_000 } = {}) {
         return Buffer.concat(chunks)
     }
 
+    /** @param {string} url */
+    async function required(url) {
+        const bytes = await request(url)
+        if (bytes === null) throw new Error("Registry response is missing")
+        return bytes
+    }
+
     async function json(url, allowMissing = false) {
         const bytes = await request(url, allowMissing)
         if (bytes === null) return null
@@ -67,41 +95,62 @@ export function createRegistries({ fetchImpl = fetch, timeout = 30_000 } = {}) {
     function versionMap(value) {
         if (!value.versions || typeof value.versions !== "object" || Array.isArray(value.versions))
             throw new Error("Registry metadata has no version inventory")
-        return Object.keys(value.versions)
+        return value.versions
     }
 
-    async function inventory(name, { bootstrap = false } = {}) {
+    /**
+     * @param {string} name
+     * @param {{ allowMissing?: boolean }} [options] Permits a missing package, which reads as an empty inventory
+     * @returns {Promise<NpmInventory>}
+     */
+    async function inventory(name, { allowMissing = false } = {}) {
         packageName(name)
-        const npm = await json(`${npmRegistry}/${encodeURIComponent(name)}`, bootstrap)
+        const npm = await json(`${npmRegistry}/${encodeURIComponent(name)}`, allowMissing)
         if (npm && npm.name !== name) throw new Error("npm inventory package identity does not match")
+        const versions = npm ? versionMap(npm) : {}
+        /** @type {Record<string, NpmDist | undefined>} */
+        const npmDist = {}
+        for (const [version, metadata] of Object.entries(versions)) {
+            const dist = metadata?.dist
+            if (typeof dist?.tarball === "string" && typeof dist?.integrity === "string")
+                npmDist[version] = { tarball: dist.tarball, integrity: dist.integrity }
+        }
         return {
-            npmVersions: npm ? versionMap(npm) : [],
+            npmVersions: Object.keys(versions),
             npmTags: npm?.["dist-tags"] ?? {},
+            npmDist,
             absent: { npm: npm === null },
         }
     }
 
-    async function npmFiles(name, version, { allowMissing = false } = {}) {
+    /**
+     * Downloads the tarball npm serves for a version and verifies it against the registry's SHA-512 integrity
+     * @param {NpmDist | undefined} dist
+     */
+    async function npmTarball(dist) {
+        if (
+            typeof dist?.integrity !== "string" ||
+            !/^sha512-[A-Za-z0-9+/]+=*$/.test(dist.integrity) ||
+            typeof dist.tarball !== "string"
+        )
+            throw new Error("npm version metadata has no SHA-512 tarball integrity")
+        const compressed = await required(dist.tarball)
+        if (sha512Integrity(compressed) !== dist.integrity)
+            throw new Error("npm tarball integrity does not match its registry metadata")
+        return compressed
+    }
+
+    async function npmFiles(name, version) {
         packageName(name)
-        const metadata = await json(`${npmRegistry}/${encodeURIComponent(name)}/${version}`, allowMissing)
-        if (metadata === null) return null
+        const metadata = await json(`${npmRegistry}/${encodeURIComponent(name)}/${version}`)
         if (metadata.name !== name || metadata.version !== version || !metadata.dist?.tarball)
             throw new Error("npm version metadata does not match its requested identity")
-        const compressed = await request(metadata.dist.tarball)
-        if (metadata.dist.integrity) {
-            const integrity = metadata.dist.integrity
-            if (
-                typeof integrity !== "string" ||
-                !/^sha512-[A-Za-z0-9+/]+=*$/.test(integrity) ||
-                `sha512-${createHash("sha512").update(compressed).digest("base64")}` !== integrity
-            )
-                throw new Error("npm tarball integrity does not match its registry metadata")
-        }
-        return readNpmTarball(compressed)
+        return readNpmTarball(await npmTarball(metadata.dist))
     }
 
     return {
         inventory,
+        npmTarball,
         npmFiles,
         async baseline(name, version) {
             const npm = await npmFiles(name, version)

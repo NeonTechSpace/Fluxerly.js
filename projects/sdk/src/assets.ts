@@ -1,7 +1,9 @@
+import { operationErrorMessage } from "./api-errors.js"
+import { FluxerlyError, operationDetails } from "./errors.js"
 import { err, ok, type Result } from "neverthrow"
 import { GuildMemberProfileFlags } from "./guilds.js"
 import type { Guild, GuildMember } from "./guilds.js"
-import { snowflakes } from "./helpers.js"
+import { snowflakes, valueOrThrow } from "./helpers.js"
 import type { GuildEmoji, GuildSticker } from "./expressions.js"
 import type { User, UserProfileFields } from "./users.js"
 
@@ -10,7 +12,11 @@ const staticOrigin = "https://fluxerstatic.com"
 const largestSize = 4_294_967_295
 const hashPattern = /^[A-Za-z0-9_]+$/u
 
-/** Choose the image format for an asset URL. WebP is the default. Sticker URLs do not accept this choice */
+/**
+ * Choose the image format for an asset URL. WebP is the default. Sticker URLs do not accept this choice
+ *
+ * @category Builders and formatting
+ */
 export const AssetFormats: Readonly<{
     /** Static PNG image, use animated false for an animated source */
     Png: "png"
@@ -30,11 +36,17 @@ export const AssetFormats: Readonly<{
     Apng: "apng",
 })
 
-/** One image encoding the hosted Fluxer media proxy can produce */
+/**
+ * One image encoding the hosted Fluxer media proxy can produce
+ *
+ * @category Builders and formatting
+ */
 export type AssetFormat = (typeof AssetFormats)[keyof typeof AssetFormats]
 
 /** Choose the format, size and animation to request in an asset URL.
- * Unknown keys or invalid values return AssetUrlError, even when the target has no image
+ * Unknown keys or invalid values throw AssetUrlError, even when the target has no image
+ *
+ * @category Builders and formatting
  */
 export interface AssetUrlOptions {
     /** Requested image size in pixels, an integer from 0 through 4_294_967_295.
@@ -44,13 +56,15 @@ export interface AssetUrlOptions {
     /** Output encoding. `Webp` is used when omitted */
     readonly format?: AssetFormat
     /** Request animation or a still image. When omitted, animated asset hashes or emoji metadata select animation.
-     * Requesting animation with Png or Jpeg fails locally, choose animated false to request a still image instead
+     * Requesting animation with Png or Jpeg throws AssetUrlError, choose animated false to request a still image instead
      */
     readonly animated?: boolean
 }
 
 /** Choose sticker size and animation. There is no format option because Fluxer chooses the sticker encoding.
- * Unknown keys or invalid values return AssetUrlError
+ * Unknown keys or invalid values throw AssetUrlError
+ *
+ * @category Builders and formatting
  */
 export interface StickerAssetUrlOptions {
     /** Requested size in pixels, an integer from 0 through 4_294_967_295. Omit to leave size selection to Fluxer, the helper does not resize it locally */
@@ -61,9 +75,12 @@ export interface StickerAssetUrlOptions {
 
 /** The SDK could not make an asset URL from the supplied input.
  * The operation identifies the helper. The reason identifies which part was invalid.
- * Default API helpers return this in a Result. Effect helpers fail with it when run. It does not store the rejected value
+ * Asset helpers throw this for invalid input in both the default and native APIs, because passing it is a programming mistake.
+ * Inside Effect code, such a throw becomes a defect rather than a typed failure. It does not store the rejected value
+ *
+ * @category Errors
  */
-export class AssetUrlError extends Error {
+export class AssetUrlError extends FluxerlyError {
     /** Stable expected-failure discriminator */
     readonly _tag = "AssetUrlError"
 
@@ -85,13 +102,44 @@ export class AssetUrlError extends Error {
             | "assets.sticker",
         /** Whether the structural target, decimal ID, asset hash, or transform options were invalid */
         readonly reason: "target" | "id" | "hash" | "options",
+        /** Optional underlying failure retained as the error's cause */
+        options?: { readonly cause?: unknown },
     ) {
-        super(`Invalid input for ${operation}`)
+        super(assetErrorMessage(operation, reason), {
+            code: `asset.${reason}`,
+            cause: options?.cause,
+            details: operationDetails({ operation, reason }),
+        })
         this.name = this._tag
     }
 }
 
 type AssetOperation = AssetUrlError["operation"]
+
+/** Describe what the asset helper accepts, without the rejected value */
+function assetErrorMessage(operation: AssetOperation, reason: AssetUrlError["reason"]): string {
+    const explanation =
+        reason === "id"
+            ? "IDs must be decimal strings"
+            : reason === "hash"
+              ? "Asset hashes must be strings of letters, digits, or underscores, or null when there is no custom image"
+              : reason === "options"
+                ? operation === "assets.sticker"
+                    ? "Sticker URL options may contain only size, an integer from 0 through 4,294,967,295, and a boolean animated"
+                    : "Asset URL options may contain only size, an integer from 0 through 4,294,967,295, a format from AssetFormats, and a boolean animated. Animated images cannot use png or jpeg"
+                : operation === "assets.emoji" || operation === "assets.sticker"
+                  ? "The target must be an object with a decimal id and a boolean animated"
+                  : operation === "assets.displayMemberAvatar"
+                    ? "The target must be an object, and the member must belong to the given user"
+                    : "The target must be an object with the fields this helper documents"
+    return operationErrorMessage({
+        subject: "Asset helper",
+        operation,
+        reason: "input",
+        outcome: "notDispatched",
+        inputExplanation: explanation,
+    })
+}
 type AssetHash = string | null | undefined
 type AssetOptions = Readonly<{
     size?: number
@@ -323,30 +371,16 @@ function memberProfileFlags(
 }
 
 /**
- * Make image URLs from user, member, server, emoji or sticker information already available to the caller.
- * Each method immediately returns a Result containing a URL or an AssetUrlError for invalid input.
- * URLs use Fluxer's media and static CDN addresses. Making a URL does not fetch a profile, download an image or check that it exists.
- * If an optional image hash is undefined, the result is undefined because the field was not observed. If it is null, the result is null because no image was supplied.
- * These helpers do not transform attachment or embed URLs, refresh expired URLs or change caches
+ * Methods of the assets helper, which builds image URLs for avatars, banners, community images, emoji and stickers.
+ * Each method returns its URL, null or undefined directly and throws AssetUrlError for an invalid target, ID, hash or option
  *
- * @example
- * ```ts
- * import { assets, AssetFormats, type Guild, type GuildEmoji, type GuildMember, type User, type UserProfile } from "@neontechspace/fluxerly"
- *
- * export function assetsExample(user: Pick<User, "id" | "avatar">, member: Pick<GuildMember, "guildId" | "userId" | "avatar" | "profileFlags">, guild: Pick<Guild, "id" | "icon">, emoji: Pick<GuildEmoji, "id" | "animated">, profile: UserProfile) {
- *     const avatar = assets.displayAvatar(user, { size: 256, format: AssetFormats.Webp })
- *     const memberAvatar = assets.displayMemberAvatar(user, member, { size: 256 })
- *     const icon = assets.guildIcon(guild, { format: AssetFormats.Png })
- *     const emojiUrl = assets.emoji(emoji, { animated: emoji.animated })
- *     const banner = assets.userBanner(profile)
- *     return { avatar, memberAvatar, icon, emojiUrl, banner }
- * }
- * ```
+ * @category Builders and formatting
  */
-export const assets: Readonly<{
-    /** Build an account-banner URL from a users.fetchProfile result, using only user.id and profile.banner.
-     * A null banner stays null, even when a limited profile withheld the banner. Null does not prove that the account has no banner.
-     * Uses AssetUrlOptions' WebP default and transform validation, without fetching, selecting a guild banner or verifying existence
+export type AssetHelpers = Readonly<{
+    /**
+     * Build an account-banner URL from a users.fetchProfile result, using only user.id and profile.banner.
+     * A null banner stays null, even when a limited profile withheld the banner, so null does not prove that the account has no banner.
+     * Uses AssetUrlOptions' WebP default and transform validation, without fetching, selecting a community banner or verifying existence or access
      */
     userBanner(
         profile: Readonly<{
@@ -356,73 +390,90 @@ export const assets: Readonly<{
             profile: Pick<UserProfileFields, "banner">
         }>,
         options?: AssetUrlOptions,
-    ): Result<string | null, AssetUrlError>
-    /** Return the user's custom-avatar URL, or null when their avatar field is null.
-     * Uses only id and avatar. No profile is fetched. An omitted avatar is invalid
+    ): string | null
+    /**
+     * Build the user's custom-avatar URL, or null when the avatar field is null.
+     * Uses only the supplied id and avatar fields, and no profile is fetched.
+     * An omitted avatar is invalid and throws AssetUrlError
      */
-    avatar(user: Pick<User, "id" | "avatar">, options?: AssetUrlOptions): Result<string | null, AssetUrlError>
-    /** Build Fluxer's static default-avatar URL from a user ID. Static defaults have no media transform query and do not depend on user-profile availability */
-    defaultAvatar(userId: string): Result<string, AssetUrlError>
-    /** Return a URL suitable for displaying a user avatar, using their custom avatar or a static default when avatar is null.
-     * Requires known user id and avatar fields. It never returns null, invalid targets or options return AssetUrlError
+    avatar(user: Pick<User, "id" | "avatar">, options?: AssetUrlOptions): string | null
+    /**
+     * Build Fluxer's static default-avatar URL from a canonical user ID.
+     * Static defaults have no media transform query and do not depend on user-profile availability
      */
-    displayAvatar(user: Pick<User, "id" | "avatar">, options?: AssetUrlOptions): Result<string, AssetUrlError>
-    /** Return the member's server-avatar URL using only guildId, userId and avatar.
-     * Returns undefined for an omitted avatar hash, or null for an explicitly absent avatar. Use displayMemberAvatar if you want a fallback
+    defaultAvatar(userId: string): string
+    /**
+     * Build a URL suitable for displaying a user avatar, using the custom avatar or a static default when avatar is null.
+     * Requires known user id and avatar fields.
+     * It never produces null, and invalid targets or options throw AssetUrlError
+     */
+    displayAvatar(user: Pick<User, "id" | "avatar">, options?: AssetUrlOptions): string
+    /**
+     * Build the member's community avatar URL using only guildId, userId and avatar.
+     * Produces undefined for an omitted avatar hash, or null for an explicitly absent avatar.
+     * It does not choose a fallback, which displayMemberAvatar provides
      */
     memberAvatar(
         member: Pick<GuildMember, "guildId" | "userId" | "avatar">,
         options?: AssetUrlOptions,
-    ): Result<string | null | undefined, AssetUrlError>
-    /** Return the member's server-banner URL using only guildId, userId and banner.
-     * Returns undefined for an omitted banner hash, or null for an explicitly absent banner. It does not substitute the account banner
+    ): string | null | undefined
+    /**
+     * Build the member's community banner URL using only guildId, userId and banner.
+     * Produces undefined for an omitted banner hash, or null for an explicitly absent banner.
+     * It does not substitute the account banner
      */
     memberBanner(
         member: Pick<GuildMember, "guildId" | "userId" | "banner">,
         options?: AssetUrlOptions,
-    ): Result<string | null | undefined, AssetUrlError>
-    /** Choose an avatar to display for a user in a server. The user ID must match member.userId.
-     * Normally chooses the member avatar, then the account avatar, then a static default. AvatarUnset instead selects the static default directly.
-     * Returns undefined if profileFlags is omitted or avatar is omitted without AvatarUnset.
-     * Reads guildId, userId, avatar and profileFlags from the member. Invalid targets or options return AssetUrlError
+    ): string | null | undefined
+    /**
+     * Choose an avatar to display for a user in a community.
+     * The user ID must match member.userId.
+     * Normally chooses the member avatar, then the account avatar, then a static default, while AvatarUnset selects the static default directly.
+     * Produces undefined if profileFlags is omitted or avatar is omitted without AvatarUnset.
+     * Reads guildId, userId, avatar and profileFlags from the member, not banner.
+     * Invalid targets or options throw AssetUrlError
      */
     displayMemberAvatar(
         user: Pick<User, "id" | "avatar">,
         member: Pick<GuildMember, "guildId" | "userId" | "avatar" | "profileFlags">,
         options?: AssetUrlOptions,
-    ): Result<string | undefined, AssetUrlError>
-    /** Return a server-icon URL from the server's id and icon. An omitted icon hash returns undefined, an explicitly absent icon returns null */
-    guildIcon(
-        guild: Pick<Guild, "id" | "icon">,
-        options?: AssetUrlOptions,
-    ): Result<string | null | undefined, AssetUrlError>
-    /** Return a server-banner URL from the server's id and banner. An omitted banner hash returns undefined, an explicitly absent banner returns null */
-    guildBanner(
-        guild: Pick<Guild, "id" | "banner">,
-        options?: AssetUrlOptions,
-    ): Result<string | null | undefined, AssetUrlError>
-    /** Return the server's invite-background image URL from id and splash. An omitted splash hash returns undefined, an explicitly absent splash returns null */
-    guildSplash(
-        guild: Pick<Guild, "id" | "splash">,
-        options?: AssetUrlOptions,
-    ): Result<string | null | undefined, AssetUrlError>
-    /** Return the background image URL for an embedded server invite, using id and embedSplash.
-     * An omitted embedSplash hash returns undefined, an explicitly absent one returns null
+    ): string | undefined
+    /**
+     * Build a community icon URL from the community's id and icon.
+     * An omitted icon hash produces undefined, and an explicitly absent icon produces null
      */
-    guildEmbedSplash(
-        guild: Pick<Guild, "id" | "embedSplash">,
-        options?: AssetUrlOptions,
-    ): Result<string | null | undefined, AssetUrlError>
-    /** Return a custom-emoji image URL from its ID and animated metadata, no emoji is looked up.
-     * Animated emoji request animation by default. Choose Webp, Gif or Apng to preserve it, or animated false for a still image
+    guildIcon(guild: Pick<Guild, "id" | "icon">, options?: AssetUrlOptions): string | null | undefined
+    /**
+     * Build a community banner URL from the community's id and banner.
+     * An omitted banner hash produces undefined, and an explicitly absent banner produces null
      */
-    emoji(emoji: Pick<GuildEmoji, "id" | "animated">, options?: AssetUrlOptions): Result<string, AssetUrlError>
-    /** Build a custom-sticker URL from only its ID and `animated` metadata. Sticker format is intentionally absent: Fluxer returns WebP except an animated sticker's GIF source */
-    sticker(
-        sticker: Pick<GuildSticker, "id" | "animated">,
-        options?: StickerAssetUrlOptions,
-    ): Result<string, AssetUrlError>
-}> = Object.freeze({
+    guildBanner(guild: Pick<Guild, "id" | "banner">, options?: AssetUrlOptions): string | null | undefined
+    /**
+     * Build the community's invite-background image URL from id and splash.
+     * An omitted splash hash produces undefined, and an explicitly absent splash produces null
+     */
+    guildSplash(guild: Pick<Guild, "id" | "splash">, options?: AssetUrlOptions): string | null | undefined
+    /**
+     * Build the background image URL for an embedded community invite, using id and embedSplash.
+     * An omitted embedSplash hash produces undefined, and an explicitly absent one produces null
+     */
+    guildEmbedSplash(guild: Pick<Guild, "id" | "embedSplash">, options?: AssetUrlOptions): string | null | undefined
+    /**
+     * Build a custom-emoji image URL from only its ID and animated metadata, without looking up the emoji.
+     * Animated emoji request animation by default.
+     * Choose Webp, Gif or Apng to preserve it, or animated false for a still image
+     */
+    emoji(emoji: Pick<GuildEmoji, "id" | "animated">, options?: AssetUrlOptions): string
+    /**
+     * Build a custom-sticker URL from only its ID and `animated` metadata.
+     * Sticker format is intentionally absent, because Fluxer returns WebP except an animated sticker's GIF source
+     */
+    sticker(sticker: Pick<GuildSticker, "id" | "animated">, options?: StickerAssetUrlOptions): string
+}>
+
+/** Result-returning URL builders behind the public asset helpers, which throw their AssetUrlError */
+const assetUrls = Object.freeze({
     userBanner(
         profile: Readonly<{
             user: Pick<User, "id">
@@ -606,19 +657,60 @@ export const assets: Readonly<{
 })
 
 /**
+ * Make image URLs from user, member, community, emoji or sticker information already available to the caller.
+ * Each method returns a URL, null or undefined directly, and throws AssetUrlError for invalid input, which indicates a programming mistake.
+ * URLs use Fluxer's media and static CDN addresses. Making a URL does not fetch a profile, download an image or check that it exists.
+ * If an optional image hash is undefined, the result is undefined because the field was not observed. If it is null, the result is null because no image was supplied.
+ * These helpers do not transform attachment or embed URLs, refresh expired URLs or change caches
+ *
+ * @example
+ * ```ts
+ * import { assets, AssetFormats, type Guild, type GuildEmoji, type GuildMember, type User, type UserProfile } from "@neontechspace/fluxerly"
+ *
+ * export function assetsExample(user: Pick<User, "id" | "avatar">, member: Pick<GuildMember, "guildId" | "userId" | "avatar" | "profileFlags">, guild: Pick<Guild, "id" | "icon">, emoji: Pick<GuildEmoji, "id" | "animated">, profile: UserProfile) {
+ *     const avatar = assets.displayAvatar(user, { size: 256, format: AssetFormats.Webp })
+ *     const memberAvatar = assets.displayMemberAvatar(user, member, { size: 256 })
+ *     const icon = assets.guildIcon(guild, { format: AssetFormats.Png })
+ *     const emojiUrl = assets.emoji(emoji, { animated: emoji.animated })
+ *     const banner = assets.userBanner(profile)
+ *     return { avatar, memberAvatar, icon, emojiUrl, banner }
+ * }
+ * ```
+ */
+export const assets: AssetHelpers = Object.freeze({
+    userBanner: (...input: Parameters<typeof assetUrls.userBanner>) => valueOrThrow(assetUrls.userBanner(...input)),
+    avatar: (...input: Parameters<typeof assetUrls.avatar>) => valueOrThrow(assetUrls.avatar(...input)),
+    defaultAvatar: (userId: string) => valueOrThrow(assetUrls.defaultAvatar(userId)),
+    displayAvatar: (...input: Parameters<typeof assetUrls.displayAvatar>) =>
+        valueOrThrow(assetUrls.displayAvatar(...input)),
+    memberAvatar: (...input: Parameters<typeof assetUrls.memberAvatar>) =>
+        valueOrThrow(assetUrls.memberAvatar(...input)),
+    memberBanner: (...input: Parameters<typeof assetUrls.memberBanner>) =>
+        valueOrThrow(assetUrls.memberBanner(...input)),
+    displayMemberAvatar: (...input: Parameters<typeof assetUrls.displayMemberAvatar>) =>
+        valueOrThrow(assetUrls.displayMemberAvatar(...input)),
+    guildIcon: (...input: Parameters<typeof assetUrls.guildIcon>) => valueOrThrow(assetUrls.guildIcon(...input)),
+    guildBanner: (...input: Parameters<typeof assetUrls.guildBanner>) => valueOrThrow(assetUrls.guildBanner(...input)),
+    guildSplash: (...input: Parameters<typeof assetUrls.guildSplash>) => valueOrThrow(assetUrls.guildSplash(...input)),
+    guildEmbedSplash: (...input: Parameters<typeof assetUrls.guildEmbedSplash>) =>
+        valueOrThrow(assetUrls.guildEmbedSplash(...input)),
+    emoji: (...input: Parameters<typeof assetUrls.emoji>) => valueOrThrow(assetUrls.emoji(...input)),
+    sticker: (...input: Parameters<typeof assetUrls.sticker>) => valueOrThrow(assetUrls.sticker(...input)),
+})
+
+/**
  * Bind the pure asset helpers to validated instance media and static-CDN bases
  *
  * This keeps the hosted `assets` export stable while preserving its local input
- * validation and result types for a selected instance
+ * validation, including thrown AssetUrlError, for a selected instance
  */
-export function createInstanceAssets(media: string, staticCdn: string): typeof assets {
-    const project = <A extends string | null | undefined>(value: Result<A, AssetUrlError>): Result<A, AssetUrlError> =>
-        value.map((url) => {
-            if (typeof url !== "string") return url
-            if (url.startsWith(mediaOrigin)) return `${media}${url.slice(mediaOrigin.length)}` as A
-            if (url.startsWith(staticOrigin)) return `${staticCdn}${url.slice(staticOrigin.length)}` as A
-            return url
-        })
+export function createInstanceAssets(media: string, staticCdn: string): AssetHelpers {
+    const project = <A extends string | null | undefined>(url: A): A => {
+        if (typeof url !== "string") return url
+        if (url.startsWith(mediaOrigin)) return `${media}${url.slice(mediaOrigin.length)}` as A
+        if (url.startsWith(staticOrigin)) return `${staticCdn}${url.slice(staticOrigin.length)}` as A
+        return url
+    }
     return Object.freeze({
         userBanner: (...input: Parameters<typeof assets.userBanner>) => project(assets.userBanner(...input)),
         avatar: (...input: Parameters<typeof assets.avatar>) => project(assets.avatar(...input)),

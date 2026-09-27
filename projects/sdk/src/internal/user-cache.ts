@@ -1,11 +1,19 @@
+/**
+ * Optional user and private-conversation cache with collection and per-resource stale-completion fences.
+ * Invariant: It keeps public snapshots only, bounded per resource, and a stale completion never repopulates invalidated data.
+ * Every applied store, removal and whole-kind clear is recorded to the client's change hub, a replacement counting as one store.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type { ResourceCacheSettings } from "#sdk/cache"
 import type { CacheDiagnostic } from "#sdk/client"
 import type { DirectMessageChannel, User } from "#sdk/users"
-import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
+import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
+import type { LogicalScheduler } from "./logical-scheduler.js"
+import type { CacheChangeHub } from "./cache-changes.js"
 
 export type UserResources = { users: User; directMessages: DirectMessageChannel }
 type Kind = keyof UserResources
-type Entry = { value: User | DirectMessageChannel; bytes: number; expires: number | null }
+type Entry = { kind: Kind; value: User | DirectMessageChannel; bytes: number; expires: number | null }
 const targetGuardCapacity = 256
 
 export type UserCacheGuard = {
@@ -23,19 +31,33 @@ export class UserCache {
     #bytes = { users: 0, directMessages: 0 }
     #collectionEpoch = { users: {}, directMessages: {} }
     #targetEpoch = { users: {}, directMessages: {} }
-    // Keep only the latest active guard per ID, with a conservative collection fence if callers exceed the bound.
+    // Keep only the latest active guard per ID, with a conservative collection fence if callers exceed the bound
     #targets = {
         users: new Map<string, UserCacheGuard>(),
         directMessages: new Map<string, UserCacheGuard>(),
     }
     #closed = false
-    #timer: ReturnType<typeof setTimeout> | LogicalTimer | undefined
+    #expiry = new ExpiryQueue<Entry & { expires: number }>(
+        (entry) => this.#entries[entry.kind].get(entry.value.id) === entry,
+    )
+    #timer: ExpiryTimer
 
     constructor(
         private readonly settings: Partial<Record<Kind, Required<ResourceCacheSettings>>>,
         private readonly now: () => number,
-        private readonly logical?: LogicalScheduler,
-    ) {}
+        logical?: LogicalScheduler,
+        readonly changes?: CacheChangeHub,
+    ) {
+        this.#timer = new ExpiryTimer(
+            "user cache",
+            now,
+            () => {
+                this.#purge()
+                this.#schedule()
+            },
+            logical,
+        )
+    }
 
     begin(kind: Kind, options: { id?: string; mutation?: boolean; replace?: boolean } = {}): UserCacheGuard {
         const mutation = options.mutation === true
@@ -70,7 +92,7 @@ export class UserCache {
             return
         }
         if (!this.#current(guard)) {
-            // A stale write can still have changed Fluxer state, so evict only the resource it could affect.
+            // A stale write can still have changed Fluxer state, so evict only the resource it could affect
             if (guard.mutation) this.invalidate(guard.kind, guard.id)
             this.#finish(guard)
             return
@@ -196,62 +218,57 @@ export class UserCache {
         return entry
     }
 
-    #remove(kind: Kind, id: string) {
+    /** Remove one retained snapshot, reporting the deletion unless the caller replaces it. Returns whether one was removed */
+    #remove(kind: Kind, id: string, notify = true): boolean {
         const entry = this.#entries[kind].get(id)
-        if (!entry) return
+        if (!entry) return false
         this.#entries[kind].delete(id)
         this.#bytes[kind] -= entry.bytes
+        if (notify && this.changes?.active) this.changes.record(kind, "delete", id)
+        return true
     }
 
     #clearKind(kind: Kind) {
+        const held = this.#entries[kind].size > 0
         this.#entries[kind].clear()
         this.#bytes[kind] = 0
+        if (held && this.changes?.active) this.changes.record(kind, "clear", null)
     }
 
     #observe(kind: Kind, value: User | DirectMessageChannel, settings: Required<ResourceCacheSettings>) {
-        this.#remove(kind, value.id)
+        // A replacement reports one set, while an older copy that the new one cannot replace reports a delete
+        const replaced = this.#remove(kind, value.id, false)
         const bytes = Buffer.byteLength(JSON.stringify(value))
-        if (bytes > settings.maxBytes) return
+        if (bytes > settings.maxBytes) {
+            if (replaced && this.changes?.active) this.changes.record(kind, "delete", value.id)
+            return
+        }
         const entries = this.#entries[kind]
         while (entries.size >= settings.maxEntries || this.#bytes[kind] > settings.maxBytes - bytes)
             this.#remove(kind, entries.keys().next().value!)
-        entries.set(value.id, {
+        const entry: Entry = {
+            kind,
             value,
             bytes,
             expires: settings.maxAgeMs === null ? null : this.now() + settings.maxAgeMs,
-        })
+        }
+        entries.set(value.id, entry)
         this.#bytes[kind] += bytes
+        if (entry.expires !== null) this.#expiry.push(entry as Entry & { expires: number })
+        if (this.changes?.active) this.changes.record(kind, "set", value.id)
     }
 
     #purge() {
-        const now = this.now()
-        for (const kind of ["users", "directMessages"] as const)
-            for (const [id, entry] of this.#entries[kind])
-                if (entry.expires !== null && entry.expires <= now) this.#remove(kind, id)
+        this.#expiry.purge(this.now(), (entry) => this.#remove(entry.kind, entry.value.id))
     }
 
     #schedule() {
-        if (this.#timer !== undefined)
-            if (this.logical) this.logical.clear(this.#timer as LogicalTimer)
-            else clearTimeout(this.#timer as ReturnType<typeof setTimeout>)
-        this.#timer = undefined
-        if (this.#closed) return
-        let earliest = Infinity
-        for (const kind of ["users", "directMessages"] as const)
-            for (const entry of this.#entries[kind].values())
-                if (entry.expires !== null) earliest = Math.min(earliest, entry.expires)
-        if (earliest !== Infinity) {
-            const callback = () => {
-                this.#purge()
-                this.#schedule()
-            }
-            const delay = Math.min(2_147_483_647, Math.max(1, Math.ceil(earliest - this.now())))
-            if (this.logical) this.#timer = this.logical.set(callback, delay, "user cache")
-            else {
-                const timer = setTimeout(callback, delay)
-                timer.unref()
-                this.#timer = timer
-            }
+        if (this.#closed) {
+            this.#timer.cancel()
+            this.#expiry.clear()
+            return
         }
+        this.#expiry.compact(this.#entries.users.size + this.#entries.directMessages.size)
+        this.#timer.set(this.#expiry.next())
     }
 }

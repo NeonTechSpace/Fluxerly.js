@@ -1,3 +1,8 @@
+/**
+ * Request-only text normalization for names and nicknames, following pinned Fluxer schema rules.
+ * Invariant: Normalization applies only to text sent to Fluxer, never to received values.
+ * Implements [SDK contracts: Validation requirements](/docs/SDK-CONTRACTS.md#validation-requirements)
+ */
 // Request-only rules from Fluxer schema primitives at 70e1ce682ac1da6502ea08253296aa4727330ce8
 // Validate the provider's normalized view without rewriting caller-owned wire values
 export function normalizedText(value: unknown, minimum: number, maximum: number): value is string {
@@ -7,6 +12,7 @@ export function normalizedText(value: unknown, minimum: number, maximum: number)
 }
 
 function normalizeText(value: string): string {
+    // oxlint-disable-next-line no-control-regex -- the provider strips form feed before measuring text
     return value.replace(/[\u000c\u202e]/g, "").trim()
 }
 
@@ -24,6 +30,7 @@ export function channelName(value: unknown): value is string {
     // GeneralChannelNameType removes these invisible ranges, but retains variation selectors and lone surrogates
     const normalized = normalizeText(value)
         .replace(
+            // oxlint-disable-next-line no-control-regex, no-misleading-character-class -- removes each provider-listed code point, including the zero-width joiner, individually
             /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200c\u200d\u2060\ufeff\u200e\u200f\u202a-\u202e\u2066-\u2069\u00ad\u180e\ufffe\uffff\u{e0000}-\u{e007f}]/gu,
             "",
         )

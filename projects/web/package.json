@@ -9,10 +9,12 @@
         "build": "pnpm run generate && astro build",
         "build:public": "node scripts/generate.js --public && astro build",
         "preview": "astro preview",
-        "check": "pnpm run build && astro check && node --test tests/*.test.js",
-        "check:public": "pnpm run build:public && astro check && node --test tests/*.test.js",
+        "lint": "oxlint -c ../.oxlintrc.json scripts src tests",
+        "check": "pnpm run lint && pnpm run build && astro check && node --test tests/*.test.js",
+        "check:public": "pnpm run lint && pnpm run build:public && astro check && node --test tests/*.test.js",
         "test:browser": "playwright test",
-        "test:versions": "node tests/version-fixtures.js"
+        "test:versions": "node tests/version-fixtures.js",
+        "test:snapshots": "node tests/snapshot-builds.js"
     },
     "dependencies": {
         "@astrojs/markdown-remark": "7.3.1",
@@ -27,13 +29,13 @@
         "github-slugger": "2.0.0",
         "react": "19.3.0",
         "react-dom": "19.3.0",
-        "tailwindcss": "4.3.3",
-        "zod": "4.6.4"
+        "tailwindcss": "4.3.3"
     },
     "devDependencies": {
         "@astrojs/check": "0.9.10",
         "@axe-core/playwright": "4.13.0",
         "@playwright/test": "1.63.0",
+        "@types/node": "24.13.3",
         "@types/react": "19.3.0",
         "@types/react-dom": "19.3.0",
         "typedoc": "0.28.20",

@@ -1,14 +1,18 @@
+// Guild and channel permission calculation against independent raw reads, and indexed member search with filters,
+// iteration, an injected transport failure and cancellation. The search POST can trigger provider lazy indexing.
+// Creates no journal and no remote resources, and makes no member, role or channel edits
 import assert from "node:assert/strict"
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import { Cause, Effect, Exit, Scope, Stream } from "effect"
+import { acquireLock, checkSandboxIdentity, finalizeOwned, loadSandboxEnvironment } from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { settle as value } from "./support/results.js"
+import { createRetryingSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
 
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
 let lock
 let client
 let scope
@@ -17,15 +21,8 @@ let guildId
 let botId
 let stage = "configuration"
 
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...details }))
+const report = createReporter({ mode }, { passed: true })
 const skip = (check, reason) => console.log(JSON.stringify({ mode, check, skipped: true, reason }))
-
-function releaseLock() {
-    if (lock === undefined) return
-    closeSync(lock)
-    lock = undefined
-    unlinkSync(lockPath)
-}
 
 function safeFailure(error) {
     return {
@@ -132,7 +129,7 @@ function sameSearchHit(hit, raw) {
         hit.userId === raw.user_id &&
         hit.username === raw.username &&
         hit.discriminator === raw.discriminator &&
-        hit.globalName === raw.global_name &&
+        hit.displayName === raw.global_name &&
         hit.nickname === raw.nickname &&
         sameStringSet(hit.roleIds, raw.role_ids) &&
         hit.joinedAtSeconds === raw.joined_at &&
@@ -157,56 +154,9 @@ function sameSearchPage(page, raw) {
     )
 }
 
-async function value(operation) {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
-
-async function api(method, path, body) {
-    let response
-    try {
-        response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-            method,
-            redirect: "error",
-            signal: AbortSignal.timeout(15_000),
-            headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        })
-        if (!response.ok)
-            throw Object.assign(new Error("Sandbox HTTP request failed"), {
-                status: response.status,
-            })
-        return await response.json().catch(() => null)
-    } finally {
-        if (response && !response.bodyUsed) await response.body?.cancel()
-    }
-}
-
-async function rawMemberSearch(body) {
-    let response
-    try {
-        response = await rawFetch(`https://api.fluxer.app/v1/guilds/${guildId}/members-search`, {
-            method: "POST",
-            redirect: "error",
-            signal: AbortSignal.timeout(15_000),
-            headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-        })
-        if (!response.ok)
-            throw Object.assign(new Error("Sandbox member search failed"), {
-                status: response.status,
-            })
-        return await response.json().catch(() => null)
-    } finally {
-        if (response && !response.bodyUsed) await response.body?.cancel()
-    }
-}
+const sandboxApi = createRetryingSandboxApi({ fetch: rawFetch, token: () => token })
+const api = async (method, path, body) => (await sandboxApi(method, path, body)).data
+const rawMemberSearch = (body) => api("POST", `/guilds/${guildId}/members-search`, body)
 
 async function waitForRawMemberSearch(body) {
     const deadline = performance.now() + 30_000
@@ -230,25 +180,17 @@ async function collectSearch(iterable) {
 
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, check: stage, passed: false, reason: "deadline" }))
-    try {
-        releaseLock()
-    } catch {
-        // The process is terminating; do not mask the bounded-run failure with local cleanup details.
-    }
+    // The process is terminating; a lock that cannot be released stays without masking the bounded-run failure
+    lock?.release()
     process.exit(1)
 }, 90_000).unref()
 
 try {
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
 
-    const env = { ...parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8")), ...process.env }
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.ok(/^[1-9][0-9]*$/.test(guildId ?? ""))
-    assert.ok(/^[1-9][0-9]*$/.test(env.FLUXER_TEST_APPLICATION_ID ?? ""))
-    assert.ok(token.split(".")[0] === env.FLUXER_TEST_APPLICATION_ID)
+    const sandbox = loadSandboxEnvironment({ processOverrides: true, requireApplicationToken: true })
+    token = sandbox.token
+    guildId = sandbox.guildId
 
     stage = "sandbox_identity"
     const [application, self, rawGuild, rawMember, rawRoles] = await Promise.all([
@@ -258,16 +200,16 @@ try {
         api("GET", `/guilds/${guildId}/members/@me`),
         api("GET", `/guilds/${guildId}/roles`),
     ])
-    assert.ok(application && application.id === env.FLUXER_TEST_APPLICATION_ID)
-    assert.ok(self && self.bot === true && application.bot?.id === self.id)
-    assert.ok(rawGuild && rawGuild.id === guildId)
+    botId = checkSandboxIdentity(
+        { application, user: self, guild: rawGuild },
+        { applicationId: sandbox.applicationId, guildId },
+    )
     assert.ok(rawMember?.user?.id === self.id && Array.isArray(rawMember.roles))
     assert.ok(Array.isArray(rawRoles))
-    botId = self.id
     report(stage)
 
     const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
-    if (mode === "default") client = sdk.createClient({ token })._unsafeUnwrap()
+    if (mode === "default") client = sdk.createClient({ token })
     else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(sdk.createClient({ token }).pipe(Scope.provide(scope)))
@@ -294,7 +236,7 @@ try {
     assert.ok(Object.isFrozen(roles) && roles.every(Object.isFrozen))
 
     const rawPermissions = rawPermissionCalculation(rawGuild, rawMember, rawRoles)
-    const calculatedPermissions = await value(client.permissions.calculate({ guild, member, roles }))
+    const calculatedPermissions = client.permissions.calculate({ guild, member, roles })
     const fetchedPermissions = await value(client.permissions.fetch({ guildId, userId: botId }))
     assert.ok(calculatedPermissions === rawPermissions && fetchedPermissions === rawPermissions)
     report(stage, {
@@ -321,9 +263,7 @@ try {
             assert.ok(Object.isFrozen(channel) && Object.isFrozen(channel.permissionOverwrites))
             assert.ok(channel.permissionOverwrites.every(Object.isFrozen))
             const rawChannelPermissions = rawPermissionCalculation(rawGuild, rawMember, rawRoles, rawChannel)
-            const calculatedChannelPermissions = await value(
-                client.permissions.calculate({ guild, member, roles, channel }),
-            )
+            const calculatedChannelPermissions = client.permissions.calculate({ guild, member, roles, channel })
             const fetchedChannelPermissions = await value(
                 client.permissions.fetch({ guildId, userId: botId, channelId: channel.id }),
             )
@@ -517,39 +457,32 @@ try {
     process.exitCode = 1
 } finally {
     globalThis.fetch = rawFetch
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({
-                mode,
-                check: "client_cleanup",
-                passed: false,
-                finalizer,
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exitCode = 1
-    }
-    if (client)
-        try {
-            const closed = client.shutdown()
-            if (Effect.isEffect(closed)) await Effect.runPromise(closed)
-            else await closed
-        } catch {
-            retainEvidence("client_shutdown")
-        }
-    if (scope)
-        try {
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        } catch {
-            retainEvidence("scope_close")
-        }
-    if (quiescent)
-        try {
-            releaseLock()
-        } catch {
-            retainEvidence("sandbox_lock_cleanup")
-        }
-    if (quiescent) clearTimeout(watchdog)
+    // Keep the lock and deadline if a failed owned finalizer may have left a writer alive
+    await finalizeOwned({
+        writers: [
+            client && [
+                "client_shutdown",
+                async () => {
+                    const closed = client.shutdown()
+                    if (Effect.isEffect(closed)) await Effect.runPromise(closed)
+                    else await closed
+                },
+            ],
+            scope && ["scope_close", () => Effect.runPromise(Scope.close(scope, Exit.void))],
+        ],
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            console.error(
+                JSON.stringify({
+                    mode,
+                    check: "client_cleanup",
+                    passed: false,
+                    finalizer: finalizer === "sandbox_lock" ? "sandbox_lock_cleanup" : finalizer,
+                    lockRetained: lock !== undefined,
+                }),
+            )
+            process.exitCode = 1
+        },
+    })
 }

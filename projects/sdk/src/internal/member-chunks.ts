@@ -1,13 +1,23 @@
+/**
+ * Member chunk streams: One active guild member request per client with bounded unread batches.
+ * Invariant: A stream fails only for a connection gap on its shard or client closure, releases local intake on failure, and
+ * publishes no cache or event data. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import { randomUUID } from "node:crypto"
-import { Cause, Effect, Exit, Stream } from "effect"
+import * as Cause from "effect/Cause"
+import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
+import * as Stream from "effect/Stream"
 import type { OperationOptions } from "#sdk/client"
 import { ClientClosedError } from "#sdk/errors"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { MemberChunkError, type MemberChunk, type MemberChunkFailure } from "#sdk/member-chunks"
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import { decodeMember } from "./guilds.js"
-import { identifier, record } from "./message.js"
+import { fieldsOnce, identifier, record, snapshotArray } from "./decode/primitives.js"
+import { readCaller, suspendMarked, thrownCause } from "./defects.js"
 import { decodePresenceUpdate } from "./presence.js"
+import { Opcode } from "./protocol/gateway.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
 const maximumUint64 = "18446744073709551615"
@@ -30,24 +40,35 @@ interface Settings {
     readonly payload: Readonly<Record<string, unknown>>
 }
 
+/** Validate one request, reading each caller query and option field once so the validated value is the one sent */
 function settings(guildId: unknown, query: unknown, options: unknown): Settings | InputValidationFailure {
     if (!positiveId(guildId))
         return inputValidationFailure("guildId", "format", "Must be a canonical positive uint64 decimal string")
     if (!record(query)) return inputValidationFailure("query", "type", "Must be a member-chunk query object")
-    if (Object.keys(query).some((key) => !["all", "userIds", "query", "limit", "presences"].includes(key)))
-        return inputValidationFailure(
-            "query",
-            "allowedFields",
-            "Only all, userIds, query, limit, and presences are accepted",
-        )
-    if (query.presences !== undefined && typeof query.presences !== "boolean")
+    const unsupported = unsupportedKeyFailure(
+        query,
+        ["all", "userIds", "query", "limit", "presences"],
+        "query",
+        "the member chunk query",
+    )
+    if (unsupported) return unsupported
+    const field = fieldsOnce(query)
+    const presencesInput = field("presences")
+    if (presencesInput !== undefined && typeof presencesInput !== "boolean")
         return inputValidationFailure("query.presences", "type", "Must be a boolean when supplied")
     const input = options === undefined ? {} : options
     if (!record(input)) return inputValidationFailure("options", "type", "Must be an options object when supplied")
-    if (Object.keys(input).some((key) => key !== "timeoutMs" && key !== "maxPendingBytes"))
-        return inputValidationFailure("options", "allowedFields", "Only timeoutMs and maxPendingBytes are accepted")
-    const timeoutMs = input.timeoutMs === undefined ? 30_000 : input.timeoutMs
-    const maxPendingBytes = input.maxPendingBytes === undefined ? 4_194_304 : input.maxPendingBytes
+    const unsupportedOption = unsupportedKeyFailure(
+        input,
+        ["timeoutMs", "maxPendingBytes"],
+        "options",
+        "the member chunk options",
+    )
+    if (unsupportedOption) return unsupportedOption
+    const timeoutInput = input.timeoutMs
+    const maxPendingInput = input.maxPendingBytes
+    const timeoutMs = timeoutInput === undefined ? 30_000 : timeoutInput
+    const maxPendingBytes = maxPendingInput === undefined ? 4_194_304 : maxPendingInput
     if (typeof timeoutMs !== "number")
         return inputValidationFailure("options.timeoutMs", "type", "Must be an integer number of milliseconds")
     if (!positive(timeoutMs) || timeoutMs > 2_147_483_647)
@@ -68,57 +89,67 @@ function settings(guildId: unknown, query: unknown, options: unknown): Settings 
             "range",
             "Must be a positive safe integer number of bytes",
         )
-    const presences = query.presences === true
+    const presences = presencesInput === true
+    const all = field("all")
+    const userIdsInput = field("userIds")
+    const text = field("query")
+    const limitInput = field("limit")
     let userIds: readonly string[] | undefined
     let maximumMembers: number
     let selection: Record<string, unknown>
-    if (query.all !== undefined && query.all !== true)
+    if (all !== undefined && all !== true)
         return inputValidationFailure("query.all", "allowedValue", "Must be true when supplied")
-    if (query.all === true) {
-        if (query.userIds !== undefined || query.query !== undefined || query.limit !== undefined)
+    if (all === true) {
+        if (userIdsInput !== undefined || text !== undefined || limitInput !== undefined)
             return inputValidationFailure("query", "relationship", "Use all or one explicit selection, not both")
         maximumMembers = 100_000
         selection = { query: "", limit: 0 }
-    } else if (query.userIds !== undefined) {
-        if (query.query !== undefined || query.limit !== undefined)
+    } else if (userIdsInput !== undefined) {
+        if (text !== undefined || limitInput !== undefined)
             return inputValidationFailure("query", "relationship", "Use userIds or a text query, not both")
-        if (!Array.isArray(query.userIds))
+        if (!Array.isArray(userIdsInput))
             return inputValidationFailure("query.userIds", "type", "Must be an array of canonical user IDs")
-        if (query.userIds.length < 1 || query.userIds.length > 100)
+        // Copy once and validate the copy, so the validated IDs are the ones requested
+        const copied = snapshotArray(userIdsInput, 100)
+        if (copied === undefined || copied.length < 1)
             return inputValidationFailure("query.userIds", "length", "Must contain from 1 through 100 user IDs")
-        if (!Array.from(query.userIds).every(positiveId))
+        if (!copied.every(positiveId))
             return inputValidationFailure(
                 "query.userIds",
                 "format",
                 "Each ID must be a canonical positive uint64 decimal string",
             )
-        userIds = Object.freeze([...query.userIds])
+        userIds = copied as readonly string[]
         if (new Set(userIds).size !== userIds.length)
             return inputValidationFailure("query.userIds", "unique", "Must not contain duplicate user IDs")
         maximumMembers = userIds.length
         selection = { user_ids: userIds }
-    } else if (query.query !== undefined) {
-        if (typeof query.query !== "string")
+    } else if (text !== undefined) {
+        if (typeof text !== "string")
             return inputValidationFailure("query.query", "type", "Must be a string when supplied")
-        if (query.query.length > 4_096)
+        if (text.length > 4_096)
             return inputValidationFailure("query.query", "length", "Must contain at most 4096 UTF-16 code units")
-        if (!query.query.isWellFormed())
+        if (!text.isWellFormed())
             return inputValidationFailure("query.query", "format", "Must be a well-formed Unicode string")
-        const limit = query.limit === undefined ? 25 : query.limit
+        const limit = limitInput === undefined ? 25 : limitInput
         if (typeof limit !== "number")
             return inputValidationFailure("query.limit", "type", "Must be an integer when supplied")
         if (!positive(limit) || limit > 100)
             return inputValidationFailure("query.limit", "range", "Must be an integer from 1 through 100")
         maximumMembers = limit
-        selection = { query: query.query, limit }
+        selection = { query: text, limit }
     } else {
-        if (query.limit !== undefined)
+        if (limitInput !== undefined)
             return inputValidationFailure("query", "relationship", "limit requires a text query")
         return inputValidationFailure("query", "required", "Must select all members, user IDs, or a text query")
     }
     const payload = Object.freeze({ guild_id: guildId, ...selection, presences })
     // Op8 nonces are at most 32 bytes, unlike count nonces. Reject frames the gateway would close as oversized
-    if (Buffer.byteLength(JSON.stringify({ op: 8, d: { ...payload, nonce: "0".repeat(32) } })) > 4_096)
+    if (
+        Buffer.byteLength(
+            JSON.stringify({ op: Opcode.requestGuildMembers, d: { ...payload, nonce: "0".repeat(32) } }),
+        ) > 4_096
+    )
         return inputValidationFailure("query", "size", "The encoded gateway request must not exceed 4096 bytes")
     return { guildId, presences, ...(userIds ? { userIds } : {}), maximumMembers, timeoutMs, maxPendingBytes, payload }
 }
@@ -171,7 +202,7 @@ export class MemberChunkSource {
 
     #expired() {
         if (this.#exit || this.#received || this.#now() < this.#deadline) return false
-        this.fail(new MemberChunkError("timeout"))
+        this.fail(new MemberChunkError({ reason: "timeout" }))
         return true
     }
 
@@ -198,7 +229,8 @@ export class MemberChunkSource {
             try {
                 release?.()
             } catch (error) {
-                defects = Cause.combine(defects, Cause.die(error))
+                // Removing the caller signal listener is a marked read, so its throw is an application fault
+                defects = Cause.combine(defects, thrownCause(error))
             }
         }
         if (Cause.hasDies(defects))
@@ -218,12 +250,13 @@ export class MemberChunkSource {
     bindSignal(signal: NonNullable<OperationOptions["signal"]>) {
         if (this.#exit) return
         const abort = () => this.#end(Exit.failCause(Cause.interrupt()))
-        this.#onRelease = () => signal.removeEventListener("abort", abort)
+        // Calling the caller signal is application code, so its throws are application faults
+        this.#onRelease = () => readCaller(() => signal.removeEventListener("abort", abort))
         try {
-            signal.addEventListener("abort", abort, { once: true })
-            if (signal.aborted) abort()
+            readCaller(() => signal.addEventListener("abort", abort, { once: true }))
+            if (readCaller(() => signal.aborted)) abort()
         } catch (error) {
-            this.defect(error)
+            this.#end(Exit.failCause(thrownCause(error)))
         }
     }
 
@@ -263,7 +296,7 @@ export class MemberChunkSource {
     receive(value: unknown, bytes: number) {
         const config = this.#settings
         if (!config || this.#received || this.#expired()) return
-        const invalid = () => this.fail(new MemberChunkError("response"))
+        const invalid = () => this.fail(new MemberChunkError({ reason: "response" }))
         if (
             !record(value) ||
             value.guild_id !== config.guildId ||
@@ -280,7 +313,7 @@ export class MemberChunkSource {
         )
             return invalid()
         if (!positive(bytes) || bytes > config.maxPendingBytes - this.#bytes)
-            return this.fail(new MemberChunkError("overflow"))
+            return this.fail(new MemberChunkError({ reason: "overflow" }))
         const members: import("#sdk/guilds").GuildMember[] = []
         const batchIds = new Set<string>()
         for (const raw of value.members) {
@@ -350,8 +383,8 @@ export class MemberChunkSource {
             value.retry_after <= 0 ||
             value.retry_after * 1_000 > Number.MAX_SAFE_INTEGER
         )
-            return this.fail(new MemberChunkError("response"))
-        this.fail(new MemberChunkError("rateLimit", Math.ceil(value.retry_after * 1_000)))
+            return this.fail(new MemberChunkError({ reason: "response" }))
+        this.fail(new MemberChunkError({ reason: "rateLimit", retryAfterMs: Math.ceil(value.retry_after * 1_000) }))
     }
 }
 
@@ -375,12 +408,12 @@ export class MemberChunkOwner {
     detach(shardId?: number) {
         if (shardId === undefined) {
             this.#senders.clear()
-            this.#active?.fail(new MemberChunkError("connectionLost"))
+            this.#active?.fail(new MemberChunkError({ reason: "connectionLost" }))
             return
         }
         if (!Number.isSafeInteger(shardId) || shardId < 0) return
         this.#senders.delete(shardId)
-        if (this.#activeShard === shardId) this.#active?.fail(new MemberChunkError("connectionLost"))
+        if (this.#activeShard === shardId) this.#active?.fail(new MemberChunkError({ reason: "connectionLost" }))
     }
     close() {
         this.#closed = true
@@ -394,7 +427,7 @@ export class MemberChunkOwner {
     rateLimited(value: unknown) {
         if (
             record(value) &&
-            value.opcode === 8 &&
+            value.opcode === Opcode.requestGuildMembers &&
             record(value.meta) &&
             typeof value.meta.nonce === "string" &&
             value.meta.nonce === this.#active?.nonce
@@ -403,17 +436,24 @@ export class MemberChunkOwner {
     }
 
     open(guildId: string, query: unknown, options?: unknown): Effect.Effect<MemberChunkSource, MemberChunkFailure> {
+        // Only reading the caller query and options is marked, so opening intake keeps SDK faults as SDK faults
+        return suspendMarked(() => {
+            if (this.#closed) return Effect.fail(new ClientClosedError())
+            const config = readCaller(() => settings(guildId, query, options))
+            return this.#open(config)
+        })
+    }
+
+    #open(config: Settings | InputValidationFailure): Effect.Effect<MemberChunkSource, MemberChunkFailure> {
         return Effect.gen({ self: this }, function* () {
-            if (this.#closed) return yield* Effect.fail(new ClientClosedError())
-            const config = settings(guildId, query, options)
             if (config instanceof InputValidationFailure)
-                return yield* Effect.fail(new MemberChunkError("input", null, config.detail))
+                return yield* Effect.fail(new MemberChunkError({ reason: "input", inputValidation: config.detail }))
             const shardId = this.routeGuild(config.guildId)
             const sender = shardId === undefined ? undefined : this.#senders.get(shardId)
-            if (!sender) return yield* Effect.fail(new MemberChunkError("notConnected"))
-            if (this.#active) return yield* Effect.fail(new MemberChunkError("busy"))
+            if (!sender) return yield* Effect.fail(new MemberChunkError({ reason: "notConnected" }))
+            if (this.#active) return yield* Effect.fail(new MemberChunkError({ reason: "busy" }))
             const release = this.budget.acquire()
-            if (!release) return yield* Effect.fail(new MemberChunkError("busy"))
+            if (!release) return yield* Effect.fail(new MemberChunkError({ reason: "busy" }))
             let source: MemberChunkSource | undefined
             try {
                 source = new MemberChunkSource(randomUUID().replaceAll("-", ""), config, this.logical, () => {
@@ -438,29 +478,21 @@ export class MemberChunkOwner {
 }
 
 /** Copy the default stream's options before opening intake, without giving native streams a signal contract */
-export function memberChunkIterationOptions(value: unknown) {
+export function memberChunkIterationOptions(value: unknown, signal: unknown) {
     const input = value === undefined ? {} : value
     if (!record(input)) return inputValidationFailure("options", "type", "Must be an options object when supplied")
-    if (Object.keys(input).some((key) => !["timeoutMs", "maxPendingBytes", "signal"].includes(key)))
-        return inputValidationFailure(
-            "options",
-            "allowedFields",
-            "Only timeoutMs, maxPendingBytes, and signal are accepted",
-        )
-    const signal = input.signal as OperationOptions["signal"]
-    if (
-        signal !== undefined &&
-        (!signal ||
-            typeof signal.aborted !== "boolean" ||
-            typeof signal.addEventListener !== "function" ||
-            typeof signal.removeEventListener !== "function")
+    const unsupported = unsupportedKeyFailure(
+        input,
+        ["timeoutMs", "maxPendingBytes", "signal"],
+        "options",
+        "the member chunk options",
     )
-        return inputValidationFailure(
-            "options.signal",
-            "type",
-            "Must be an AbortSignal-compatible object when supplied",
-        )
-    return { request: { timeoutMs: input.timeoutMs, maxPendingBytes: input.maxPendingBytes }, signal }
+    if (unsupported) return unsupported
+    // The default adapter validated the signal it read before this call
+    return {
+        request: { timeoutMs: input.timeoutMs, maxPendingBytes: input.maxPendingBytes },
+        signal: signal as OperationOptions["signal"],
+    }
 }
 
 export const memberChunkStream = (create: Effect.Effect<MemberChunkSource, MemberChunkFailure>) =>

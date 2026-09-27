@@ -1,10 +1,23 @@
-import { Cause, Effect, Exit } from "effect"
+import { causeReasons, defectReason, inputDefect, readCaller, readInput, suspendMarked } from "#sdk/internal/defects"
+import * as Cause from "effect/Cause"
+import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
 import type { ClientOptions } from "#sdk/client"
-import { CancelledError, ConfigurationError, SdkDefect, type ConnectError, type DefectReason } from "#sdk/errors"
+import type { SessionStore } from "#sdk/sharding"
+import {
+    ApplicationError,
+    CancelledError,
+    ConfigurationError,
+    SdkDefect,
+    type ConnectError,
+    type DefectReason,
+} from "#sdk/errors"
 import { attachIdentifyGate } from "#sdk/internal/client"
+import { throwIfErr } from "#sdk/internal/failures"
 import { operationSignalError } from "#sdk/internal/operation-signal"
-import { ChildBridge, createSupervisor, type SupervisorOwner } from "#sdk/internal/supervisor"
+import { ChildBridge, childFailureReason, createSupervisor, type SupervisorOwner } from "#sdk/internal/supervisor"
+import { childClientOptionsError } from "#sdk/internal/configuration"
 import {
     SupervisorChildError,
     type SupervisorAssignment,
@@ -16,7 +29,11 @@ import {
 } from "#sdk/supervisor"
 import type { Client } from "./index.js"
 
-/** Client and fixed shard assignment available to configure before the helper starts the gateway connection */
+/**
+ * Client and fixed shard assignment available to configure before the helper starts the gateway connection
+ *
+ * @category Sharding and supervision
+ */
 export interface DefaultSupervisorChildContext {
     /** Client created and owned by child.run. Register application behavior here rather than starting or stopping this client */
     readonly client: Client
@@ -25,30 +42,39 @@ export interface DefaultSupervisorChildContext {
     /** Signal aborted when the parent requests shutdown or its message channel disconnects.
      * Setup work should check this signal and stop when it is aborted. The helper cannot forcibly cancel a JavaScript promise
      */
-    readonly signal: import("#sdk/client").OperationSignal
+    readonly signal: AbortSignal
 }
 
-/** Bot credentials, client settings and setup callback for a JavaScript module launched by a supervisor */
+/**
+ * Bot credentials, client settings and setup callback for a JavaScript module launched by a supervisor
+ *
+ * @category Sharding and supervision
+ */
 export interface DefaultSupervisorChildOptions extends SupervisorChildOptions {
     /** Register subscriptions and local application behavior before the helper calls client.run.
      * Return when setup is finished, not when the bot stops. Do not call client.run, connect or shutdown here.
-     * A thrown error or rejected promise is a defect and rejects child.run with SdkDefect.
+     * A thrown error, rejected promise or returned Err rejects child.run with SdkDefect code application.defect, whose
+     * cause is an ApplicationError with source "supervisor child configure" and the original value as its cause.
      * A parent stop can finish child.run without waiting for this promise. Setup must check context.signal to avoid continuing afterward
      */
-    readonly configure: (context: DefaultSupervisorChildContext) => void | Promise<void>
+    readonly configure: (context: DefaultSupervisorChildContext) => unknown
 }
 
 /**
  * Parent that starts and stops child processes for one fixed set of local shards.
  * Methods start their asynchronous work when called and return ResultAsync for expected failures.
- * Unexpected defects reject with SdkDefect instead of returning Err.
+ * Unexpected defects reject with SdkDefect instead of returning Err, and a throwing waitForReady option or signal getter
+ * uses code application.defect with the thrown value as its cause.
  * Creating this parent starts no child. Call shutdown to release its owned processes
+ *
+ * @category Sharding and supervision
  */
 export interface DefaultSupervisor {
     /** Start the configured children and return Ok when each child accepts its shard assignment and finishes configure.
      * This is setup completion, not gateway readiness. Use waitForReady to observe connected gateway sessions.
      * Concurrent calls share startup. Calling again does not create extra children or await replacement startup.
      * Failure returns SupervisorError only after owned processes exit. Start during or after shutdown returns reason closed.
+     * With totalShards "auto" it first counts the bot's communities, and a failed count returns reason shardCount.
      * If a child remains alive after losing its message channel for shutdownTimeoutMs, pending startup fails with closed after cleanup
      */
     start(): ResultAsync<void, SupervisorError>
@@ -78,12 +104,18 @@ export interface DefaultSupervisor {
     shutdown(): ResultAsync<void, never>
 }
 
-/** Create a local parent supervisor or run its child module using the default API */
+/**
+ * Create a local parent supervisor or run its child module using the default API
+ *
+ * @category Sharding and supervision
+ */
 export interface DefaultSupervisorTools {
-    /** Validate and copy options now, returning Ok with an idle supervisor or Err with ConfigurationError.
+    /** Validate and copy options now and return an idle supervisor. Invalid options throw ConfigurationError.
+     * Each option is read once. A throwing option getter throws SdkDefect with code application.defect and the thrown
+     * value as its cause, while another unexpected fault uses sdk.defect.
      * Does not start a process or check whether the entry module can execute. Launch failures are reported by start
      */
-    create(options: SupervisorOptions): Result<DefaultSupervisor, ConfigurationError>
+    create(options: SupervisorOptions): DefaultSupervisor
     /** Child-module helper. Call run inside the module selected by the parent's entry option */
     readonly child: {
         /** Receive the parent's assignment, create a client, finish configure, then run the client until stop or failure.
@@ -93,6 +125,8 @@ export interface DefaultSupervisorTools {
          * Message-channel loss or invalid coordination data returns SupervisorChildError.
          * A stop during configure never starts the client afterward.
          * The helper cannot forcibly stop a configure promise that ignores cancellation and does not wait for it.
+         * The options are read once before waiting for the assignment, and a throwing option getter rejects with
+         * SdkDefect code application.defect and the thrown value as its cause.
          * Defects reject with SdkDefect, retaining accompanying typed failures without private error text
          */
         run(
@@ -113,24 +147,16 @@ function resultFromExit<A, E>(
 ): Result<A, E> {
     if (Exit.isSuccess(exit)) return ok(exit.value)
     if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause)) {
-        const reasons: DefectReason[] = exit.cause.reasons.map((reason) =>
-            reason._tag === "Fail"
-                ? {
-                      kind: "Failure",
-                      failure: reason.error as Extract<DefectReason, { readonly kind: "Failure" }>["failure"],
-                  }
-                : { kind: reason._tag === "Die" ? "Defect" : "Interruption" },
-        )
-        throw new SdkDefect(operation, reasons)
+        throw new SdkDefect(operation, causeReasons(exit.cause))
     }
     const reason = exit.cause.reasons.find((reason) => reason._tag === "Fail")
     if (reason?._tag === "Fail") return err(reason.error)
-    throw new SdkDefect(operation)
+    throw new SdkDefect(operation, causeReasons(exit.cause))
 }
 
 function defectReasons(error: unknown): DefectReason[] {
     if (error instanceof SdkDefect && error.reasons.length > 0) return [...error.reasons]
-    return [{ kind: "Defect" }]
+    return [defectReason(error)]
 }
 
 function bridgeResult<A>(effect: Effect.Effect<A, SupervisorChildError>): Promise<Result<A, SupervisorChildError>> {
@@ -138,16 +164,21 @@ function bridgeResult<A>(effect: Effect.Effect<A, SupervisorChildError>): Promis
 }
 
 function readyResult(owner: SupervisorOwner, options?: SupervisorWaitOptions) {
-    const readiness = Effect.suspend((): Effect.Effect<void, SupervisorError | CancelledError | ConfigurationError> => {
-        const signal = options?.signal
-        const invalidSignal = operationSignalError(signal)
+    // Reading the caller options and calling the caller signal are marked as application input
+    const readiness = suspendMarked((): Effect.Effect<void, SupervisorError | CancelledError | ConfigurationError> => {
+        const signal = readCaller(() => options?.signal)
+        const invalidSignal = readCaller(() => operationSignalError(signal))
         if (invalidSignal) return Effect.fail(invalidSignal)
-        if (signal?.aborted) return Effect.fail(new CancelledError())
+        if (readCaller(() => signal?.aborted)) return Effect.fail(new CancelledError("supervisor.waitForReady"))
         if (!signal) return owner.waitForReady()
         const cancelled = Effect.callback<never, CancelledError>((resume) => {
-            const abort = () => resume(Effect.fail(new CancelledError()))
-            signal.addEventListener("abort", abort, { once: true })
-            return Effect.sync(() => signal.removeEventListener("abort", abort))
+            const abort = () => resume(Effect.fail(new CancelledError("supervisor.waitForReady")))
+            try {
+                signal.addEventListener("abort", abort, { once: true })
+            } catch (error) {
+                resume(Effect.failCause(inputDefect(error)))
+            }
+            return readInput(() => signal.removeEventListener("abort", abort))
         })
         return Effect.raceFirst(owner.waitForReady(), cancelled)
     })
@@ -156,54 +187,77 @@ function readyResult(owner: SupervisorOwner, options?: SupervisorWaitOptions) {
     )
 }
 
-function rejectChildOverrides(options: DefaultSupervisorChildOptions): ConfigurationError | undefined {
+/** Child options read once before the helper waits for an assignment */
+interface ChildSettings {
+    readonly clientOptions: Omit<ClientOptions, "token" | "sharding">
+    /** The child's session store, added to the shards the parent assigns */
+    readonly sessions: SessionStore | undefined
+    readonly token: string | undefined
+    readonly configure: DefaultSupervisorChildOptions["configure"]
+}
+
+/**
+ * Read the child options once, so later getter changes cannot alter the client or configure callback. A throw here comes
+ * from reading the caller options
+ */
+function readChildOptions(options: DefaultSupervisorChildOptions): ChildSettings | ConfigurationError {
     const clientOptions = options.clientOptions
-    if (
-        clientOptions !== undefined &&
-        (typeof clientOptions !== "object" ||
-            clientOptions === null ||
-            "token" in clientOptions ||
-            "sharding" in clientOptions)
-    )
-        return new ConfigurationError(
-            "configuration",
-            "supervisor child clientOptions cannot override token or sharding",
-        )
-    return undefined
+    const invalid = childClientOptionsError(clientOptions)
+    if (invalid) return invalid
+    const {
+        messageFields,
+        instance,
+        rest,
+        transport,
+        uploads,
+        logging,
+        onError,
+        gateway,
+        cache,
+        connection,
+        observe,
+        sharding,
+    } = clientOptions ?? {}
+    const configure = options.configure
+    return {
+        sessions: sharding?.sessions,
+        clientOptions: {
+            ...(messageFields === undefined ? {} : { messageFields }),
+            ...(instance === undefined ? {} : { instance }),
+            ...(rest === undefined ? {} : { rest }),
+            ...(transport === undefined ? {} : { transport }),
+            ...(uploads === undefined ? {} : { uploads }),
+            ...(logging === undefined ? {} : { logging }),
+            ...(onError === undefined ? {} : { onError }),
+            ...(gateway === undefined ? {} : { gateway }),
+            ...(cache === undefined ? {} : { cache }),
+            ...(connection === undefined ? {} : { connection }),
+            ...(observe === undefined ? {} : { observe }),
+        },
+        token: options.token,
+        // Keep the options object as the receiver, as a method call on it would
+        configure: (context) => Reflect.apply(configure, options, [context]),
+    }
 }
 
 function childClientOptions(
-    options: DefaultSupervisorChildOptions,
+    settings: ChildSettings,
     assignment: SupervisorAssignment,
     bridge: ChildBridge,
 ): ClientOptions {
-    const { messageFields, instance, uploads, logging, cache, connection } = options.clientOptions ?? {}
-    return attachIdentifyGate(
-        {
-            ...(messageFields === undefined ? {} : { messageFields }),
-            ...(instance === undefined ? {} : { instance }),
-            ...(uploads === undefined ? {} : { uploads }),
-            ...(logging === undefined ? {} : { logging }),
-            ...(cache === undefined ? {} : { cache }),
-            ...(connection === undefined ? {} : { connection }),
-            token: options.token,
-            sharding: assignment,
-        },
-        bridge.identifyGate,
-    )
+    const sharding = settings.sessions === undefined ? assignment : { ...assignment, sessions: settings.sessions }
+    return attachIdentifyGate({ ...settings.clientOptions, token: settings.token, sharding }, bridge.identifyGate)
 }
 
 /** Build default-API supervisor tools around this entry point's client creator */
-export function makeDefaultSupervisor(
-    createClient: (options: ClientOptions) => Result<Client, ConfigurationError>,
-): DefaultSupervisorTools {
+export function makeDefaultSupervisor(createClient: (options: ClientOptions) => Client): DefaultSupervisorTools {
     const child = Object.freeze({
         run: (options: DefaultSupervisorChildOptions) =>
             new ResultAsync<void, ConfigurationError | ConnectError | CancelledError | SupervisorChildError>(
                 (async () => {
                     let bridge: ChildBridge | undefined
                     let client: Client | undefined
-                    let unsubscribeState: (() => void) | undefined
+                    let stateObserver: { close(): void } | undefined
                     let shutdownAttempted = false
                     let outcome: Result<
                         void,
@@ -219,16 +273,27 @@ export function makeDefaultSupervisor(
                           >
                         | undefined
                     const defects: DefectReason[] = []
+                    // A stop the parent requested lets running work finish, while any other end stops at once
+                    let stopRequested = false
                     const shutdownClient = async () => {
                         if (!client || shutdownAttempted) return
                         shutdownAttempted = true
-                        await client.shutdown()
+                        const drainMs = stopRequested ? bridge!.drainMs : 0
+                        await client.shutdown(drainMs > 0 ? { drainMs } : undefined)
                     }
                     try {
                         main: {
-                            const rejected = rejectChildOverrides(options)
-                            if (rejected) {
-                                outcome = err(rejected)
+                            let settings: ChildSettings
+                            try {
+                                const read = readChildOptions(options)
+                                if (read instanceof ConfigurationError) {
+                                    outcome = err(read)
+                                    break main
+                                }
+                                settings = read
+                            } catch (error) {
+                                // Only the caller option reads run here, so a throw is an application fault
+                                defects.push(defectReason(error, "application"))
                                 break main
                             }
                             const opened = await bridgeResult(ChildBridge.open())
@@ -253,18 +318,20 @@ export function makeDefaultSupervisor(
                             }
                             if (initial.value.kind === "stop") break main
                             const assigned = initial.value.assignment
-                            const created = createClient(childClientOptions(options, assigned, bridge))
-                            if (created.isErr()) {
+                            let createdClient: Client
+                            try {
+                                createdClient = createClient(childClientOptions(settings, assigned, bridge))
+                            } catch (error) {
+                                if (!(error instanceof ConfigurationError)) throw error
                                 bridge.failed("configure")
-                                outcome = err(created.error)
+                                outcome = err(error)
                                 break main
                             }
-                            const createdClient = created.value
                             client = createdClient
-                            unsubscribeState = createdClient.observeState((state) => bridge!.state(state))
+                            stateObserver = createdClient.observeState((state) => bridge!.state(state))
                             const configured = Promise.resolve()
                                 .then(() =>
-                                    options.configure(
+                                    settings.configure(
                                         Object.freeze({
                                             client: createdClient,
                                             assignment: assigned,
@@ -272,6 +339,8 @@ export function makeDefaultSupervisor(
                                         }),
                                     ),
                                 )
+                                // An Err result from configure fails setup like a throw
+                                .then(throwIfErr)
                                 .then(
                                     () => ({ kind: "configured" as const }),
                                     (error: unknown) => ({ kind: "defect" as const, error }),
@@ -283,7 +352,14 @@ export function makeDefaultSupervisor(
                             const configuration = await Promise.race([configured, stopped])
                             if (configuration.kind === "defect") {
                                 bridge.failed("configure")
-                                throw configuration.error
+                                // Configure is application code. An SdkDefect it rethrows from an SDK call keeps its reasons
+                                const failure = configuration.error
+                                defects.push(
+                                    ...(failure instanceof SdkDefect && failure.reasons.length > 0
+                                        ? failure.reasons
+                                        : [defectReason(new ApplicationError("supervisor child configure", failure))]),
+                                )
+                                break main
                             }
                             if (configuration.kind === "stop") {
                                 if (configuration.result.isErr()) outcome = err(configuration.result.error)
@@ -291,6 +367,7 @@ export function makeDefaultSupervisor(
                             }
                             bridge.ready()
                             bridge.state(createdClient.state)
+                            bridge.reportDiagnostics(() => createdClient.diagnostics())
                             running = Promise.resolve(client.run()).then(
                                 (result) => ({ kind: "client" as const, result }),
                                 (error: unknown) => ({ kind: "defect" as const, reasons: defectReasons(error) }),
@@ -301,11 +378,12 @@ export function makeDefaultSupervisor(
                                 break main
                             }
                             if (settled.kind === "client") {
-                                if (settled.result.isErr()) bridge.failed("client")
+                                if (settled.result.isErr()) bridge.failed(childFailureReason(settled.result.error))
                                 outcome = settled.result
                                 break main
                             }
                             if (settled.result.isErr()) outcome = err(settled.result.error)
+                            else stopRequested = true
                         }
                     } catch (error) {
                         defects.push(...defectReasons(error))
@@ -322,7 +400,7 @@ export function makeDefaultSupervisor(
                                 }
                             } finally {
                                 try {
-                                    unsubscribeState?.()
+                                    stateObserver?.close()
                                 } finally {
                                     try {
                                         bridge?.close()
@@ -344,34 +422,34 @@ export function makeDefaultSupervisor(
     return Object.freeze({
         create: (options: SupervisorOptions) => {
             const result = resultFromExit(Effect.runSyncExit(createSupervisor(options)), "supervisor.create")
-            if (result.isErr()) return err(result.error)
+            if (result.isErr()) throw result.error
             const owner = result.value
-            return ok(
-                Object.freeze({
-                    start: () =>
-                        new ResultAsync<void, SupervisorError>(
-                            Effect.runPromiseExit(owner.start()).then((exit) =>
-                                resultFromExit(exit, "supervisor.start"),
-                            ),
+            return Object.freeze({
+                start: () =>
+                    new ResultAsync<void, SupervisorError>(
+                        Effect.runPromiseExit(owner.start()).then((exit) => resultFromExit(exit, "supervisor.start")),
+                    ),
+                waitForClose: () =>
+                    new ResultAsync<void, SupervisorError>(
+                        Effect.runPromiseExit(owner.waitForClose()).then((exit) =>
+                            resultFromExit(exit, "supervisor.waitForClose"),
                         ),
-                    waitForClose: () =>
-                        new ResultAsync<void, SupervisorError>(
-                            Effect.runPromiseExit(owner.waitForClose()).then((exit) =>
-                                resultFromExit(exit, "supervisor.waitForClose"),
-                            ),
-                        ),
-                    waitForReady: (options?: SupervisorWaitOptions) => readyResult(owner, options),
-                    status: () => owner.status(),
-                    shutdown: () =>
-                        new ResultAsync<void, never>(
-                            Effect.runPromiseExit(owner.shutdown()).then((exit) => {
-                                const result = resultFromExit(exit, "supervisor.shutdown")
-                                if (result.isErr()) throw new SdkDefect("supervisor.shutdown")
-                                return ok(undefined)
-                            }),
-                        ),
-                }),
-            )
+                    ),
+                waitForReady: (options?: SupervisorWaitOptions) => readyResult(owner, options),
+                status: () => owner.status(),
+                shutdown: () =>
+                    new ResultAsync<void, never>(
+                        Effect.runPromiseExit(owner.shutdown()).then((exit) => {
+                            const result = resultFromExit(exit, "supervisor.shutdown")
+                            if (result.isErr())
+                                throw new SdkDefect(
+                                    "supervisor.shutdown",
+                                    Exit.isFailure(exit) ? causeReasons(exit.cause) : [],
+                                )
+                            return ok(undefined)
+                        }),
+                    ),
+            })
         },
         child,
     })

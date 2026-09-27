@@ -5,6 +5,7 @@ import { stripTypeScriptTypes } from "node:module"
 import { createMarkdownProcessor } from "@astrojs/markdown-remark"
 import { exampleVariants, isEffectExample, remarkExampleBlocks, renderExampleBlock } from "../scripts/example-blocks.js"
 import { exampleLanguageKey, parseExampleLanguage } from "../src/components/example-preferences.ts"
+import { find, findAll, hasClass, parseHtml, textContent } from "./html.js"
 
 test("Canonical TypeScript keeps source intact while JavaScript removes declarations and assertions", () => {
     const source = `import { createClient } from "@neontechspace/fluxerly"
@@ -40,14 +41,12 @@ export const result = await Promise.resolve(selected + 1n)`
     assert.match(variants.js, /\?\.nested\?\.value \?\? 0n/)
 })
 
-test("First-bot JavaScript and inferred TypeScript share ESM setup and use standard extensions", async () => {
-    const guide = await readFile(new URL("../content/guides/quick-start.md", import.meta.url), "utf8")
-    const source = guide.match(/```js\n([\s\S]*?)\n```/)[1]
-    assert.deepEqual(exampleVariants(source, "javascript"), { js: source, ts: source })
-    const setup = guide.match(/```json\r?\n([\s\S]*?)\r?\n```/)
-    assert.equal(JSON.parse(setup[1]).type, "module")
-    assert.ok(guide.indexOf('"type": "module"') < guide.indexOf("{{installation}}"))
-    assert.match(guide, /data-example-filename>bot.js/)
+test("JavaScript examples serve the same untyped source as their TypeScript variant", () => {
+    const source = `import { createClient } from "@neontechspace/fluxerly"
+const client = createClient({ token: process.env.FLUXER_TOKEN })
+await client.connect()`
+    for (const language of ["js", "javascript"])
+        assert.deepEqual(exampleVariants(source, language), { js: source, ts: source })
 })
 
 test("Both variants of the authored pure-helper example execute through the built public SDK", async () => {
@@ -63,9 +62,9 @@ test("Both variants of the authored pure-helper example execute through the buil
     const typescript = await load(stripTypeScriptTypes(variants.ts))
     const actual = javascript.pureHelpersExample(0n, "Ping!")
     assert.deepEqual(actual, typescript.pureHelpersExample(0n, "Ping!"))
-    assert.ok(actual.required.isOk())
-    assert.ok(actual.color.isOk())
-    assert.equal(actual.color.value, 0xff8800)
+    assert.equal(typeof actual.required, "bigint")
+    assert.ok(actual.required > 0n)
+    assert.equal(actual.color, 0xff8800)
 })
 
 test("Malformed examples fail explicitly without exposing authored literals", () => {
@@ -75,17 +74,28 @@ test("Malformed examples fail explicitly without exposing authored literals", ()
 })
 
 test("Static examples are highlighted, escaped and keyboard accessible with a usable JavaScript fallback", async () => {
-    const html = await renderExampleBlock('const value: string = "<private>"', "ts")
-    const select = html.match(/<select\b[^>]*\bdata-example-language\b[^>]*>/)[0]
-    assert.match(select, /\baria-label="[^"]+"/)
-    assert.match(select, /\bdisabled(?:\s|=|>)/)
-    assert.match(html, /data-example-variant="js">/)
-    assert.match(html, /data-example-variant="ts" hidden>/)
-    assert.match(html, /astro-code/)
-    assert.match(html, /tabindex="0"/)
-    assert.doesNotMatch(html, /<private>/)
-    assert.match(html, /data-example-copy hidden/)
-    assert.match(html, /data-example-copy-status role="status"/)
+    // The no-JavaScript browser check covers the hidden copy button and fallback text
+    const tree = parseHtml(await renderExampleBlock('const value: string = "<private>"', "ts"))
+    const select = find(tree, (node) => node.tagName === "select" && node.properties.dataExampleLanguage !== undefined)
+    assert.ok(select.properties.ariaLabel)
+    assert.equal(select.properties.disabled, true)
+    const variants = Object.fromEntries(findAll(tree, (node) => node.properties.dataExampleVariant !== undefined)
+        .map((node) => [node.properties.dataExampleVariant, node]))
+    assert.deepEqual(Object.keys(variants).sort(), ["js", "ts"])
+    assert.equal(variants.js.properties.hidden, undefined)
+    assert.equal(variants.ts.properties.hidden, true)
+    for (const [language, variant] of Object.entries(variants)) {
+        // Each variant is a highlighted, keyboard-scrollable block whose literal stays text
+        const pre = find(variant, "pre")
+        assert.ok(hasClass(pre, "astro-code"), language)
+        assert.equal(pre.properties.tabIndex, 0, language)
+        assert.ok(findAll(pre, "span").length > 1, language)
+        assert.match(textContent(pre), /"<private>"/, language)
+    }
+    assert.match(textContent(variants.ts), /value: string/)
+    assert.doesNotMatch(textContent(variants.js), /value: string/)
+    assert.deepEqual(findAll(tree, "private"), [])
+    assert.equal(find(tree, (node) => node.properties.dataExampleCopyStatus !== undefined).properties.role, "status")
 })
 
 test("Remark converts executable JS and TS fences but leaves shell, JSON, text and Effect examples alone", async () => {
@@ -102,7 +112,8 @@ test("Remark converts executable JS and TS fences but leaves shell, JSON, text a
     assert.equal(root.children[1].children[0].type, "html")
     for (const child of root.children.slice(2)) assert.equal(child.type, "code")
     for (const path of ["content/docs/preview/api/modules/Effect.md", "content/docs/preview/api/interfaces/Effect.Client.md",
-        "C:\\docs\\api\\functions\\Effect.createClient.md"]) {
+        "C:\\docs\\api\\functions\\Effect.createClient.md", "content/docs/preview/api/modules/Effect-testing.md",
+        "content/docs/preview/api/interfaces/Effect-testing.TestClient.md"]) {
         assert.equal(isEffectExample("const value: number = 1", path), true)
         const effectRoot = { children: [{ type: "code", lang: "ts", value: "const value: number = 1" }] }
         await remarkExampleBlocks()(effectRoot, { path })
@@ -110,13 +121,21 @@ test("Remark converts executable JS and TS fences but leaves shell, JSON, text a
     }
     assert.equal(isEffectExample('import { createClient } from "@neontechspace/fluxerly/effect"'), true)
     assert.equal(isEffectExample('import { createClient } from "@neontechspace/fluxerly"'), false)
+    assert.equal(isEffectExample('import { createTestClient } from "@neontechspace/fluxerly/effect/testing"'), true)
+    // Default testing examples keep the JavaScript option
+    assert.equal(isEffectExample('import { createTestClient } from "@neontechspace/fluxerly/testing"'), false)
+    assert.equal(isEffectExample("const value: number = 1", "content/docs/preview/api/modules/testing.md"), false)
+    assert.equal(isEffectExample("const value: number = 1", "content/docs/preview/api/interfaces/testing.TestClient.md"), false)
 })
 
 test("Astro renders both variants as HTML and build errors identify only their owner", async () => {
     const processor = await createMarkdownProcessor({ remarkPlugins: [remarkExampleBlocks] })
-    const result = await processor.render('```ts\nconst value: number = 1\n```')
-    assert.match(result.code, /data-example-block/)
-    assert.doesNotMatch(result.code, /&lt;select/)
+    const tree = parseHtml((await processor.render('```ts\nconst value: number = 1\n```')).code)
+    const block = find(tree, (node) => node.properties.dataExampleBlock !== undefined)
+    assert.ok(block)
+    assert.equal(findAll(block, "select").length, 1)
+    assert.equal(findAll(block, (node) => node.properties.dataExampleVariant !== undefined).length, 2)
+    assert.ok(!textContent(tree).includes("<select"))
     await assert.rejects(() => remarkExampleBlocks()({ children: [
         { type: "code", lang: "ts", value: 'const private-value = "secret"', position: { start: { line: 7 } } },
     ] }, { path: "guide.md" }), { message: "Example rendering failed at guide.md:7" })

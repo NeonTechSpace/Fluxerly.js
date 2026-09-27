@@ -1,5 +1,11 @@
+/**
+ * Fresh gateway counts: Nonce-correlated guild and channel member count requests across shards.
+ * Invariant: One logical request holds one admission slot across its shard fragments and releases every fragment on terminal
+ * failure or interruption. Provider omissions are result data, not a substitute for routing, readiness or transport failures,
+ * and no count is retained. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import { randomUUID } from "node:crypto"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect"
 import {
     CountOperationError,
     type ChannelMemberCount,
@@ -10,10 +16,11 @@ import {
     type GuildCountsResult,
 } from "#sdk/counts"
 import { ClientClosedError } from "#sdk/errors"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { withDeadline } from "./effect-failures.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
-import { identifier, record } from "./message.js"
+import { identifier, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
+import { readCaller, suspendMarked } from "./defects.js"
 
 const defaultTimeoutMs = 30_000
 const maximumUint64 = "18446744073709551615"
@@ -68,10 +75,7 @@ const positiveIdentifier = (value: unknown): value is string =>
     identifier(value) &&
     value !== "0" &&
     (value.length < maximumUint64.length || value <= maximumUint64)
-const nonnegativeInteger = (value: unknown): value is number =>
-    typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-const shard = (value: unknown): value is number =>
-    typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+const shard = (value: unknown): value is number => nonNegativeInteger(value)
 
 function copyIdentifiers(
     value: unknown,
@@ -79,22 +83,27 @@ function copyIdentifiers(
     maximum: number,
 ): readonly string[] | InputValidationFailure {
     if (!Array.isArray(value)) return inputValidationFailure(path, "type", "Must be a non-empty array of canonical IDs")
-    if (value.length < 1 || value.length > maximum)
+    // Copy once and validate the copy, so the validated IDs are the ones requested
+    const ids = snapshotArray(value, maximum)
+    if (ids === undefined || ids.length < 1)
         return inputValidationFailure(path, "length", `Must contain from 1 through ${maximum} IDs`)
-    if (!Array.from(value).every(positiveIdentifier))
+    if (!ids.every(positiveIdentifier))
         return inputValidationFailure(path, "format", "Each ID must be a canonical positive uint64 decimal string")
-    const ids = Object.freeze([...value])
     return new Set(ids).size === ids.length
-        ? ids
+        ? (ids as readonly string[])
         : inputValidationFailure(path, "unique", "Must not contain duplicate IDs")
 }
 
 function timeout(value: unknown): number | InputValidationFailure {
     if (value !== undefined && !record(value))
         return inputValidationFailure("options", "type", "Must be an options object when supplied")
-    if (value !== undefined && Object.keys(value).some((key) => key !== "timeoutMs" && key !== "signal"))
-        return inputValidationFailure("options", "allowedFields", "Only timeoutMs and signal are accepted")
-    const duration = value === undefined || value.timeoutMs === undefined ? defaultTimeoutMs : value.timeoutMs
+    const unsupported =
+        value === undefined
+            ? undefined
+            : unsupportedKeyFailure(value, ["timeoutMs", "signal"], "options", "the operation options")
+    if (unsupported) return unsupported
+    const timeoutMs = value === undefined ? undefined : value.timeoutMs
+    const duration = timeoutMs === undefined ? defaultTimeoutMs : timeoutMs
     if (typeof duration !== "number")
         return inputValidationFailure("options.timeoutMs", "type", "Must be an integer number of milliseconds")
     return Number.isSafeInteger(duration) && duration >= 1 && duration <= 2_147_483_647
@@ -122,8 +131,8 @@ function guildCounts(guildIds: readonly string[], value: unknown): readonly Guil
         if (
             !record(entry) ||
             !positiveIdentifier(entry.guild_id) ||
-            !nonnegativeInteger(entry.member_count) ||
-            !nonnegativeInteger(entry.online_count) ||
+            !nonNegativeInteger(entry.member_count) ||
+            !nonNegativeInteger(entry.online_count) ||
             Object.hasOwn(entry, "channel_id") ||
             !guildIds.includes(entry.guild_id) ||
             counts.has(entry.guild_id)
@@ -154,8 +163,8 @@ function channelCounts(
             !record(entry) ||
             entry.guild_id !== guildId ||
             !positiveIdentifier(entry.channel_id) ||
-            !nonnegativeInteger(entry.member_count) ||
-            !nonnegativeInteger(entry.online_count) ||
+            !nonNegativeInteger(entry.member_count) ||
+            !nonNegativeInteger(entry.online_count) ||
             !channelIds.includes(entry.channel_id) ||
             counts.has(entry.channel_id)
         )
@@ -232,7 +241,10 @@ export class CountOwner implements CountGatewayOwner {
         if (!pending || pending.request.operation !== "guilds.fetchCounts") return
         const counts = guildCounts(pending.guildIds, value)
         if (!counts) {
-            this.#settle(pending.request, Effect.fail(new CountOperationError(pending.request.operation, "response")))
+            this.#settle(
+                pending.request,
+                Effect.fail(new CountOperationError({ operation: pending.request.operation, reason: "response" })),
+            )
             return
         }
         this.#complete(valueNonce, counts)
@@ -245,7 +257,10 @@ export class CountOwner implements CountGatewayOwner {
         if (!pending || pending.request.operation !== "channels.fetchMemberCounts" || !pending.channelIds) return
         const counts = channelCounts(pending.request.guildId!, pending.channelIds, value)
         if (!counts) {
-            this.#settle(pending.request, Effect.fail(new CountOperationError(pending.request.operation, "response")))
+            this.#settle(
+                pending.request,
+                Effect.fail(new CountOperationError({ operation: pending.request.operation, reason: "response" })),
+            )
             return
         }
         this.#complete(valueNonce, counts)
@@ -257,36 +272,43 @@ export class CountOwner implements CountGatewayOwner {
         guildId: string | undefined,
         options?: CountOperationOptions,
     ) {
-        return Effect.suspend(() => {
+        // Only reading the caller IDs and options is marked, so a throw there is an application fault
+        return suspendMarked(() => {
             if (this.#closed) return Effect.fail(new ClientClosedError())
             const guildRequest = operation === "guilds.fetchCounts"
-            const copiedIds = copyIdentifiers(ids, guildRequest ? "guildIds" : "channelIds", guildRequest ? 100 : 25)
+            const copiedIds = readCaller(() =>
+                copyIdentifiers(ids, guildRequest ? "guildIds" : "channelIds", guildRequest ? 100 : 25),
+            )
             if (copiedIds instanceof InputValidationFailure)
-                return Effect.fail(new CountOperationError(operation, "input", copiedIds.detail))
-            const duration = timeout(options)
+                return Effect.fail(
+                    new CountOperationError({ operation, reason: "input", inputValidation: copiedIds.detail }),
+                )
+            const duration = readCaller(() => timeout(options))
             if (duration instanceof InputValidationFailure)
-                return Effect.fail(new CountOperationError(operation, "input", duration.detail))
+                return Effect.fail(
+                    new CountOperationError({ operation, reason: "input", inputValidation: duration.detail }),
+                )
             const channelGuildId = guildRequest ? undefined : positiveIdentifier(guildId) ? guildId : undefined
             if (!guildRequest && channelGuildId === undefined)
                 return Effect.fail(
-                    new CountOperationError(
+                    new CountOperationError({
                         operation,
-                        "input",
-                        inputValidationFailure(
+                        reason: "input",
+                        inputValidation: inputValidationFailure(
                             "guildId",
                             "format",
                             "Must be a canonical positive uint64 decimal string",
                         ).detail,
-                    ),
+                    }),
                 )
             const routed = guildRequest
                 ? this.#routeGuilds(copiedIds)
                 : this.#routeGuilds(Object.freeze([channelGuildId!]))
-            if (!routed) return Effect.fail(new CountOperationError(operation, "notConnected"))
+            if (!routed) return Effect.fail(new CountOperationError({ operation, reason: "notConnected" }))
             const request = Effect.callback<GuildCountsResult | ChannelMemberCountsResult, CountFailure>((complete) => {
                 const release = this.budget.acquire()
                 if (!release) {
-                    complete(Effect.fail(new CountOperationError(operation, "busy")))
+                    complete(Effect.fail(new CountOperationError({ operation, reason: "busy" })))
                     return
                 }
                 const pendingRequest: Request = {
@@ -324,7 +346,7 @@ export class CountOwner implements CountGatewayOwner {
                     throw defect
                 }
                 return Effect.sync(() => this.#cancel(pendingRequest))
-            }).pipe(withDeadline(duration, () => new CountOperationError(operation, "timeout")))
+            }).pipe(withDeadline(duration, () => new CountOperationError({ operation, reason: "timeout" })))
             return request
         })
     }
@@ -355,7 +377,10 @@ export class CountOwner implements CountGatewayOwner {
             const id =
                 request.operation === "guilds.fetchCounts" ? count.guildId : (count as ChannelMemberCount).channelId
             if (request.counts.has(id)) {
-                this.#settle(request, Effect.fail(new CountOperationError(request.operation, "response")))
+                this.#settle(
+                    request,
+                    Effect.fail(new CountOperationError({ operation: request.operation, reason: "response" })),
+                )
                 return
             }
             request.counts.set(id, count)
@@ -403,7 +428,7 @@ export class CountOwner implements CountGatewayOwner {
                 Effect.fail(
                     failure instanceof ClientClosedError
                         ? failure
-                        : new CountOperationError(request.operation, failure),
+                        : new CountOperationError({ operation: request.operation, reason: failure }),
                 ),
             )
         }

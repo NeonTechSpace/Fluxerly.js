@@ -1,17 +1,23 @@
 # Repository navigation
 
-When locating code or documentation, or deciding where a file belongs, read [the repository guide](/docs/REPOSITORY.md)
+| Task | Read |
+| --- | --- |
+| Locating code, setup, checks or deciding where a file belongs | [Repository guide](/docs/REPOSITORY.md) |
+| Deciding where documentation goes | [Documentation placement](/docs/DOCUMENTATION.md#documentation-placement) |
+| Testing and live sandbox checks | [Development checks](/docs/REPOSITORY.md#development-checks) and the [live check guide](/projects/sdk/tests/live/README.md) |
+| Releasing | [Releasing](/docs/RELEASING.md) |
+| Website documentation, reference generation and Preview delivery | [Documentation maintenance](/docs/DOCUMENTATION.md) |
 
-Before adding, expanding or reviewing repository Markdown, apply the [documentation placement check](/docs/TECHNOLOGY.md#documentation-placement)
+Before adding, expanding or reviewing repository Markdown, apply the [documentation placement check](/docs/DOCUMENTATION.md#documentation-placement)
 
-Before implementing or reviewing SDK public API changes, including behavior changes without signature changes, read and apply the [public API documentation completion gate](/docs/TECHNOLOGY.md#public-api-documentation-completion-gate)
+Before implementing or reviewing SDK public API changes, including behavior changes without signature changes, read and apply the [public API documentation completion gate](/docs/DOCUMENTATION.md#public-api-documentation-completion-gate)
 
 # Verification ownership
 
 During authorized project work, identify and run important feasible checks before reporting completion, including relevant live sandbox failure/recovery tests.
 Add a focused check when existing tests cannot establish the affected behavior, rather than leaving a testable gap as a follow-up suggestion
 
-Use the designated sandbox under the [live-test instructions](/docs/REPOSITORY.md#opt-in-live-sandbox-check), with target verification, bounded execution and verified test-owned cleanup
+Use the designated sandbox under the [live check guide](/projects/sdk/tests/live/README.md), with target verification, bounded execution and verified test-owned cleanup
 
 When a check cannot run, report the concrete blocker and remaining evidence gap.
 These checks do not authorize unrelated systems, publication, VCS changes or recurring unattended work

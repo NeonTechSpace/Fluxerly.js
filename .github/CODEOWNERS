@@ -1,0 +1,5 @@
+# Review ownership. The last matching pattern takes precedence
+
+* @Neonsy
+/.github/ @Neonsy
+/projects/release/ @Neonsy

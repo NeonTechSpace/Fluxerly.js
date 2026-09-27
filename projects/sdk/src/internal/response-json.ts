@@ -1,3 +1,8 @@
+/**
+ * Bounded JSON response reading.
+ * Invariant: Decoded body bytes are bounded before parsing, and reader cancellation and release are always awaited.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 /** Bounded response parsing completed, but releasing its owned reader failed */
 export class ResponseJsonCleanupError extends Error {
     constructor(
@@ -34,10 +39,15 @@ export async function readResponseJson(
         }
         return JSON.parse(result + decoder.decode()) as unknown
     } catch {
+        // allow-silent: Invalid JSON returns undefined, which the decoder reports as an unusable response
         return undefined
     } finally {
         const failures: unknown[] = []
-        for (const action of [...(!ended ? [() => reader.cancel()] : []), () => reader.releaseLock()]) {
+        const actions: (() => Promise<void> | void)[] = [
+            ...(!ended ? [() => reader.cancel()] : []),
+            () => reader.releaseLock(),
+        ]
+        for (const action of actions) {
             try {
                 await action()
             } catch (error) {
@@ -47,6 +57,7 @@ export async function readResponseJson(
             }
         }
         if (failures.length)
+            // oxlint-disable-next-line no-unsafe-finally -- a reader cleanup failure deliberately replaces the parsed result
             throw new ResponseJsonCleanupError(
                 failures.length === 1 ? failures[0] : new AggregateError(failures, "JSON response cleanup failed"),
                 response.status,

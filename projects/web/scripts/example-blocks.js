@@ -1,5 +1,8 @@
+import { pageSchema, requireTransformSchema } from "./transform-schemas.js"
 import ts from "typescript"
 import { createMarkdownProcessor } from "@astrojs/markdown-remark"
+import { rehypeReferenceCode } from "./reference-code.js"
+import { pageContext } from "./reference-links.js"
 
 const languages = new Map([["js", "js"], ["javascript", "js"], ["ts", "ts"], ["typescript", "ts"]])
 let renderer
@@ -27,24 +30,26 @@ export function exampleVariants(source, language) {
     return { js: result.outputText.trimEnd(), ts: source }
 }
 
-async function highlighted(source, language) {
-    const key = `${language}\0${source}`
+// The page path selects the docs version and API whose reference previews the code's public names
+async function highlighted(source, language, pagePath) {
+    const context = pageContext(pagePath)
+    const key = `${context?.root ?? ""}\0${context?.entry ?? ""}\0${language}\0${source}`
     if (!rendered.has(key)) {
-        renderer ??= createMarkdownProcessor({ smartypants: false })
+        renderer ??= createMarkdownProcessor({ smartypants: false, rehypePlugins: [rehypeReferenceCode] })
         rendered.set(key, (async () => {
             const processor = await renderer
             // A longer fence cannot be closed by code containing Markdown fences
             const fence = "`".repeat(Math.max(3, ...[...source.matchAll(/`+/g)].map((match) => match[0].length + 1)))
-            const result = await processor.render(`${fence}${language}\n${source}\n${fence}`)
+            const result = await processor.render(`${fence}${language}\n${source}\n${fence}`, { fileURL: context ? pagePath : undefined })
             return result.code
         })())
     }
     return rendered.get(key)
 }
 
-export async function renderExampleBlock(source, language) {
+export async function renderExampleBlock(source, language, pagePath) {
     const variants = exampleVariants(source, language)
-    const [javascript, typescript] = await Promise.all([highlighted(variants.js, "js"), highlighted(variants.ts, "ts")])
+    const [javascript, typescript] = await Promise.all([highlighted(variants.js, "js", pagePath), highlighted(variants.ts, "ts", pagePath)])
     return `<div class="example-block" data-example-block>
 <div class="example-controls"><label>Language <select aria-label="Example language" data-example-language disabled><option value="js">JavaScript</option><option value="ts">TypeScript</option></select></label><button type="button" data-example-copy hidden>Copy</button><span data-example-copy-status role="status"></span></div>
 <div data-example-variant="js">${javascript}</div>
@@ -53,11 +58,11 @@ export async function renderExampleBlock(source, language) {
 </div>`
 }
 
-/** Effect-native examples retain their canonical TypeScript without a JavaScript option */
+/** Effect examples retain their canonical TypeScript without a JavaScript option */
 export function isEffectExample(source, filePath = "") {
     const path = String(filePath).replaceAll("\\", "/")
-    return /\/(?:modules\/Effect(?:\.md|\/)|[^/]+\/Effect\.)/.test(path) ||
-        /\b(?:from\s*|import\s*\()["'](?:effect(?:\/[^"']*)?|@neontechspace\/fluxerly\/effect)["']/.test(source)
+    return /\/(?:modules\/Effect(?:-testing)?(?:\.md|\/)|[^/]+\/Effect(?:-testing)?\.)/.test(path) ||
+        /\b(?:from\s*|import\s*\()["'](?:effect(?:\/[^"']*)?|@neontechspace\/fluxerly\/effect(?:\/testing)?)["']/.test(source)
 }
 
 function isExecutableExample(source, language) {
@@ -76,6 +81,7 @@ function isExecutableExample(source, language) {
 
 export function remarkExampleBlocks() {
     return async function transform(root, file) {
+        requireTransformSchema("exampleBlocks", pageSchema(file))
         await visit(root)
         async function visit(node) {
             if (!Array.isArray(node.children)) return
@@ -83,7 +89,7 @@ export function remarkExampleBlocks() {
                 const child = node.children[index]
                 if (child.type === "code" && languages.has(child.lang) && !isEffectExample(child.value, file?.path) &&
                     isExecutableExample(child.value, child.lang)) {
-                    try { node.children[index] = { type: "html", value: await renderExampleBlock(child.value, child.lang) } }
+                    try { node.children[index] = { type: "html", value: await renderExampleBlock(child.value, child.lang, file?.path) } }
                     catch (error) {
                         // File and line identify the owner without exposing code or private literals
                         const location = `${file?.path ?? "Markdown"}:${child.position?.start?.line ?? "?"}`

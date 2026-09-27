@@ -1,22 +1,24 @@
+/**
+ * Invite operations and invite gateway projections.
+ * Invariant: Invite codes grant access, so they stay out of diagnostics and are masked in log records.
+ * Implements [SDK contracts: Logging](/docs/SDK-CONTRACTS.md#logging)
+ */
 import type { Invite, InviteCreate, InviteMetadata } from "#sdk/invites"
 import type { InviteDeleteEvent } from "#sdk/events"
 import type { ModerationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, record } from "./message.js"
+import { identifier, nonNegativeInteger as integer, record } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
-import { validCalendarTimestamp } from "./timestamp.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import { timestamp } from "./decode/timestamp.js"
 
 const hostedInvite = "https://fluxer.gg"
 
-const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
-    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max
-const timestamp = (value: unknown): value is string =>
-    typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && validCalendarTimestamp(value)
 const codeValue = (value: unknown): value is string =>
     typeof value === "string" &&
     value.length > 0 &&
     value.isWellFormed() &&
+    // oxlint-disable-next-line no-control-regex -- rejects control characters in invite codes
     !/[\s\x00-\x1f\x7f/?#\\]/u.test(value) &&
     value !== "." &&
     value !== ".."
@@ -144,7 +146,7 @@ export function inviteList(
         return inputValidationFailure(
             kind === "guilds" ? "guildId" : "channelId",
             "format",
-            "Resource IDs must be decimal strings",
+            kind === "guilds" ? "Guild IDs must be decimal strings" : "Channel IDs must be decimal strings",
         )
     return {
         guildId: id,
@@ -184,12 +186,13 @@ export function inviteCreate(
     if (base instanceof InputValidationFailure) return base
     if (audit instanceof InputValidationFailure) return audit
     if (!record(value)) return inputValidationFailure("input", "type", "Invite input must be an object")
-    if (Object.keys(value).some((key) => !["maxAgeSeconds", "maxUses", "unique", "temporary"].includes(key)))
-        return inputValidationFailure(
-            "input",
-            "allowedFields",
-            "Invite input may contain only maxAgeSeconds, maxUses, unique, and temporary",
-        )
+    const unsupported = unsupportedKeyFailure(
+        value,
+        ["maxAgeSeconds", "maxUses", "unique", "temporary"],
+        "input",
+        "the invite input",
+    )
+    if (unsupported) return unsupported
     const maxAgeSeconds = value.maxAgeSeconds === undefined ? 86_400 : value.maxAgeSeconds
     const maxUses = value.maxUses === undefined ? 0 : value.maxUses
     const unique = value.unique === undefined ? true : value.unique
@@ -202,9 +205,10 @@ export function inviteCreate(
         )
     if (!integer(maxUses, 100))
         return inputValidationFailure("maxUses", "range", "Invite maximum uses must be an integer from 0 through 100")
-    if (typeof unique !== "boolean") return inputValidationFailure("unique", "type", "Invite unique must be a boolean")
+    if (typeof unique !== "boolean")
+        return inputValidationFailure("unique", "type", "Invite option unique must be a boolean")
     if (typeof temporary !== "boolean")
-        return inputValidationFailure("temporary", "type", "Invite temporary must be a boolean")
+        return inputValidationFailure("temporary", "type", "Invite option temporary must be a boolean")
     return {
         ...base,
         ...audit,

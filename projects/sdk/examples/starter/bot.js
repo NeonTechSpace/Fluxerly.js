@@ -1,19 +1,14 @@
 import { runBot } from "@neontechspace/fluxerly"
 
-try {
-    const result = await runBot({
-        token: process.env.FLUXER_BOT_TOKEN,
-        processSignals: true,
-        events: {
-            messageCreate: async ({ message, reply }) => {
-                if (message.author.isBot || message.content !== "!ping") return
-                const sent = await reply({ content: "Pong!" })
-                if (sent.isErr()) console.warn("Reply failed", { kind: sent.error._tag })
-            },
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    processSignals: true,
+    events: {
+        messageCreate: ({ message, reply }) => {
+            if (message.author.isBot || message.content !== "!ping") return
+            // Returning the reply reports a failed send to the log
+            return reply("Pong!")
         },
-    })
-    if (result.isErr()) throw result.error
-} catch {
-    console.error("Bot stopped because an operation or cleanup failed")
-    process.exitCode = 1
-}
+    },
+})

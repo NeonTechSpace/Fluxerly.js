@@ -9,16 +9,12 @@ on:
       line:
         description: Optional expected major.minor release line
         type: string
-      bootstrap:
-        description: Explicitly allow a channel with no published baseline
-        default: false
-        type: boolean
 permissions:
   contents: read
   actions: read
 cache-mode: read
 concurrency:
-  group: release-prepare-${{ inputs.source_ref }}-${{ inputs.line }}-${{ inputs.bootstrap }}
+  group: release-prepare-${{ inputs.source_ref }}-${{ inputs.line }}
   cancel-in-progress: false
   queue: max
 jobs:
@@ -31,12 +27,8 @@ jobs:
         with:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         id: setup
-      - name: Require supported registry contracts before candidate preparation
-        id: support
-        working-directory: projects
-        run: pnpm release:check
       - name: Reuse successful checks for the exact source or require full validation
         id: ci
         working-directory: projects
@@ -70,7 +62,6 @@ jobs:
         working-directory: projects
         env:
           RELEASE_LINE: ${{ inputs.line }}
-          RELEASE_BOOTSTRAP: ${{ inputs.bootstrap }}
         run: |
           node --input-type=module <<'NODE'
           import { execFileSync } from 'node:child_process'
@@ -84,20 +75,18 @@ jobs:
           execFileSync(process.execPath, ['web/scripts/snapshot.js', '--out', docs], { stdio: 'inherit', timeout: 300000 })
           const args = ['release:prepare', '--output', directory, '--docs', docs]
           if (process.env.RELEASE_LINE) args.push('--line', process.env.RELEASE_LINE)
-          if (process.env.RELEASE_BOOTSTRAP === 'true') args.push('--bootstrap')
           const output = execFileSync('pnpm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 600000 })
           process.stdout.write(output)
           const result = JSON.parse(output.trim().split('\n').at(-1))
           appendFileSync(process.env.GITHUB_OUTPUT, `skipped=${result.skipped === true}\n`)
           if (result.skipped === true) {
-            appendFileSync(process.env.GITHUB_OUTPUT, `reason_json=${JSON.stringify(result.reason ?? 'No content change')}\n`)
+            appendFileSync(process.env.GITHUB_OUTPUT, `reason=${String(result.reason ?? 'No content change').replace(/[\r\n]/g, ' ')}\n`)
             process.exit(0)
           }
           const candidate = await readCandidate(directory)
           if (candidate.sourceCommit !== source || !candidate.docs) throw new Error('Candidate source snapshot mismatch')
-          const name = `release-candidate-${source}`
-          appendFileSync(process.env.GITHUB_OUTPUT, `name=${name}\n`)
-          for (const [key, value] of [['version', candidate.version], ['channel', candidate.channel], ['source', source], ['checksum', candidate.checksum]]) {
+          const command = `gh workflow run release-publish.yml --repo ${process.env.GITHUB_REPOSITORY} --ref main -f preparation_run_id=${process.env.GITHUB_RUN_ID} -f candidate_checksum=${candidate.checksum}`
+          for (const [key, value] of [['name', `release-candidate-${source}`], ['version', candidate.version], ['channel', candidate.channel], ['source', source], ['checksum', candidate.checksum], ['publish_command', command]]) {
             appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
           }
           NODE
@@ -106,16 +95,17 @@ jobs:
         if: steps.candidate.outputs.skipped != 'true'
         working-directory: projects
         run: pnpm --filter @neontechspace/fluxerly test:npm --candidate "$RUNNER_TEMP/release-candidate"
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         id: floor_setup
         if: steps.ci.outputs.reused == 'false' && steps.candidate.outputs.skipped != 'true'
         with:
           runtime-policy: consumer-floor
-      - name: Check consumers on the declared Node floor when CI is unavailable
+      - name: Run the SDK suite and check consumers on the declared Node floor when CI is unavailable
         id: floor
         if: steps.ci.outputs.reused == 'false' && steps.candidate.outputs.skipped != 'true'
         working-directory: projects
         run: |
+          pnpm --filter @neontechspace/fluxerly test
           pnpm --filter @neontechspace/fluxerly test:package
           pnpm --filter @neontechspace/fluxerly test:npm --candidate "$RUNNER_TEMP/release-candidate"
       - name: Retain the immutable candidate
@@ -130,13 +120,11 @@ jobs:
           retention-days: 90
       - name: Summarize candidate preparation
         if: always()
-        shell: bash
-        env:
-          SUMMARY_KIND: prepare
-          SUMMARY_STEPS: ${{ toJSON(steps) }}
-        run: |
-          if [ -f .github/scripts/workflow-summary.mjs ]; then
-            node .github/scripts/workflow-summary.mjs
-          else
-            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+        uses: $/.github/actions/summary
+        with:
+          title: Immutable release candidate preparation
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate source": ${{ toJSON(steps.candidate.outputs.source) }}, "Candidate version": ${{ toJSON(steps.candidate.outputs.version) }}, "Candidate channel": ${{ toJSON(steps.candidate.outputs.channel) }}, "Candidate SHA256": ${{ toJSON(steps.candidate.outputs.checksum) }}, "Candidate artifact": ${{ toJSON(steps.candidate.outputs.name) }}, "Candidate artifact ID": ${{ toJSON(steps.artifact.outputs.artifact-id) }}, "Candidate retention": "90 days after upload", "Source validation": ${{ toJSON(steps.ci.outputs.reused == 'true' && 'Reused exact-source Check' || 'Full preparation checks') }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "No-change reason": ${{ toJSON(steps.candidate.outputs.reason) }}}
+          next: Review the version, release notes and candidate SHA256 externally. Then publish this candidate from main
+          command: ${{ steps.candidate.outputs.skipped == 'false' && steps.candidate.outputs.publish_command || '' }}

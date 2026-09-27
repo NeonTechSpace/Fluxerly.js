@@ -1,30 +1,35 @@
+// Bot-session guild create delivery after READY for the existing sandbox guild. The `--voice` mode also compares
+// the projected voice-state snapshot and member voice flags with raw reads.
+// Creates no journal and no remote resources, and changes no server content
 import assert from "node:assert/strict"
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
+import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { readSandbox } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 const voice = process.argv[3] === "--voice"
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, voice, check, ...details }))
+const report = createReporter({ mode, voice })
 let lock
 let stage = "configuration"
 let restoreGatewayCapture
 const rawGuildCreate = { value: undefined }
+
+// Counts only: which member data the provider includes in GUILD_CREATE, without IDs or profile values
+function guildCreateMembers(botId) {
+    const raw = rawGuildCreate.value ?? {}
+    const members = Array.isArray(raw.members) ? raw.members : undefined
+    return {
+        membersField: members === undefined ? (Object.hasOwn(raw, "members") ? "invalid" : "absent") : "array",
+        membersSupplied: members?.length ?? null,
+        botIncluded: members?.some((member) => member?.user?.id === botId) ?? null,
+        memberCount: typeof raw.member_count === "number" ? raw.member_count : null,
+        presencesSupplied: Array.isArray(raw.presences) ? raw.presences.length : null,
+    }
+}
 let listedUnavailableAtReady = false
 
-async function get(path, token) {
-    const response = await fetch(`https://api.fluxer.app/v1${path}`, {
-        headers: { Authorization: `Bot ${token}` },
-        signal: AbortSignal.timeout(10_000),
-        redirect: "error",
-    })
-    if (!response.ok) {
-        await response.body?.cancel()
-        throw new Error("Sandbox identity request failed")
-    }
-    return response.json()
-}
+const get = (path, token) => readSandbox(path, token, { timeout: 10_000 })
 
 async function waitForGuildCreate(client, guildId, created, unavailable) {
     const deadline = performance.now() + 15_000
@@ -98,27 +103,16 @@ try {
     assert.ok(process.argv[3] === undefined || voice)
     assert.equal(process.argv[4], undefined)
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
 
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    const token = env.FLUXER_TEST_BOT_TOKEN
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    const guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.match(applicationId ?? "", /^\d+$/)
-    assert.match(guildId ?? "", /^\d+$/)
+    const { token, applicationId, guildId } = loadSandboxEnvironment()
 
     stage = "sandbox_identity"
-    const [application, bot, guild] = await Promise.all([
-        get("/applications/@me", token),
-        get("/users/@me", token),
-        get(`/guilds/${guildId}`, token),
-    ])
-    assert.equal(application.id, applicationId)
-    assert.equal(application.bot?.id, bot.id)
-    assert.equal(bot.bot, true)
-    assert.equal(guild.id, guildId)
+    const { user: bot, guild } = await verifySandboxIdentity((path) => get(path, token), {
+        applicationId,
+        guildId,
+        concurrent: true,
+    })
     report(stage, { passed: true, clientSecretUsed: false })
 
     {
@@ -146,35 +140,29 @@ try {
 
     if (mode === "default") {
         const { createClient } = await import("@neontechspace/fluxerly")
-        const client = createClient({ token })._unsafeUnwrap()
+        const client = createClient({ token })
         const created = { value: undefined }
         const unavailable = { value: undefined }
         const voiceSnapshot = { value: undefined }
         try {
             stage = "subscribe_before_ready"
-            client
-                .on("guildCreate", (value) => {
-                    if (value.id === guildId) created.value = value
-                })
-                ._unsafeUnwrap()
-            client
-                .on("guildDelete", (value) => {
-                    if (value.id === guildId && value.unavailable) unavailable.value = value
-                })
-                ._unsafeUnwrap()
+            client.on("guildCreate", (value) => {
+                if (value.id === guildId) created.value = value
+            })
+            client.on("guildDelete", (value) => {
+                if (value.id === guildId && value.unavailable) unavailable.value = value
+            })
             if (voice)
-                client
-                    .on("voiceStateSnapshot", (value) => {
-                        if (value.guildId === guildId) voiceSnapshot.value = value
-                    })
-                    ._unsafeUnwrap()
+                client.on("voiceStateSnapshot", (value) => {
+                    if (value.guildId === guildId) voiceSnapshot.value = value
+                })
             stage = "connect"
             ;(await client.connect())._unsafeUnwrap()
             stage = "guild_create_after_ready"
             await waitForGuildCreate(client, guildId, created, unavailable)
             assert.equal(created.value.name, guild.name)
             assert.equal(created.value.ownerId, guild.owner_id)
-            report(stage, { passed: true, isNewJoin: created.value.isNewJoin })
+            report(stage, { passed: true, isNewJoin: created.value.isNewJoin, members: guildCreateMembers(bot.id) })
             if (voice) {
                 stage = "voice_baseline"
                 const snapshotSupplied = await waitForVoiceSnapshot(client, guildId, voiceSnapshot)
@@ -228,7 +216,11 @@ try {
                     yield* Effect.promise(() => waitForGuildCreate(client, guildId, created, unavailable))
                     assert.equal(created.value.name, guild.name)
                     assert.equal(created.value.ownerId, guild.owner_id)
-                    report(stage, { passed: true, isNewJoin: created.value.isNewJoin })
+                    report(stage, {
+                        passed: true,
+                        isNewJoin: created.value.isNewJoin,
+                        members: guildCreateMembers(bot.id),
+                    })
                     if (voice) {
                         stage = "voice_baseline"
                         const snapshotSupplied = yield* Effect.promise(() =>
@@ -254,8 +246,8 @@ try {
     process.exitCode = 1
 } finally {
     restoreGatewayCapture?.()
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (lock !== undefined && !lock.release()) {
+        report("sandbox_lock_cleanup", { passed: false, lockRetained: true })
+        process.exitCode = 1
     }
 }

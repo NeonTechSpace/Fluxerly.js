@@ -2,35 +2,47 @@ import type { OperationOptions } from "./client.js"
 import type { MessageOperationOptions, Message, MessageCore } from "./messages.js"
 import type { PaginationQuery } from "./pagination.js"
 
-/** Server or channel in which to search messages visible to the bot.
- * Supply at least guildId or channelId, as decimal strings. You may supply both.
+/** Community or channel in which to search messages visible to the bot.
+ * Supply at least guildId or channelId, as decimal strings, or both.
  * Search uses the bot's current access permissions, not another account's permissions or access the bot had earlier.
  * The SDK captures the supplied IDs once when the request or traversal starts
+ *
+ * @category Messages
  */
 export type MessageSearchContext =
     | {
-          /** Server ID defining the search context, as a decimal string */
+          /** Community ID defining the search context, as a decimal string */
           readonly guildId: string
-          /** Optional channel context supplied alongside the server ID, as a decimal string */
+          /** Optional channel context supplied alongside the community ID, as a decimal string */
           readonly channelId?: string
       }
     | {
-          /** Optional server ID supplied with this channel context, as a decimal string */
+          /** Optional community ID supplied with this channel context, as a decimal string */
           readonly guildId?: string
           /** Channel ID defining the search context, as a decimal string */
           readonly channelId: string
       }
 
-/** Author category used by Fluxer's message search: A user, bot or webhook sender */
+/**
+ * Author category used by Fluxer's message search: A user, bot or webhook sender
+ *
+ * @category Messages
+ */
 export type MessageSearchAuthorType = "user" | "bot" | "webhook"
 
 /** Kind of content to require or exclude in Fluxer's message search.
- * snapshot identifies copied content in a forwarded message
+ * The kind snapshot identifies copied content in a forwarded message
+ *
+ * @category Messages
  */
 export type MessageSearchContentType =
     "image" | "sound" | "video" | "file" | "sticker" | "embed" | "link" | "poll" | "snapshot"
 
-/** Embed category to require or exclude in Fluxer's message search */
+/**
+ * Embed category to require or exclude in Fluxer's message search
+ *
+ * @category Messages
+ */
 export type MessageSearchEmbedType = "image" | "video" | "sound" | "article"
 
 /** Filters and paging settings for one messages.search request.
@@ -40,6 +52,8 @@ export type MessageSearchEmbedType = "image" | "video" | "sound" | "article"
  * Unknown properties, invalid values and lists exceeding the documented limits are rejected locally.
  * The SDK copies each filter array when the operation starts, so later changes to the array do not affect this request.
  * All ID filters use decimal strings. Text limits count UTF-16 code units, the units used by JavaScript string.length
+ *
+ * @category Messages
  */
 export interface MessageSearchQuery {
     /** Maximum indexed messages requested, an integer from 1 through 25, default 25 */
@@ -110,11 +124,13 @@ export interface MessageSearchQuery {
 
 /** Channel information supplied beside message search results.
  * This frozen snapshot is not a complete channel, cached channel or permission check
+ *
+ * @category Messages
  */
 export interface MessageSearchChannel {
     /** Channel ID as a decimal string */
     readonly id: string
-    /** Owning server ID, when Fluxer supplied it */
+    /** Owning community ID, when Fluxer supplied it */
     readonly guildId?: string
     /** Observed channel name, when supplied. Private channels may omit it */
     readonly name?: string
@@ -125,6 +141,8 @@ export interface MessageSearchChannel {
 /** Successful search response indicating that Fluxer is still preparing an index.
  * No messages or result total are available yet. Retry later with another explicit search request.
  * The SDK does not poll or retry indexing automatically
+ *
+ * @category Messages
  */
 export interface MessageSearchIndexingPage {
     /** True distinguishes this response from a MessageSearchResultsPage */
@@ -134,6 +152,8 @@ export interface MessageSearchIndexingPage {
 /** Search results returned once Fluxer's index can answer the request.
  * The page and its nested results are frozen. Later index updates can change later pages and totals.
  * Check indexing before reading results, since search can instead return MessageSearchIndexingPage
+ *
+ * @category Messages
  */
 export interface MessageSearchResultsPage<M extends MessageCore = Message> {
     /** False distinguishes this response from an index-preparation response */
@@ -152,6 +172,8 @@ export interface MessageSearchResultsPage<M extends MessageCore = Message> {
 
 /** Successful outcome of one messages.search request.
  * Branch on indexing before accessing result fields
+ *
+ * @category Messages
  */
 export type MessageSearchPage<M extends MessageCore = Message> = MessageSearchIndexingPage | MessageSearchResultsPage<M>
 
@@ -160,6 +182,8 @@ export type MessageSearchPage<M extends MessageCore = Message> = MessageSearchIn
  * Limits are captured once when that consumption starts.
  * Fluxer supports at most 400 numbered pages. If more results remain after page 400, traversal fails with PaginationError reason pageLimit.
  * No background prefetch runs. An indexing response fails traversal with PaginationError reason indexing rather than polling
+ *
+ * @category Messages
  */
 export interface MessageSearchIterationLimits extends PaginationQuery {
     /** Maximum messages per request, an integer from 1 through 25, default 25.
@@ -170,11 +194,15 @@ export interface MessageSearchIterationLimits extends PaginationQuery {
 
 /** Deadline for one explicit search request.
  * For iterateSearch, the deadline applies separately to each page request, not to the entire traversal
+ *
+ * @category Messages
  */
 export interface MessageSearchOptions extends MessageOperationOptions {}
 
 /** Search settings for the Promise and Result API, including AbortSignal cancellation.
- * signal affects this explicit request or this consumption's iterator pulls, not other callers.
+ * The signal affects this explicit request or this consumption's iterator pulls, not other callers.
  * The Effect entry point uses interruption instead
+ *
+ * @category Messages
  */
 export interface DefaultMessageSearchOptions extends MessageSearchOptions, OperationOptions {}

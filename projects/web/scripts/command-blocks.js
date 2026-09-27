@@ -1,4 +1,8 @@
+import { pageSchema, requireTransformSchema } from "./transform-schemas.js"
 const exactVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/
+
+// Released guide snapshots still use the plain form, so both stay accepted
+const runCommands = ["node --env-file=.env bot.js", "node bot.js"]
 
 /** Reject unsupported metadata without including authored input in build errors */
 export function validateCommand(value) {
@@ -9,7 +13,7 @@ export function validateCommand(value) {
     if (value.kind === "add" && keys === "kind,package,version" && value.package === "effect" &&
         typeof value.version === "string" && exactVersion.test(value.version)) return value
     if (value.kind === "list" && keys === "kind,package" && value.package === "effect") return value
-    if (value.kind === "run" && keys === "command,kind" && value.command === "node bot.js") return value
+    if (value.kind === "run" && keys === "command,kind" && runCommands.includes(value.command)) return value
     throw new Error("Invalid command metadata")
 }
 
@@ -18,12 +22,14 @@ export function commandVariant(metadata, manager = "npm", language = "js") {
     if (!["npm", "pnpm"].includes(manager) || !["js", "ts"].includes(language)) throw new Error("Invalid command preference")
     let command
     let note = ""
-    if (value.kind === "install") {
-        command = `${manager === "npm" ? "npm install" : "pnpm add"} ${value.package}@${value.version}`
-    } else if (value.kind === "add") {
-        command = `${manager === "npm" ? "npm install" : "pnpm add"} --save-exact ${value.package}@${value.version}`
+    // A prerelease SDK's API can change between versions, so its install pins the exact version, and a Stable install
+    // keeps the package manager's normal range. The Effect add always pins, because the SDK's Effect peer is one exact
+    // version. npm and pnpm both accept --save-exact
+    if (value.kind === "install" || value.kind === "add") {
+        const exact = value.kind === "add" || value.version.includes("-")
+        command = `${manager === "npm" ? "npm install" : "pnpm add"}${exact ? " --save-exact" : ""} ${value.package}@${value.version}`
     } else if (value.kind === "list") command = `${manager} list ${value.package}`
-    else command = language === "ts" ? "node bot.ts" : value.command
+    else command = language === "ts" ? value.command.replace(/bot\.js$/, "bot.ts") : value.command
     return { command, note }
 }
 
@@ -48,7 +54,8 @@ export function renderCommandBlock(metadata) {
 }
 
 export function remarkCommandBlocks() {
-    return function transform(root) {
+    return function transform(root, file) {
+        requireTransformSchema("commandBlocks", pageSchema(file))
         visit(root)
         function visit(node) {
             if (!Array.isArray(node.children)) return

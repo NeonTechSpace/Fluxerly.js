@@ -1,3 +1,5 @@
+// @ts-check
+
 import { readFileSync } from "node:fs"
 
 const releaseCommands = new Set(["check-support", "version", "prepare", "verify", "publish", "status"])

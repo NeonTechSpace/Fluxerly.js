@@ -1,26 +1,28 @@
+// Manual selected-participant move, disconnect, mute and deafen controls with snapshots, events and REST readback.
+// Journal `.env.test.voice-controls.local` records the sandbox, bot and participant identity, the participant's
+// baseline and current state, the temporary voice channel marker and returned ID, and any pending operation.
+// An existing journal triggers recovery only: a pending operation is resolved from fresh gateway and REST
+// observations, the participant must rejoin the baseline channel with unchanged flags, the baseline is restored and
+// verified, and the test channel is removed. Unexpected or conflicting state keeps the journal
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import { Effect, Exit, Scope } from "effect"
+import {
+    acquireLock,
+    checkSandboxIdentity,
+    finalizeOwned,
+    loadSandboxEnvironment,
+    openJournal,
+    processValue,
+    snowflake as idPattern,
+} from "./support/harness.js"
+import { pendingResolution, rejoinedBaseline, sameState } from "./support/voice-state.js"
+import { createReporter } from "./support/reporting.js"
+import { createSandboxApi } from "./support/sandbox-api.js"
+import { settle as value } from "./support/results.js"
 
 const mode = process.argv[2]
-const idPattern = /^[1-9][0-9]{0,19}$/
-const sameState = (left, right) =>
-    left?.channelId === right?.channelId && left?.muted === right?.muted && left?.deafened === right?.deafened
-const pendingResolution = (current, pending) =>
-    sameState(current, pending.intended) ? "intended" : sameState(current, pending.before) ? "before" : "conflict"
-
-if (mode === "--self-test") {
-    const before = { channelId: "1", muted: false, deafened: false }
-    const intended = { channelId: "2", muted: true, deafened: false }
-    assert.equal(pendingResolution(intended, { before, intended }), "intended")
-    assert.equal(pendingResolution(before, { before, intended }), "before")
-    assert.equal(pendingResolution({ ...before, deafened: true }, { before, intended }), "conflict")
-    console.log(JSON.stringify({ check: "voice_control_journal_state_machine", passed: true }))
-    process.exit(0)
-}
 
 // Manual current-authorization check. The participant ID is accepted only from this process, never .env.test.local
 assert.ok(mode === "default" || mode === "effect")
@@ -28,13 +30,11 @@ assert.ok(process.argv[3] === undefined || ["--flags-only", "--no-move"].include
 assert.equal(process.argv[4], undefined)
 const flagsOnly = process.argv[3] === "--flags-only"
 const skipMoves = process.argv[3] === "--no-move"
-const voiceUserId = process.env.FLUXER_TEST_VOICE_USER_ID
-assert.match(voiceUserId ?? "", idPattern, "Set the currently authorized FLUXER_TEST_VOICE_USER_ID")
+const voiceUserId = processValue("FLUXER_TEST_VOICE_USER_ID")
 
 const rawFetch = globalThis.fetch
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const journalPath = new URL("../../.env.test.voice-controls.local", import.meta.url)
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, passed: true, ...details }))
+const journalFile = openJournal("voice-controls")
+const report = createReporter({ mode }, { passed: true })
 let lock, journal, client, scope, sdk, token, guildId, botId
 let verified = false
 let stage = "configuration"
@@ -42,32 +42,10 @@ let stops = []
 let voiceEvents = []
 let snapshots = []
 
-async function value(operation) {
-    if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        if (result._tag === "Failure") throw result.failure
-        return result.success
-    }
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
-
+const sandboxApi = createSandboxApi({ fetch: rawFetch, token: () => token })
 async function api(method, path) {
-    let response
-    try {
-        response = await rawFetch(`https://api.fluxer.app/v1${path}`, {
-            method,
-            redirect: "error",
-            signal: AbortSignal.timeout(15_000),
-            headers: { Authorization: `Bot ${token}` },
-        })
-        const body = await response.json().catch(() => undefined)
-        assert.ok(response.ok, `Sandbox HTTP ${response.status}`)
-        return body && typeof body === "object" && "data" in body ? body.data : body
-    } finally {
-        if (response && !response.bodyUsed) await response.body?.cancel()
-    }
+    const { data } = await sandboxApi(method, path)
+    return data && typeof data === "object" && "data" in data ? data.data : data
 }
 
 async function rawMember() {
@@ -79,7 +57,7 @@ async function rawMember() {
 }
 
 const flags = (member) => ({ muted: member.mute, deafened: member.deaf })
-const save = () => writeFileSync(journalPath, JSON.stringify(journal))
+const save = () => journalFile.save(journal)
 
 async function stopClient() {
     const failures = []
@@ -115,7 +93,7 @@ async function stopClient() {
 async function startClient() {
     voiceEvents = []
     snapshots = []
-    if (mode === "default") client = sdk.createClient({ token, cache: { members: true } })._unsafeUnwrap()
+    if (mode === "default") client = sdk.createClient({ token, cache: { members: true } })
     else {
         scope = Scope.makeUnsafe()
         client = await Effect.runPromise(
@@ -125,16 +103,16 @@ async function startClient() {
     const subscribe = async (event, receive) => {
         const subscription =
             mode === "default"
-                ? await value(client.on(event, receive))
+                ? client.on(event, receive)
                 : await Effect.runPromise(
                       client.on(event, (item) => Effect.sync(() => receive(item))).pipe(Scope.provide(scope)),
                   )
         return async () => {
             if (mode === "default") {
-                subscription.unsubscribe()
+                subscription.close()
                 await value(subscription.waitForClose())
             } else {
-                await Effect.runPromise(subscription.unsubscribe())
+                await Effect.runPromise(subscription.close())
                 await Effect.runPromise(subscription.waitForClose().pipe(Scope.provide(scope)))
             }
         }
@@ -308,12 +286,7 @@ async function requireRejoin() {
                 muted: event.isMuted,
                 deafened: event.isDeafened,
             }
-        if (current.channelId === journal.baseline.channelId) {
-            assert.deepEqual(
-                { muted: current.muted, deafened: current.deafened },
-                { muted: journal.baseline.muted, deafened: journal.baseline.deafened },
-                "Concurrent participant voice-flag change after disconnect; retain recovery journal",
-            )
+        if (rejoinedBaseline(current, journal.baseline)) {
             journal.current = current
             journal.phase = "restoring"
             save()
@@ -338,14 +311,7 @@ async function restore() {
     else {
         const current = await freshCurrentState()
         if (journal.phase === "awaiting_rejoin") {
-            if (current.channelId === journal.baseline.channelId) {
-                assert.deepEqual(
-                    { muted: current.muted, deafened: current.deafened },
-                    { muted: journal.baseline.muted, deafened: journal.baseline.deafened },
-                    "Concurrent participant voice-flag change after disconnect; retain recovery journal",
-                )
-                journal.phase = "restoring"
-            }
+            if (rejoinedBaseline(current, journal.baseline)) journal.phase = "restoring"
             journal.current = current
             if (current.channelId !== journal.baseline.channelId) await requireRejoin()
         } else
@@ -372,15 +338,15 @@ async function restore() {
     }
     if (journal.current.muted !== journal.baseline.muted)
         await mutate("restore_mute", { ...journal.current, muted: journal.baseline.muted }, () =>
-            client.members.setMute({ guildId, userId: voiceUserId }, journal.baseline.muted),
+            client.members.setMute({ guildId, userId: voiceUserId }, { muted: journal.baseline.muted }),
         )
     if (journal.current.deafened !== journal.baseline.deafened)
         await mutate("restore_deafen", { ...journal.current, deafened: journal.baseline.deafened }, () =>
-            client.members.setDeaf({ guildId, userId: voiceUserId }, journal.baseline.deafened),
+            client.members.setDeaf({ guildId, userId: voiceUserId }, { deafened: journal.baseline.deafened }),
         )
     await verifyState(journal.baseline)
     await removeTestChannel()
-    unlinkSync(journalPath)
+    journalFile.remove()
     journal = undefined
     report("participant_state_restored")
 }
@@ -391,14 +357,10 @@ const watchdog = setTimeout(() => {
 }, 330_000).unref()
 
 async function run() {
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    const env = { ...parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8")), ...process.env }
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", idPattern)
-    assert.match(env.FLUXER_TEST_APPLICATION_ID ?? "", idPattern)
+    lock = acquireLock()
+    const sandbox = loadSandboxEnvironment({ processOverrides: true })
+    token = sandbox.token
+    guildId = sandbox.guildId
     stage = "sandbox_identity_and_participant"
     const [application, self, guild, participant] = await Promise.all([
         api("GET", "/applications/@me"),
@@ -406,14 +368,10 @@ async function run() {
         api("GET", `/guilds/${guildId}`),
         rawMember(),
     ])
-    assert.equal(application?.id, env.FLUXER_TEST_APPLICATION_ID)
-    assert.equal(application?.bot?.id, self?.id)
-    assert.equal(self?.bot, true)
-    assert.equal(guild?.id, guildId)
+    botId = checkSandboxIdentity({ application, user: self, guild }, sandbox)
     assert.equal(participant.user?.id, voiceUserId)
     assert.notEqual(participant.user?.bot, true, "Use the currently authorized non-bot participant")
-    assert.notEqual(voiceUserId, self.id, "The bot cannot be the voice-control participant")
-    botId = self.id
+    assert.notEqual(voiceUserId, botId, "The bot cannot be the voice-control participant")
     verified = true
     report(stage, { clientSecretUsed: false })
     sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
@@ -426,7 +384,7 @@ async function run() {
         sdk.Permissions.MoveMembers |
         sdk.Permissions.MuteMembers |
         sdk.Permissions.DeafenMembers
-    const canManageParticipant = await value(client.members.fetchHierarchyCheck({ guildId, userId: voiceUserId }))
+    const canManageParticipant = await value(client.members.fetchCanManage({ guildId, userId: voiceUserId }))
     report("voice_control_preflight", {
         passed: (permissions & required) === required && canManageParticipant,
         hasRequiredPermissions: (permissions & required) === required,
@@ -444,8 +402,8 @@ async function run() {
         "The bot cannot manage this participant under Fluxer's current hierarchy rule",
     )
     report(stage)
-    if (existsSync(journalPath)) {
-        journal = JSON.parse(readFileSync(journalPath, "utf8"))
+    if (journalFile.exists()) {
+        journal = journalFile.read()
         stage = "recover_prior_voice_test"
         await restore()
         return
@@ -461,14 +419,14 @@ async function run() {
         current: baseline,
         phase: "preparing",
     }
-    writeFileSync(journalPath, JSON.stringify(journal), { flag: "wx" })
+    journalFile.create(journal)
     journal.phase = "mutating"
     save()
     const setFlags = (name, changed) =>
         mutate(name, { ...journal.current, ...changed }, () =>
             "muted" in changed
-                ? client.members.setMute({ guildId, userId: voiceUserId }, changed.muted)
-                : client.members.setDeaf({ guildId, userId: voiceUserId }, changed.deafened),
+                ? client.members.setMute({ guildId, userId: voiceUserId }, { muted: changed.muted })
+                : client.members.setDeaf({ guildId, userId: voiceUserId }, { deafened: changed.deafened }),
         )
     stage = "server_mute"
     if (journal.current.muted) await setFlags("initial_unmute", { muted: false })
@@ -542,56 +500,44 @@ try {
     )
     process.exitCode = 1
 } finally {
-    let quiescent = true
-    const retainEvidence = (finalizer) => {
-        quiescent = false
-        console.error(
-            JSON.stringify({
-                mode,
-                stage: "client_cleanup",
-                passed: false,
-                finalizer,
-                journalRetained: journal !== undefined,
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exitCode = 1
-    }
-    try {
-        await stopClient()
-    } catch {
-        retainEvidence("initial_client_shutdown")
-    }
-    if (quiescent)
-        try {
-            await restore()
-        } catch {
-            quiescent = false
-            console.error(
-                JSON.stringify({
-                    mode,
-                    stage: "voice_recovery",
-                    passed: false,
-                    journalRetained: journal !== undefined,
-                    lockRetained: lock !== undefined,
-                }),
-            )
+    // Recovery runs only after the original client is proven closed, and the client it starts is always closed.
+    // Keep the journal, lock and deadline if a failed owned finalizer or recovery leaves work uncertain
+    let initialClientClosed = false
+    await finalizeOwned({
+        writers: [
+            [
+                "initial_client_shutdown",
+                async () => {
+                    await stopClient()
+                    initialClientClosed = true
+                },
+            ],
+            [
+                "voice_recovery",
+                async () => {
+                    if (initialClientClosed) await restore()
+                },
+            ],
+            ["restoration_client_shutdown", stopClient],
+        ],
+        lock,
+        watchdog,
+        onFailure: (finalizer) => {
+            const lockRetained = lock?.held ?? false
+            if (finalizer === "sandbox_lock")
+                console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained }))
+            else
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        stage: finalizer === "voice_recovery" ? "voice_recovery" : "client_cleanup",
+                        passed: false,
+                        ...(finalizer === "voice_recovery" ? {} : { finalizer }),
+                        journalRetained: journal !== undefined,
+                        lockRetained,
+                    }),
+                )
             process.exitCode = 1
-        }
-    try {
-        await stopClient()
-    } catch {
-        retainEvidence("restoration_client_shutdown")
-    }
-    if (quiescent && lock !== undefined) {
-        try {
-            closeSync(lock)
-            unlinkSync(lockPath)
-        } catch {
-            console.error(JSON.stringify({ mode, stage: "lock_cleanup", passed: false, lockRetained: true }))
-            process.exitCode = 1
-        }
-    }
-    // Keep the deadline if failed owned finalizers or recovery leave work uncertain
-    if (quiescent) clearTimeout(watchdog)
+        },
+    })
 }

@@ -1,16 +1,18 @@
+/**
+ * Guild list, leave and bulk own-message deletion requests, including the required deletion confirmation.
+ * Invariant: Requests are validated locally, and list summaries keep only decoded public fields.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import type { GuildListQuery, GuildListSummary } from "#sdk/guilds"
 import { decodeGuild, type GuildRequest } from "./guilds.js"
-import { identifier, record } from "./message.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import { count, identifier, record } from "./decode/primitives.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
 const unsigned64 = (value: unknown): value is string =>
     typeof value === "string" &&
     value.length <= 20 &&
     /^(0|[1-9][0-9]*)$/.test(value) &&
     BigInt(value) <= (1n << 64n) - 1n
-
-const count = (value: unknown): value is number =>
-    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 2_147_483_647
 
 function decodeGuildListSummary(value: unknown): GuildListSummary | undefined {
     const guild = decodeGuild(value)
@@ -34,23 +36,21 @@ export function guildList(
     query: GuildListQuery = {},
 ): GuildRequest<readonly GuildListSummary[]> | InputValidationFailure {
     if (!record(query)) return inputValidationFailure("query", "type", "Guild list query must be an object")
-    if (Object.keys(query).some((key) => !["limit", "before", "after", "withCounts"].includes(key)))
-        return inputValidationFailure(
-            "query",
-            "allowedFields",
-            "Guild list query may contain only limit, before, after, and withCounts",
-        )
-    if (
-        (query.before !== undefined && !identifier(query.before)) ||
-        (query.after !== undefined && !identifier(query.after)) ||
-        (query.before !== undefined && query.after !== undefined) ||
-        (query.withCounts !== undefined && typeof query.withCounts !== "boolean")
+    const unsupported = unsupportedKeyFailure(
+        query,
+        ["limit", "before", "after", "withCounts"],
+        "query",
+        "the guild list query",
     )
-        return inputValidationFailure(
-            "query",
-            "format",
-            "Guild list cursors must be decimal IDs, only one cursor may be set, and withCounts must be boolean",
-        )
+    if (unsupported) return unsupported
+    if (query.before !== undefined && !identifier(query.before))
+        return inputValidationFailure("query", "format", "Guild list cursor IDs must be decimal strings")
+    if (query.after !== undefined && !identifier(query.after))
+        return inputValidationFailure("query", "format", "Guild list cursor IDs must be decimal strings")
+    if (query.before !== undefined && query.after !== undefined)
+        return inputValidationFailure("query", "format", "Guild list query cannot combine before and after")
+    if (query.withCounts !== undefined && typeof query.withCounts !== "boolean")
+        return inputValidationFailure("query", "format", "Guild list withCounts must be a boolean")
     const limit = query.limit === undefined ? 200 : query.limit
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 200)
         return inputValidationFailure("query.limit", "range", "Guild list limit must be an integer from 1 through 200")
@@ -93,8 +93,23 @@ export function guildLeave(guildId: string): GuildRequest<void> | InputValidatio
     }
 }
 
+/**
+ * Check the required own-history deletion confirmation and return the remaining deadline and signal settings.
+ * The confirm field is removed so the shared option checks accept the rest unchanged
+ */
+export function ownDeletionOptions<O extends object>(options: unknown): O | InputValidationFailure {
+    if (!record(options) || options.confirm !== true)
+        return inputValidationFailure(
+            "options.confirm",
+            "required",
+            "Own-history deletion requires options with confirm: true",
+        )
+    const { confirm: _confirm, ...rest } = options
+    return rest as O
+}
+
 /** Builds the authenticated member's whole-guild message deletion request without changing membership or roles */
-export function guildDeleteMine(guildId: string): GuildRequest<void> | InputValidationFailure {
+export function guildDeleteOwnMessages(guildId: string): GuildRequest<void> | InputValidationFailure {
     if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {
         guildId,

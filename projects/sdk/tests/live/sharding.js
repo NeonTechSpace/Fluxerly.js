@@ -1,16 +1,19 @@
+// Two-shard connection, a selected member stream, interruption and recovery of this process's own socket for the
+// shard that owns the sandbox guild, a count request routed to that shard, and cancellation of a partially ready
+// startup.
+// Creates no journal and no remote resources, and changes no server content
 import assert from "node:assert/strict"
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import { Cause, Effect, Exit, Scope, Stream } from "effect"
 import WebSocket from "ws"
+import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createFailureClassifier, createOutcomeReporter } from "./support/reporting.js"
+import { fromExit, settleExit as value } from "./support/results.js"
+import { readSandbox } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
 const totalShards = 2
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const report = (check, passed = true, details = {}) => console.log(JSON.stringify({ mode, check, passed, ...details }))
-const skipped = (check, reason) =>
-    console.log(JSON.stringify({ mode, check, status: "SKIPPED", skipped: true, reason }))
+const report = createOutcomeReporter({ mode })
 let stage = "configuration"
 let lock
 let client
@@ -20,38 +23,15 @@ let token
 let guildId
 let botId
 
-function fromExit(exit) {
-    if (Exit.isSuccess(exit)) return exit.value
-    if (Cause.hasDies(exit.cause)) throw Error("Unexpected SDK defect")
-    if (Cause.hasInterruptsOnly(exit.cause)) throw { _tag: "TestInterrupted" }
-    const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-    if (failure?._tag === "Fail") throw failure.error
-    throw Error("Unexpected operation outcome")
+// Cache lookups return the guild or undefined directly in the default API and as a never-failing Effect natively
+function cachedGuild() {
+    return mode === "default" ? client.guilds.get(guildId) : Effect.runPromise(client.guilds.get(guildId))
 }
 
-async function value(operation) {
-    if (Effect.isEffect(operation)) return fromExit(await Effect.runPromiseExit(operation))
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}
+const api = (path) => readSandbox(path, token, { exact: true })
 
-async function api(path) {
-    const response = await fetch(`https://api.fluxer.app/v1${path}`, {
-        method: "GET",
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: { Authorization: `Bot ${token}` },
-    })
-    if (response.status !== 200) {
-        await response.body?.cancel()
-        throw Error("Sandbox identity request failed")
-    }
-    return response.json()
-}
-
-function safeFailure(error) {
-    const known = new Set([
+const safeFailure = createFailureClassifier({
+    tags: [
         "ConfigurationError",
         "ConnectionError",
         "ConnectionTimeoutError",
@@ -59,11 +39,8 @@ function safeFailure(error) {
         "MemberChunkError",
         "ClientClosedError",
         "TestInterrupted",
-    ])
-    return {
-        category: known.has(error?._tag) ? error._tag : error?.code === "ERR_ASSERTION" ? "assertion" : "unexpected",
-    }
-}
+    ],
+})
 
 function shardForGuild(id) {
     return Number((BigInt(id) >> 22n) % BigInt(totalShards))
@@ -212,9 +189,7 @@ async function selectedMemberStream() {
 
 async function createDriver(sdk, options) {
     if (mode === "default") {
-        const created = sdk.createClient(options)
-        assert.ok(created.isOk())
-        client = created.value
+        client = sdk.createClient(options)
         return {
             connect: (signal) => client.connect(signal ? { signal } : undefined),
             close: () => value(client.shutdown()),
@@ -256,26 +231,18 @@ try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    token = env.FLUXER_TEST_BOT_TOKEN
-    guildId = env.FLUXER_TEST_GUILD_ID
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    assert.ok(token && token === token.trim())
-    assert.match(guildId ?? "", /^[1-9][0-9]*$/)
-    assert.match(applicationId ?? "", /^[1-9][0-9]*$/)
+    lock = acquireLock()
+    const sandbox = loadSandboxEnvironment()
+    token = sandbox.token
+    guildId = sandbox.guildId
 
     stage = "sandbox_identity"
-    const [application, bot, guild] = await Promise.all([
-        api("/oauth2/applications/@me"),
-        api("/users/@me"),
-        api(`/guilds/${guildId}`),
-    ])
-    assert.equal(application.id, applicationId)
-    assert.equal(bot.bot, true)
-    assert.equal(application.bot?.id, bot.id)
-    assert.equal(guild.id, guildId)
+    const { user: bot } = await verifySandboxIdentity(api, {
+        applicationId: sandbox.applicationId,
+        guildId,
+        applicationPath: "/oauth2/applications/@me",
+        concurrent: true,
+    })
     assert.match(bot.id, /^[1-9][0-9]*$/)
     botId = bot.id
     const botMember = await api(`/guilds/${guildId}/members/${botId}`)
@@ -341,8 +308,17 @@ try {
     await selectedMemberStream()
     report(stage, true, { selectedBotOnly: true })
 
-    // The hosted multi-shard count owner fix is not deployed, so no fallback can establish provider routing
-    skipped("count_request_owner", "provider_fix_not_deployed")
+    stage = "count_request_owner"
+    // Read-only count request that the SDK must route to the shard owning the sandbox guild
+    const counted = await value(client.guilds.fetchCounts([guildId], { timeoutMs: 10_000 }))
+    assert.ok(Object.isFrozen(counted) && Object.isFrozen(counted.counts))
+    assert.equal(counted.counts.length, 1)
+    assert.ok(Object.isFrozen(counted.counts[0]))
+    assert.equal(counted.counts[0].guildId, guildId)
+    for (const count of [counted.counts[0].memberCount, counted.counts[0].onlineCount])
+        assert.ok(Number.isSafeInteger(count) && count >= 0)
+    assert.deepEqual(counted.omittedGuildIds, [])
+    report(stage, true, { ownerShardId: targetShard, counts: 1, omitted: 0 })
 
     stage = "first_client_cleanup"
     await driver.close()
@@ -377,7 +353,7 @@ try {
         10_000,
         5,
     )
-    const cachedBeforeCancellation = await value(client.guilds.get(guildId))
+    const cachedBeforeCancellation = await cachedGuild()
     controller.abort()
     if (mode === "default") {
         const result = await pending
@@ -390,7 +366,7 @@ try {
     }
     await waitFor(() => client.state === "Disconnected", 5_000)
     assert.ok(client.shards.every((shard) => shard.state === "Disconnected"))
-    const cachedAfterCancellation = await value(client.guilds.get(guildId))
+    const cachedAfterCancellation = await cachedGuild()
     assert.equal(cachedAfterCancellation, undefined)
     probe.verifyClosed()
     report(stage, true, {
@@ -426,14 +402,8 @@ try {
         probe?.restore()
         if (cleanupVerified) clearTimeout(watchdog)
         if (lock !== undefined && cleanupVerified) {
-            try {
-                assert.equal(readFileSync(lockPath, "utf8"), String(process.pid))
-                closeSync(lock)
-                lock = undefined
-                unlinkSync(lockPath)
-                assert.equal(existsSync(lockPath), false)
-                report("sandbox_lock_released", true, { lockVerified: true })
-            } catch {
+            if (lock.release()) report("sandbox_lock_released", true, { lockVerified: true })
+            else {
                 report("sandbox_lock_cleanup", false, { lockVerified: false })
                 process.exitCode = 1
             }

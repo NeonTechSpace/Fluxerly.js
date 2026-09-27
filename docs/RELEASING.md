@@ -1,188 +1,204 @@
 # Releasing
 
-This guide covers Changesets authoring, immutable candidates and publication from reviewed SDK source. Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions and distribution tags
+This guide covers cutting an SDK release from reviewed `main` source, recovering from failures and the rules the release tooling enforces.
+Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions and distribution tags
 
-## Registry publication contract
+## Cut a release
 
-The canonical SDK manifest remains `private`. `stageRelease` creates a separate public npm package directory and `sdk.tgz` tarball. Never publish from the SDK checkout
+1. Record SDK changes with `pnpm changeset` from [projects/](/projects/) while developing them.
+   Select the public package and compatibility bump, and write caller-relevant notes rather than an edited-file list
+2. Run [Release version PR](/.github/workflows/release-version.yml) with `source_ref: main` and the readiness `channel`.
+   It opens a `release/version-VERSION` pull request and dispatches [Check](/.github/workflows/ci.yml) on that branch.
+   Review the SDK version, changelog and consumed fragments, then merge after Check passes
+3. After the merge, Check runs on `main`. When it passes and the push changed the SDK version to one npm lacks, it dispatches [Release prepare](/.github/workflows/release-prepare.yml) for that exact commit.
+   Review the version, channel, release notes and candidate SHA256 in the preparation summary
+4. Run the `gh workflow run release-publish.yml` command printed in that summary, or dispatch [Release publish](/.github/workflows/release-publish.yml) from `main` with the same preparation run ID and checksum.
+   It publishes the retained tarball, installs it from npm on both supported Node versions, announces the GitHub release and deploys the Docs preview
+5. Confirm the result in the run summaries.
+   For a downloaded candidate, `pnpm release:status` reports whether npm serves the reviewed bytes and the current distribution tags
+
+Every step can be rerun with the same inputs. Publication reads npm before uploading and never uploads a version twice
+
+## When a step fails
+
+| Message | Meaning | Action |
+| --- | --- | --- |
+| `npm publication is unconfirmed` | The upload outcome is unknown | Rerun Release publish with the same inputs. It reads npm first |
+| `npm serves different bytes for VERSION than the reviewed candidate` | npm already has this version with other content | Never republish. Inspect the registry version and release a new version through Changesets |
+| `npm serves VERSION, but the TAG tag does not point to it` | The bytes are published, the distribution tag is not | Correct the tag with the [dist-tag runbook](/docs/RELEASING.md#npm-distribution-tags), then rerun Release publish |
+| `npm could not install ... from the registry` | A registry install check failed after publication | Inspect the install log. The GitHub release stays unannounced until a rerun passes |
+| `Published baseline changed since review` | Another version on the same channel and line was published after preparation | Prepare a new candidate from current `main` |
+| `Candidate source is not reachable from main` | The candidate was prepared from unmerged source | Merge the source, then prepare from `main` |
+| `Candidate does not match the externally reviewed checksum` | The checksum input differs from the candidate | Copy the checksum from the preparation summary |
+| `Preparation is not a successful manual run of this repository's release-prepare workflow` | The run ID is wrong or the run failed | Use the ID of a successful Release prepare run |
+| `GitHub rejected the OPERATION with HTTP 4xx` | GitHub refused the request, so nothing changed | Fix the cause, such as App permissions or tag rules, then rerun Release publish |
+| `GitHub release creation is unconfirmed` or `asset contents are unconfirmed` | A network or server failure left the outcome uncertain | Rerun Release publish. Reconciliation reads back instead of writing twice |
+| `Publish pending changes as a release candidate before stable` | Stable was selected from an RC source that has new changes | Run Release version PR with `channel: rc`, publish that RC, then select Stable |
+| `VERSION is a new major version or epoch` | A big release was selected for Stable without a published RC | Run Release version PR with `channel: rc`, publish that RC, then select Stable. See [release stages](/docs/RELEASING.md#release-stages) |
+| `Release candidate VERSION is pending` | An unreleased RC blocks every other Stable at or above its version | Publish that RC as Stable first, or release a fix below it |
+| `Stable content differs from VERSION` | An RC of this version is published, and the source changed after the newest one | Publish the current content as a new RC first. See [release baselines](/docs/RELEASING.md#release-baselines) |
+| `No pending Changesets fragments or readiness promotion` | Nothing describes a new release | Add a fragment or select a promoting channel |
+| `The source branch moved after version preparation` | New commits arrived during Release version PR | Rerun Release version PR |
+| `Check run N did not pass` or `The exact-source Check gate timed out` | Release prepare or Docs preview found no passing Check for the source | Fix or rerun Check, then rerun the blocked workflow |
+| `GitHub OIDC configuration is incomplete, refusing token fallback` | The publisher has no OIDC token | Confirm `id-token: write`, the `package` environment and npm trusted publishing |
+
+Unchanged publishable content on a Canary or RC is not a failure. Release version PR opens no pull request and Release prepare retains no candidate in that case
+
+## Reference
+
+### Registry publication contract
+
+The canonical SDK manifest remains `private`. The `stageRelease` package script creates a separate public npm package directory and `sdk.tgz` tarball. Never publish from the SDK checkout
+
+[Package preparation](/projects/sdk/scripts/packages.js) copies compiled JavaScript, declarations, maps, sources, license and consumer guidance into a new directory.
+It creates the public npm package directory and verifies the matching `sdk.tgz` inventory
 
 The staged npm manifest receives the reviewed release version and retains Effect as an exact required peer.
 [The prerequisite check](/projects/release/support.js) requires that exact Effect version to match the SDK development dependency and rejects an optional peer.
-It does not authenticate an npm account or grant permission to publish
+Release commands that read or change registries enforce it, and the release tooling tests run it in `pnpm check`
 
-Candidate schema 1 binds the package inventory, staged manifest and tarball checksums, source commit and checked documentation snapshot checksum into one reviewed candidate. Validation rereads the staged directory and tarball before publication. The candidate checksum identifies that candidate, not uploaded content
+Candidate schema 1 binds the package inventory, staged manifest and tarball checksums, source commit and checked documentation snapshot checksum into one reviewed candidate.
+Validation rereads the staged directory and tarball before publication.
+Publication, verification, status and the GitHub announcement download the tarball npm serves, check it against the registry's SHA-512 integrity and compare its SHA-256 with the candidate's `sdk.tgz`
 
-Code, comments, declarations, source maps, package metadata and the file inventory participate in the unchanged-content comparison.
-Published npm metadata establishes version availability, not uploaded file-content identity
-
-## Available local work
-
-Use the pinned runtime and run commands from [projects/](/projects/). [Repository checks](/docs/REPOSITORY.md#development-checks) cover package and website validation. [Check](/.github/workflows/ci.yml) validates pull requests, pushes to `main` or `codex/**`, and manual runs without publishing
-
-For an SDK change, run `pnpm changeset` and select the public package and compatibility bump. Write caller-relevant notes, not an edited-file list. In later prerelease cycles, classify compatibility against the stable starting version. Breaking only a new preview API still requires migration notes, but does not itself break the stable API. Website, test and release-tooling changes that do not alter the published SDK need no SDK fragment. The wrapper permits fragment authoring and status, not direct versioning or publication
-
-Inspect a source-only proposal with `pnpm release:plan --channel canary`.
-Planning does not compare published npm package bytes or prove that a release is publishable.
-A version in the source manifest does not establish publication
-
-## Version and content rules
+### Version and content rules
 
 [Epoch Semantic Versioning](/docs/TECHNOLOGY.md#versioning-and-release-stages) defines compatibility and readiness separately.
-The planner reads the [SDK source manifest](/projects/sdk/package.json). Canary, RC and Stable are the only channels, and each new prerelease counter starts at zero.
+Canary, RC and Stable are the only channels, and each new prerelease counter starts at zero.
 The release wrapper retains the cycle's stable starting version in `projects/.changeset/pre.json` as `releaseBase`, with `null` for the initial `1000.0.0` cycle.
 Pending and archived Changesets together determine the target's compatibility impact, while only pending notes enter a new preview's changelog. Stable collects the complete cycle's notes.
-Repeated previews keep the target unless increased compatibility impact requires a higher one. A changed target must receive an RC before Stable
+Before the Stable version PR, edit or delete archived notes in `projects/.changeset/pre/` that later changes in the cycle superseded, so the Stable changelog never announces an API that the same release removes.
+Make packaged text changes for a Stable that follows an RC, such as the README release status or the `homepage` URL, before the final RC
 
-The wrapper preserves `releaseBase` through Canary and RC, then removes prerelease state through Changesets on Stable. Missing or invalid state fails closed. For an older checkout lacking the field, restore the reviewed stable starting version before versioning. Use `null` only for the initial `1000.0.0` cycle, not an inferred registry baseline. Source versioning is not atomic. After interruption, reconcile the manifest, prerelease state, archived notes and changelog before retrying
+Source versioning is not atomic. After an interruption, reconcile the manifest, prerelease state, archived notes and changelog before retrying.
+Missing or invalid prerelease state fails closed
 
 An explicit higher epoch is a multiple of 1000 and requires a major fragment.
-There are no permanent readiness branches.
-Normal development and release review are main-first, with occasional explicitly selected source branches for another release line
-
-The publication check compares against the previous npm version on the same channel and `major.minor` line. If none exists, the first release on that line requires explicit bootstrap. Do not use bootstrap when an earlier version exists or the registry lookup fails
+There are no permanent readiness branches. Occasional other release lines use an explicitly selected source branch
 
 [Content fingerprints](/projects/release/content.js) ignore package-version fields and changelog bookkeeping, not arbitrary SDK bytes.
-If the package content has not changed, version preparation leaves Changesets fragments untouched and creates no version PR.
-Candidate preparation also creates no candidate artifact for unchanged content.
-On the same channel, changed publishable bytes require a pending Changesets fragment rather than an undocumented version bump.
-Readiness promotion must advance SemVer order, and Canary must pass through RC before Stable.
-Promotion alone does not bypass the unchanged-content guard
+Changed publishable bytes on the same channel require a pending fragment. Promotion to RC alone does not bypass the unchanged-content guard. Stable instead follows the [release stages](/docs/RELEASING.md#release-stages)
 
-Changesets owns `projects/sdk/CHANGELOG.md` from first version preparation. The website renders it, and GitHub uses its exact version section for release notes. Do not keep another manual changelog or invent an entry before preparation
+Changesets owns `projects/sdk/CHANGELOG.md`. The website renders it, and GitHub uses its exact version section for release notes.
+Website, test and release-tooling changes that do not alter the published SDK need no fragment
 
-For the first release, Release version creates the initial-canary Changeset only when the source manifest is `0.0.0`, the selected channel is `canary`, and no pending notes exist.
-Its text is `Initial canary release of Fluxerly.js for testing and feedback`.
-The action passes that Changeset to Changesets, which consumes it and generates the initial changelog automatically
+### Release stages
 
-## Gated manual workflow
+The size of a release decides whether Stable needs an RC first:
 
-Configure the protected environment and npm authentication before an authorized publication.
-No push or tag automatically publishes a package
+- **Small release:** A patch or minor release within the same epoch and major version.
+  It can go straight to Stable from a Stable or Canary source version, with no RC
+- **Big release:** A new major version, which is a breaking change, or a new epoch.
+  It must be published as an RC first. Stable then promotes that RC from an RC source version with no pending notes
 
-### Choose a workflow
+A pending RC is the newest published RC above the newest published Stable.
+While one exists, the only Stable at or above its version that can be published is the RC's own version.
+Stables below it stay free, such as a fix on an older line.
+Whenever an RC of the same version is published, Stable must match the newest one byte for byte by content fingerprint
 
-For a manual run, open GitHub Actions and select Run workflow. Choose a branch with reviewed tooling. The `source_ref` input selects SDK source independently of the workflow branch
+Canary releases are experimental and exempt from these rules.
+A Canary needs no RC, is never blocked by a pending RC and has no content to match.
+The usual Canary checks still apply. Each Canary version must be valid and higher than the previous one on its line, and it publishes under the `canary` tag without moving `latest` or `rc`
 
-| Workflow | When to use it | Inputs and result |
+### Release baselines
+
+Each Canary and RC compares against the previous npm version on the same channel and `major.minor` line.
+The first one on a channel and line has none. The tooling reads that from the registry version list, so it needs no extra input.
+Stable compares against the newest published RC of the same version and must match its content. A small Stable with no RC of its version has no baseline.
+A failed registry lookup, including a missing package, always stops the release
+
+### Workflows
+
+| Workflow | Trigger | Inputs and result |
 | --- | --- | --- |
-| [Check](/.github/workflows/ci.yml) | Validate a pull request or selected branch without publishing | No extra inputs, runs workspace checks, browser checks and a two-version Node consumer matrix in parallel |
-| [Release version PR](/.github/workflows/release-version.yml) | Prepare a reviewable version change | `source_ref` is a branch and `channel` is canary, rc or stable, producing a version and changelog PR unless content is unchanged |
-| [Release prepare](/.github/workflows/release-prepare.yml) | Validate merged release source and retain its exact candidate | `source_ref` is the reviewed merged ref or commit, producing the candidate artifact, preparation run ID and review checksum |
-| [Release publish](/.github/workflows/release-publish.yml) | Publish or reconcile the already reviewed candidate | Supply `preparation_run_id`, `candidate_checksum` and `operation`, which is `publish` by default or `reconcile` |
-| [Docs preview](/.github/workflows/docs-preview.yml) | Deploy the temporary documentation after Preview setup | No extra inputs, always reads `main`, imports verified release snapshots and deploys only the configured Preview target. The public build serves the newest Canary and RC under rolling channel paths and retains published Stable exact-version pages |
+| [Check](/.github/workflows/ci.yml) | Pull requests, pushes to `main`, manual and version-branch dispatches | Runs SDK, website and release tooling, workflow lint, browser and two-version consumer jobs in parallel. The `check` job requires all of them, or reuses an earlier passing run for identical content |
+| [Release version PR](/.github/workflows/release-version.yml) | Manual | `source_ref`, `channel` and optional `epoch` and `line`. Opens the version pull request |
+| [Release prepare](/.github/workflows/release-prepare.yml) | Dispatched by Check after a version change on `main`, or manual | `source_ref` and optional `line`. Retains the candidate artifact for 90 days and prints the publish command |
+| [Release publish](/.github/workflows/release-publish.yml) | Manual only | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces and deploys the Preview |
+| [Docs preview](/.github/workflows/docs-preview.yml) | Called by Release publish, or manual | Always builds `main` and deploys only the Preview target |
 
-`publish` uses npm OIDC. `reconcile` skips npm publication and verifies version availability for the same immutable candidate after npm has published. The release App authenticates only the GitHub tag and release, and Docs preview follows successful reconciliation
+Only Release publish writes to npm, and no push or tag publishes a package.
+Release publish checks out its own workflow commit, so its tooling never comes from the candidate source.
+The candidate commit is only the tag target and must be reachable from `main`
 
-Check also runs automatically on pull requests and pushes to `main` or `codex/**`.
-Release version PR and Release prepare accept optional `line` and `bootstrap` inputs.
-Only Release version PR accepts `epoch`.
-Leave these unset unless the [version and content rules](/docs/RELEASING.md#version-and-content-rules) require them
+Release version PR builds the version change in a read-only job, then a separate job opens the pull request.
+Pull request events for pull requests created or updated with `GITHUB_TOKEN` are not guaranteed, so that job also dispatches Check on the version branch
 
-### Parallel checks and cancellation
+Identical content needs one full Check. The first job of every Check run compares the checked-out git tree with earlier push and dispatched Check runs in this repository.
+When the newest conclusive matching run passed, the check jobs are skipped and the required `check` job passes with a summary that links that run.
+An unfinished matching run is awaited for up to 40 minutes rather than repeated, and a failed or uncertain lookup runs the full Check.
+Pull request runs never serve as evidence, because they check a merge commit rather than the recorded branch head.
+A release therefore runs the full Check once, in the Check dispatched on the version branch. The version pull request run and the `main` push run after merging reuse it while `main` has not moved
 
-Check runs `pnpm check`, browser checks and a packed and npm-installed consumer matrix on the pinned Node version and declared minimum. Browser checks use a separate runner. Both matrix entries run despite one failure, with at most two consumer jobs at once. The final gate requires success from every job. Failed, cancelled, skipped or missing results cannot pass. The `SDK consumers on the declared Node floor` result name remains
+Release prepare reuses the newest successful main-push Check for the exact source, waiting while it runs. A main-push Check that reused identical content counts as successful.
+Only a verified absence of such a run falls back to full workspace, browser and declared-minimum-Node checks.
+Preparation always builds fresh output, snapshots the documentation and installs the candidate's actual tarball before retaining it
 
-New automatic Check runs cancel older runs for the same event and ref. Push and pull-request checks remain separate Git states, and manual checks are independent. Version PRs use `GITHUB_TOKEN`, so approve their checks in the PR merge box before relying on them
+Check on `main` dispatches Release prepare only when its own run passes. A newer push cancels an older Check, so dispatch Release prepare manually if a version change was superseded
 
-Release prepare reuses the newest successful main-push Check for the exact source commit, including its current attempt. A running check is awaited, while failed, cancelled, mismatched or unreadable evidence blocks preparation. Only a verified absence of matching runs falls back to full workspace, browser and declared-minimum-Node consumer checks.
-Reusing source checks does not reuse built artifacts. Preparation builds fresh SDK and documentation output, validates the exact-version snapshot and candidate checksums, then installs the candidate's actual tarball through npm and checks both public entry points before retaining it
+### Publication
 
-Release version PR serializes repository-wide because version branch names are shared. Release prepare serializes matching source, line and bootstrap inputs. Release publish uses separate npm publication and GitHub reconciliation queues. Reconciliation follows publication or runs directly for `operation: reconcile`. Docs preview has a separate queue shared by manual and called runs, without holding the npm lock
+Publication first reads npm. An existing version with the reviewed bytes succeeds without uploading, and one with other bytes fails.
+Otherwise it verifies the published baseline, submits the tarball once with npm OIDC and polls for up to 20 minutes until npm serves the reviewed bytes and the expected distribution tag points to the version.
+Transient registry failures during polling do not trigger another upload
 
-Release and Preview queues do not cancel running work. [GitHub's extended queue](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency) retains up to 100 pending requests per group. Lock arrival, not dispatch, determines order. Inspect cancelled overflow runs and partial external effects before retrying. Do not cancel active publication to advance the queue
+Two registry install jobs then install the exact version from npm on the development Node version and the declared minimum, Node.js 24.11.0, and import every entry point the installed package exports.
+Only after both pass does the release App create a short-lived, repository-scoped token for the GitHub announcement
 
-### Read the result
+GitHub reconciliation polls delayed release, asset, tag and latest visibility for one minute per check.
+HTTP 4xx responses are definite rejections and stop reconciliation. Network failures and 5xx responses are uncertain and lead to readback, never a repeated write.
+Source, release notes and asset-content conflicts stop reconciliation
 
-Read the run's Summary for the checks performed, their results and the next action. Candidate reports identify source, version, checksum and artifact when available. Publication and Preview reports separate confirmed npm or hosting results from actions that failed or were skipped. Called Docs preview results are reported separately. Unchanged content does not produce a prepared release
+Provider output is logged with token-like values redacted
 
-The reconciliation summary records the operation, npm availability and completion state. With npm `missing`, the release App creates no tag or release and Docs preview does not run. Registry read failures are not missing versions
+### npm distribution tags
 
-Step logs retain diagnostic output. Summaries also run after failures but may be absent if GitHub terminates the runner. If checkout lacks the summary helper, the fallback points to checkout and setup logs without claiming success
+The channel tags are `canary`, `rc` and `latest` for Stable.
+Older release lines never move a channel tag backward and publish under a line-specific staging tag, such as `canary-1000-0`
 
-### Release sequence
+No stable version exists yet, so `latest` stays at `1000.0.0-rc.0`. Release publish never moves it for previews.
+The first stable release moves it to `1000.0.0`
 
-For releases after npm trusted publishing is configured:
+Trusted publishing cannot change tags, so tag corrections need an interactive npm login with two-factor authentication:
 
-1. Run [Release version PR](/.github/workflows/release-version.yml) with a reviewed source branch and readiness channel.
-   Supply an expected `major.minor` line when needed, an epoch only for an approved epoch transition, and bootstrap only for a verified absent baseline
-2. Review the SDK manifest version, Changesets changelog, consumed fragments and lockfile, then merge the version PR.
-   For a PR created by GitHub's automatic token, approve any pending workflow runs in the PR's merge box before relying on its checks
-3. Run [Release prepare](/.github/workflows/release-prepare.yml) with the exact reviewed merged ref or commit.
-   It checks packages and documentation, snapshots the checked docs, and stages a new immutable candidate without publishing
-4. Review the preparation run ID, source commit, version, channel, release notes and candidate SHA256 in the run summary.
-   Preserve the named candidate artifact, which has a 90-day workflow retention period
-5. Run [Release publish](/.github/workflows/release-publish.yml) with `operation: publish`, the successful preparation run ID and the externally reviewed SHA256.
-   It checks out the candidate source commit and publishes the retained npm artifact without rebuilding it. The release App then authenticates the GitHub tag and release. Docs preview follows successful reconciliation
+```sh
+npm dist-tag ls @neontechspace/fluxerly
+npm dist-tag add @neontechspace/fluxerly@VERSION TAG
+npm dist-tag rm @neontechspace/fluxerly TAG
+```
 
-For the first release:
+The `latest` tag cannot be removed, only pointed at another version.
+Confirm the correction with `pnpm release:status`, then rerun Release publish if it stopped at the tag check
 
-1. Run Release version PR with `channel: canary` and `bootstrap: true`.
-   Under the initial-canary conditions, it creates and consumes the generated initial Changeset before opening the version PR
-2. Merge the reviewed version PR, then run Release prepare with `bootstrap: true` for that exact merged source
-3. Review and preserve the immutable candidate, then publish its retained npm tarball interactively outside GitHub Actions with your npm login and 2FA.
-   Do not rebuild the reviewed artifact
-4. Configure npm trusted publishing for `release-publish.yml` in the `package` environment, with direct publishing allowed
-5. Run Release publish with `operation: reconcile`, the original preparation run ID and the reviewed checksum.
-   It verifies npm availability. The release App authenticates the GitHub tag and release only. Docs preview follows successful reconciliation
+### Local commands
 
-`release:inspect CANDIDATE_DIRECTORY` checks only local candidate contents.
-The status, verify and publish commands additionally require `--checksum REVIEWED_SHA256`.
-Use `release:publish CANDIDATE_DIRECTORY --checksum REVIEWED_SHA256` to publish once through the automated path.
-Use `release:verify CANDIDATE_DIRECTORY --checksum REVIEWED_SHA256` to require that the npm version exists without publishing.
-Use `release:status CANDIDATE_DIRECTORY --checksum REVIEWED_SHA256` to report npm as `published` or `missing` and `complete` as the matching boolean.
+Run these from [projects/](/projects/). The status, verify and publish commands require `--checksum REVIEWED_SHA256`
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm release:plan --channel CHANNEL` | Show the source-only version proposal without comparing registry bytes |
+| `pnpm release:inspect CANDIDATE_DIRECTORY` | Check local candidate contents only |
+| `pnpm release:status CANDIDATE_DIRECTORY --checksum SHA256` | Report `published`, `missing` or `different` for the served bytes, plus the distribution tags |
+| `pnpm release:verify CANDIDATE_DIRECTORY --checksum SHA256` | Fail unless npm serves the reviewed bytes |
+| `pnpm release:publish CANDIDATE_DIRECTORY --checksum SHA256` | Publish through GitHub OIDC only, used by Release publish |
+
 Never treat a checksum taken only from an untrusted replacement candidate as external review
 
-## Reconciliation and external setup
+### External setup
 
-Publication-job concurrency and `.release-publish-npm.lock` serialize npm publishing. Verify that no publisher is active before removing a stale lock
+The protected `package` environment needs no npm token secret.
+Configure npm trusted publishing for `release-publish.yml` in that environment.
+[Release authentication](/projects/release/authentication.js) requires GitHub OIDC and strips inherited registry tokens with an isolated token-free npm configuration
 
-Publication stops if the npm version already exists. Otherwise it submits the retained tarball once and waits up to 20 minutes for registry availability, reporting progress without repeating the upload. Transient metadata failures use the same deadline. A final metadata read confirms that the version exists, but not that npm serves the reviewed file bytes
+Workflows use the automatic `GITHUB_TOKEN` for repository reads, version pull requests, Check dispatches and artifacts. Do not add a `GH_TOKEN` or `GITHUB_TOKEN` secret.
+Allow GitHub Actions to create pull requests
 
-GitHub reconciliation retains a newly created release's ID and polls delayed release, asset, tag and latest visibility for one minute per check. Individual provider requests have separate timeouts. Lost create, upload or update responses lead to readback, not repeated writes. Source, release notes and asset-content conflicts still stop reconciliation
+Create the private `Fluxerly Release` GitHub App under `NeonTechSpace`, with Contents write, mandatory Metadata read and no webhooks, installed only on `Fluxerly.js`.
+In the `package` environment, set the `RELEASE_APP_CLIENT_ID` variable and `RELEASE_APP_PRIVATE_KEY` secret. Keep the key out of repository secrets, source, artifacts and logs.
+Permit only `main` to enter `package` and keep administrator bypass disabled
 
-If the provider outcome is uncertain, preserve the same immutable candidate and inspect its npm status before any further action.
-Do not rebuild a candidate or attempt publication for a version that metadata already reports as published
+For `v*` tags, use a creation-restriction ruleset whose only bypass actor is the release App, and a separate update and deletion ruleset with no bypass actors.
+These rules constrain credentials, not one workflow. Administrators who can edit rules, workflows or environments can change the boundary
 
-The npm channel tags are `canary`, `rc` and `latest` for Stable, and older release lines must not move them backward.
-Older maintenance lines use a line-specific staging tag when the channel tag cannot advance.
-These staging tags are not additional readiness channels
-
-npm trusted publishing [requires the package to exist first](https://docs.npmjs.com/cli/v11/commands/npm-trust/#prerequisites).
-For the initial publication, publish the reviewed npm tarball interactively before configuring trusted publishing.
-Subsequent npm releases publish through GitHub OIDC, not a token fallback
-
-The protected `package` environment needs no npm token secret. [Release authentication](/projects/release/authentication.js) requires GitHub OIDC and strips inherited registry tokens with an isolated token-free npm configuration. Missing or incomplete OIDC stops publication before npm requests
-
-Workflows use automatic `GITHUB_TOKEN` for repository reads, version PRs and artifacts. Do not add a `GH_TOKEN` or `GITHUB_TOKEN` secret. Check needs no custom secret or Fluxer bot token
-
-Allow the version workflow to open pull requests.
-GitHub tag and release reconciliation uses the dedicated release App described below, without changing npm OIDC
-
-Tokens, credentials and private payloads must not appear in logs or release notes.
-External configuration, actual publication and repository visibility changes are separate authorized operations
-
-Use [documentation maintenance](/docs/DOCUMENTATION.md#preview-setup) for the independently required public Preview hostname, Cloudflare access and `website` environment.
+Use [documentation maintenance](/docs/DOCUMENTATION.md#preview-setup) for the Preview hostname, Cloudflare access and `website` environment.
 Local tests establish the checked planning, staging and recovery boundaries, not live provider success
-
-### Release App and tag controls
-
-Create the private `Fluxerly Release` GitHub App under `NeonTechSpace`, with Contents write, mandatory Metadata read and no webhooks.
-Install it only on `Fluxerly.js`.
-In the `package` environment, set the `RELEASE_APP_CLIENT_ID` variable and `RELEASE_APP_PRIVATE_KEY` secret.
-Keep the private key out of repository and organization secrets, source, artifacts and logs
-
-Permit only the `main` branch to enter `package` and keep administrator approval bypass disabled.
-The environment has no required-reviewer approval step.
-Review the candidate's selected source before dispatching publication, because the workflow branch restriction does not constrain its independent source selection
-
-The reconciliation job creates a short-lived, repository-scoped token with Contents write only after npm metadata confirms the candidate version exists.
-The token authenticates only the GitHub announcement step, and the pinned token action revokes it when the job finishes.
-The npm publisher retains OIDC and does not use the App key
-
-For `v*` tags, use a creation-restriction ruleset whose only bypass actor is the release App.
-Use a separate update and deletion ruleset with no bypass actors, including the App.
-Verify App creation with an agreed disposable tag before activating restrictions, then check denied non-App creation and denied App update and deletion.
-Remove test tags through exceptions scoped only to their exact names, and remove those exceptions after verifying cleanup
-
-These rules constrain the credentials that perform tag operations, not one uniquely identifiable workflow.
-Administrators who can edit rules, workflow source or environment access can change the boundary

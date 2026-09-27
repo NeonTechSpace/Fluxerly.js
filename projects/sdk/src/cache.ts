@@ -1,17 +1,59 @@
+import type { CacheKind } from "./client.js"
 import type { Message, MessageCore } from "./messages.js"
 
-/** Set memory-only cache bounds for a resource category such as users, guilds or channels.
+/**
+ * One change applied to a client-owned cache, delivered to cache.onChange listeners after it happened.
+ * A change describes the SDK's local copy, not a remote create, update or delete, and carries no snapshot:
+ * Look the entry up with the matching get method when its value matters
+ *
+ * The key identifies the entry within its kind, using decimal IDs:
+ * Messages use `channelId:messageId`, members use `guildId:userId`, and roles, emojis and stickers use `guildId:id`.
+ * Communities, channels, users and direct messages use the resource ID alone. A clear has a null key
+ *
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * export function cacheSizeExample(client: Client, record: (kind: string, delta: number) => void) {
+ *     return client.cache.onChange((change) => {
+ *         if (change.op === "set") record(change.kind, 1)
+ *         if (change.op === "delete") record(change.kind, -1)
+ *     })
+ * }
+ * ```
+ *
+ * @category Caching
+ */
+export interface CacheChange {
+    /** Cache category whose local copy changed */
+    readonly kind: CacheKind
+    /**
+     * What happened to the local copy.
+     * The value set means an entry was stored or replaced, even with identical content.
+     * The value delete means one entry was removed, including removal by expiry, capacity eviction, an event, a write or a connection gap limited to known communities.
+     * The value clear means every entry of this kind was released at once, as by cache.clear(), shutdown, a connection gap of unknown scope
+     * or an event or write whose effect cannot be narrowed to single entries.
+     * No delete is reported for the entries a clear released
+     */
+    readonly op: "set" | "delete" | "clear"
+    /** Entry key in the format described for this kind, or null for a clear */
+    readonly key: string | null
+}
+
+/** Set memory-only cache bounds for a resource category such as users, communities (the guilds category) or channels.
  * Use true or an options object in ClientOptions.cache to enable that category, which is otherwise disabled.
  * The SDK keeps frozen copies of resources encountered through supported reads and events, not every remote resource.
  * Fetches still contact Fluxer, writes still execute, and the SDK does no preload, persistence or background refresh.
  * When capacity is full, the least recently used snapshot is removed first.
  * Expired entries, overlapping reads and lost gateway connections can make a lookup miss.
- * A connection gap clears affected snapshots even if the connection resumes. Responses started before the gap cannot restore them.
+ * A connection gap clears affected users and direct messages even if the session resumes. Community-scoped snapshots stay
+ * while the session resumes and are cleared when a new session starts. Responses started before the gap are not stored.
  * Shutdown releases the SDK's copies, not copies still held by the application
+ *
+ * @category Caching
  */
 export interface ResourceCacheSettings {
     /** Maximum snapshots kept for this category across the client, as a positive safe integer.
-     * Defaults to 1,000, not a limit per guild
+     * Defaults to 1,000, not a limit per community
      */
     readonly maxEntries?: number
     /** Maximum accounted UTF-8 JSON bytes kept for this category, as a positive safe integer.
@@ -29,17 +71,11 @@ export interface ResourceCacheSettings {
     readonly maxAgeMs?: number | null
 }
 
-/** A message cache-duration failure reported without the message, invalid return value or thrown exception */
-export interface CachePolicyErrorReport {
-    /** threw means the duration callback threw, while invalidReturn means it returned neither null nor a nonnegative safe integer */
-    readonly reason: "threw" | "invalidReturn"
-}
-
 /**
  * Bound the message snapshots kept for local lookups in either API style.
  * Enable the cache in ClientOptions.cache.messages before using these settings.
  * Eligible fetch, send, reply, edit and history results, plus gateway create and update events, supply snapshots.
- * Entry and byte limits apply across this client, not separately per channel or server.
+ * Entry and byte limits apply across this client, not separately per channel or community.
  * Capacity eviction removes the least recently used snapshot first.
  * An oversized or zero-age replacement removes the older copy without retaining the new one
  *
@@ -53,8 +89,10 @@ export interface CachePolicyErrorReport {
  * Batch deletion evicts selected messages after dispatch even on rejection.
  * These operations also stop older responses from entering the cache, including some pending reads of other resources
  *
- * A ban that requests message deletion evicts this author's cached messages across guilds because some messages lack guild context.
+ * A ban that requests message deletion evicts this author's cached messages across communities because some messages lack community context.
  * The server deletion job is asynchronous, so later observations do not establish whether the job has finished
+ *
+ * @category Caching
  */
 export interface MessageCacheSettings<M extends MessageCore = Message> {
     /** Maximum messages kept across this client, as a positive safe integer.
@@ -71,9 +109,9 @@ export interface MessageCacheSettings<M extends MessageCore = Message> {
      * Omitting this setting also disables age expiry
      *
      * The function receives the frozen message with this client's selected fields and must return a duration or null.
-     * A throw, undefined, Promise, thenable or invalid number removes the older copy and reports a policy failure.
+     * A throw, undefined, Promise, thenable or invalid number removes the older copy and reports a cache failure with the thrown value or an explanation.
      * Message delivery and successful REST results still succeed when the policy fails.
-     * The SDK does not await or cancel invalid promises and thenables, and does not report their rejection values
+     * The SDK does not await or cancel invalid promises and thenables
      *
      * Each eligible replacement starts a new age, even when values are unchanged.
      * Local lookups change eviction order but do not renew age.
@@ -88,19 +126,10 @@ export interface MessageCacheSettings<M extends MessageCore = Message> {
     readonly maxAgeMs?: number | null | ((message: M) => number | null)
 }
 
-/** Configure the default API's message cache and optionally handle failures in the duration callback.
- * An options object enables caching with defaults for omitted settings
+/** Configure the message cache in either API. An options object enables caching with defaults for omitted settings.
+ * A throwing or invalid maxAgeMs callback is reported to the client-level onError option as a cache FailureReport,
+ * or logged at Error with the thrown value when no hook is set
+ *
+ * @category Caching
  */
-export interface MessageCacheOptions<M extends MessageCore = Message> extends MessageCacheSettings<M> {
-    /**
-     * Handle a message duration callback that throws or returns an invalid value.
-     * Omission sends safe reports to this client's operational logger instead.
-     * The SDK allows one unfinished custom report per client and logs later failures while that report is busy.
-     * A reporter failure attempts one safe fallback log without rerunning the duration policy.
-     * The SDK does not await a reporter Promise before delivering messages or returning successful REST results.
-     * Keep synchronous reporter work nonblocking because it shares the application's event loop.
-     * Shutdown does not await or cancel reporter Promises, which remain application-owned.
-     * Reports contain no message references
-     */
-    readonly onError?: (report: CachePolicyErrorReport) => void | Promise<void>
-}
+export interface MessageCacheOptions<M extends MessageCore = Message> extends MessageCacheSettings<M> {}

@@ -1,0 +1,44 @@
+{
+    "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+    // Only the SDK is in scope. The website and release tooling are reported separately, not gated here
+    "ignoreWorkspaces": [".", "web", "release"],
+    "workspaces": {
+        "sdk": {
+            // src/index.ts and src/effect.ts come from the package exports map
+            "entry": [
+                "scripts/*.js",
+                "tests/**/*.test.{ts,js}",
+                // Standalone Node scripts started from package.json scripts or by other checks
+                "tests/**/*.{js,mjs}",
+                // Compile-only type assertions checked by tsconfig.test.json
+                "tests/resources/commands/command-message-types.ts",
+                "tests/types/**/*.ts",
+                // Compiler fixtures loaded by path by tests/contract/public-client-contract.js
+                "tests/contract/fixtures/**/*.ts",
+                // Shared fixtures offered to every test, including helpers not yet adopted by a migrated file
+                "tests/support/**/*.{ts,mjs}",
+                "examples/*/*.{js,ts}",
+            ],
+            "project": [
+                "src/**/*.ts",
+                "scripts/**/*.js",
+                "tests/**/*.{ts,js,mjs}",
+                "examples/**/*.{js,ts}",
+            ],
+            // Exported interfaces describe helper parameters and results even when callers infer them
+            "ignoreExportsUsedInFile": { "interface": true, "type": true },
+            "ignoreFiles": [
+                // Declarations for JavaScript test modules, read by TypeScript through the paired .js import
+                "tests/**/*.d.ts",
+            ],
+            // Process and contract checks import the built SDK, which does not exist yet when lint runs before the build
+            "ignoreUnresolved": ["^(\\.\\./)+dist/"],
+            // Lint tools are workspace-root devDependencies shared by every project
+            "ignoreBinaries": ["oxlint", "knip", "cspell"],
+            "ignore": [
+                // Copied into isolated packed consumers and resolved against the packed SDK and their compiled out/ files
+                "tests/packaging/consumers/**",
+            ],
+        },
+    },
+}

@@ -1,0 +1,66 @@
+# Project, product and package names
+fluxer
+fluxerapp
+fluxerly
+fumadocs
+msgpackr
+workerd
+neontechspace
+neverthrow
+repobeats
+
+# Development tools
+journalctl
+tsgolint
+zizmor
+
+# Protocol and provider terms
+apng
+bitfield
+bitfields
+bsky
+cooldowns
+instatus
+joinability
+llms
+pkce
+preuploaded
+preuploads
+replyable
+rrggbb
+slowmode
+tempban
+toggleable
+undeafen
+unban
+
+# Effect and JavaScript runtime terms
+enoent
+finalizer
+finalizers
+interruptible
+nonenumerable
+thenables
+
+# Descriptive compounds used in SDK and repository prose
+backpressure
+journaled
+noncanonical
+nonblank
+nonblocking
+nonpositive
+precheck
+readback
+rescan
+rescanning
+resends
+uninspectable
+unredacted
+unretained
+unreviewed
+unsharded
+undeployed
+unvalidated
+reshard
+resharded
+resharding

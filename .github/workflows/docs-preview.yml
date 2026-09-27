@@ -5,6 +5,7 @@ on:
 permissions:
   contents: read
   actions: read
+cache-mode: read
 concurrency:
   group: docs-preview
   cancel-in-progress: false
@@ -22,7 +23,7 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - uses: $/.github/actions/setup
         id: setup
       - name: Read verified release snapshots
         id: snapshots
@@ -68,15 +69,10 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       - name: Summarize Preview delivery
         if: always()
-        shell: bash
-        env:
-          SUMMARY_KIND: preview
-          SUMMARY_STEPS: ${{ toJSON(steps) }}
-          SUMMARY_DETAILS: >-
-            {"sourceCommit": ${{ toJSON(env.DOCS_SOURCE_COMMIT) }}, "previewUrl": ${{ toJSON(vars.CLOUDFLARE_PREVIEW_URL) }}}
-        run: |
-          if [ -f .github/scripts/workflow-summary.mjs ]; then
-            node .github/scripts/workflow-summary.mjs
-          else
-            printf '## Workflow summary unavailable\n\nCheckout did not provide the summary helper. Inspect the checkout and setup logs, no downstream checks are confirmed\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+        uses: $/.github/actions/summary
+        with:
+          title: Documentation Preview delivery
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Checked source commit": ${{ toJSON(env.DOCS_SOURCE_COMMIT) }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "Exact deployment URL": ${{ toJSON(steps.deploy.outputs.deployment_url) }}, "Configured custom domain": ${{ toJSON(vars.CLOUDFLARE_PREVIEW_URL) }}, "Custom-domain access": ${{ toJSON(steps.deploy.outputs.custom_domain_status == 'verified' && 'Verified' || steps.deploy.outputs.custom_domain_status == 'challenged' && 'Cloudflare challenge, public access not verified' || 'Unconfirmed, inspect deployment verification') }}}
+          next: Inspect the exact deployment URL and custom-domain access before sharing the Preview. A challenged custom domain is not verified public access

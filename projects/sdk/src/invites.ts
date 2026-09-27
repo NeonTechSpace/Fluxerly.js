@@ -11,6 +11,8 @@
  *     return { content: invite.url }
  * }
  * ```
+ *
+ * @category Invites and webhooks
  */
 export interface InviteCreate {
     /** Lifetime in seconds, integer 0–604800. Default 86400. Zero requests no expiry */
@@ -19,7 +21,7 @@ export interface InviteCreate {
     readonly maxUses?: number
     /** Default true requests a new code. False permits Fluxer to reuse a matching existing invite */
     readonly unique?: boolean
-    /** Default false. True requests temporary guild membership, which Fluxer can remove after disconnect */
+    /** Default false. True requests temporary community membership, which Fluxer can remove after disconnect */
     readonly temporary?: boolean
 }
 
@@ -27,6 +29,8 @@ export interface InviteCreate {
  * These returned details are frozen (read-only). Fetching them does not accept the invite or change membership, and the SDK does not keep them.
  * Codes can grant access to the destination and should only be shared with intended recipients.
  * The reported counts and expiry do not guarantee that someone can join later
+ *
+ * @category Invites and webhooks
  */
 export interface Invite {
     /** Provider code, not a full URL. The SDK never includes it in errors or diagnostics */
@@ -35,7 +39,7 @@ export interface Invite {
      * Does not check expiry or joinability. Not a credential-safe value for diagnostics or public logs
      */
     readonly url: string
-    /** Guild invite or invitation to an existing group DM */
+    /** Community invite or invitation to an existing group DM */
     readonly type: "guild" | "group"
     /** Minimal destination channel identity, not a full channel snapshot */
     readonly channel: {
@@ -43,21 +47,21 @@ export interface Invite {
         readonly id: string
         /** Destination channel name. Null means no name, omission means Fluxer did not supply it */
         readonly name?: string | null
-        /** Numeric Fluxer channel type. This can describe a guild channel or a private group conversation */
+        /** Numeric Fluxer channel type. This can describe a community channel or a private group conversation */
         readonly type: number
     }
-    /** Present for guild invites only. Not a full guild snapshot */
+    /** Present for community invites only. Not a full guild snapshot */
     readonly guild?: {
-        /** Decimal ID of the guild this invitation leads to */
+        /** Decimal ID of the community this invitation leads to */
         readonly id: string
-        /** Guild name returned with this invitation */
+        /** Community name returned with this invitation */
         readonly name: string
     }
     /** Creator ID. Null means no creator, omission means unavailable */
     readonly inviterId?: string | null
     /** Observed destination member count */
     readonly memberCount: number
-    /** Observed presence count, available for guild invites */
+    /** Observed presence count, available for community invites */
     readonly presenceCount?: number
     /** ISO 8601 expiry. Null means no expiry, omission means unavailable */
     readonly expiresAt?: string | null
@@ -68,6 +72,8 @@ export interface Invite {
 /** Invite details returned by creation and management lists, including creation time and use limits.
  * Use these observations to inspect or reconcile created codes, not to predict whether a future join succeeds.
  * The SDK does not cache invite codes or track later uses
+ *
+ * @category Invites and webhooks
  */
 export interface InviteMetadata extends Invite {
     /** ISO 8601 creation time */

@@ -1,3 +1,8 @@
+/**
+ * Guild settings edits.
+ * Invariant: The edit is the bot-permitted settings patch, and REST owns dispatch, retry, audit headers and cache invalidation.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ */
 import {
     GuildFeatureToggles,
     type Guild,
@@ -6,10 +11,10 @@ import {
     type ModerationOptions,
 } from "#sdk/guilds"
 import { decodeGuild, type GuildRequest } from "./guilds.js"
-import { identifier, record } from "./message.js"
+import { identifier, record, snapshotArray } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
-import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
-import { validCalendarTimestamp } from "./timestamp.js"
+import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import { timestamp } from "./decode/timestamp.js"
 import { normalizedText as text, rawText } from "./field-text.js"
 
 const imageDataUri = (value: unknown): value is string =>
@@ -18,22 +23,9 @@ const imageDataUri = (value: unknown): value is string =>
         value,
     )
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
-const timestamp = (value: unknown): value is string =>
-    typeof value === "string" &&
-    /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(value) &&
-    validCalendarTimestamp(value)
 const guildFeatureToggles = new Set<GuildFeatureToggle>(Object.values(GuildFeatureToggles))
 
-function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
-    if (!Array.isArray(value)) return undefined
-    const count = value.length
-    if (count > maximum) return undefined
-    const items = new Array<unknown>(count)
-    for (let index = 0; index < count; index++) items[index] = value[index]
-    return Object.freeze(items)
-}
-
-/** Builds the bot-permitted guild settings patch; REST owns dispatch, retry, audit headers and cache invalidation */
+/** Builds the bot-permitted guild settings patch. REST owns dispatch, retry, audit headers and cache invalidation */
 export function guildEdit(
     guildId: string,
     input: GuildEdit,
@@ -47,46 +39,46 @@ export function guildEdit(
     const messageHistoryCutoff = input.messageHistoryCutoff
     const featureToggles =
         rawFeatureToggles === undefined ? undefined : snapshotArray(rawFeatureToggles, guildFeatureToggles.size)
-    if (
-        Object.keys(input).some(
-            (key) =>
-                ![
-                    "name",
-                    "icon",
-                    "banner",
-                    "splash",
-                    "embedSplash",
-                    "systemChannelId",
-                    "systemChannelFlags",
-                    "afkChannelId",
-                    "afkTimeoutSeconds",
-                    "defaultMessageNotifications",
-                    "verificationLevel",
-                    "nsfw",
-                    "contentWarningLevel",
-                    "contentWarningText",
-                    "explicitContentFilter",
-                    "splashCardAlignment",
-                    "featureToggles",
-                    "messageHistoryCutoff",
-                ].includes(key),
-        )
+    const unsupported = unsupportedKeyFailure(
+        input,
+        [
+            "name",
+            "icon",
+            "banner",
+            "splash",
+            "embedSplash",
+            "systemChannelId",
+            "systemChannelFlags",
+            "afkChannelId",
+            "afkTimeoutSeconds",
+            "defaultMessageNotifications",
+            "verificationLevel",
+            "nsfw",
+            "contentWarningLevel",
+            "contentWarningText",
+            "explicitContentFilter",
+            "splashCardAlignment",
+            "featureToggles",
+            "messageHistoryCutoff",
+        ],
+        "input",
+        "the guild settings input",
     )
-        return inputValidationFailure("input", "allowedFields", "Guild settings input contains an unsupported field")
+    if (unsupported) return unsupported
     if (input.name !== undefined && !text(input.name, 1, 100))
         return inputValidationFailure(
             "name",
             "length",
-            "Guild name must contain 1 through 100 UTF-16 code units after provider normalization",
+            "Community name must contain 1 through 100 UTF-16 code units after Fluxer's normalization",
         )
-    for (const [path, value] of [
-        ["icon", input.icon],
-        ["banner", input.banner],
-        ["splash", input.splash],
-        ["embedSplash", input.embedSplash],
+    for (const [path, label, value] of [
+        ["icon", "icon", input.icon],
+        ["banner", "banner", input.banner],
+        ["splash", "splash", input.splash],
+        ["embedSplash", "embed splash", input.embedSplash],
     ] as const)
         if (value !== undefined && value !== null && !imageDataUri(value))
-            return inputValidationFailure(path, "format", `${path} must be null or a base64 image data URI`)
+            return inputValidationFailure(path, "format", `Guild ${label} must be null or a base64 image data URI`)
     if (input.systemChannelId !== undefined && !nullableIdentifier(input.systemChannelId))
         return inputValidationFailure("systemChannelId", "format", "System channel ID must be null or a decimal string")
     if (input.systemChannelFlags !== undefined && input.systemChannelFlags !== 0 && input.systemChannelFlags !== 1)
@@ -177,7 +169,7 @@ export function guildEdit(
         return inputValidationFailure(
             "messageHistoryCutoff",
             "format",
-            "Message history cutoff must be null or an ISO 8601 UTC timestamp",
+            "Message history cutoff must be null or an ISO 8601 timestamp with seconds and a Z or ±hh:mm offset",
         )
     const json = JSON.stringify({
         name: input.name,

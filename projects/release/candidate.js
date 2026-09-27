@@ -1,35 +1,41 @@
+// @ts-check
+
 import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import { assertExactFiles, contentFingerprint, exactFiles, readDirectory, readNpmTarball, sha256 } from "./content.js"
-import { parseVersion, selectBaseline } from "./planning.js"
+import { assertStablePromotion, parseVersion, selectBaseline } from "./planning.js"
 import { assertSourceReleaseState, changelogSection } from "./source.js"
 
-export async function guardVersionContent({ plan, bootstrap, registries, stage }) {
-    const inventory = await registries.inventory("@neontechspace/fluxerly", { bootstrap })
+export async function guardVersionContent({ plan, registries, stage }) {
+    const inventory = await registries.inventory("@neontechspace/fluxerly")
     if (inventory.npmVersions.includes(plan.version))
         throw new Error("Prospective release version already exists")
-    const baselineVersion = selectBaseline({ ...inventory, version: plan.version, channel: plan.channel, bootstrap })
+    const baselineVersion = selectBaseline({ ...inventory, version: plan.version, channel: plan.channel })
     if (baselineVersion === null) return
     const baseline = await registries.baseline("@neontechspace/fluxerly", baselineVersion)
     const root = await mkdtemp(join(tmpdir(), "fluxerly-release-guard-"))
+    if (dirname(root) !== resolve(tmpdir()) || !root.startsWith(resolve(tmpdir()) + sep))
+        throw new Error("Temporary release guard directory escaped its owner")
     try {
         const candidate = await stage({ version: plan.version, output: join(root, "candidate") })
-        const npm = await readDirectory(candidate.npm.directory)
-        if (contentFingerprint(npm) === baseline.contentFingerprint)
+        const fingerprint = contentFingerprint(await readDirectory(candidate.npm.directory))
+        assertStablePromotion(plan.channel, baselineVersion, fingerprint, baseline.contentFingerprint)
+        if (plan.channel !== "stable" && fingerprint === baseline.contentFingerprint)
             return {
                 skipped: true,
                 reason: "Publishable SDK bytes are unchanged from the previous published channel and line baseline",
                 baseline: baselineVersion,
             }
     } finally {
-        if (dirname(root) !== resolve(tmpdir()) || !root.startsWith(resolve(tmpdir()) + sep))
-            throw new Error("Temporary release guard directory escaped its owner")
         await rm(root, { recursive: true })
     }
 }
 
-export async function prepareCandidate({ workspace, output, bootstrap = false, line, docs, registries, stage }) {
+/**
+ * @param {{ workspace: string, output: string, line?: string, docs?: string, registries: any, stage: any }} options
+ */
+export async function prepareCandidate({ workspace, output, line, docs, registries, stage }) {
     if (
         !isAbsolute(output) ||
         resolve(output) === workspace ||
@@ -38,7 +44,7 @@ export async function prepareCandidate({ workspace, output, bootstrap = false, l
         throw new Error("Candidate output must be a new absolute directory outside SDK source")
     const source = JSON.parse(await readFile(join(workspace, "sdk", "package.json"), "utf8"))
     const version = parseVersion(source.version)
-    if (source.name !== "@neontechspace/fluxerly" || source.private !== true || source.version === "0.0.0")
+    if (source.name !== "@neontechspace/fluxerly" || source.private !== true || version.major < 1000)
         throw new Error("Prepare a reviewed SDK release version before staging")
     if (line && version.line !== line) throw new Error("Requested release line does not match the reviewed version")
     const notes = changelogSection(await readFile(join(workspace, "sdk", "CHANGELOG.md"), "utf8"), source.version)
@@ -61,31 +67,35 @@ export async function prepareCandidate({ workspace, output, bootstrap = false, l
             throw new Error("Documentation snapshot does not match the reviewed SDK candidate")
         sourceCommit = snapshot.sourceCommit
     }
-    const inventory = await registries.inventory(source.name, { bootstrap })
+    const inventory = await registries.inventory(source.name)
     if (inventory.npmVersions.includes(source.version))
         throw new Error("Candidate version already exists, recover using its original immutable candidate")
-    const baselineVersion = selectBaseline({
-        ...inventory,
-        version: source.version,
-        channel: version.channel,
-        bootstrap,
-    })
+    const baselineVersion = selectBaseline({ ...inventory, version: source.version, channel: version.channel })
     const baseline = baselineVersion === null ? null : await registries.baseline(source.name, baselineVersion)
     try {
         await lstat(output)
         throw new Error("Candidate output already exists, use a new directory")
     } catch (error) {
-        if (error.code !== "ENOENT") throw error
+        if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ENOENT") throw error
     }
     const intendedOutput = join(await realpath(dirname(output)), basename(output))
     const staged = await stage({ version: source.version, output })
     const npm = await readDirectory(staged.npm.directory)
     const files = exactFiles(npm)
     const fingerprint = contentFingerprint(npm)
-    if (baseline?.contentFingerprint === fingerprint) {
+    const discardOutput = async () => {
         const actualOutput = await realpath(output)
-        if (actualOutput !== intendedOutput) throw new Error("Skipped candidate directory escaped its verified owner")
+        if (actualOutput !== intendedOutput) throw new Error("Discarded candidate directory escaped its verified owner")
         await rm(actualOutput, { recursive: true })
+    }
+    try {
+        assertStablePromotion(version.channel, baselineVersion, fingerprint, baseline?.contentFingerprint)
+    } catch (error) {
+        await discardOutput()
+        throw error
+    }
+    if (version.channel !== "stable" && baseline?.contentFingerprint === fingerprint) {
+        await discardOutput()
         return {
             skipped: true,
             reason: "Publishable SDK bytes are unchanged from the previous published channel and line baseline",
@@ -106,7 +116,6 @@ export async function prepareCandidate({ workspace, output, bootstrap = false, l
         channel: version.channel,
         line: version.line,
         sourceCommit,
-        bootstrap,
         baseline,
         contentFingerprint: fingerprint,
         files,
@@ -128,6 +137,10 @@ export async function prepareCandidate({ workspace, output, bootstrap = false, l
     }
 }
 
+/**
+ * @param {string} directory
+ * @param {{ checksum?: string }} [options]
+ */
 export async function readCandidate(directory, { checksum } = {}) {
     const bytes = await readFile(join(directory, "candidate.json"))
     const actualChecksum = sha256(bytes)

@@ -1,23 +1,34 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { readFile, readdir } from "node:fs/promises"
-import { resolve, join, relative } from "node:path"
+import { access, readFile, readdir } from "node:fs/promises"
+import { join, posix, relative } from "node:path"
+import { fileURLToPath } from "node:url"
 import { channelTargets, defaultVersion, publishedSnapshotFiles, retainedVersions, validateSnapshot } from "../scripts/versions.js"
-import { previewSettings } from "../scripts/preview-deploy.js"
 import { pageUrl } from "../scripts/reference-theme.js"
 import { remarkReferenceAnchors } from "../scripts/reference-anchors.js"
+import { findAll, hasClass, parseHtml, textContent } from "./html.js"
 
 test("Channel pointers prefer Stable, use rolling prerelease paths and omit absent stages", () => {
     assert.deepEqual(channelTargets([]), [])
-    assert.equal(defaultVersion(["1000.1.0-canary.0", "1000.0.0"]), "1000.0.0")
-    assert.equal(defaultVersion(["1000.0.0-canary.2", "1000.0.0-rc.0"]), "1000.0.0-rc.0")
     assert.equal(channelTargets(["1000.0.0-canary.9", "1000.0.0-canary.10"])[0].version, "1000.0.0-canary.10")
     assert.deepEqual(channelTargets(["1000.0.0", "1000.1.0-rc.0", "1000.2.0-canary.0", "1000.2.0-canary.1"]), [
         { version: "1000.0.0", label: "Stable", path: "1000.0.0" },
         { version: "1000.1.0-rc.0", label: "RC", path: "rc" },
         { version: "1000.2.0-canary.1", label: "Canary", path: "canary" },
     ])
-    for (const version of ["1000.0.0-alpha.0", "1000.0.0-beta.0"]) assert.throws(() => channelTargets([version]))
+    for (const version of ["1000.0.0-alpha.0", "1000.0.0-beta.0"])
+        assert.throws(() => channelTargets([version]), /canary or rc suffix/)
+})
+
+test("Latest source selection respects readiness before numerical version order", () => {
+    for (const [versions, expected] of [
+        [[], null],
+        [["1000.2.0-canary.9", "1000.2.0-canary.10"], "1000.2.0-canary.10"],
+        [["1000.0.0-canary.2", "1000.0.0-rc.0"], "1000.0.0-rc.0"],
+        [["1000.1.0-rc.9", "1000.2.0-canary.10", "1000.1.0-rc.10"], "1000.1.0-rc.10"],
+        [["1000.1.0-canary.0", "1000.0.0"], "1000.0.0"],
+        [["1000.0.9", "1000.1.0-rc.10", "1000.2.0-canary.10", "1000.0.10"], "1000.0.10"],
+    ]) assert.equal(defaultVersion(versions), expected)
 })
 
 test("Retention keeps all Stable versions and only the newest of each prerelease channel", () => {
@@ -53,25 +64,15 @@ test("Snapshots reject traversal, duplicates, missing guides and invalid provena
         files: ["index.md", "quick-start.md", "changelog.md"].map((path) => ({ path, content: "" })),
     }
     assert.equal(validateSnapshot(snapshot), snapshot)
-    assert.throws(() =>
-        validateSnapshot({ ...snapshot, files: [...snapshot.files, { path: "../escape.md", content: "" }] }),
-    )
-    assert.throws(() => validateSnapshot({ ...snapshot, files: [...snapshot.files, snapshot.files[0]] }))
-    assert.throws(() => validateSnapshot({ ...snapshot, files: [] }))
-    assert.throws(() => validateSnapshot({ ...snapshot, sourceCommit: "main" }))
-})
-
-test("Temporary deployment rejects a production hostname and unsafe configuration", () => {
-    const env = {
-        CLOUDFLARE_ACCOUNT_ID: "1".repeat(32),
-        CLOUDFLARE_API_TOKEN: "test-only",
-        CLOUDFLARE_PAGES_PROJECT: "test-docs",
-        CLOUDFLARE_PREVIEW_URL: "https://preview.example.test",
-    }
-    assert.equal(previewSettings(env).branch, "preview")
-    assert.throws(() => previewSettings({ ...env, CLOUDFLARE_PREVIEW_URL: "https://example.test" }))
-    assert.throws(() => previewSettings({ ...env, CLOUDFLARE_PREVIEW_URL: "https://preview.example.test/path" }))
-    assert.throws(() => previewSettings({ ...env, CLOUDFLARE_API_TOKEN: "" }))
+    for (const { patch, reason } of [
+        { patch: { files: [...snapshot.files, { path: "../escape.md", content: "" }] }, reason: /Invalid docs snapshot file/ },
+        { patch: { files: [...snapshot.files, snapshot.files[0]] }, reason: /Invalid docs snapshot file/ },
+        { patch: { files: [] }, reason: /Empty docs snapshot/ },
+        { patch: { files: snapshot.files.slice(1) }, reason: /Incomplete docs snapshot/ },
+        { patch: { sourceCommit: "main" }, reason: /Invalid docs provenance/ },
+        { patch: { schemaVersion: 3 }, reason: /Invalid docs provenance/ },
+        { patch: { version: "../escape" }, reason: /canary or rc suffix/ },
+    ]) assert.throws(() => validateSnapshot({ ...snapshot, ...patch }), reason)
 })
 
 test("Generated symbol links preserve exact route and anchor identities", () => {
@@ -83,7 +84,7 @@ test("Generated symbol links preserve exact route and anchor identities", () => 
     assert.equal(pageUrl("https://example.test/source.md"), "https://example.test/source.md")
 })
 
-test("Reference headings retain TypeDoc IDs without collisions with parameter headings", () => {
+test("Reference headings retain TypeDoc IDs without collisions with parameter headings", async () => {
     const heading = () => ({ type: "heading", depth: 3, children: [{ type: "text", value: "operation" }] })
     const root = {
         type: "root",
@@ -100,7 +101,7 @@ test("Reference headings retain TypeDoc IDs without collisions with parameter he
         ],
     }
     const file = { data: {} }
-    remarkReferenceAnchors()(root, file)
+    await remarkReferenceAnchors()(root, file)
     assert.equal(root.children.length, 2)
     assert.deepEqual(
         root.children.map((node) => node.data.hProperties.id),
@@ -112,6 +113,24 @@ test("Reference headings retain TypeDoc IDs without collisions with parameter he
     )
 })
 
+test("Section headings avoid member anchors in property tables", async () => {
+    // A member named properties shares its TypeDoc anchor with the Properties heading's slug
+    const cell = (value) => ({ type: "tableCell", children: value })
+    const root = {
+        type: "root",
+        children: [
+            { type: "heading", depth: 2, children: [{ type: "text", value: "Properties" }] },
+            { type: "table", children: [{ type: "tableRow", children: [
+                cell([{ type: "html", value: '<a id="properties"></a>' }, { type: "inlineCode", value: "properties" }]),
+            ] }] },
+        ],
+    }
+    const file = { data: {} }
+    await remarkReferenceAnchors()(root, file)
+    assert.equal(root.children[0].data.hProperties.id, "properties-1")
+    assert.deepEqual(file.data.toc.map((item) => item.url), ["#properties-1"])
+})
+
 async function inventory(root, extension) {
     const result = []
     for (const entry of await readdir(root, { withFileTypes: true })) {
@@ -121,64 +140,85 @@ async function inventory(root, extension) {
     }
     return result
 }
-const decode = (value) => value.replaceAll("&quot;", '"').replaceAll("&#39;", "'").replaceAll("&amp;", "&")
 
-test("HTML link and anchor decoding preserves encoded entity text", () => {
-    assert.equal(decode("&quot;&#39;&amp;"), "\"'&")
-    assert.equal(decode("#&amp;quot;-&amp;#39;-&amp;amp;"), "#&quot;-&#39;-&amp;")
+const dist = fileURLToPath(new URL("../dist/", import.meta.url))
+let builtSite
+// One parse of the built site serves every check below. Each page keeps only the facts those checks read
+function readBuiltSite() {
+    builtSite ??= (async () => {
+        const pages = new Map()
+        for (const path of await inventory(dist, ".html")) {
+            const tree = parseHtml(await readFile(path, "utf8"), { fragment: false })
+            const route = relative(dist, path).replaceAll("\\", "/")
+            const meta = findAll(tree, "meta")
+            pages.set(route, {
+                robots: meta.filter((node) => node.properties.name === "robots").map((node) => String(node.properties.content)),
+                social: meta.filter((node) => /^(?:og|twitter):/.test(String(node.properties.property ?? node.properties.name ?? ""))).length,
+                sitemaps: findAll(tree, (node) => node.tagName === "link" && (node.properties.rel ?? []).includes("sitemap")).length,
+                ids: findAll(tree, (node) => node.properties.id !== undefined).map((node) => String(node.properties.id)),
+                hrefs: findAll(tree, (node) => node.properties.href !== undefined).map((node) => String(node.properties.href)),
+                // Inline code outside fenced examples, recorded as whether each element carries syntax tokens
+                inlineCode: route.includes("/api/")
+                    ? findAll(tree, (node, ancestors) => node.tagName === "code" && !ancestors.some((parent) => parent.tagName === "pre"))
+                        .filter((node) => textContent(node).trim())
+                        .map((node) => findAll(node, (inner) => inner.tagName === "span" && hasClass(inner, "syntax-token")).length > 0)
+                    : [],
+            })
+        }
+        assert.ok(pages.size > 0, "Build the documentation site before running the built-site checks")
+        return pages
+    })()
+    return builtSite
+}
+
+test("Built pages are noindex without sitemap or social metadata", async () => {
+    for (const [route, page] of await readBuiltSite()) {
+        assert.ok(page.robots.some((content) => /\bnoindex\b/.test(content)), route)
+        assert.equal(page.sitemaps, 0, route)
+        assert.equal(page.social, 0, route)
+    }
 })
 
-test("Every built internal link and fragment resolves, public docs exclude internal-only modules", async () => {
-    const dist = resolve("dist")
-    const files = await inventory(dist, ".html")
-    const pages = new Map()
-    for (const path of files) {
-        const html = await readFile(path, "utf8")
-        assert.ok(!/<link[^>]+rel="sitemap"|property="og:|name="twitter:/i.test(html), path)
-        assert.match(html, /noindex/)
-        // Copy anchor strings so V8 cannot keep each full HTML body through a sliced string
-        const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) =>
-            Buffer.from(decode(match[1]), "utf8").toString("utf8"),
-        )
-        assert.equal(new Set(ids).size, ids.length, `Duplicate HTML anchor in ${path}`)
-        pages.set(path, { ids: new Set(ids) })
-    }
+test("Every built internal link and fragment resolves to a unique anchor", async () => {
+    const pages = await readBuiltSite()
     const failures = new Set()
-    for (const path of pages.keys()) {
-        const html = await readFile(path, "utf8")
-        const base = new URL(
-            relative(dist, path)
-                .replaceAll("\\", "/")
-                .replace(/index\.html$/, ""),
-            "https://docs.test/",
-        )
-        for (const [, href] of html.matchAll(/\bhref="([^"]+)"/g)) {
-            const url = new URL(decode(href), base)
+    for (const [route, page] of pages) {
+        assert.equal(new Set(page.ids).size, page.ids.length, `Duplicate HTML anchor in ${route}`)
+        const base = new URL(route.replace(/index\.html$/, ""), "https://docs.test/")
+        for (const href of page.hrefs) {
+            const url = new URL(href, base)
             if (url.origin !== base.origin || !url.pathname.startsWith("/docs/")) continue
-            const destination = join(dist, decodeURIComponent(url.pathname), "index.html")
-            const target = pages.get(destination)
-            if (!target || (url.hash && !target.ids.has(decodeURIComponent(url.hash.slice(1)))))
-                failures.add(`${relative(dist, path)} -> ${url.pathname}${url.hash}`)
+            const path = decodeURIComponent(url.pathname).slice(1)
+            // Markdown twins and assistant indexes are files beside the HTML pages
+            if (/\.(?:md|txt)$/.test(url.pathname)) {
+                if (url.hash || !(await access(join(dist, path)).then(() => true, () => false)))
+                    failures.add(`${route} -> ${url.pathname}${url.hash}`)
+                continue
+            }
+            const target = pages.get(posix.join(path, "index.html"))
+            if (!target || (url.hash && !target.ids.includes(decodeURIComponent(url.hash.slice(1)))))
+                failures.add(`${route} -> ${url.pathname}${url.hash}`)
         }
     }
     assert.deepEqual([...failures], [])
-    const routes = files.map((path) => relative(dist, path).replaceAll("\\", "/"))
-    assert.ok(routes.some((route) => route.includes("functions/js-ts.createClient/")))
-    assert.ok(routes.some((route) => route.includes("types/js-ts.PermissionName/")))
-    assert.ok(!routes.some((route) => /\/internal\/|\.Rest\/|\.Gateway\//.test(route)))
-    console.log(`Verified internal links and anchors across ${files.length} rendered HTML pages`)
-    let inlineTypes = 0
-    const uncoloured = []
-    for (const path of pages.keys()) {
-        if (!path.replaceAll("\\", "/").includes("/api/")) continue
-        const html = (await readFile(path, "utf8")).replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/g, "")
-        for (const [, content] of html.matchAll(/<code\b[^>]*>([\s\S]*?)<\/code>/g)) {
-            if (!content.replace(/<[^>]*>/g, "").trim()) continue
-            inlineTypes++
-            if (!content.includes('class="syntax-token"')) uncoloured.push(relative(dist, path))
-        }
-    }
-    assert.ok(inlineTypes > 0)
-    assert.deepEqual([...new Set(uncoloured)], [])
-    console.log(`Verified syntax colouring across ${inlineTypes} generated inline-code elements`)
+    console.log(`Verified internal links and anchors across ${pages.size} rendered HTML pages`)
+})
+
+test("Public reference pages include entry-point symbols and exclude internal-only modules", async () => {
+    const pages = await readBuiltSite()
+    const routes = [...pages.keys()]
+    // Older snapshots give each symbol a page. Current output groups functions and type aliases on entry points
+    const symbol = (kind, name) => routes.some((route) => route.includes(`${kind}/js-ts.${name}/`)) ||
+        [...pages].some(([route, page]) => route.endsWith("/api/modules/js-ts/index.html") && page.ids.includes(name.toLowerCase()))
+    assert.ok(symbol("functions", "createClient"))
+    assert.ok(symbol("types", "PermissionName"))
+    assert.deepEqual(routes.filter((route) => /\/internal\/|\.Rest\/|\.Gateway\//.test(route)), [])
+})
+
+test("Generated reference inline code is syntax-coloured", async () => {
+    const pages = await readBuiltSite()
+    const coloured = [...pages.values()].flatMap((page) => page.inlineCode)
+    assert.ok(coloured.length > 0)
+    assert.deepEqual([...pages].filter(([, page]) => page.inlineCode.includes(false)).map(([route]) => route), [])
+    console.log(`Verified syntax colouring across ${coloured.length} generated inline-code elements`)
 })

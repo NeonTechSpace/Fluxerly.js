@@ -1,0 +1,457 @@
+import { Effect, Exit, Scope, Stream } from "effect"
+import { afterEach, expect, onTestFinished, test, vi } from "vitest"
+import {
+    type EventName,
+    type MessagePinsQuery,
+    type MessageReference,
+    type DefaultMessageOperationOptions,
+} from "../../../src/index.js"
+import {
+    defaultApi as createDefaultApi,
+    modes,
+    nativeApi as createNativeApi,
+    type Mode,
+} from "../../support/both-apis.js"
+import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
+import { startSynchronousGateway } from "../../support/messages-gateway.js"
+import { settle } from "../../support/settle.js"
+import { wsTarget } from "../../support/ws-redirect.js"
+
+vi.mock("ws", (original) => import("../../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    wsTarget.sockets = []
+})
+const target = { id: "10", channelId: "20" }
+const wire = (id = "10", pinned?: boolean) => ({
+    id,
+    channel_id: "20",
+    content: "fixture",
+    author: { id: "30", username: "fixture" },
+    ...(pinned === undefined ? {} : { pinned }),
+})
+const metadataWire = (id = "10") => ({
+    ...wire(id, true),
+    timestamp: "2026-09-09T12:00:00.000Z",
+    edited_timestamp: null,
+    type: 19,
+    flags: 4,
+    guild_id: "40",
+    mention_everyone: false,
+    mentions: [{ id: "31", username: "mentioned", bot: true }],
+    mention_roles: ["50"],
+    mention_channels: null,
+    message_reference: { message_id: "70", channel_id: "71", guild_id: null, type: 1 },
+})
+const pin = (id = "10", time = "2026-09-08T12:00:00.000Z") => ({ message: wire(id, true), pinned_at: time })
+function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
+    stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
+        url.endsWith("/gateway/bot")
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            : handler(url, init),
+    )
+}
+async function fixture(mode: Mode) {
+    // Registered before the client so its shutdown runs first, then this closes native subscriptions
+    const scope = Scope.makeUnsafe()
+    onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+    /** Run a native Effect with an optional AbortSignal, throwing its typed failure */
+    const run = async <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) => {
+        const r = await Effect.runPromise(Effect.result(effect), signal ? { signal } : undefined)
+        if (r._tag === "Failure") throw r.failure
+        return r.success
+    }
+    const options = { gateway: { onMalformedDispatch: "terminate" as const }, cache: { messages: true } }
+    const defaultApi = mode === "default" ? createDefaultApi(options) : undefined
+    const native = mode === "native" ? await createNativeApi(options) : undefined
+    const close = async () => {
+        if (defaultApi) await settle(defaultApi.shutdown())
+        else await settle(native!.shutdown())
+    }
+    return {
+        defaultApi,
+        native,
+        close,
+        connect: async () => (defaultApi ? settle(defaultApi.connect()) : settle(native!.connect())),
+        state: () => (defaultApi ?? native)!.state,
+        fetch: async (message = target) =>
+            defaultApi ? settle(defaultApi.messages.fetch(message)) : settle(native!.messages.fetch(message)),
+        get: async (message = target) =>
+            defaultApi ? settle(defaultApi.messages.get(message)) : settle(native!.messages.get(message)),
+        mutate: async (
+            operation: "pin" | "unpin",
+            message: MessageReference = target,
+            options?: DefaultMessageOperationOptions,
+        ) =>
+            defaultApi
+                ? settle(defaultApi.messages[operation](message, options))
+                : run(native!.messages[operation](message, options), options?.signal as AbortSignal | undefined),
+        pins: async (query?: MessagePinsQuery, channel = "20", options?: DefaultMessageOperationOptions) =>
+            defaultApi
+                ? settle(defaultApi.messages.fetchPins(channel, query, options))
+                : run(native!.messages.fetchPins(channel, query, options), options?.signal as AbortSignal | undefined),
+        on: async (event: EventName, handler: (value: any) => void, maxPendingBytes?: number) => {
+            if (defaultApi)
+                return settle(
+                    defaultApi.on(
+                        event,
+                        handler,
+                        maxPendingBytes === undefined ? undefined : { maxPendingBytes, overflow: "stop" },
+                    ),
+                )
+            const subscription = await settle(
+                native!
+                    .on(
+                        event,
+                        (value) => Effect.sync(() => handler(value)),
+                        maxPendingBytes === undefined ? undefined : { maxPendingBytes, overflow: "stop" },
+                    )
+                    .pipe(Scope.provide(scope)),
+            )
+            return { waitForClose: () => settle(subscription.waitForClose()) }
+        },
+        readOne: async () => {
+            if (defaultApi) {
+                const source = await settle(defaultApi.subscribe("channelPinsUpdate"))
+                try {
+                    return await settle(source.next())
+                } finally {
+                    source.close()
+                }
+            }
+            return (await settle(Stream.runCollect(native!.subscribe("channelPinsUpdate").pipe(Stream.take(1)))))[0]
+        },
+        closed: async () => (defaultApi ? settle(defaultApi.waitForClose()) : settle(native!.waitForClose())),
+    }
+}
+/** Dispatch over the network, or synchronously on the SDK socket when the assertion needs delivery before the call returns */
+async function gateway() {
+    const server = await startSynchronousGateway({ heartbeatIntervalMs: 600_000 })
+    return (event: string, body: unknown, synchronous = false) =>
+        synchronous ? server.deliverNow(event, body) : server.dispatch(event, body)
+}
+
+test.each(modes)(
+    "%s pins and unpins exact targets without implicit connection or optimistic cache state",
+    async (mode) => {
+        const calls: [string, string][] = []
+        rest(async (url, init) => {
+            if (init.method === "GET") return Response.json(wire(url.endsWith("/11") ? "11" : "10", false))
+            calls.push([init.method!, url])
+            expect(init.body).toBeUndefined()
+            return new Response(null, { status: 204 })
+        })
+        const api = await fixture(mode)
+        const other = await api.fetch({ ...target, id: "11" })
+        for (const op of ["pin", "unpin"] as const) {
+            expect((await api.fetch()).pinned).toBe(false)
+            await api.mutate(op)
+            expect(await api.get()).toBeUndefined()
+            expect(await api.get({ ...target, id: "11" })).toBe(other)
+        }
+        expect(calls).toEqual([
+            ["PUT", "https://api.fluxer.app/v1/channels/20/pins/10"],
+            ["DELETE", "https://api.fluxer.app/v1/channels/20/pins/10"],
+        ])
+        expect(api.state()).not.toBe("Connected")
+    },
+)
+
+test.each(modes)("%s lists explicit frozen timestamp pages without traversal or cache population", async (mode) => {
+    const calls: string[] = []
+    rest(async (url) => {
+        calls.push(url)
+        return Response.json(
+            calls.length === 1
+                ? { items: [pin("10"), pin("11")], has_more: true }
+                : { items: [pin("11")], has_more: false },
+        )
+    })
+    const api = await fixture(mode)
+    const page = await api.pins({ limit: 2 })
+    expect(calls).toHaveLength(1)
+    expect(page.items.map((p) => p.message.id)).toEqual(["10", "11"])
+    expect(page.nextBefore).toBe(page.items[1]!.pinnedAt)
+    expect(page.hasMore).toBe(true)
+    expect(
+        Object.isFrozen(page) &&
+            Object.isFrozen(page.items) &&
+            page.items.every(
+                (p) => Object.isFrozen(p) && Object.isFrozen(p.message) && Object.isFrozen(p.message.author),
+            ),
+    ).toBe(true)
+    const next = await api.pins({ before: page.nextBefore! })
+    expect(next.items[0]!.message.id).toBe("11")
+    expect(next.nextBefore).toBeNull()
+    expect(calls[1]).toBe(
+        "https://api.fluxer.app/v1/channels/20/messages/pins?limit=50&before=2026-09-08T12%3A00%3A00.000Z",
+    )
+    expect(await api.get()).toBeUndefined()
+})
+
+test.each(modes)("%s preserves supplied metadata from pin pages without hydration", async (mode) => {
+    rest(async () =>
+        Response.json({ items: [{ message: metadataWire(), pinned_at: "2026-09-08T12:00:00.000Z" }], has_more: false }),
+    )
+    const api = await fixture(mode)
+    const message = (await api.pins()).items[0]!.message
+    expect(message).toMatchObject({
+        id: "10",
+        createdAt: "2026-09-09T12:00:00.000Z",
+        editedAt: null,
+        type: 19,
+        flags: 4,
+        guildId: "40",
+        mentionedEveryone: false,
+        mentions: [{ id: "31", username: "mentioned", isBot: true }],
+        mentionRoleIds: ["50"],
+        mentionChannels: null,
+        messageReference: { id: "70", channelId: "71", guildId: null, type: 1 },
+    })
+    expect("reactions" in message).toBe(false)
+    expect("referencedMessage" in message).toBe(false)
+    expect(
+        Object.isFrozen(message) &&
+            Object.isFrozen(message.mentions) &&
+            Object.isFrozen(message.mentions?.[0]) &&
+            Object.isFrozen(message.mentionRoleIds) &&
+            Object.isFrozen(message.messageReference),
+    ).toBe(true)
+    expect(await api.get()).toBeUndefined()
+})
+
+test.each(modes)("%s rejects invalid pin inputs and malformed pages without partial results", async (mode) => {
+    const urls: string[] = []
+    let calls = 0,
+        body: unknown = { items: [], has_more: false }
+    rest(async (url) => {
+        calls++
+        urls.push(url)
+        return Response.json(body)
+    })
+    const api = await fixture(mode)
+    for (const query of [
+        null,
+        { limit: 0 },
+        { limit: 51 },
+        { limit: 1.5 },
+        { after: "10" },
+        { before: "10" },
+        { before: "2026-09-08" },
+        { before: "2025-02-29T00:00:00Z" },
+        { before: "2024-04-31T00:00:00+02:00" },
+        { before: "1900-02-29T00:00:00Z" },
+    ])
+        await expect(api.pins(query as any)).rejects.toMatchObject({
+            operation: "fetchPins",
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    await expect(api.pins({}, "bad")).rejects.toMatchObject({ reason: "input" })
+    for (const operation of ["pin", "unpin"] as const)
+        for (const message of [null, {}, { id: "10/11", channelId: "20" }, { id: "10", channelId: "020" }])
+            await expect(api.mutate(operation, message as MessageReference)).rejects.toMatchObject({
+                operation,
+                reason: "input",
+            })
+    expect(calls).toBe(0)
+    let beforeReads = 0
+    const changingBefore = {
+        get before() {
+            return ++beforeReads === 1 ? "2024-02-29T00:00:00Z" : "bad"
+        },
+    }
+    expect(await api.pins(changingBefore)).toEqual({ items: [], hasMore: false, nextBefore: null })
+    expect(beforeReads).toBe(1)
+    expect(urls.at(-1)).toContain("before=2024-02-29T00%3A00%3A00Z")
+    const firstInvalid = {
+        get before() {
+            return "bad"
+        },
+    }
+    await expect(api.pins(firstInvalid)).rejects.toMatchObject({
+        operation: "fetchPins",
+        reason: "input",
+        outcome: "notDispatched",
+    })
+    expect(calls).toBe(1)
+    for (const invalid of [
+        null,
+        [],
+        { items: [], has_more: true },
+        { items: [], has_more: "false" },
+        { items: [pin(), pin()], has_more: false },
+        { items: [pin("10"), pin("11", "2026-09-09T00:00:00Z")], has_more: false },
+        { items: [pin("10", "invalid")], has_more: false },
+        { items: [pin("10", "2025-02-29T00:00:00Z")], has_more: false },
+        { items: [{ ...pin(), message: { ...wire(), channel_id: "21" } }], has_more: false },
+        { items: [{ ...pin(), message: wire("10", false) }], has_more: false },
+        { items: [{ ...pin(), message: { ...wire(), pinned: "true" } }], has_more: false },
+    ]) {
+        body = invalid
+        await expect(api.pins({ limit: 2 })).rejects.toMatchObject({
+            operation: "fetchPins",
+            reason: "response",
+            status: 200,
+        })
+    }
+    body = { items: [pin()], has_more: false }
+    await expect(api.pins({ before: "2026-09-07T00:00:00Z" })).rejects.toMatchObject({
+        operation: "fetchPins",
+        reason: "response",
+    })
+    body = { items: [], has_more: false }
+    expect(await api.pins()).toEqual({ items: [], hasMore: false, nextBefore: null })
+    for (const before of ["2000-02-29T00:00:00Z", "2024-02-29T24:00:00+14:00", "2024-04-30T12:00:00.123456789Z"]) {
+        expect(await api.pins({ before })).toEqual({ items: [], hasMore: false, nextBefore: null })
+    }
+    await api.close()
+    await expect(api.pins()).rejects.toMatchObject({ _tag: "ClientClosedError" })
+    await expect(api.mutate("pin")).rejects.toMatchObject({ _tag: "ClientClosedError" })
+})
+
+test.each(modes)(
+    "%s classifies pin failures, preserves rejected cache entries and evicts uncertain changes",
+    async (mode) => {
+        let status = 204,
+            calls = 0
+        rest(async (_url, init) =>
+            init.method === "GET" ? Response.json(wire()) : (calls++, new Response(null, { status })),
+        )
+        const api = await fixture(mode)
+        for (const operation of ["pin", "unpin"] as const) {
+            for (const [code, reason, outcome] of [
+                [403, "rejected", "rejected"],
+                [404, "notFound", "rejected"],
+                [500, "rejected", "unknown"],
+                [200, "response", "unknown"],
+            ] as const) {
+                const cached = await api.fetch()
+                status = code
+                await expect(api.mutate(operation)).rejects.toMatchObject({ operation, reason, outcome, status })
+                expect(await api.get()).toBe(outcome === "unknown" ? undefined : cached)
+            }
+        }
+        expect(calls).toBe(8)
+        for (const code of [403, 404, 500, 204]) {
+            rest(async () => new Response(null, { status: code }))
+            await expect(api.pins()).rejects.toMatchObject({ operation: "fetchPins", status: code })
+        }
+    },
+)
+
+test.each(modes)("%s pin mutations prevent older in-flight reads from repopulating cached pin state", async (mode) => {
+    let respond!: (value: Response) => void
+    rest((_, init) =>
+        init.method === "GET"
+            ? new Promise((resolve) => {
+                  respond = resolve
+              })
+            : Promise.resolve(new Response(null, { status: 204 })),
+    )
+    const api = await fixture(mode)
+    const old = api.fetch()
+    await vi.waitFor(() => expect(respond).toBeTypeOf("function"))
+    await api.mutate("pin")
+    respond(Response.json(wire("10", false)))
+    expect((await old).pinned).toBe(false)
+    expect(await api.get()).toBeUndefined()
+})
+
+test.each(modes)("%s shares the pin rate bucket across pin, unpin and pin reads", async (mode) => {
+    const api = await fixture(mode)
+    let calls = 0
+    rest(async () =>
+        ++calls === 1 ? Response.json({ retry_after: 0.01 }, { status: 429 }) : new Response(null, { status: 204 }),
+    )
+    await api.mutate("pin")
+    expect(calls).toBe(2)
+    rest(async () => {
+        calls++
+        return Response.json({ retry_after: 60 }, { status: 429 })
+    })
+    await expect(api.mutate("unpin", target, { timeoutMs: 10 })).rejects.toMatchObject({ reason: "rateLimit" })
+    const before = calls
+    await expect(api.pins({}, "20", { timeoutMs: 10 })).rejects.toMatchObject({
+        reason: "timeout",
+        outcome: "notDispatched",
+    })
+    expect(calls).toBe(before)
+})
+
+test.each(modes)(
+    "%s exposes frozen pin notifications and received pin state without guessing missing values",
+    async (mode) => {
+        const dispatch = await gateway()
+        rest(async () => Response.json(wire()))
+        const api = await fixture(mode)
+        await api.connect()
+        const received: any[] = []
+        await api.on("channelPinsUpdate", (value) => received.push(value))
+        const updated: any[] = []
+        await api.on("messageUpdate", (value) => updated.push(value))
+        const read = api.readOne()
+        dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: null, private: "discard" })
+        expect(await read).toEqual({ channelId: "20", lastPinTimestamp: null })
+        const stamp = "2026-09-08T12:00:00.000Z"
+        dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: stamp, guild_id: "99" })
+        dispatch("MESSAGE_UPDATE", wire("10", true))
+        await vi.waitFor(() => expect(updated).toHaveLength(1))
+        expect(updated[0].pinned).toBe(true)
+        expect((await api.get())?.pinned).toBe(true)
+        expect(received).toEqual([
+            { channelId: "20", lastPinTimestamp: null },
+            { channelId: "20", lastPinTimestamp: stamp, guildId: "99" },
+        ])
+        expect(received.every(Object.isFrozen)).toBe(true)
+        dispatch("MESSAGE_UPDATE", wire("10", false))
+        await vi.waitFor(() => expect(updated).toHaveLength(2))
+        expect((await api.get())?.pinned).toBe(false)
+        expect(await api.fetch()).not.toHaveProperty("pinned")
+    },
+)
+
+test.each(modes)("%s pin event overflow is subscription-local and subscriptions survive resume", async (mode) => {
+    const dispatch = await gateway()
+    rest(async () => Response.json(wire()))
+    const api = await fixture(mode)
+    await api.connect()
+    const tiny = await api.on("channelPinsUpdate", () => {}, 1)
+    const closed = Promise.resolve(tiny.waitForClose()).catch((e) => e)
+    const received: any[] = []
+    await api.on("channelPinsUpdate", (value) => received.push(value))
+    dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: null }, true)
+    dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: null }, true)
+    const outcome = await closed
+    if (mode === "default") expect(outcome.error).toMatchObject({ _tag: "EventOverflowError", limit: "bytes" })
+    else expect(outcome).toMatchObject({ _tag: "EventOverflowError", limit: "bytes" })
+    expect(api.state()).toBe("Connected")
+    vi.spyOn(Math, "random").mockReturnValue(0)
+    wsTarget.sockets.at(-1)!.close(4000)
+    await vi.waitFor(() => expect(wsTarget.sockets).toHaveLength(2))
+    await vi.waitFor(() => expect(api.state()).toBe("Connected"))
+    dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: null })
+    await vi.waitFor(() => expect(received).toHaveLength(3))
+})
+
+test.each(
+    modes.flatMap((mode) =>
+        [
+            { channel_id: "20", last_pin_timestamp: 1 },
+            { channel_id: "20", last_pin_timestamp: "2025-02-29T00:00:00Z" },
+            { channel_id: "20", last_pin_timestamp: null, guild_id: null },
+            { channel_id: "20", last_pin_timestamp: null, guild_id: "invalid" },
+        ].map((body) => ({ mode, body })),
+    ),
+)("$mode malformed pin notifications fail protocol validation without partial delivery", async ({ mode, body }) => {
+    const dispatch = await gateway()
+    rest(async () => Response.json(wire()))
+    const api = await fixture(mode)
+    await api.connect()
+    const handler = vi.fn()
+    await api.on("channelPinsUpdate", handler)
+    dispatch("CHANNEL_PINS_UPDATE", body)
+    await expect(api.closed()).rejects.toMatchObject({ reason: "protocol" })
+    expect(handler).not.toHaveBeenCalled()
+})

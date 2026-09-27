@@ -1,0 +1,32 @@
+name: Upstream drift
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: true
+jobs:
+  drift:
+    name: Fluxer API and gateway event drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup
+        id: setup
+        with:
+          install: 'false'
+          cache: 'false'
+      # Read-only: The script fetches public upstream documents and writes only this job's summary
+      - name: Compare upstream documents with the pinned manifest
+        id: drift
+        working-directory: projects
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node release/upstream.js

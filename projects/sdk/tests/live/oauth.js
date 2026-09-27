@@ -1,9 +1,12 @@
+// OAuth2 client flows against the sandbox application: authorization URLs, introspection, bearer reads, refresh
+// rotation and revocation. Creates no journal: every issued token pair is revoked and verified in the finalizer,
+// and an uncertain revocation is reported as a manual consent revocation instead
 import assert from "node:assert/strict"
 import { randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer } from "node:http"
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
-import { parseEnv } from "node:util"
 import { Effect, Exit, Scope } from "effect"
+import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
 
 // Default mode requires manual consent; --no-consent performs only explicit read and URL-construction checks
 // Neither mode is part of CI or schedules
@@ -13,9 +16,8 @@ const mode = process.argv.slice(2).find((argument) => argument !== "--no-consent
 const redirectUri = "http://localhost:3000/auth/fluxer/callback"
 const callbackPath = "/auth/fluxer/callback"
 const apiBase = "https://api.fluxer.app"
-const environment = new URL("../../.env.test.local", import.meta.url)
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, ...details }))
+const identityChecks = { "/applications/@me": "application_identity", "/users/@me": "bot_identity" }
+const report = createReporter({ mode })
 
 class HarnessFailure extends Error {
     constructor(check, details = {}) {
@@ -227,14 +229,9 @@ const deadlineAt = Date.now() + 300_000
 
 try {
     assert.ok((mode === "default" || mode === "effect") && process.argv.length === (noConsent ? 4 : 3))
-    const env = parseEnv(readFileSync(environment, "utf8"))
-    const clientId = env.FLUXER_TEST_APPLICATION_ID
-    const botToken = env.FLUXER_TEST_BOT_TOKEN
+    const { env, token: botToken, guildId, applicationId: clientId } = loadSandboxEnvironment()
     const clientSecret = env.FLUXER_TEST_CLIENT_SECRET
     const configuredRedirect = env.FLUXER_TEST_OAUTH_REDIRECT_URI
-    assert.match(clientId ?? "", /^\d+$/)
-    assert.match(env.FLUXER_TEST_GUILD_ID ?? "", /^\d+$/)
-    assert.ok(botToken && botToken === botToken.trim())
     assert.ok(clientSecret && clientSecret === clientSecret.trim())
     assert.equal(configuredRedirect, redirectUri)
     verifyToken = async (token, active) => {
@@ -253,16 +250,12 @@ try {
         if (active) assert.equal(result.client_id, clientId)
     }
 
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
     stage = "sandbox_identity"
-    const application = await botGet("/applications/@me", botToken, "application_identity")
-    const bot = await botGet("/users/@me", botToken, "bot_identity")
-    const guild = await botGet(`/guilds/${env.FLUXER_TEST_GUILD_ID}`, botToken, "guild_identity")
-    assert.equal(application.id, clientId)
-    assert.equal(application.bot?.id, bot.id)
-    assert.equal(bot.bot, true)
-    assert.equal(guild.id, env.FLUXER_TEST_GUILD_ID)
+    const { application } = await verifySandboxIdentity(
+        (path) => botGet(path, botToken, identityChecks[path] ?? "guild_identity"),
+        { applicationId: clientId, guildId },
+    )
     assert.ok(Array.isArray(application.redirect_uris))
     assert.ok(application.redirect_uris.includes(redirectUri))
     report(stage, { passed: true, redirectRegistered: true })
@@ -277,11 +270,8 @@ try {
         if (result.isErr()) throw result.error
         return result.value
     }
-    if (mode === "default") {
-        const created = sdk.oauth.create({ clientId, clientSecret })
-        if (created.isErr()) throw created.error
-        client = created.value
-    } else {
+    if (mode === "default") client = sdk.oauth.create({ clientId, clientSecret })
+    else {
         scope = Scope.makeUnsafe()
         client = await operation(sdk.oauth.create({ clientId, clientSecret }))
     }
@@ -296,7 +286,7 @@ try {
                     scopes: [sdk.OAuthScopes.Identify, sdk.OAuthScopes.Bot],
                     state,
                     codeChallenge: pkce.challenge,
-                    guildId: env.FLUXER_TEST_GUILD_ID,
+                    guildId,
                     permissions: 0n,
                     disableGuildSelect: true,
                 },
@@ -309,7 +299,7 @@ try {
         assert.equal(url.searchParams.get("code_challenge"), pkce.challenge)
         assert.equal(url.searchParams.get("scope"), "identify bot")
         assert.equal(url.searchParams.get("response_type"), "code")
-        assert.equal(url.searchParams.get("guild_id"), env.FLUXER_TEST_GUILD_ID)
+        assert.equal(url.searchParams.get("guild_id"), guildId)
         assert.equal(url.searchParams.get("permissions"), "0")
         assert.equal(url.searchParams.get("disable_guild_select"), "true")
         assert.equal(url.searchParams.has("client_secret"), false)
@@ -554,9 +544,9 @@ try {
         process.exitCode = 1
     }
     verifyToken = undefined
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (lock !== undefined && !lock.release()) {
+        report("sandbox_lock_cleanup", { passed: false, lockRetained: true })
+        process.exitCode = 1
     }
     const manualConsentRevokeRequired =
         tokenMutationUncertain ||

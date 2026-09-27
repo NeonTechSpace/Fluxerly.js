@@ -9,6 +9,7 @@ export const collections = {
             title: z.string(),
             navTitle: z.string().trim().min(1).optional(),
             description: z.string().optional(),
+            snapshotSchema: z.number().int().positive().optional(),
         }),
     }),
     meta: defineCollection({
@@ -18,6 +19,8 @@ export const collections = {
             description: z.string().optional(),
             pages: z.array(z.string()).optional(),
             root: z.union([z.boolean(), z.string()]).optional(),
+            // Reference entry points list source-assigned categories for sidebar navigation
+            categories: z.record(z.string(), z.array(z.object({ title: z.string(), anchor: z.string() }))).optional(),
         }),
     }),
 }

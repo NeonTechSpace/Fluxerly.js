@@ -1,0 +1,33 @@
+name: Job summary
+description: Write step outcomes, selected details and the next action to the job summary
+inputs:
+  title:
+    description: Summary heading
+    required: true
+  steps:
+    description: The job's steps context, passed as toJSON(steps)
+    required: true
+  details:
+    description: JSON object mapping display labels to values. Step outputs are never rendered unless listed here
+    required: false
+    default: '{}'
+  next:
+    description: Next action after the listed steps succeed
+    required: false
+    default: ''
+  command:
+    description: Ready-to-run follow-up command, shown only when no step failed
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Write the job summary
+      shell: bash
+      env:
+        SUMMARY_TITLE: ${{ inputs.title }}
+        SUMMARY_STEPS: ${{ inputs.steps }}
+        SUMMARY_DETAILS: ${{ inputs.details }}
+        SUMMARY_NEXT: ${{ inputs.next }}
+        SUMMARY_COMMAND: ${{ inputs.command }}
+      run: node "$GITHUB_ACTION_PATH/summary.mjs"

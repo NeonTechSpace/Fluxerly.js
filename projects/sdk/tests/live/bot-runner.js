@@ -1,12 +1,15 @@
+// Public bot runner lifecycle: synchronous misuse rejection, cancellation during recovery of its own interrupted
+// gateway connection, setup failure and the simple event path, each with client, socket and signal-listener release.
+// Read-only. Creates no journal and no remote resources
 import assert from "node:assert/strict"
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
-import { parseEnv } from "node:util"
 import WebSocket from "ws"
+import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createReporter } from "./support/reporting.js"
+import { readSandbox } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
-const lockPath = new URL("../../.env.test.local.lock", import.meta.url)
-const report = (check, details = {}) => console.log(JSON.stringify({ mode, check, ...details }))
+const report = createReporter({ mode })
 let stage = "arguments"
 let lock
 let probe
@@ -59,18 +62,7 @@ async function until(predicate, timeoutMs) {
     }
 }
 
-async function get(path, token) {
-    const response = await fetch(`https://api.fluxer.app/v1${path}`, {
-        headers: { Authorization: `Bot ${token}` },
-        signal: AbortSignal.timeout(10_000),
-        redirect: "error",
-    })
-    if (!response.ok) {
-        await response.body?.cancel()
-        throw new Error("Identity request failed")
-    }
-    return response.json()
-}
+const get = (path, token) => readSandbox(path, token, { timeout: 10_000 })
 
 function assertReleased(client, listeners) {
     assert.equal(client.state, "Closed")
@@ -78,113 +70,217 @@ function assertReleased(client, listeners) {
     for (const signal of ["SIGINT", "SIGTERM"]) assert.equal(process.listenerCount(signal), listeners[signal])
 }
 
+function assertSignalListeners(listeners) {
+    for (const signal of ["SIGINT", "SIGTERM"]) assert.equal(process.listenerCount(signal), listeners[signal])
+}
+
 async function checkDefault(token, userId) {
-    const { runBot } = await import("@neontechspace/fluxerly")
+    const { ApplicationError, ConfigurationError, runBot } = await import("@neontechspace/fluxerly")
     const listeners = { SIGINT: process.listenerCount("SIGINT"), SIGTERM: process.listenerCount("SIGTERM") }
-    for (const scenario of ["cancel_recovery", "critical_close"]) {
-        stage = scenario
-        let client
-        let subscription
-        const controller = new AbortController()
-        const running = runBot(
-            { token },
-            (created) => {
-                client = created
-                const opened = created.on("messageCreate", () => undefined)
-                if (opened.isErr()) throw opened.error
-                subscription = opened.value
-                return [subscription]
-            },
-            { signal: controller.signal, processSignals: true },
-        )
-        active = { controller, running }
-        try {
-            await until(() => client?.state === "Connected", 35_000)
-            stage = `${scenario}_fresh_self_read`
-            const self = await client.users.fetchSelf({ timeoutMs: 10_000 })
-            assert.ok(self.isOk())
-            assert.equal(self.value.id, userId)
-            assert.equal(self.value.isBot, true)
-            report(stage, { passed: true, remoteMutations: false })
-            stage = scenario
-            if (scenario === "cancel_recovery") {
-                await probe.interrupt(client)
-                report("recovering_before_cancellation", { passed: true })
-                controller.abort()
-                const result = await running
-                assert.ok(result.isOk())
-            } else {
-                subscription.unsubscribe()
-                const result = await running
-                assert.ok(result.isErr())
-                assert.equal(result.error._tag, "CriticalWorkerStoppedError")
-                assert.equal(result.error.workerIndex, 0)
-            }
-            assertReleased(client, listeners)
-            report(stage, { passed: true })
-        } finally {
-            controller.abort()
-            await Promise.resolve(running).catch(() => undefined)
-            active = undefined
-        }
+
+    stage = "configuration_misuse"
+    // Misuse throws synchronously, before any socket or process signal listener exists
+    const socketsBeforeMisuse = probe.sockets.size
+    assert.throws(
+        () => runBot({ token: "", processSignals: true }),
+        (error) => error instanceof ConfigurationError,
+    )
+    assert.throws(
+        () => runBot({ token, processSignals: true, events: { notAnEvent: () => undefined } }),
+        (error) => error instanceof ConfigurationError,
+    )
+    assert.equal(probe.sockets.size, socketsBeforeMisuse)
+    assertSignalListeners(listeners)
+    report(stage, { passed: true, remoteMutations: false })
+
+    stage = "cancel_recovery"
+    let client
+    let stateAtSetup
+    const controller = new AbortController()
+    const running = runBot({
+        token,
+        signal: controller.signal,
+        processSignals: true,
+        events: { messageCreate: () => undefined },
+        commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Pong") } } },
+        setup: (created) => {
+            client = created
+            stateAtSetup = created.state
+        },
+    })
+    active = { controller, running }
+    try {
+        await until(() => client?.state === "Connected", 35_000)
+        // Setup runs after registration and before the gateway connects
+        assert.equal(stateAtSetup, "Disconnected")
+        stage = "cancel_recovery_fresh_self_read"
+        const self = await client.users.fetchSelf({ timeoutMs: 10_000 })
+        assert.ok(self.isOk())
+        assert.equal(self.value.id, userId)
+        assert.equal(self.value.isBot, true)
+        report(stage, { passed: true, remoteMutations: false })
+        stage = "cancel_recovery"
+        await probe.interrupt(client)
+        report("recovering_before_cancellation", { passed: true })
+        controller.abort()
+        const result = await running
+        assert.ok(result.isOk())
+        assertReleased(client, listeners)
+        report(stage, { passed: true })
+    } finally {
+        controller.abort()
+        await Promise.resolve(running).catch(() => undefined)
+        active = undefined
+    }
+
+    stage = "setup_failure"
+    // The earlier runs stopped cleanly, so no failing exit code may be set before the deliberate failure
+    assert.equal(process.exitCode, undefined)
+    let failed
+    const failure = new Error("Test-owned setup failure")
+    const socketsBeforeSetup = probe.sockets.size
+    const setupController = new AbortController()
+    const failing = runBot({
+        token,
+        signal: setupController.signal,
+        processSignals: true,
+        events: { messageCreate: () => undefined },
+        setup: (created) => {
+            failed = created
+            throw failure
+        },
+    })
+    active = { controller: setupController, running: failing }
+    try {
+        // A failed setup is an application failure returned as Err, not an SDK defect
+        const outcome = await failing
+        assert.ok(outcome.isErr())
+        assert.ok(outcome.error instanceof ApplicationError)
+        assert.equal(outcome.error.source, "runBot setup")
+        assert.equal(outcome.error.cause, failure)
+        // runBot reports the failed run through the exit code. The failure is test-owned, so the check clears it
+        assert.equal(process.exitCode, 1)
+        process.exitCode = undefined
+        // A failed setup stops the bot before it connects and still releases the client and signal listeners
+        assertReleased(failed, listeners)
+        assert.equal(probe.sockets.size, socketsBeforeSetup)
+        report(stage, { passed: true, remoteMutations: false })
+    } finally {
+        setupController.abort()
+        await Promise.resolve(failing).catch(() => undefined)
+        active = undefined
     }
 }
 
 async function checkEffect(token, userId) {
     const { Effect, Exit } = await import("effect")
-    const { runBot } = await import("@neontechspace/fluxerly/effect")
+    const { ApplicationError, ConfigurationError, runBot } = await import("@neontechspace/fluxerly/effect")
     const listeners = { SIGINT: process.listenerCount("SIGINT"), SIGTERM: process.listenerCount("SIGTERM") }
-    for (const scenario of ["cancel_recovery", "critical_close"]) {
-        stage = scenario
-        let client
-        let subscription
-        const controller = new AbortController()
-        const running = Effect.runPromiseExit(
-            runBot(
-                { token },
-                (created) =>
-                    Effect.gen(function* () {
-                        client = created
-                        subscription = yield* created.on("messageCreate", () => Effect.void)
-                        return [subscription]
-                    }),
-                { signal: controller.signal, processSignals: true },
-            ),
-        )
-        active = { controller, running }
-        try {
-            await until(() => client?.state === "Connected", 35_000)
-            stage = `${scenario}_fresh_self_read`
-            const self = await Effect.runPromise(client.users.fetchSelf({ timeoutMs: 10_000 }))
-            assert.equal(self.id, userId)
-            assert.equal(self.isBot, true)
-            report(stage, { passed: true, remoteMutations: false })
-            stage = scenario
-            if (scenario === "cancel_recovery") {
-                await probe.interrupt(client)
-                report("recovering_before_cancellation", { passed: true })
-                controller.abort()
-                assert.ok(Exit.isSuccess(await running))
-            } else {
-                await Effect.runPromise(subscription.unsubscribe())
-                const exit = await running
-                assert.ok(Exit.isFailure(exit))
-                assert.ok(
-                    exit.cause.reasons.some(
-                        (reason) =>
-                            reason._tag === "Fail" &&
-                            reason.error?._tag === "CriticalWorkerStoppedError" &&
-                            reason.error.workerIndex === 0,
-                    ),
-                )
-            }
-            assertReleased(client, listeners)
-            report(stage, { passed: true })
-        } finally {
-            controller.abort()
-            await running
-            active = undefined
-        }
+    const defects = (exit) =>
+        Exit.isFailure(exit)
+            ? exit.cause.reasons.filter((reason) => reason._tag === "Die").map(({ defect }) => defect)
+            : []
+
+    stage = "configuration_misuse"
+    // Native misuse is a defect carrying the ConfigurationError, and no socket or signal listener is left behind
+    const socketsBeforeMisuse = probe.sockets.size
+    for (const options of [
+        { token: "", processSignals: true },
+        { token, processSignals: true, events: { notAnEvent: () => Effect.void } },
+    ]) {
+        const exit = await Effect.runPromiseExit(runBot(options))
+        assert.ok(defects(exit).some((defect) => defect instanceof ConfigurationError))
+        // The Effect runner reports a failure before the client exists and sets a failing exit code
+        assert.equal(process.exitCode, 1)
+        process.exitCode = undefined
+    }
+    assert.equal(probe.sockets.size, socketsBeforeMisuse)
+    assertSignalListeners(listeners)
+    report(stage, { passed: true, remoteMutations: false })
+
+    stage = "cancel_recovery"
+    let client
+    let stateAtSetup
+    const controller = new AbortController()
+    const running = Effect.runPromiseExit(
+        runBot({
+            token,
+            signal: controller.signal,
+            processSignals: true,
+            events: { messageCreate: () => Effect.void },
+            commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Pong") } } },
+            setup: (created) =>
+                Effect.sync(() => {
+                    client = created
+                    stateAtSetup = created.state
+                }),
+        }),
+    )
+    active = { controller, running }
+    try {
+        await until(() => client?.state === "Connected", 35_000)
+        // Setup runs after registration and before the gateway connects
+        assert.equal(stateAtSetup, "Disconnected")
+        stage = "cancel_recovery_fresh_self_read"
+        const self = await Effect.runPromise(client.users.fetchSelf({ timeoutMs: 10_000 }))
+        assert.equal(self.id, userId)
+        assert.equal(self.isBot, true)
+        report(stage, { passed: true, remoteMutations: false })
+        stage = "cancel_recovery"
+        await probe.interrupt(client)
+        report("recovering_before_cancellation", { passed: true })
+        controller.abort()
+        assert.ok(Exit.isSuccess(await running))
+        assertReleased(client, listeners)
+        report(stage, { passed: true })
+    } finally {
+        controller.abort()
+        await running
+        active = undefined
+    }
+
+    stage = "setup_failure"
+    // The earlier runs stopped cleanly, so no failing exit code may be set before the deliberate failure
+    assert.equal(process.exitCode, undefined)
+    let failed
+    const failure = new Error("Test-owned setup failure")
+    const socketsBeforeSetup = probe.sockets.size
+    const setupController = new AbortController()
+    const failing = Effect.runPromiseExit(
+        runBot({
+            token,
+            signal: setupController.signal,
+            processSignals: true,
+            events: { messageCreate: () => Effect.void },
+            setup: (created) =>
+                Effect.suspend(() => {
+                    failed = created
+                    return Effect.fail(failure)
+                }),
+        }),
+    )
+    active = { controller: setupController, running: failing }
+    try {
+        // A failed setup Effect fails the bot with ApplicationError, not a defect
+        const exit = await failing
+        assert.ok(Exit.isFailure(exit))
+        assert.deepEqual(defects(exit), [])
+        const failures = exit.cause.reasons.filter((reason) => reason._tag === "Fail").map(({ error }) => error)
+        assert.equal(failures.length, 1)
+        assert.ok(failures[0] instanceof ApplicationError)
+        assert.equal(failures[0].source, "runBot setup")
+        assert.equal(failures[0].cause, failure)
+        // runBot reports the failed run through the exit code. The failure is test-owned, so the check clears it
+        assert.equal(process.exitCode, 1)
+        process.exitCode = undefined
+        // A failed setup stops the bot before it connects and still releases the client and signal listeners
+        assertReleased(failed, listeners)
+        assert.equal(probe.sockets.size, socketsBeforeSetup)
+        report(stage, { passed: true, remoteMutations: false })
+    } finally {
+        setupController.abort()
+        await failing
+        active = undefined
     }
 }
 
@@ -243,24 +339,15 @@ try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv[3], undefined)
     stage = "sandbox_lock"
-    lock = openSync(lockPath, "wx")
-    writeSync(lock, String(process.pid))
+    lock = acquireLock()
     stage = "configuration"
-    const env = parseEnv(readFileSync(new URL("../../.env.test.local", import.meta.url), "utf8"))
-    const token = env.FLUXER_TEST_BOT_TOKEN
-    const applicationId = env.FLUXER_TEST_APPLICATION_ID
-    const guildId = env.FLUXER_TEST_GUILD_ID
-    assert.ok(token && token === token.trim())
-    assert.match(applicationId ?? "", /^\d+$/)
-    assert.match(guildId ?? "", /^\d+$/)
+    const { token, applicationId, guildId } = loadSandboxEnvironment()
     stage = "sandbox_identity"
-    const application = await get("/oauth2/applications/@me", token)
-    const user = await get("/users/@me", token)
-    assert.equal(application.id, applicationId)
-    assert.equal(user.bot, true)
-    assert.equal(typeof user.id, "string")
-    assert.equal(application.bot?.id, user.id)
-    assert.equal((await get(`/guilds/${guildId}`, token)).id, guildId)
+    const { user } = await verifySandboxIdentity((path) => get(path, token), {
+        applicationId,
+        guildId,
+        applicationPath: "/oauth2/applications/@me",
+    })
     report(stage, { passed: true, remoteMutations: false })
     probe = observeSockets()
     if (mode === "default") await checkDefault(token, user.id)
@@ -277,8 +364,8 @@ try {
     active?.controller.abort()
     if (active) await Promise.resolve(active.running).catch(() => undefined)
     probe?.restore()
-    if (lock !== undefined) {
-        closeSync(lock)
-        unlinkSync(lockPath)
+    if (lock !== undefined && !lock.release()) {
+        report("sandbox_lock_cleanup", { passed: false, lockRetained: true })
+        process.exitCode = 1
     }
 }
