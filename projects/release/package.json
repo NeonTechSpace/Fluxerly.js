@@ -8,15 +8,15 @@
         "test": "tsc -p tsconfig.json && pnpm run lint && node --test tests/*.test.js"
     },
     "dependencies": {
-        "@changesets/apply-release-plan": "8.1.0",
-        "@changesets/cli": "3.0.2",
-        "@changesets/config": "4.0.0",
+        "@changesets/apply-release-plan": "8.1.1",
+        "@changesets/cli": "3.0.3",
+        "@changesets/config": "4.0.1",
         "@changesets/assemble-release-plan": "7.0.0",
         "@changesets/read": "1.0.1",
         "@manypkg/get-packages": "3.1.0"
     },
     "devDependencies": {
-        "@types/node": "24.13.3",
+        "@types/node": "24.13.6",
         "typescript": "7.0.2",
         "yaml": "2.9.1"
     }
