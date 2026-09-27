@@ -38,7 +38,7 @@ The overview and API landing prose live in Markdown partials under `projects/web
 ### Command blocks and navigation
 
 Use a fenced `command` block with JSON metadata for package installation and executable guide commands.
-The command renderer (`projects/web/scripts/command-blocks.js`) owns the supported `install`, `add`, `dev`, `list` and `run` variants and the npm, pnpm and Bun command for each
+The command renderer (`projects/web/scripts/command-blocks.js`) owns the supported `install`, `add`, `dev`, `list`, `agents` and `run` variants and the npm, pnpm and Bun command for each
 
 The generator reads the guide inventory and fills SDK and Effect versions from the selected release and SDK manifest before taking a snapshot.
 Local source previews show an unreleased-version notice instead of an installation command for an unavailable package

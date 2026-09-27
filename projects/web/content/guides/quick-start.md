@@ -21,6 +21,12 @@ This lets the bot use `import` in Node.js
 
 {{installation}}
 
+When a coding agent helps write the bot, copy the SDK's rules for it into the project's `AGENTS.md`, which coding agents read automatically. Run the same command again after updating the SDK
+
+```command
+{"kind":"agents"}
+```
+
 ## 2. Create the bot
 
 Save this as <code data-example-filename>bot.js</code>.

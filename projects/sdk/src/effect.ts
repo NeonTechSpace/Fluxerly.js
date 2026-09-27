@@ -49,6 +49,8 @@
  * This example sends through HTTP without connecting the gateway.
  * The returned Promise settles after the scoped client finishes cleanup
  *
+ * Coding agents: read node_modules/@neontechspace/fluxerly/consumer/AGENTS.md before writing code with this package
+ *
  * @packageDocumentation
  */
 // Checked first, so an unsupported Node.js version fails with a clear message before any other SDK code runs

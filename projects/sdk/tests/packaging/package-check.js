@@ -414,6 +414,20 @@ try {
                 () => createRequire(join(consumer, "package.json"))(specifier),
                 (error) => error.constructor === Error && error.code === undefined && /ESM-only/.test(error.message),
             )
+        if (kind === "default") {
+            // The installed command writes the rules into the application's AGENTS.md, as the guides instruct
+            packageManager(["exec", "fluxerly", "agents"], consumer)
+            const agents = readFileSync(join(consumer, "AGENTS.md"), "utf8")
+            assert.ok(
+                agents.includes(`@neontechspace/fluxerly ${manifest.version}`),
+                "AGENTS.md names the installed version",
+            )
+            assert.ok(
+                agents.includes("run `pnpm exec fluxerly agents` to refresh"),
+                "AGENTS.md names the project's command",
+            )
+            assert.ok(agents.includes("1. Import only from"), "AGENTS.md contains the rules")
+        }
         const installedManifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"))
         assert.ok(!installedManifest.private && !installedManifest.scripts && !installedManifest.devDependencies)
         for (const field of ["peerDependencies", "peerDependenciesMeta", "imports", "engines"])

@@ -16,7 +16,7 @@ const authoredGuides = guideInventory.pages.flatMap((slug) => {
         slug,
         title,
         navTitle: frontmatter(source, "navTitle"),
-        examples: slug === "quick-start" ? 3 : source.split(/\r?\n/).filter((line) => /^```\S+$/.test(line)).length,
+        examples: slug === "quick-start" ? 4 : source.split(/\r?\n/).filter((line) => /^```\S+$/.test(line)).length,
     }]
 })
 
@@ -297,15 +297,17 @@ test("Inline command choices synchronize, survive navigation and reload, and cop
     page.on("pageerror", (error) => errors.push(error.message))
     await page.goto("/docs/preview/quick-start/")
     const blocks = page.locator("[data-command-block]")
-    await expect(blocks).toHaveCount(2)
+    await expect(blocks).toHaveCount(3)
     const manager = blocks.first().getByLabel("Package manager", { exact: true })
     await expect(manager).toBeEnabled()
     await expect(manager).toHaveValue("npm")
     await manager.selectOption("pnpm")
-    await expect(blocks.first().locator("[data-command-code]")).toHaveText("node --env-file=.env bot.js")
+    await expect(blocks.nth(0).locator("[data-command-code]")).toHaveText("pnpm exec fluxerly agents")
+    const run = blocks.nth(1)
+    await expect(run.locator("[data-command-code]")).toHaveText("node --env-file=.env bot.js")
     await expect(blocks.last().locator("[data-command-code]")).toHaveText("pnpm add --save-dev @types/node")
-    await blocks.first().getByRole("button", { name: "Copy", exact: true }).click()
-    await expect(blocks.first().getByRole("status")).toHaveText("Copied")
+    await run.getByRole("button", { name: "Copy", exact: true }).click()
+    await expect(run.getByRole("status")).toHaveText("Copied")
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("node --env-file=.env bot.js")
     await page.locator(".docs-content").getByRole("link", { name: /client.s message methods/ }).click()
     await expect(page.getByRole("heading", { level: 1, name: "Client", exact: true })).toBeVisible()
@@ -367,7 +369,7 @@ test("Without client JavaScript, the quick start remains readable and runnable",
         if (previewVersion) await expect(page.locator(".version-label")).toContainText(previewVersion)
         await expect(page.getByRole("heading", { level: 1, name: quickStartTitle, exact: true })).toBeVisible()
         // The server-rendered command defaults to the JavaScript example and npm
-        const command = page.locator("[data-command-block]").first()
+        const command = page.locator("[data-command-block]").filter({ hasText: "--env-file" })
         await expect(command.locator("[data-command-code]")).toHaveText("node --env-file=.env bot.js")
         await expect(command.getByLabel("Package manager", { exact: true })).toBeDisabled()
         await expect(command.locator("[data-command-fallback]")).toBeVisible()
@@ -443,9 +445,9 @@ test("Assistant indexes list the version's guides and reference pages", async ({
     const text = await index.text()
     for (const guide of authoredGuides) expect(text).toContain(`](/docs/preview/${guide.slug}.md)`)
     expect(text).toContain("](/docs/preview/api/interfaces/js-ts.Client)")
+    expect(text).toContain("/docs/preview/llms-reference.txt")
     const full = (await (await request.get("/docs/preview/llms-full.txt")).text()).replaceAll("\r\n", "\n")
     expect(full).toContain(`# Guide: ${quickStartTitle}`)
-    expect(text).toContain("/docs/preview/llms-reference.txt")
     // Guides and reference are separate files so each fits in one AI context, and release history stays out
     expect(full).not.toContain("\nPage: /docs/preview/api/")
     expect(full).not.toContain("# Guide: Changelog")
@@ -455,7 +457,6 @@ test("Assistant indexes list the version's guides and reference pages", async ({
     expect(client).toBeDefined()
     expect(client).toMatch(/^- `\w+(?:<[^`]*>)?\([^`]*\)[^`]*`/m)
     expect(reference).not.toContain("<details")
-})
     const root = await request.get("/llms.txt")
     expect(root.status()).toBe(200)
     expect(await root.text()).toContain("](/docs/preview/llms.txt)")
@@ -469,3 +470,4 @@ test("Pages point programs to their Markdown version and the AI index", async ({
     await page.goto("/docs/preview/api/interfaces/js-ts.Client/")
     await expect(page.locator('head link[rel="alternate"][type="text/markdown"]')).toHaveCount(0)
     await expect(page.locator('head link[rel="alternate"][type="text/plain"]')).toHaveAttribute("href", "/docs/preview/llms.txt")
+})

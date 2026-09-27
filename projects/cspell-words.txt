@@ -10,6 +10,7 @@ neverthrow
 repobeats
 
 # Development tools
+bunx
 journalctl
 tsgolint
 zizmor

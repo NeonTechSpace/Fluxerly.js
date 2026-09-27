@@ -58,11 +58,17 @@ test("Development dependency installs use each manager's own flag", () => {
         ["npm install --save-dev @types/node", "pnpm add --save-dev @types/node", "bun add --dev @types/node"])
 })
 
+test("The agent setup command runs the installed SDK command with each manager", () => {
+    // pnpx and pnpm dlx would download a fresh copy instead of the installed version
+    assert.deepEqual(managers.map((manager) => commandVariant({ kind: "agents" }, manager).command),
+        ["npx fluxerly agents", "pnpm exec fluxerly agents", "bunx fluxerly agents"])
+})
+
 test("Invalid command metadata fails closed without exposing input", () => {
     for (const value of [null, [], {}, { ...install, version: "latest" }, { ...install, version: "dev" }, { ...install, version: "0.0.0" },
         { ...install, version: "1.0.0; secret-value" }, { ...install, package: "other" }, { ...install, token: "secret-value" },
         { kind: "run", command: "echo secret-value" }, { kind: "run", command: "node bot.ts" }, { kind: "add", package: "effect", version: "4.0.0-rc.01" },
-        { kind: "list", package: "effect", version: "4.0.0" }, { kind: "dev", package: "effect" }]) {
+        { kind: "list", package: "effect", version: "4.0.0" }, { kind: "dev", package: "effect" }, { kind: "agents", package: "effect" }]) {
         assert.throws(() => validateCommand(value), { message: "Invalid command metadata" })
     }
     assert.throws(() => commandVariant(install, "yarn"), { message: "Invalid command preference" })

@@ -14,6 +14,7 @@ export function validateCommand(value) {
         typeof value.version === "string" && exactVersion.test(value.version)) return value
     if (value.kind === "list" && keys === "kind,package" && value.package === "effect") return value
     if (value.kind === "dev" && keys === "kind,package" && value.package === "@types/node") return value
+    if (value.kind === "agents" && keys === "kind") return value
     if (value.kind === "run" && keys === "command,kind" && runCommands.includes(value.command)) return value
     throw new Error("Invalid command metadata")
 }
@@ -21,9 +22,9 @@ export function validateCommand(value) {
 // Bun ignores npm's --save-exact and --save-dev without an error, so each manager names its own flags. Its `bun pm ls` ignores a
 // package filter, while `bun why` prints the installed version
 export const packageManagers = {
-    npm: { add: "npm install", exact: "--save-exact", dev: "--save-dev", list: "npm list" },
-    pnpm: { add: "pnpm add", exact: "--save-exact", dev: "--save-dev", list: "pnpm list" },
-    bun: { add: "bun add", exact: "--exact", dev: "--dev", list: "bun why" },
+    npm: { add: "npm install", exact: "--save-exact", dev: "--save-dev", list: "npm list", exec: "npx" },
+    pnpm: { add: "pnpm add", exact: "--save-exact", dev: "--save-dev", list: "pnpm list", exec: "pnpm exec" },
+    bun: { add: "bun add", exact: "--exact", dev: "--dev", list: "bun why", exec: "bunx" },
 }
 
 export function commandVariant(metadata, manager = "npm", language = "js") {
@@ -38,7 +39,8 @@ export function commandVariant(metadata, manager = "npm", language = "js") {
     if (value.kind === "install" || value.kind === "add") {
         const exact = value.kind === "add" || value.version.includes("-")
         command = `${commands.add}${exact ? ` ${commands.exact}` : ""} ${value.package}@${value.version}`
-    } else if (value.kind === "dev") command = `${commands.add} ${commands.dev} ${value.package}`
+    } else if (value.kind === "agents") command = `${commands.exec} fluxerly agents`
+    else if (value.kind === "dev") command = `${commands.add} ${commands.dev} ${value.package}`
     else if (value.kind === "list") command = `${commands.list} ${value.package}`
     else command = language === "ts" ? value.command.replace(/bot\.js$/, "bot.ts") : value.command
     return { command, note }

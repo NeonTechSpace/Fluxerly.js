@@ -100,14 +100,13 @@ For example, run `npm install effect@VERSION`, `pnpm add effect@VERSION` or `bun
 
 Do not substitute Effect's latest release for the SDK's declared version
 
-Run `pnpm list effect` or `npm ls effect` in the bot project to inspect the installed version.
+Run `npm ls effect`, `pnpm list effect` or `bun why effect` in the bot project to inspect the installed version.
 Recheck the SDK manifest when upgrading the SDK
 
 ## For coding agents
 
-Open `consumer/AGENTS.md` inside the installed package before implementing SDK usage.
-It explains which API to use, how to start and stop the client, and how to check the result.
-Agent tools do not necessarily discover instructions inside dependencies automatically
+Agent tools do not read instructions inside dependencies on their own. Run `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` in the bot project to copy the SDK's rules into its `AGENTS.md`, which agents read automatically. Run it again after an SDK update to refresh them.
+The complete guide is `consumer/AGENTS.md` inside the installed package. It explains which API to use, how to start and stop the client, and how to check the result
 
 The installed `package.json` lists the supported Node.js version and import paths.
 The files listed in the `types` entries inside `exports` contain the API reference and examples

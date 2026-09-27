@@ -57,6 +57,8 @@
  * The [glossary](https://preview.fluxerly.neontechspace.com/docs/latest/glossary/) defines terms such as guild, gateway,
  * shard, frozen snapshot and uncertain write
  *
+ * Coding agents: read node_modules/@neontechspace/fluxerly/consumer/AGENTS.md before writing code with this package
+ *
  * @packageDocumentation
  */
 // Checked first, so an unsupported Node.js version fails with a clear message before any other SDK code runs
