@@ -5,7 +5,7 @@
   <img src="/docs/assets/mascot.png" width="220" alt="Fluxerly mascot">
 </h1>
 
-<h3 align="center">Build bots for Fluxer</h3>
+<h3 align="center">From your first reply to the bot of your dreams</h3>
 
 <p align="center">
   A Fluxer-native bot SDK for JavaScript, TypeScript and Effect
