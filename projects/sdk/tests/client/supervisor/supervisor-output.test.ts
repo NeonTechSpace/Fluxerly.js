@@ -178,10 +178,12 @@ test("prefix output pauses a child stream while the parent stream applies backpr
     try {
         const running = runFormatWorker("pretty")
         await vi.waitFor(() => expect(stdout.length).toBeGreaterThan(0))
+        // The first chunk can hold several lines, and they are written together before the stream pauses
+        const before = stdout.length
         // Without a drain event the forwarder writes nothing further, even though the child has more lines
         await new Promise((resolve) => setTimeout(resolve, 100))
-        const before = stdout.length
-        expect(before).toBe(1)
+        expect(stdout.length).toBe(before)
+        expect(stdout.some((line) => line.startsWith("[shard 0] long:"))).toBe(false)
         while (!stdout.some((line) => line.startsWith("[shard 0] long:"))) {
             process.stdout.emit("drain")
             await new Promise((resolve) => setTimeout(resolve, 5))

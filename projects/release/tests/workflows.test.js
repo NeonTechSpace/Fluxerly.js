@@ -142,6 +142,8 @@ test("The required CI gate needs every job and rejects failed, cancelled, skippe
         assert.equal(job.needs, "reuse", id)
         assert.match(job.if, /^\$\{\{ !cancelled\(\) && needs\.reuse\.outputs\.reused != 'true' \}\}$/, id)
     }
+    // Those skipped jobs make the implicit success() condition false, so the release trigger reads check's own result
+    assert.match(workflows["ci.yml"].jobs["release-trigger"].if, /^\$\{\{ !cancelled\(\) && needs\.check\.result == 'success' && /)
     const passed = { ...Object.fromEntries(groups.map((key) => [key, "success"])), REUSE_RESULT: "success", REUSED_RUN_URL: "" }
     const skipped = Object.fromEntries(groups.map((key) => [key, "skipped"]))
     const reused = { REUSE_RESULT: "success", REUSED_RUN_URL: "https://github.com/owner/repo/actions/runs/1" }

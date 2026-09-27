@@ -59,7 +59,7 @@ export async function prepareCandidate({ workspace, output, line, docs, registri
         documentation = await readFile(docs)
         const snapshot = JSON.parse(documentation.toString("utf8"))
         if (
-            snapshot.schemaVersion !== 1 ||
+            !(Number.isSafeInteger(snapshot.schemaVersion) && snapshot.schemaVersion >= 1) ||
             snapshot.version !== source.version ||
             !Array.isArray(snapshot.files) ||
             !/^[a-f0-9]{40}$/.test(snapshot.sourceCommit)
@@ -169,7 +169,7 @@ export async function readCandidate(directory, { checksum } = {}) {
         const snapshot = JSON.parse(bytes.toString("utf8"))
         if (
             candidate.docs.sha256 !== sha256(bytes) ||
-            snapshot.schemaVersion !== 1 ||
+            !(Number.isSafeInteger(snapshot.schemaVersion) && snapshot.schemaVersion >= 1) ||
             snapshot.version !== candidate.version ||
             snapshot.sourceCommit !== candidate.sourceCommit
         )

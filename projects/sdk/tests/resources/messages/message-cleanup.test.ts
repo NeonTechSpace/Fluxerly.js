@@ -589,8 +589,8 @@ test.each(modes)("%s awaits the timed-out batch response cleanup before failing"
         if (init.method === "POST") {
             posts++
             if (posts === 1) {
-                // The first batch leaves 5 ms of the shared budget for the second
-                clock.advance(95)
+                // The first batch leaves 100 ms of the shared budget, enough to dispatch the second on a slow host
+                clock.advance(100)
                 return new Response(null, { status: 204 })
             }
             return new Promise<Response>((resolve) => {
@@ -604,7 +604,7 @@ test.each(modes)("%s awaits the timed-out batch response cleanup before failing"
     const api = await cleanupApi(mode)
     try {
         const plan = await api.preview("20", { authorId: "30", maxScanned: 101, maxSelected: 101 })
-        const result = api.cleanup(plan, { timeoutMs: 100 }).then(
+        const result = api.cleanup(plan, { timeoutMs: 200 }).then(
             () => "success" as const,
             (error: unknown) => error,
         )

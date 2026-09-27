@@ -4,6 +4,7 @@ import { join } from "node:path"
 import test from "node:test"
 import { prepareCandidate, readCandidate } from "../candidate.js"
 import { contentFingerprint } from "../content.js"
+import { currentSnapshotSchema } from "../../web/scripts/transform-schemas.js"
 import { fixture, packages, stageFixture, write } from "./helpers.js"
 
 test("Candidate checksum binds exact packages, notes and docs independently of the meaningful-byte guard", async () => {
@@ -14,8 +15,9 @@ test("Candidate checksum binds exact packages, notes and docs independently of t
             "# SDK\n\n## 1000.0.0-rc.0\n\nNo code changes in this readiness promotion\n",
         )
         const docs = join(root, "snapshot.json")
+        // The website owns snapshot schemas, so a candidate accepts the one its generator writes
         await write(docs, {
-            schemaVersion: 1,
+            schemaVersion: currentSnapshotSchema,
             version: "1000.0.0-rc.0",
             sourceCommit: "a".repeat(40),
             files: [{ path: "guides/index.md", content: "Guide\n" }],

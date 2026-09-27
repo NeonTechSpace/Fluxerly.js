@@ -279,7 +279,8 @@ jobs:
   release-trigger:
     name: Release preparation trigger
     needs: check
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # The default condition skips this job when a reused Check skipped the jobs behind check, so it reads check's result
+    if: ${{ !cancelled() && needs.check.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
