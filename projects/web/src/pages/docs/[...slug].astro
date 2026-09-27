@@ -43,8 +43,13 @@ const pageUrl = source.getPage(routeSlugs)!.url
 const referenceMeta = (await getCollection('meta')).find((meta) =>
   meta.filePath?.replaceAll('\\', '/').endsWith(`content/docs/${routeVersion}/api/meta.json`))
 const markdownUrl = isReference ? undefined : markdownTwinUrl(routeSlugs)
+const assistantIndexUrl = `/docs/${routeVersion}/llms.txt`
+const alternates = [
+  ...(markdownUrl ? [{ href: markdownUrl, type: 'text/markdown', title: 'This page as Markdown' }] : []),
+  { href: assistantIndexUrl, type: 'text/plain', title: 'Documentation index for AI tools' },
+]
 ---
-<Layout title={entry.data.title}>
+<Layout title={entry.data.title} alternates={alternates}>
   <Docs tree={treeForVersion(pageTree, routeVersion)} pathname={Astro.url.pathname} params={Astro.params}
     page={{ toc, footer: { enabled: !isReference } }} version={routeVersion} channelTabs={channelTabs}
     breadcrumbs={breadcrumbsFor(pageTree, routeVersion, pageUrl)} searchUrl={await searchIndexUrl(routeVersion)}
@@ -60,6 +65,7 @@ const markdownUrl = isReference ? undefined : markdownTwinUrl(routeSlugs)
         <div class="page-actions">
           <button type="button" data-copy-markdown={markdownUrl} hidden>Copy page as Markdown</button>
           <a href={markdownUrl}>View as Markdown</a>
+          <a href={assistantIndexUrl}>Docs for AI tools</a>
           <span data-copy-markdown-status role="status"></span>
         </div>
       )}

@@ -9,6 +9,8 @@ const targets = versions.targets as { version: string; label: string; path: stri
 type Page = ReturnType<typeof source.getPages>[number]
 
 const isReference = (page: Page) => page.slugs[1] === "api"
+// The changelog is release history, not usage, and would crowd the AI files
+const isChangelog = (page: Page) => page.slugs.length === 2 && page.slugs[1] === "changelog"
 
 /** Markdown twin of a non-reference page, next to its HTML page */
 export function markdownTwinUrl(slugs: string[]) {
@@ -72,7 +74,7 @@ export function llmsIndex(version: string) {
     const reference = pages.filter(isReference)
     return [
         `# Fluxerly.js documentation`,
-        `> Documentation for the Fluxerly.js SDK (${label(version)}). Guides are linked as Markdown. The complete guides and a condensed API reference are in /docs/${version}/llms-full.txt`,
+        `> Documentation for the Fluxerly.js SDK (${label(version)}). Guides are linked as Markdown. Every guide is in /docs/${version}/llms-full.txt and a condensed API reference is in /docs/${version}/llms-reference.txt`,
         `## Guides`,
         guides.map((page) => entry(page, markdownTwinUrl(page.slugs))).join("\n"),
         `## API reference`,
@@ -95,15 +97,31 @@ function condensedReference(page: Page) {
     return lines.join("\n")
 }
 
+// Guides and reference are separate files, so each fits in one AI context
 export function llmsFull(version: string) {
-    const pages = versionPages(version)
-    const guides = pages.filter((page) => !isReference(page))
-    const reference = pages.filter((page) => isReference(page) && page.slugs.length > 2 && page.slugs[2] !== "tasks")
+    const guides = versionPages(version).filter((page) => !isReference(page) && !isChangelog(page))
     return [
         `# Fluxerly.js documentation`,
-        `> Documentation for the Fluxerly.js SDK (${label(version)}). This file contains every guide followed by a condensed API reference with signatures and first summary sentences`,
+        `> Documentation for the Fluxerly.js SDK (${label(version)}). This file contains every guide. A condensed API reference with signatures and first summary sentences is in /docs/${version}/llms-reference.txt`,
         ...guides.map((page) => `---\n\n${pageMarkdown(page).replace(/^# /, "# Guide: ").trim()}`),
-        `---\n\n# Condensed API reference`,
+    ].join("\n\n") + "\n"
+}
+
+export function llmsReference(version: string) {
+    const reference = versionPages(version).filter((page) => isReference(page) && page.slugs.length > 2 && page.slugs[2] !== "tasks")
+    return [
+        `# Fluxerly.js API reference`,
+        `> Condensed API reference for the Fluxerly.js SDK (${label(version)}), with signatures and first summary sentences. Every guide is in /docs/${version}/llms-full.txt`,
         ...reference.map(condensedReference),
+    ].join("\n\n") + "\n"
+}
+
+/** Site-wide entry for AI tools, listing each documentation version's index */
+export function llmsRoot(served: string[]) {
+    return [
+        `# Fluxerly.js`,
+        `> Fluxerly.js is a bot SDK for Fluxer, for JavaScript, TypeScript and Effect. Each documentation version below has an index of its guides as Markdown, every guide in llms-full.txt and a condensed API reference in llms-reference.txt`,
+        `## Documentation versions`,
+        served.map((version) => `- [${label(version)}](/docs/${version}/llms.txt)`).join("\n"),
     ].join("\n\n") + "\n"
 }

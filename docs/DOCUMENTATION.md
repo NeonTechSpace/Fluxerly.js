@@ -55,7 +55,7 @@ Hub pages, such as the landing page, task index, changelog, glossary, FAQ, examp
 Index filenames carry a content hash, so they are cached as immutable like the `_astro/` assets.
 The [search precision check](/projects/web/tests/search-precision.js) records realistic queries, the pages that answer them and the rank each must keep. Targets name dedicated pages, not hubs that only route to them. Search changes must not make any recorded query rank worse
 
-Each version also serves `llms.txt`, an index of guides and reference pages, and `llms-full.txt`, with every guide and a condensed reference. Guide pages have a Markdown twin at the same path with `.md`, linked beside the page title. These files use the site's noindex headers
+Each version also serves files for AI tools: `llms.txt`, an index of guides and reference pages, `llms-full.txt`, with every guide except the changelog, and `llms-reference.txt`, with a condensed reference. Guides and reference are separate so each file fits in one AI context. The site root serves `/llms.txt`, which lists every version's index. Guide pages have a Markdown twin at the same path with `.md`, linked beside the page title, and each page's head links its twin and its version's `llms.txt` for programs. These files use the site's noindex headers
 
 Author default API examples in TypeScript. The build derives JavaScript, and the reader's language choice is remembered. Effect examples remain TypeScript-only. The starter uses the selected `bot.js` or `bot.ts` filename and run command, with `"type": "module"` in `package.json`. A guide renders any repository example file with an `{{example:<folder>/<file>}}` marker, such as the small bot example
 

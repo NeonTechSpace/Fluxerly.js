@@ -192,7 +192,7 @@ test("Withdrawn content is absent from published pages, navigation, search and a
         const index = await request.get(await searchIndexUrl(request, served))
         expect(index.status()).toBe(200)
         expect(await index.text()).not.toContain("Withdrawncontentmarker")
-        for (const file of ["llms.txt", "llms-full.txt"]) {
+        for (const file of ["llms.txt", "llms-full.txt", "llms-reference.txt"]) {
             const assistant = await request.get(`${served}${file}`)
             expect(assistant.status()).toBe(200)
             expect(await assistant.text()).not.toContain("Withdrawncontentmarker")

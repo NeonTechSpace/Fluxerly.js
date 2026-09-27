@@ -22,7 +22,7 @@ export async function checkSnapshotBuild({ releasesDirectory, outDir }) {
         const path = metadata.targets.find((target) => target.version === version)?.path ?? version
         for (const page of ["", "quick-start/", "changelog/", "api/"])
             assert.ok(await exists(join(outDir, "docs", path, page, "index.html")), `${version} is missing /docs/${path}/${page}`)
-        for (const file of ["llms.txt", "llms-full.txt", "quick-start.md"])
+        for (const file of ["llms.txt", "llms-full.txt", "llms-reference.txt", "quick-start.md"])
             assert.ok(await exists(join(outDir, "docs", path, file)), `${version} is missing /docs/${path}/${file}`)
         assert.ok(searchFiles.some((name) => name.startsWith(`${path}.`)), `${version} has no search index`)
         served.push(path)
