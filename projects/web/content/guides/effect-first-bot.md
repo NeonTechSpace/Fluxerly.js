@@ -12,7 +12,7 @@ The examples introduce each Effect concept before combining them into a bot
 
 ## Install the matching version
 
-First install the SDK with [the quick start](/docs/{{version}}/quick-start/). Fluxerly is tested against Node.js 24.11 or newer. Use such a version, an ESM project with `"type": "module"`, and TypeScript 7 for typechecking with the Node.js types from the [TypeScript setup](/docs/{{version}}/create-a-bot/#typescript-setup). Native examples use TypeScript
+First install the SDK with [the quick start](/docs/{{version}}/quick-start/). Fluxerly is tested against Node.js 24.15 or newer. Use such a version, an ESM project with `"type": "module"`, and TypeScript 7 for typechecking with the Node.js types from the [TypeScript setup](/docs/{{version}}/create-a-bot/#typescript-setup). Native examples use TypeScript
 
 Use the Effect version that the installed SDK requires, not Effect's latest release. Open `node_modules/@neontechspace/fluxerly/package.json` and read `peerDependencies.effect`. Fluxerly currently requires one exact Effect 4 RC, and other RCs and Effect 3 are incompatible
 

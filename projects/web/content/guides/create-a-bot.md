@@ -8,7 +8,7 @@ A Fluxer bot is an application with its own bot account. This page creates the a
 
 ## What is needed
 
-- Node.js 24.11 or newer, which Fluxerly is tested against. Run `node --version` to check
+- Node.js 24.15 or newer, which Fluxerly is tested against. Run `node --version` to check
 - A registered Fluxer account. If the Fluxer app shows **Claim account**, use it first to add an email and password, because an unclaimed account cannot create applications
 - A community where that account has the `ManageGuild` or `Administrator` permission, such as a private test community
 
@@ -115,7 +115,7 @@ The variable lasts until the terminal closes. The typed command can stay in the 
 ## 5. Check the project setup
 
 - The SDK is ESM-only. Load it with `import`, and set `"type": "module"` in `package.json`, which the quick start creates. Loading it with `require()` fails with an error that says so
-- Node.js 24.11 or newer runs both `bot.js` and `bot.ts` directly, without a build step
+- Node.js 24.15 or newer runs both `bot.js` and `bot.ts` directly, without a build step
 - TypeScript projects that typecheck their code also need Node.js type definitions and a `tsconfig.json`, as the next section shows
 
 ### TypeScript setup

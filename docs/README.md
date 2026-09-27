@@ -31,7 +31,7 @@
 
 ## Install
 
-Fluxerly is tested against Node.js 24.11 or newer. JavaScript needs no compiler, and TypeScript typechecking or compilation requires TypeScript 7 and `@types/node` as a development dependency
+Fluxerly is tested against Node.js 24.15 or newer. JavaScript needs no compiler, and TypeScript typechecking or compilation requires TypeScript 7 and `@types/node` as a development dependency
 
 **npm**
 

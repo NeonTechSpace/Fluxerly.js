@@ -10,7 +10,7 @@ Fluxerly is prerelease software intended for testing. It does not yet promise st
 
 | Area              | Current policy                                                                                   |
 | ----------------- | ------------------------------------------------------------------------------------------------ |
-| Runtime           | Tested against Node.js 24.11 or newer                                                            |
+| Runtime           | Tested against Node.js 24.15 or newer                                                            |
 | Modules           | ESM only, with `"type": "module"` in `package.json` or `.mjs` files                              |
 | JavaScript        | No TypeScript compiler requirement                                                               |
 | TypeScript        | TypeScript 7, not TypeScript 6 or earlier, with `@types/node` for the Node.js types              |

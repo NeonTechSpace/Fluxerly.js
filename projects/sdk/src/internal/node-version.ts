@@ -5,7 +5,7 @@
  */
 
 /** Oldest supported Node.js release, matching the package's engines field */
-const minimum = { major: 24, minor: 11 } as const
+const minimum = { major: 24, minor: 15 } as const
 
 /** Throw when the reported Node.js version is older than the supported minimum */
 export function checkNodeVersion(versions: { readonly node?: string | undefined } | undefined): void {

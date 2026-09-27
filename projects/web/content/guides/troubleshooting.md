@@ -59,7 +59,7 @@ Node.js could not open the file named after `--env-file`. Run the command from t
 ## The process fails with a Node.js version error
 
 ```text
-Error: Fluxerly needs Node.js 24.11 or newer, but this is Node.js 22.12.0. Install a current Node.js release from https://nodejs.org, then run the bot again
+Error: Fluxerly needs Node.js 24.15 or newer, but this is Node.js 22.12.0. Install a current Node.js release from https://nodejs.org, then run the bot again
 ```
 
 The SDK checks the Node.js version when it loads. Run `node --version` to see the version in use, install a newer release, and open a new terminal so that it is found first

@@ -4,7 +4,7 @@
 
 A client logs one `lifecycle.connected` record once every shard it owns is connected, such as `Connected to Fluxer as MyBot in 3 communities`. When the bot owns every shard and is in no community, the record is a Warn that includes the bot's installation link
 
-Loading any entry point on a Node.js version older than 24.11 throws an error that names the required and the found version, instead of failing later with an unrelated error
+Loading any entry point on a Node.js version older than 24.15 throws an error that names the required and the found version, instead of failing later with an unrelated error
 
 Several configuration errors explain the likely fix:
 

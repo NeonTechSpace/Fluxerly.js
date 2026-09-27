@@ -10,7 +10,7 @@ A deployed bot is an ordinary Node.js process. A process manager starts it, pass
 
 Every setup below expects the same project:
 
-- Node.js 24.11 or newer on the server or in the image
+- Node.js 24.15 or newer on the server or in the image
 - The `"type": "module"` field in `package.json`, because the SDK is ESM-only
 - The `processSignals: true` option in `runBot`, so SIGINT and SIGTERM stop the bot cleanly
 - The token read from `process.env.FLUXER_BOT_TOKEN`, never written in a source file, committed to version control or copied into an image

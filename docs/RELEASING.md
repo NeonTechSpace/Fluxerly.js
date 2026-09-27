@@ -142,7 +142,7 @@ Publication first reads npm. An existing version with the reviewed bytes succeed
 Otherwise it verifies the published baseline, submits the tarball once with npm OIDC and polls for up to 20 minutes until npm serves the reviewed bytes and the expected distribution tag points to the version.
 Transient registry failures during polling do not trigger another upload
 
-Two registry install jobs then install the exact version from npm on the development Node version and the declared minimum, Node.js 24.11.0, and import every entry point the installed package exports.
+Two registry install jobs then install the exact version from npm on the development Node version and the declared minimum, Node.js 24.15.0, and import every entry point the installed package exports.
 Only after both pass does the release App create a short-lived, repository-scoped token for the GitHub announcement
 
 GitHub reconciliation polls delayed release, asset, tag and latest visibility for one minute per check.

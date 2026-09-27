@@ -30,7 +30,7 @@ If a method is absent from the installed public declarations, report the gap ins
 
 ## Project requirements
 
-- Node.js 24.11 or newer, as `engines` states
+- Node.js 24.15 or newer, as `engines` states
 - The SDK is ESM-only. Use `import` in a project whose `package.json` sets `"type": "module"`, or in `.mjs` files. A `require()` call fails with an error that explains this
 - TypeScript checks need TypeScript 7 and `@types/node`, for example with `"types": ["node"]`, because handler signals are `AbortSignal` values and clients support `await using`. Running `node bot.ts` directly needs no compiler
 - Read the token from the environment, such as `FLUXER_BOT_TOKEN`. A missing or blank token throws `ConfigurationError` with a hint that the variable is probably unset

@@ -132,7 +132,7 @@ jobs:
         include:
           - name: Registry install on the development Node version
           - name: Registry install on the declared Node floor
-            runtime: node@24.11.0
+            runtime: node@24.15.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout

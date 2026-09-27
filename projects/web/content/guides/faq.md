@@ -16,7 +16,7 @@ The SDK ships only ECMAScript modules, so `require("@neontechspace/fluxerly")` f
 <details>
 <summary>Which Node.js version is required?</summary>
 
-Fluxerly is tested against Node.js 24.11 or newer. A bot runs as a Node.js program on a computer or server, not inside a web page. See [support and compatibility](/docs/{{version}}/support-and-compatibility/)
+Fluxerly is tested against Node.js 24.15 or newer. A bot runs as a Node.js program on a computer or server, not inside a web page. See [support and compatibility](/docs/{{version}}/support-and-compatibility/)
 
 </details>
 

@@ -24,7 +24,7 @@ Applications that use Effect directly must install the matching version describe
 ## Requirements
 
 This package is under development and has not reached its first stable release.
-Fluxerly is tested against Node.js 24.11 or newer.
+Fluxerly is tested against Node.js 24.15 or newer.
 JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code, with `@types/node` as a development dependency
 
 Keep the package manager's lockfile for reproducible installs and review prerelease changes before upgrading.

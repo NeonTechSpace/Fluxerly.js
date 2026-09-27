@@ -106,7 +106,7 @@ jobs:
           working-directory: projects
           require-lockfile: true
           cache: true
-          runtime: node@24.11.0
+          runtime: node@24.15.0
       - name: Run the SDK suite and check consumers on the declared Node floor when CI is unavailable
         id: floor
         if: steps.ci.outputs.reused == 'false' && steps.candidate.outputs.skipped != 'true'

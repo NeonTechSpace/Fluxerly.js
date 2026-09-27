@@ -4,7 +4,7 @@ navTitle: Quick start
 description: Send !ping and receive Pong! from a bot
 ---
 
-Before starting, [create a Fluxer bot](/docs/{{version}}/create-a-bot/), store its token and add it to a community. Fluxerly is tested against Node.js 24.11 or newer
+Before starting, [create a Fluxer bot](/docs/{{version}}/create-a-bot/), store its token and add it to a community. Fluxerly is tested against Node.js 24.15 or newer
 
 ## 1. Install the SDK
 
