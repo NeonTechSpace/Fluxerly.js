@@ -7,7 +7,7 @@ import { authoredGuides } from "../scripts/generate.js"
 import { find, findAll, hasClass, parseHtml, textContent } from "./html.js"
 
 const install = { kind: "install", package: "@neontechspace/fluxerly", version: "1000.0.0-rc.2" }
-const managers = ["npm", "pnpm"]
+const managers = ["npm", "pnpm", "bun"]
 
 test("Authored guide command blocks render with supported metadata", async () => {
     const processor = await createMarkdownProcessor({ remarkPlugins: [remarkCommandBlocks] })
@@ -21,21 +21,30 @@ test("SDK install variants pin a prerelease exactly and keep the normal range fo
     assert.deepEqual(managers.map((manager) => commandVariant(install, manager).command), [
         "npm install --save-exact @neontechspace/fluxerly@1000.0.0-rc.2",
         "pnpm add --save-exact @neontechspace/fluxerly@1000.0.0-rc.2",
+        // Bun ignores --save-exact without an error and saves a range
+        "bun add --exact @neontechspace/fluxerly@1000.0.0-rc.2",
     ])
     const stable = { ...install, version: "1000.0.0" }
     assert.deepEqual(managers.map((manager) => commandVariant(stable, manager).command), [
         "npm install @neontechspace/fluxerly@1000.0.0",
         "pnpm add @neontechspace/fluxerly@1000.0.0",
+        "bun add @neontechspace/fluxerly@1000.0.0",
     ])
     assert.equal(commandVariant(install).note, "")
     assert.equal(commandVariant(install, "pnpm").note, "")
 })
 
 test("Effect add and list use the chosen manager, while node execution follows the example language", () => {
+    const add = { kind: "add", package: "effect", version: "4.0.0-rc.29" }
+    assert.deepEqual(managers.map((manager) => commandVariant(add, manager).command), [
+        "npm install --save-exact effect@4.0.0-rc.29",
+        "pnpm add --save-exact effect@4.0.0-rc.29",
+        "bun add --exact effect@4.0.0-rc.29",
+    ])
+    // Bun's list command ignores a package filter, and bun why prints the installed version
+    assert.deepEqual(managers.map((manager) => commandVariant({ kind: "list", package: "effect" }, manager).command),
+        ["npm list effect", "pnpm list effect", "bun why effect"])
     for (const manager of managers) {
-        assert.equal(commandVariant({ kind: "add", package: "effect", version: "4.0.0-rc.29" }, manager).command,
-            `${manager === "npm" ? "npm install" : "pnpm add"} --save-exact effect@4.0.0-rc.29`)
-        assert.equal(commandVariant({ kind: "list", package: "effect" }, manager).command, `${manager} list effect`)
         const run = { kind: "run", command: "node --env-file=.env bot.js" }
         assert.deepEqual(commandVariant(run, manager), { command: "node --env-file=.env bot.js", note: "" })
         assert.deepEqual(commandVariant(run, manager, "ts"), { command: "node --env-file=.env bot.ts", note: "" })
@@ -43,11 +52,17 @@ test("Effect add and list use the chosen manager, while node execution follows t
     }
 })
 
+test("Development dependency installs use each manager's own flag", () => {
+    // Bun ignores --save-dev without an error and adds a regular dependency
+    assert.deepEqual(managers.map((manager) => commandVariant({ kind: "dev", package: "@types/node" }, manager).command),
+        ["npm install --save-dev @types/node", "pnpm add --save-dev @types/node", "bun add --dev @types/node"])
+})
+
 test("Invalid command metadata fails closed without exposing input", () => {
     for (const value of [null, [], {}, { ...install, version: "latest" }, { ...install, version: "dev" }, { ...install, version: "0.0.0" },
         { ...install, version: "1.0.0; secret-value" }, { ...install, package: "other" }, { ...install, token: "secret-value" },
         { kind: "run", command: "echo secret-value" }, { kind: "run", command: "node bot.ts" }, { kind: "add", package: "effect", version: "4.0.0-rc.01" },
-        { kind: "list", package: "effect", version: "4.0.0" }]) {
+        { kind: "list", package: "effect", version: "4.0.0" }, { kind: "dev", package: "effect" }]) {
         assert.throws(() => validateCommand(value), { message: "Invalid command metadata" })
     }
     assert.throws(() => commandVariant(install, "yarn"), { message: "Invalid command preference" })

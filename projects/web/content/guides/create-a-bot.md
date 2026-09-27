@@ -122,11 +122,11 @@ The variable lasts until the terminal closes. The typed command can stay in the 
 
 The SDK's types use Node.js types, such as the `AbortSignal` passed to handlers. Install them as a development dependency:
 
-```sh
-npm install --save-dev @types/node
+```command
+{"kind":"dev","package":"@types/node"}
 ```
 
-With pnpm, run `pnpm add --save-dev @types/node`. Then save this as `tsconfig.json` next to the bot:
+Then save this as `tsconfig.json` next to the bot:
 
 ```json
 {

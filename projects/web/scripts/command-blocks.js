@@ -13,22 +13,33 @@ export function validateCommand(value) {
     if (value.kind === "add" && keys === "kind,package,version" && value.package === "effect" &&
         typeof value.version === "string" && exactVersion.test(value.version)) return value
     if (value.kind === "list" && keys === "kind,package" && value.package === "effect") return value
+    if (value.kind === "dev" && keys === "kind,package" && value.package === "@types/node") return value
     if (value.kind === "run" && keys === "command,kind" && runCommands.includes(value.command)) return value
     throw new Error("Invalid command metadata")
 }
 
+// Bun ignores npm's --save-exact and --save-dev without an error, so each manager names its own flags. Its `bun pm ls` ignores a
+// package filter, while `bun why` prints the installed version
+export const packageManagers = {
+    npm: { add: "npm install", exact: "--save-exact", dev: "--save-dev", list: "npm list" },
+    pnpm: { add: "pnpm add", exact: "--save-exact", dev: "--save-dev", list: "pnpm list" },
+    bun: { add: "bun add", exact: "--exact", dev: "--dev", list: "bun why" },
+}
+
 export function commandVariant(metadata, manager = "npm", language = "js") {
     const value = validateCommand(metadata)
-    if (!["npm", "pnpm"].includes(manager) || !["js", "ts"].includes(language)) throw new Error("Invalid command preference")
+    if (!Object.hasOwn(packageManagers, manager) || !["js", "ts"].includes(language)) throw new Error("Invalid command preference")
+    const commands = packageManagers[manager]
     let command
     let note = ""
     // A prerelease SDK's API can change between versions, so its install pins the exact version, and a Stable install
     // keeps the package manager's normal range. The Effect add always pins, because the SDK's Effect peer is one exact
-    // version. npm and pnpm both accept --save-exact
+    // version
     if (value.kind === "install" || value.kind === "add") {
         const exact = value.kind === "add" || value.version.includes("-")
-        command = `${manager === "npm" ? "npm install" : "pnpm add"}${exact ? " --save-exact" : ""} ${value.package}@${value.version}`
-    } else if (value.kind === "list") command = `${manager} list ${value.package}`
+        command = `${commands.add}${exact ? ` ${commands.exact}` : ""} ${value.package}@${value.version}`
+    } else if (value.kind === "dev") command = `${commands.add} ${commands.dev} ${value.package}`
+    else if (value.kind === "list") command = `${commands.list} ${value.package}`
     else command = language === "ts" ? value.command.replace(/bot\.js$/, "bot.ts") : value.command
     return { command, note }
 }
@@ -44,7 +55,7 @@ export function renderCommandBlock(metadata) {
     const { command, note } = commandVariant(value)
     return `<div class="command-block" data-command-block data-command="${escapeHtml(JSON.stringify(value))}">
 <div class="command-controls">
-<label>Package manager <select aria-label="Package manager" data-command-preference="manager" disabled><option value="npm">npm</option><option value="pnpm">pnpm</option></select></label>
+<label>Package manager <select aria-label="Package manager" data-command-preference="manager" disabled>${Object.keys(packageManagers).map((name) => `<option value="${name}">${name}</option>`).join("")}</select></label>
 <button type="button" data-command-copy hidden>Copy</button><span data-command-copy-status role="status"></span>
 </div>
 <pre tabindex="0"><code data-command-code>${escapeHtml(command)}</code></pre>

@@ -76,8 +76,8 @@ The SDK ships only ECMAScript modules. Replace `require("@neontechspace/fluxerly
 
 Install the Node.js types as a development dependency and include them, for example with `"types": ["node"]` in `tsconfig.json`. Handler signals are `AbortSignal` values and clients support `await using`, so the SDK's declarations use those Node.js types
 
-```sh
-npm install --save-dev @types/node
+```command
+{"kind":"dev","package":"@types/node"}
 ```
 
 ## No reply arrives

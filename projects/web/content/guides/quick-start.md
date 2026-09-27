@@ -100,8 +100,8 @@ Choose TypeScript above to save this example as `bot.ts`. Node.js runs it direct
 
 To typecheck TypeScript with TypeScript 7, install the Node.js types that the SDK's types use:
 
-```sh
-npm install --save-dev @types/node
+```command
+{"kind":"dev","package":"@types/node"}
 ```
 
 Then add a `tsconfig.json` next to the bot:

@@ -37,7 +37,7 @@ This bot replies **Pong!** to **!ping**
 A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs. Then:
 
 1. Add `"type": "module"` to the bot project's `package.json`
-2. Install the SDK with `npm install @neontechspace/fluxerly` or `pnpm add @neontechspace/fluxerly`
+2. Install the SDK with `npm install @neontechspace/fluxerly`, `pnpm add @neontechspace/fluxerly` or `bun add @neontechspace/fluxerly`
 3. Save the token in a file named `.env` as `FLUXER_BOT_TOKEN=paste-the-token-here`, and add `.env` to `.gitignore`. Anyone holding the token can act as the bot
 4. Save the following as `bot.js`, or `bot.ts` for TypeScript
 
@@ -96,7 +96,7 @@ For direct control over connection and shutdown, use `createClient`. Both are av
 The Effect API also provides the one-object `runBot` configuration. Its handlers return Effects instead of Promises and Results. The runner uses the application's Effect runtime and services, and waits for cleanup before finishing. The file `examples/starter/bot-effect.ts` shows the complete bot
 
 Before running the Effect example, add Effect to the bot project's dependencies. Use the exact version listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`.
-For example, run `pnpm add effect@VERSION` or `npm install effect@VERSION`, replacing `VERSION` with that value
+For example, run `npm install effect@VERSION`, `pnpm add effect@VERSION` or `bun add effect@VERSION`, replacing `VERSION` with that value
 
 Do not substitute Effect's latest release for the SDK's declared version
 

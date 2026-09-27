@@ -97,7 +97,7 @@ The SDK targets Effect 4's release-candidate line with an exact pin for reproduc
 The package declares Effect as an exact required peer, with the same version in development dependencies.
 Native consumers must use that exact version. Effect 3 and other Effect 4 RCs are incompatible
 
-Modern npm and pnpm install required peers automatically by default.
+Modern npm, pnpm and Bun install required peers automatically by default.
 Consumers that disable peer installation must install the declared exact Effect version themselves
 
 ### Build and package optimization

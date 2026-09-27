@@ -45,7 +45,13 @@ npm install @neontechspace/fluxerly
 pnpm add @neontechspace/fluxerly
 ```
 
-> A committed lockfile records the exact installed version and keeps installs reproducible. During prerelease, add `--save-exact` so a fresh install without a lockfile cannot pick up a newer prerelease with API changes.
+**Bun**
+
+```sh
+bun add @neontechspace/fluxerly
+```
+
+> A committed lockfile records the exact installed version and keeps installs reproducible. During prerelease, add `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer prerelease with API changes.
 
 ## Getting started
 

@@ -1,7 +1,9 @@
-import { commandVariant } from "../../scripts/command-blocks.js"
+import { commandVariant, packageManagers } from "../../scripts/command-blocks.js"
 import { exampleLanguageEvent, getExampleLanguage } from "./example-preferences.ts"
 
-type Preferences = { manager: "npm" | "pnpm" }
+type Manager = keyof typeof packageManagers
+type Preferences = { manager: Manager }
+const isManager = (value: unknown): value is Manager => typeof value === "string" && Object.hasOwn(packageManagers, value)
 export const commandPreferencesKey = "fluxerly.docs.command-preferences"
 const defaults: Preferences = { manager: "npm" }
 let initialized = false
@@ -9,7 +11,7 @@ let initialized = false
 export function parseCommandPreferences(raw: string | null): Preferences {
     try {
         const value = JSON.parse(raw ?? "null")
-        if (value?.manager === "npm" || value?.manager === "pnpm") return { manager: value.manager }
+        if (isManager(value?.manager)) return { manager: value.manager }
     } catch { /* Malformed preferences use readable defaults */ }
     return { ...defaults }
 }
@@ -52,7 +54,7 @@ export function setupCommandPreferences() {
         const select = event.target
         if (!(select instanceof HTMLSelectElement) || !select.closest("[data-command-block]")) return
         const name = select.dataset.commandPreference
-        if (name === "manager" && (select.value === "npm" || select.value === "pnpm")) preferences.manager = select.value
+        if (name === "manager" && isManager(select.value)) preferences.manager = select.value
         else return
         try { window.localStorage.setItem(commandPreferencesKey, JSON.stringify(preferences)) }
         catch { sessionOnly = true }
