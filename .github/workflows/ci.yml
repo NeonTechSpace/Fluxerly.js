@@ -106,9 +106,13 @@ jobs:
           persist-credentials: false
       - name: Lint workflow syntax, expressions and shell scripts
         id: actionlint
-        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # 1.7.12
-        with:
-          args: -color
+        # The allowed-actions policy accepts no container images, so the pinned release binary is verified by its checksum
+        run: |
+          curl --fail --silent --show-error --location --output actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file actionlint.tar.gz actionlint
+          ./actionlint -color
       - name: Audit workflow security
         id: zizmor
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
