@@ -23,8 +23,12 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
+        with:
+          working-directory: projects
+          require-lockfile: true
+          cache: true
       - name: Read verified release snapshots
         id: snapshots
         run: node web/scripts/fetch-releases.js

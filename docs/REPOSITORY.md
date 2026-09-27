@@ -159,6 +159,7 @@ The [live check guide](/projects/sdk/tests/live/README.md) covers their setup, a
 Use [releasing](/docs/RELEASING.md) for registry verification, manual workflow inputs and external setup.
 Release candidates stage the SDK through [package preparation](/projects/sdk/scripts/packages.js), under the [registry publication contract](/docs/RELEASING.md#registry-publication-contract).
 Use [documentation maintenance](/docs/DOCUMENTATION.md) for generated reference ownership, published version channels and Preview delivery.
-The workflows share [.github/actions/setup](/.github/actions/setup/action.yml), which reads `projects/.node-version`, or the SDK manifest's `engines.node` minimum for consumer-floor jobs.
-It then uses the pinned upstream `pnpm/setup` action to install Node and pnpm, and installs the locked dependencies unless a job that runs only dependency-free release tooling disables it.
-There is no separate `setup-node` step or second authored Node version
+Each workflow job installs Node and pnpm with the pinned upstream `pnpm/setup` action from [projects/](/projects/), which reads `projects/.node-version`.
+Jobs that check the SDK's Node floor pass the `engines.node` minimum from the SDK manifest as `runtime` instead, and a [workflow test](/projects/release/tests/workflows.test.js) keeps those copies equal to the manifest.
+The action installs the locked dependencies unless a job that runs only dependency-free release tooling disables it.
+There is no separate `setup-node` step

@@ -30,11 +30,11 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
         with:
-          install: 'false'
-          cache: 'false'
+          working-directory: projects
+          install: false
       - name: Verify successful preparation and a candidate source reachable from main
         id: preparation
         env:
@@ -85,11 +85,11 @@ jobs:
         with:
           persist-credentials: false
       # Publishing a prebuilt tarball needs Node and pnpm, not the workspace dependencies
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
         with:
-          install: 'false'
-          cache: 'false'
+          working-directory: projects
+          install: false
       - name: Download only the inspected preparation candidate
         id: download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -130,19 +130,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runtime-policy: development
-            name: Registry install on the development Node version
-          - runtime-policy: consumer-floor
-            name: Registry install on the declared Node floor
+          - name: Registry install on the development Node version
+          - name: Registry install on the declared Node floor
+            runtime: node@24.11.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
         with:
-          runtime-policy: ${{ matrix.runtime-policy }}
+          working-directory: projects
+          require-lockfile: true
+          cache: true
+          runtime: ${{ matrix.runtime }}
       - name: Install the published version from npm and import every public entry point
         id: smoke
         working-directory: projects
@@ -155,7 +157,7 @@ jobs:
         with:
           title: ${{ matrix.name }}
           steps: ${{ toJSON(steps) }}
-          details: '{"Package version": ${{ toJSON(needs.inspect.outputs.version) }}, "Node runtime policy": ${{ toJSON(matrix.runtime-policy) }}}'
+          details: '{"Package version": ${{ toJSON(needs.inspect.outputs.version) }}, "Node version": ${{ toJSON(matrix.runtime || ''projects/.node-version'') }}}'
           next: Both registry install checks must pass before the GitHub release is announced
   reconcile:
     name: Announce the GitHub release
@@ -175,11 +177,11 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
         with:
-          install: 'false'
-          cache: 'false'
+          working-directory: projects
+          install: false
       - name: Download only the inspected preparation candidate
         id: download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

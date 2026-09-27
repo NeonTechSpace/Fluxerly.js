@@ -69,7 +69,7 @@ test("OIDC publication is confined to the protected environment after inspection
     assert.equal(publish.needs, "inspect")
     assertSerialized(publish.concurrency, "release-publish.yml/publish")
     const setup = publish.steps.find((step) => step.id === "setup")
-    assert.equal(setup.with.install, "false", "The publisher must not install the workspace")
+    assert.equal(setup.with.install, false, "The publisher must not install the workspace")
 })
 
 test("Release tooling runs from the workflow commit and the release App token stays in one step", () => {
@@ -182,30 +182,25 @@ test("The required CI gate needs every job and rejects failed, cancelled, skippe
     }
 })
 
-test("SDK consumers run on the Node floor declared by the SDK manifest", () => {
-    const consumers = workflows["ci.yml"].jobs.consumers
-    assert.ok(consumers.strategy.matrix.include.some((entry) => entry["runtime-policy"] === "consumer-floor"))
-    const setupStep = consumers.steps.find((step) => step.uses === "$/.github/actions/setup")
-    assert.equal(setupStep.with["runtime-policy"], "${{ matrix.runtime-policy }}")
-    const policy = actions.setup.runs.steps.find((step) => step.id === "node")
-    const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-node-policy-"))
-    try {
-        const output = join(directory, "output.txt")
-        const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", policy.run], {
-            cwd: repository,
-            encoding: "utf8",
-            timeout: 10_000,
-            windowsHide: true,
-            env: { ...process.env, RUNTIME_POLICY: "consumer-floor", GITHUB_OUTPUT: output },
-        })
-        assert.ifError(result.error)
-        assert.equal(result.status, 0, result.stderr)
-        const selected = /^version=(.+)$/m.exec(readFileSync(output, "utf8"))?.[1]
-        const sdk = JSON.parse(readFileSync(join(repository, "projects/sdk/package.json"), "utf8"))
-        assert.equal(sdk.engines.node, `>=${selected}`)
-    } finally {
-        rmSync(directory, { recursive: true, force: true })
-    }
+test("Setup runs projects/.node-version or the Node floor declared by the SDK manifest", () => {
+    const sdk = JSON.parse(readFileSync(join(repository, "projects/sdk/package.json"), "utf8"))
+    const floor = `node@${sdk.engines.node.replace(/^>=/, "")}`
+    const floorJobs = []
+    for (const { file, id, job } of jobs())
+        for (const step of job.steps ?? []) {
+            if (!String(step.uses).startsWith("pnpm/setup@")) continue
+            const where = `${file}/${id}`
+            // pnpm/setup reads .node-version from its working directory when no runtime is given
+            assert.equal(step.with?.["working-directory"], "projects", `${where} setup directory`)
+            const runtimes =
+                step.with.runtime === "${{ matrix.runtime }}"
+                    ? job.strategy.matrix.include.map((entry) => entry.runtime)
+                    : [step.with.runtime]
+            for (const runtime of runtimes) if (runtime !== undefined) assert.equal(runtime, floor, where)
+            if (runtimes.includes(floor)) floorJobs.push(where)
+        }
+    // A floor bump that misses one of these copies fails here rather than testing an old Node
+    assert.deepEqual(floorJobs.sort(), ["ci.yml/consumers", "release-prepare.yml/prepare", "release-publish.yml/smoke"])
 })
 
 test("Job summaries escape untrusted values and never present failures or commands as success", () => {

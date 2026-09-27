@@ -26,11 +26,11 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
         with:
-          install: 'false'
-          cache: 'false'
+          working-directory: projects
+          install: false
       - name: Find an earlier passing Check for the same git tree
         id: reuse
         env:
@@ -48,8 +48,12 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
+        with:
+          working-directory: projects
+          require-lockfile: true
+          cache: true
       - name: Check SDK formatting, build, types, runtime and packed consumers
         id: sdk
         run: pnpm --filter @neontechspace/fluxerly check
@@ -72,8 +76,12 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
+        with:
+          working-directory: projects
+          require-lockfile: true
+          cache: true
       - name: Check release tooling types and tests
         id: release
         run: pnpm --filter @fluxerly/release test
@@ -138,8 +146,12 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
+        with:
+          working-directory: projects
+          require-lockfile: true
+          cache: true
       - name: Build the SDK and documentation
         id: build
         run: pnpm build
@@ -200,19 +212,21 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-          - runtime-policy: development
-            name: SDK consumers on the development Node version
-          - runtime-policy: consumer-floor
-            name: SDK consumers on the declared Node floor
+          - name: SDK consumers on the development Node version
+          - name: SDK consumers on the declared Node floor
+            runtime: node@24.11.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
         with:
-          runtime-policy: ${{ matrix.runtime-policy }}
+          working-directory: projects
+          require-lockfile: true
+          cache: true
+          runtime: ${{ matrix.runtime }}
       - name: Build the SDK on the selected Node version
         id: build
         run: pnpm --filter @neontechspace/fluxerly build
@@ -220,7 +234,7 @@ jobs:
       # The sdk job runs the suite on the development Node version, so this covers the declared engines floor
       - name: Run the SDK test suite on the declared Node floor
         id: test
-        if: matrix.runtime-policy == 'consumer-floor'
+        if: matrix.runtime
         run: pnpm --filter @neontechspace/fluxerly test
         working-directory: projects
       - name: Check packed JavaScript and TypeScript consumers
@@ -237,8 +251,8 @@ jobs:
         with:
           title: ${{ matrix.name }}
           steps: ${{ toJSON(steps) }}
-          details: '{"Node runtime policy": ${{ toJSON(matrix.runtime-policy) }}}'
-          next: Both development and consumer-floor matrix jobs must pass before merging
+          details: '{"Node version": ${{ toJSON(matrix.runtime || ''projects/.node-version'') }}}'
+          next: Both the development and Node floor jobs must pass before merging
   check:
     name: check
     needs: [reuse, sdk, tooling, workflows, browser, consumers]
@@ -291,11 +305,11 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
         with:
-          install: 'false'
-          cache: 'false'
+          working-directory: projects
+          install: false
       - name: Detect a pushed SDK version that npm does not have
         id: trigger
         env:

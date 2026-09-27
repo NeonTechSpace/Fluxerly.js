@@ -27,8 +27,12 @@ jobs:
         with:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
+        with:
+          working-directory: projects
+          require-lockfile: true
+          cache: true
       - name: Reuse successful checks for the exact source or require full validation
         id: ci
         working-directory: projects
@@ -95,11 +99,14 @@ jobs:
         if: steps.candidate.outputs.skipped != 'true'
         working-directory: projects
         run: pnpm --filter @neontechspace/fluxerly test:npm --candidate "$RUNNER_TEMP/release-candidate"
-      - uses: $/.github/actions/setup
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: floor_setup
         if: steps.ci.outputs.reused == 'false' && steps.candidate.outputs.skipped != 'true'
         with:
-          runtime-policy: consumer-floor
+          working-directory: projects
+          require-lockfile: true
+          cache: true
+          runtime: node@24.11.0
       - name: Run the SDK suite and check consumers on the declared Node floor when CI is unavailable
         id: floor
         if: steps.ci.outputs.reused == 'false' && steps.candidate.outputs.skipped != 'true'
