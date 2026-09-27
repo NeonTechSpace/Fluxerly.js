@@ -177,6 +177,8 @@ test("Built pages are noindex without sitemap or social metadata", async () => {
         assert.equal(page.sitemaps, 0, route)
         assert.equal(page.social, 0, route)
     }
+    // Crawlers, including AI tools, may read the pages, and noindex alone keeps them out of search results
+    assert.doesNotMatch(await readFile(join(dist, "robots.txt"), "utf8"), /^\s*Disallow:\s*\S/im)
 })
 
 test("Every built internal link and fragment resolves to a unique anchor", async () => {

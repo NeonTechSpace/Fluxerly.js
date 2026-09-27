@@ -146,7 +146,7 @@ The browser checks run Wrangler Pages on loopback port 4322 and refuse an occupi
 
 Inspect desktop and mobile reading, keyboard navigation, search, version switching, public reference links and fragments.
 The selected reading UI is dark and cozy with 20px body text.
-Keep noindex controls, and add no SEO or sitemap to this temporary site.
+Keep noindex controls, and add no SEO or sitemap to this temporary site. The `robots.txt` file allows crawling, so AI tools can read the pages while noindex keeps them out of search results.
 See [the public API documentation gate](/docs/DOCUMENTATION.md#public-api-documentation-completion-gate) when SDK behavior changes
 
 ## Published version channels
