@@ -10,12 +10,7 @@ import type { Message } from "#sdk/messages"
 import { decodeMessage } from "./message.js"
 import { runGatewaySession, type GatewaySessionOptions } from "./gateway/session.js"
 
-export {
-    AttemptFailure,
-    classifyClose,
-    runGatewaySession,
-    type Session,
-} from "./gateway/session.js"
+export { AttemptFailure, classifyClose, runGatewaySession, type Session } from "./gateway/session.js"
 
 /**
  * Full-message gateway entry for independent internal protocol checks.
