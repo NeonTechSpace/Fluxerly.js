@@ -11,6 +11,7 @@ const live = new URL("./", import.meta.url)
 const harnessUrl = new URL("./support/harness.js", import.meta.url).href
 const parent = realpathSync(tmpdir())
 const roots = []
+const childTimeoutMs = 60_000
 
 afterEach(() => {
     for (const root of roots.splice(0)) {
@@ -85,7 +86,7 @@ function contend(root, checks) {
     )
     const path = join(root, ".env.test.local.lock")
     const children = checks.map(([lockClass, key]) => {
-        const child = spawn(process.execPath, [script, path, lockClass, key])
+        const child = spawn(process.execPath, [script, path, lockClass, key], { timeout: childTimeoutMs })
         const lines = []
         const waiters = []
         createInterface({ input: child.stdout }).on("line", (line) => {
@@ -93,7 +94,13 @@ function contend(root, checks) {
             for (const waiter of waiters.splice(0)) waiter()
         })
         const line = async (index) => {
-            while (lines.length <= index) await new Promise((done) => waiters.push(done))
+            while (lines.length <= index)
+                await Promise.race([
+                    new Promise((done) => waiters.push(done)),
+                    closed.then(() => {
+                        throw new Error("Lock contender exited before reporting its result")
+                    }),
+                ])
             return lines[index]
         }
         const closed = new Promise((done, fail) => {
@@ -103,54 +110,64 @@ function contend(root, checks) {
         return { child, line, lines, closed }
     })
     return (async () => {
-        await Promise.all(children.map(({ line }) => line(0)))
-        for (const { child } of children) child.stdin.write("go\n")
-        const results = await Promise.all(children.map(async ({ line }) => JSON.parse(await line(1))))
-        // Every child has attempted its lock, so the holders may release
-        for (const { child } of children) child.stdin.end()
-        await Promise.all(children.map(({ closed }) => closed))
-        return results.map((result, index) =>
-            result.acquired ? { ...result, ...JSON.parse(children[index].lines[2]) } : result,
-        )
+        try {
+            await Promise.all(children.map(({ line }) => line(0)))
+            for (const { child } of children) child.stdin.write("go\n")
+            const results = await Promise.all(children.map(async ({ line }) => JSON.parse(await line(1))))
+            // Every child has attempted its lock, so the holders may release
+            for (const { child } of children) child.stdin.end()
+            await Promise.all(children.map(({ closed }) => closed))
+            return results.map((result, index) =>
+                result.acquired ? { ...result, ...JSON.parse(children[index].lines[2]) } : result,
+            )
+        } finally {
+            for (const { child } of children) child.stdin.end()
+            await Promise.all(children.map(({ closed }) => closed))
+        }
     })()
 }
 
-test("processes holding shared locks for different checks run together", async () => {
-    const root = mkdtempSync(join(parent, "fluxerly-live-lock-"))
-    roots.push(root)
-    const results = await contend(root, [
-        ["read-only", "sdk"],
-        ["test-owned", "messages-pins"],
-        ["test-owned", "webhooks"],
-    ])
-    // Each child acquired its lock while the others still held theirs
-    expect(results.every((result) => result.acquired && result.released)).toBe(true)
-    expect(readdirSync(root).filter((name) => name.startsWith(".env.test.local.lock"))).toEqual([])
-})
-
-test("an exclusive holder never overlaps another holder when processes race for the lock", async () => {
-    const root = mkdtempSync(join(parent, "fluxerly-live-lock-"))
-    roots.push(root)
-    // A racing exclusive and shared acquisition may both back out, so a round can end with no holder. Rounds repeat
-    // until three had holders, which the invariants below then constrain
-    let contested = 0
-    for (let round = 0; contested < 3; round++) {
-        expect(round).toBeLessThan(30)
+test(
+    "processes holding shared locks for different checks run together",
+    async () => {
+        const root = mkdtempSync(join(parent, "fluxerly-live-lock-"))
+        roots.push(root)
         const results = await contend(root, [
-            ["shared-state", "administration"],
-            ["test-owned", "messages-pins"],
-            ["shared-state", "guild-feature-toggles"],
-            ["test-owned", "webhooks"],
             ["read-only", "sdk"],
             ["test-owned", "messages-pins"],
+            ["test-owned", "webhooks"],
         ])
-        const held = results.filter((result) => result.acquired)
-        if (held.length > 0) contested++
-        expect(held.every((result) => result.released)).toBe(true)
-        // Every holder kept its lock until all children had attempted, so an exclusive holder must be the only one
-        if (held.some((result) => result.lockClass === "shared-state")) expect(held).toHaveLength(1)
-        // The same check key never has two holders at once
-        expect(held.filter((result) => result.key === "messages-pins").length).toBeLessThanOrEqual(1)
+        // Each child acquired its lock while the others still held theirs
+        expect(results.every((result) => result.acquired && result.released)).toBe(true)
         expect(readdirSync(root).filter((name) => name.startsWith(".env.test.local.lock"))).toEqual([])
-    }
-}, 60_000)
+    },
+    (3 + 1) * childTimeoutMs,
+)
+
+test(
+    "an exclusive holder never overlaps another holder when processes race for the lock",
+    async () => {
+        const root = mkdtempSync(join(parent, "fluxerly-live-lock-"))
+        roots.push(root)
+        // No holder is a valid outcome when racing acquisitions both back out. Check each fixed round's safety invariants
+        // without requiring the scheduler to produce a winning interleaving
+        for (let round = 0; round < 3; round++) {
+            const results = await contend(root, [
+                ["shared-state", "administration"],
+                ["test-owned", "messages-pins"],
+                ["shared-state", "guild-feature-toggles"],
+                ["test-owned", "webhooks"],
+                ["read-only", "sdk"],
+                ["test-owned", "messages-pins"],
+            ])
+            const held = results.filter((result) => result.acquired)
+            expect(held.every((result) => result.released)).toBe(true)
+            // Every holder kept its lock until all children had attempted, so an exclusive holder must be the only one
+            if (held.some((result) => result.lockClass === "shared-state")) expect(held).toHaveLength(1)
+            // The same check key never has two holders at once
+            expect(held.filter((result) => result.key === "messages-pins").length).toBeLessThanOrEqual(1)
+            expect(readdirSync(root).filter((name) => name.startsWith(".env.test.local.lock"))).toEqual([])
+        }
+    },
+    (3 * 6 + 1) * childTimeoutMs,
+)

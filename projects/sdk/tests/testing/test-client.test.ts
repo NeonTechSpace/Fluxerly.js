@@ -22,6 +22,7 @@ import * as defaultTesting from "../../src/testing.js"
 import { fixtureToken } from "../../src/internal/testing/fixtures.js"
 import { modes, type Mode } from "../support/both-apis.js"
 import { settle } from "../support/settle.js"
+import { ownedResources } from "../support/owned-resources.js"
 
 /**
  * One test client driven through either API style with the same promise-returning calls, so each behavior below is
@@ -481,20 +482,17 @@ test("native test client scopes shut the client down and close the transport", a
     expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toBeInstanceOf(ClientClosedError)
 })
 
-/** Long-lived handles, leaving out the Immediate callbacks the runner queues and drains between turns */
-const handles = () =>
-    process
-        .getActiveResourcesInfo()
-        .filter((kind) => kind !== "Immediate")
-        .toSorted()
-
 test("shutdown releases every handle the test client opened", async () => {
-    const before = handles()
-    const test = createDefaultTestClient({ heartbeatIntervalMs: 1_000 })
-    test.rest.respond("POST /channels/:id/typing", {})
-    await test.ready()
-    await settle(test.client.messages.typing(test.fixtures.ids.channel))
-    await test.shutdown()
-    // Heartbeat timers, request deadlines and sockets are all released, leaving only what the runner already held
-    await expect.poll(handles).toEqual(before)
+    const resources = ownedResources()
+    await resources.run(async () => {
+        const test = createDefaultTestClient({ heartbeatIntervalMs: 1_000 })
+        test.rest.respond("POST /channels/:id/typing", {})
+        await test.ready()
+        await settle(test.client.messages.typing(test.fixtures.ids.channel))
+        expect(resources.remaining()).not.toEqual([])
+        await test.shutdown()
+    })
+    // Only this client's referenced timers and sockets count, not runner timers or in-flight pipe writes
+    await resources.released()
+    expect(resources.remaining()).toEqual([])
 })

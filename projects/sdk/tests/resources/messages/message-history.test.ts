@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import type { MessageHistoryQuery } from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { defaultApi } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { startRestServer } from "../../support/rest-server.js"
 import { settle } from "../../support/settle.js"
@@ -18,9 +19,12 @@ const wire = (id: string, channel = "20") => ({
     attachments: [],
 })
 const realFetch = globalThis.fetch
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
-async function fixture() {
+async function fixture(now = () => performance.now()) {
     const requests: { url: URL; at: number }[] = []
     const control = {
         respond: (response: ServerResponse, url: URL) => {
@@ -38,7 +42,7 @@ async function fixture() {
             expect(request.method).toBe("GET")
             expect(request.headers.authorization).toBe(`Bot ${token}`)
             expect(request.headers["content-type"]).toBeUndefined()
-            requests.push({ url, at: performance.now() })
+            requests.push({ url, at: now() })
             control.respond(response, url)
         },
     })
@@ -169,7 +173,8 @@ test("history rejects whole malformed, oversized, mismatched, duplicate or out-o
 })
 
 test("history shares its channel bucket across pages, separately from single fetch and other channels", async () => {
-    const server = await fixture()
+    const clock = sdkClock()
+    const server = await fixture(clock.now)
     const client = defaultApi({ token })
     server.control.respond = (response, url) => {
         if (server.requests.length === 1) {
@@ -180,14 +185,20 @@ test("history shares its channel bucket across pages, separately from single fet
             )
     }
     const first = client.messages.fetchHistory("20")
-    await vi.waitFor(() => expect(server.requests).toHaveLength(1))
+    // The retry sleep proves the first response has installed the channel's block
+    await clock.waiting(300)
     await settle(client.messages.fetch({ channelId: "20", id: "10" }))
     await settle(client.messages.fetchHistory("21"))
-    const queued = await client.messages.fetchHistory("20", { before: "12" }, { timeoutMs: 30 })
-    expect(queued.isErr() && queued.error).toMatchObject({ reason: "timeout", outcome: "notDispatched" })
+    const queued = client.messages.fetchHistory("20", { before: "12" }, { timeoutMs: 30 })
+    await clock.waiting(30)
+    await clock.advance(30)
+    const expired = await queued
+    expect(expired.isErr() && expired.error).toMatchObject({ reason: "timeout", outcome: "notDispatched" })
+    expect(server.requests).toHaveLength(3)
+    await clock.advance(270)
     await settle(first)
     expect(server.requests).toHaveLength(4)
-    expect(server.requests.at(-1)!.at - server.requests[0]!.at).toBeGreaterThanOrEqual(280)
+    expect(server.requests.at(-1)!.at - server.requests[0]!.at).toBe(300)
     expect(server.requests.at(-1)!.url.search).toBe(server.requests[0]!.url.search)
 })
 

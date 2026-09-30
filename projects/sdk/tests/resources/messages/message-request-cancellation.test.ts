@@ -3,11 +3,15 @@ import { afterEach, expect, test, vi } from "vitest"
 import type { Client } from "../../../src/index.js"
 import type { Client as NativeClient } from "../../../src/effect.js"
 import { defaultApi, modes, nativeApi } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { waitUntil } from "../../support/clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { expectErr, type Operation } from "../../support/settle.js"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 const target = { id: "10", channelId: "20" }
 type Options = { readonly signal?: AbortSignal; readonly timeoutMs?: number }
@@ -85,6 +89,7 @@ function hangingTransport(read: boolean) {
 test.each(modes.flatMap((mode) => Object.keys(operations).map((operation) => ({ mode, operation }))))(
     "$mode $operation releases its active request before a cancellation, timeout or shutdown settles",
     async ({ mode, operation }) => {
+        const clock = sdkClock()
         const { read, call } = operations[operation]!
         const transport = hangingTransport(read)
         const client: AnyClient = mode === "default" ? defaultApi() : await nativeApi()
@@ -106,9 +111,12 @@ test.each(modes.flatMap((mode) => Object.keys(operations).map((operation) => ({ 
         }
         expect(transport).toEqual({ requests: 1, active: 0 })
 
-        // Instance discovery finished during the first call, so this deadline covers only the request itself
-        const timedOut = await expectErr(call(client, { timeoutMs: 50 }))
-        expect(timedOut).toMatchObject({ reason: "timeout" })
+        // Expire only after the request owns the hanging response and its deadline sleep is registered
+        const timingOut = expectErr(call(client, { timeoutMs: 50 }))
+        await waitUntil(() => transport.active === 1)
+        await clock.waiting(50)
+        await clock.advance(50)
+        expect(await timingOut).toMatchObject({ reason: "timeout" })
         expect(transport).toEqual({ requests: 2, active: 0 })
 
         const pending = expectErr(call(client, {}))

@@ -20,6 +20,7 @@ import { oauth as native, type OAuthClient as NativeOAuthClient } from "../../..
 import { modes, type Mode } from "../../support/both-apis.js"
 import { expectErr, settle, type Operation } from "../../support/settle.js"
 import { waitUntil } from "../../support/clock.js"
+import { sdkClock } from "../../support/client-clock.js"
 
 let close: (() => Promise<void>) | undefined
 
@@ -351,6 +352,7 @@ async function fixture(
 afterEach(async () => {
     await close?.()
     close = undefined
+    vi.restoreAllMocks()
 })
 
 /** Query parameters as sorted entries, so a comparison keeps duplicates but ignores their order */
@@ -990,6 +992,7 @@ describe("oauth", () => {
     })
 
     test("cancels a token response that arrives after the deadline", async () => {
+        const clock = sdkClock()
         const { base } = await fixture()
         const made = defaultApi.create({
             clientId: "1",
@@ -1004,19 +1007,26 @@ describe("oauth", () => {
         })
         const originalFetch = globalThis.fetch
         let cancelled = false
+        let entered!: () => void
+        const dispatched = new Promise<void>((resolve) => (entered = resolve))
         globalThis.fetch = async (input, init) => {
             if (!String(input).endsWith("/oauth2/token")) return originalFetch(input, init)
             // The response arrives only after the deadline aborts the request, so its body must be cancelled
-            await new Promise((resolve) => init!.signal!.addEventListener("abort", resolve, { once: true }))
+            await new Promise((resolve) => {
+                init!.signal!.addEventListener("abort", resolve, { once: true })
+                entered()
+            })
             return new Response(new ReadableStream({ cancel: () => void (cancelled = true) }), { status: 200 })
         }
         try {
-            expect(
-                await made.exchangeCode(
-                    { code: "code", redirectUri: "http://localhost/callback", codeVerifier: "a".repeat(43) },
-                    { timeoutMs: 100 },
-                ),
-            ).toMatchObject({ error: { reason: "timeout", outcome: "unknown" } })
+            const pending = made.exchangeCode(
+                { code: "code", redirectUri: "http://localhost/callback", codeVerifier: "a".repeat(43) },
+                { timeoutMs: 100 },
+            )
+            await dispatched
+            await clock.waiting(100)
+            await clock.advance(100)
+            expect(await pending).toMatchObject({ error: { reason: "timeout", outcome: "unknown" } })
             expect(cancelled).toBe(true)
         } finally {
             globalThis.fetch = originalFetch
@@ -1025,6 +1035,7 @@ describe("oauth", () => {
     })
 
     test("keeps a received 403 rejected when its metadata body stalls past the deadline", async () => {
+        const clock = sdkClock()
         const { base } = await fixture()
         const made = defaultApi.create({
             clientId: "1",
@@ -1038,17 +1049,21 @@ describe("oauth", () => {
             codeChallenge: defaultApi.createPkce().challenge,
         })
         const originalFetch = globalThis.fetch
+        let entered!: () => void
+        const reading = new Promise<void>((resolve) => (entered = resolve))
         globalThis.fetch = async (input, init) =>
             String(input).endsWith("/oauth2/token")
-                ? new Response(new ReadableStream(), { status: 403 })
+                ? new Response(new ReadableStream({ pull: () => entered() }, { highWaterMark: 0 }), { status: 403 })
                 : originalFetch(input, init)
         try {
-            expect(
-                await made.exchangeCode(
-                    { code: "code", redirectUri: "http://localhost/callback", codeVerifier: "a".repeat(43) },
-                    { timeoutMs: 5 },
-                ),
-            ).toMatchObject({ error: { reason: "rejected", outcome: "rejected", status: 403 } })
+            const pending = made.exchangeCode(
+                { code: "code", redirectUri: "http://localhost/callback", codeVerifier: "a".repeat(43) },
+                { timeoutMs: 5 },
+            )
+            await reading
+            await clock.waiting(5)
+            await clock.advance(5)
+            expect(await pending).toMatchObject({ error: { reason: "rejected", outcome: "rejected", status: 403 } })
         } finally {
             globalThis.fetch = originalFetch
             await made.shutdown()
@@ -1116,16 +1131,21 @@ describe("oauth", () => {
     })
 
     test("marks a dispatched code exchange timeout unknown without retrying", async () => {
+        const clock = sdkClock()
         const { base, requests } = await fixture("stall")
         const made = defaultApi.create({
             clientId: "1",
             clientSecret: "secret",
             instance: { url: base, allowInsecure: true },
         })
-        const result = await made.exchangeCode(
+        const pending = made.exchangeCode(
             { code: "code", redirectUri: "http://localhost/callback", codeVerifier: "a".repeat(43) },
             { timeoutMs: 20 },
         )
+        await waitUntil(() => requests.some((request) => request.path === "/oauth2/token"))
+        await clock.waiting(20)
+        await clock.advance(20)
+        const result = await pending
         expect(result.isErr()).toBe(true)
         if (result.isErr())
             expect(result.error).toMatchObject({ _tag: "OAuthOperationError", reason: "timeout", outcome: "unknown" })
@@ -1595,16 +1615,21 @@ describe("oauth", () => {
     })
 
     test("marks a discovery deadline notDispatched and never sends a token request", async () => {
+        const clock = sdkClock()
         const { base, requests } = await fixture("discoveryStall")
         const made = defaultApi.create({
             clientId: "1",
             clientSecret: "secret",
             instance: { url: base, allowInsecure: true },
         })
-        const result = await made.exchangeCode(
+        const pending = made.exchangeCode(
             { code: "code", redirectUri: "http://localhost/callback", codeVerifier: "a".repeat(43) },
             { timeoutMs: 20 },
         )
+        await waitUntil(() => requests.some((request) => request.path === "/.well-known/fluxer"))
+        await clock.waiting(20)
+        await clock.advance(20)
+        const result = await pending
         expect(result.isErr()).toBe(true)
         if (result.isErr()) expect(result.error).toMatchObject({ reason: "timeout", outcome: "notDispatched" })
         expect(requests.filter((request) => request.path === "/oauth2/token")).toHaveLength(0)
@@ -1612,20 +1637,55 @@ describe("oauth", () => {
     })
 
     test("times out a stalled token response body as unknown", async () => {
+        const clock = sdkClock()
         const { base, requests } = await fixture("stallBody")
         const made = defaultApi.create({
             clientId: "1",
             clientSecret: "secret",
             instance: { url: base, allowInsecure: true },
         })
-        const result = await made.exchangeCode(
-            { code: "code", redirectUri: "http://localhost/callback", codeVerifier: "a".repeat(43) },
-            { timeoutMs: 20 },
-        )
-        expect(result.isErr()).toBe(true)
-        if (result.isErr()) expect(result.error).toMatchObject({ reason: "timeout", outcome: "unknown" })
-        expect(requests.filter((request) => request.path === "/oauth2/token")).toHaveLength(1)
-        await made.shutdown()
+        const originalFetch = globalThis.fetch
+        let reading = false
+        globalThis.fetch = async (input, init) => {
+            const response = await originalFetch(input, init)
+            if (!String(input).endsWith("/oauth2/token")) return response
+            const reader = response.body!.getReader()
+            let chunks = 0
+            return new Response(
+                new ReadableStream(
+                    {
+                        async pull(controller) {
+                            if (chunks > 0) reading = true
+                            const chunk = await reader.read()
+                            if (chunk.done) controller.close()
+                            else {
+                                chunks++
+                                controller.enqueue(chunk.value)
+                            }
+                        },
+                        cancel: () => reader.cancel(),
+                    },
+                    { highWaterMark: 0 },
+                ),
+                { status: response.status, headers: response.headers },
+            )
+        }
+        try {
+            const pending = made.exchangeCode(
+                { code: "code", redirectUri: "http://localhost/callback", codeVerifier: "a".repeat(43) },
+                { timeoutMs: 20 },
+            )
+            await waitUntil(() => reading)
+            await clock.waiting(20)
+            await clock.advance(20)
+            const result = await pending
+            expect(result.isErr()).toBe(true)
+            if (result.isErr()) expect(result.error).toMatchObject({ reason: "timeout", outcome: "unknown" })
+            expect(requests.filter((request) => request.path === "/oauth2/token")).toHaveLength(1)
+        } finally {
+            globalThis.fetch = originalFetch
+            await made.shutdown()
+        }
     })
 
     test("retains a response failure with its reader-cleanup defect and masks credentials in the default rejection", async () => {

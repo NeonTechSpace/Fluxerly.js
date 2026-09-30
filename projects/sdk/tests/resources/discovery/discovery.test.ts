@@ -1,10 +1,14 @@
 import { afterEach, expect, test, vi } from "vitest"
 import { DiscoveryCategories } from "../../../src/index.js"
 import { modes, setup as setupClient, type Mode } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { settle } from "../../support/settle.js"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 const setup = (mode: Mode) => setupClient(mode, { token: "fixture_only", cache: { guilds: true } })
 const wire = (extra: Record<string, unknown> = {}) => ({
     guild_id: "200",
@@ -180,8 +184,11 @@ test.each(modes)(
 )
 
 test.each(modes)("%s aborts discovery writes at their deadline and cleans up for subsequent reads", async (mode) => {
+    const clock = sdkClock()
     const client = await setup(mode)
     let aborted = false
+    let entered!: () => void
+    const dispatched = new Promise<void>((resolve) => (entered = resolve))
     stubFetchWithHostedDiscovery(
         (_url: string, init: RequestInit) =>
             new Promise((_resolve, reject) => {
@@ -191,12 +198,15 @@ test.each(modes)("%s aborts discovery writes at their deadline and cleans up for
                 }
                 if (init.signal?.aborted) abort()
                 else init.signal?.addEventListener("abort", abort, { once: true })
+                entered()
             }),
     )
-    await expect(settle(client.discovery.withdraw("200", { timeoutMs: 100 }))).rejects.toMatchObject({
-        reason: "timeout",
-        outcome: "unknown",
-    })
+    const pending = settle(client.discovery.withdraw("200", { timeoutMs: 100 }))
+    const failure = expect(pending).rejects.toMatchObject({ reason: "timeout", outcome: "unknown" })
+    await dispatched
+    await clock.waiting(100)
+    await clock.advance(100)
+    await failure
     expect(aborted).toBe(true)
     stubFetchWithHostedDiscovery(async () =>
         Response.json({ application: null, eligible: true, min_member_count: 100 }),

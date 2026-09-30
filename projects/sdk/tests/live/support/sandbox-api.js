@@ -38,19 +38,22 @@ function statusFailure(status) {
 /**
  * The request core behind every export. It resolves `{ status, ok, data }`, where `data` is the parsed JSON body or
  * null. Each attempt has its own `timeoutMs`, and the optional `deadline` signal also aborts attempts and 429 waits.
- * Up to two retries follow a 429 that asks for a wait of at most ten seconds. A 429 with a longer or missing wait, or
- * a third 429, resolves like any other status, so the caller's status check decides the outcome
+ * Confirmed 429s with a wait of at most ten seconds retry until the whole-run deadline. Without a whole-run signal,
+ * the request is bounded by the provider's one-minute edge window plus one attempt timeout. A longer or missing wait
+ * resolves like any other status, so the caller's status check decides the outcome
  */
-async function send(fetch, token, method, path, body, { deadline, timeoutMs = 15_000 } = {}) {
-    for (let attempt = 0; ; attempt++) {
+async function send(fetch, token, method, path, body, { deadline, timeoutMs = 15_000, wait = sleep } = {}) {
+    const limit = deadline ?? AbortSignal.timeout(60_000 + timeoutMs)
+    for (;;) {
+        limit.throwIfAborted()
         const timeout = AbortSignal.timeout(timeoutMs)
-        const signal = deadline === undefined ? timeout : AbortSignal.any([deadline, timeout])
+        const signal = AbortSignal.any([limit, timeout])
         const response = await fetch(`${origin}${path}`, request(method, token, body, signal))
         // Reading the body also releases it when a status such as 204 carries none
         const data = await response.json().catch(() => null)
-        const waitMs = attempt < 2 ? rateLimitWait(response, data) : undefined
+        const waitMs = rateLimitWait(response, data)
         if (waitMs === undefined) return { status: response.status, ok: response.ok, data }
-        await sleep(waitMs, undefined, deadline === undefined ? undefined : { signal: deadline })
+        await wait(waitMs, undefined, { signal: limit })
     }
 }
 
@@ -59,6 +62,7 @@ async function checked(options, accept, method, path, body) {
     const { status, ok, data } = await send(options.fetch, options.token(), method, path, body, {
         deadline: options.deadline?.(),
         timeoutMs: options.timeoutMs,
+        wait: options.wait,
     })
     if (!accept({ status, ok })) throw statusFailure(status)
     return { status, data }
@@ -77,10 +81,10 @@ export const anyStatus = () => true
  * Returns `api(method, path, body)`, which resolves `{ status, data }` after the core's 429 handling. The `accept`
  * predicate receives `{ status, ok }`, and a refused status fails an assertion that carries only `status`. The
  * optional `deadline` getter returns the current whole-run signal, and `timeoutMs` sets the per-attempt timeout, which
- * defaults to 15 seconds
+ * defaults to 15 seconds. The optional wait function replaces the host sleep for controlled local checks
  */
-export function createSandboxApi({ fetch, token, accept = successOnly, deadline, timeoutMs }) {
-    const options = { fetch, token, deadline, timeoutMs }
+export function createSandboxApi({ fetch, token, accept = successOnly, deadline, timeoutMs, wait }) {
+    const options = { fetch, token, deadline, timeoutMs, wait }
     return (method, path, body) => checked(options, accept, method, path, body)
 }
 
@@ -88,8 +92,14 @@ export function createSandboxApi({ fetch, token, accept = successOnly, deadline,
  * Returns `api(method, path, body, allowNotFound)`, which works like `createSandboxApi` and also accepts a 404 when
  * `allowNotFound` is true. The `allowNotFound` option sets the default for calls that omit it
  */
-export function createRetryingSandboxApi({ fetch, token, allowNotFound: allowNotFoundByDefault = false }) {
-    const options = { fetch, token }
+export function createRetryingSandboxApi({
+    fetch,
+    token,
+    allowNotFound: allowNotFoundByDefault = false,
+    deadline,
+    wait,
+}) {
+    const options = { fetch, token, deadline, wait }
     return (method, path, body, allowNotFound = allowNotFoundByDefault) =>
         checked(options, allowNotFound ? successOrNotFound : successOnly, method, path, body)
 }
@@ -98,8 +108,8 @@ export function createRetryingSandboxApi({ fetch, token, allowNotFound: allowNot
  * Returns `api(method, path, body)` for harnesses with a whole-run request deadline. The `deadline` getter returns the
  * current deadline signal, which aborts requests and 429 waits. A successful status or 404 resolves
  */
-export function createDeadlineSandboxApi({ fetch, token, deadline }) {
-    return createSandboxApi({ fetch, token, deadline, accept: successOrNotFound })
+export function createDeadlineSandboxApi({ fetch, token, deadline, wait }) {
+    return createSandboxApi({ fetch, token, deadline, wait, accept: successOrNotFound })
 }
 
 /**

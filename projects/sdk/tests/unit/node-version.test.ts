@@ -1,11 +1,19 @@
-import { afterEach, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { checkNodeVersion } from "../../src/internal/node-version.js"
+// Load the graphs before timed cases. Each case still resets evaluation before reporting its own runtime version
+import "../../src/index.js"
+import "../../src/effect.js"
+import "../../src/testing.js"
+import "../../src/effect-testing.js"
 
 const original = Object.getOwnPropertyDescriptor(process, "versions")!
 
+beforeEach(() => {
+    vi.resetModules()
+})
+
 afterEach(() => {
     Object.defineProperty(process, "versions", original)
-    vi.resetModules()
 })
 
 /** Report a different Node.js version for the rest of the test */

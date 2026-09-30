@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import { SdkDefect, type DefaultMessageOperationOptions, type ReplyInput } from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { defaultApi } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { startRestServer } from "../../support/rest-server.js"
 import { expectErr, settle } from "../../support/settle.js"
@@ -122,6 +123,8 @@ test("confirmed rate limits retain a caller nonce, while server failure and malf
 })
 
 test("send deadlines include server waits and cancellation aborts HTTP without retrying", async () => {
+    // Loopback I/O cannot consume the send's budget before its 429 is classified
+    sdkClock()
     const server = await fixture()
     const client = defaultApi({ token })
     server.control.status = 429
@@ -341,6 +344,7 @@ test("a full outgoing queue rejects only new work, queued cancellation releases 
 })
 
 test("outgoing byte budget applies independently of request count and queued deadlines release their entries", async () => {
+    const clock = sdkClock()
     const server = await fixture()
     server.control.hold = true
     const client = defaultApi({ token })
@@ -349,6 +353,8 @@ test("outgoing byte budget applies independently of request count and queued dea
     const large = client.messages.send("20", { content: "x".repeat(3 * 1024 * 1024) }, { timeoutMs: 150 })
     const rejected = await client.messages.send("20", { content: "y".repeat(2 * 1024 * 1024) })
     expect(rejected.isErr() && rejected.error._tag === "MessageError" && rejected.error.reason).toBe("busy")
+    await clock.waiting(150)
+    await clock.advance(150)
     const expired = await large
     expect(expired.isErr() && expired.error._tag === "MessageError" && expired.error.outcome).toBe("notDispatched")
     await settle(client.shutdown())

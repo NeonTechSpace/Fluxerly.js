@@ -3,12 +3,40 @@ import { Effect, Exit, Cause } from "effect"
 import { withHostedDiscovery } from "../hosted-discovery.mjs"
 
 const [mode, url] = process.argv.slice(2)
+const forced = mode.endsWith("forced")
+let shuttingDown = false
+let expireClose
+// Control only the graceful-close deadline. Startup, real sockets and natural process exit stay real.
+if (forced) {
+    const set = globalThis.setTimeout
+    const clear = globalThis.clearTimeout
+    const heldTimer = {}
+    globalThis.setTimeout = (callback, delay, ...arguments_) => {
+        if (shuttingDown && delay === 5_000) {
+            if (expireClose) throw new Error("Duplicate graceful-close deadline")
+            expireClose = () => callback(...arguments_)
+            process.send?.({ event: "close-deadline", durationMs: delay })
+            return heldTimer
+        }
+        return set(callback, delay, ...arguments_)
+    }
+    globalThis.clearTimeout = (timer) => {
+        if (timer === heldTimer) expireClose = undefined
+        else clear(timer)
+    }
+}
 // Redirect only the external ws constructor, leaving the built public SDK and real loopback I/O intact
 registerHooks({
     resolve(specifier, context, next) {
         if (specifier === "ws" && context.parentURL?.endsWith("/dist/internal/transport/socket.js")) {
             const original = next(specifier, context).url
-            const source = `import WebSocket from ${JSON.stringify(original)}; export default class extends WebSocket { constructor(_url, options) { super(${JSON.stringify(url)}, options) } }`
+            const source = `import WebSocket from ${JSON.stringify(original)}; export default class extends WebSocket {
+                constructor(_url, options) { super(${JSON.stringify(url)}, options) }
+                terminate() {
+                    if (${forced}) process.send?.({ event: "forced-close" })
+                    return super.terminate()
+                }
+            }`
             return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true }
         }
         return next(specifier, context)
@@ -21,7 +49,16 @@ const controller = new AbortController()
 const stop = Promise.withResolvers()
 process.on("message", (message) => {
     if (message === "interrupt") controller.abort()
-    if (message === "shutdown") stop.resolve()
+    if (message === "shutdown") {
+        shuttingDown = true
+        stop.resolve()
+    }
+    if (message === "expire-close") {
+        if (!expireClose) throw new Error("No graceful-close deadline to expire")
+        const expire = expireClose
+        expireClose = undefined
+        expire()
+    }
 })
 const pending = mode.endsWith("pending")
 if (mode.startsWith("default")) {

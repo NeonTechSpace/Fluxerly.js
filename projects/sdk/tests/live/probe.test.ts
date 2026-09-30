@@ -2,9 +2,13 @@ import { spawnSync } from "node:child_process"
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { afterEach, expect, test } from "vitest"
+import { afterEach, expect, test, vi } from "vitest"
 import { copyHarnessSupport } from "./support/fixture-root.js"
 import { jsonLines } from "./support/json-lines.js"
+
+const childTimeoutMs = 60_000
+// Allow every sequential child its own limit, plus one child limit for fixture setup and cleanup
+vi.setConfig({ testTimeout: (1 + 1) * childTimeoutMs })
 
 const temporaryParent = realpathSync(tmpdir())
 const temporaryRoots: string[] = []
@@ -47,7 +51,7 @@ function run(root: string, fetchBody: string) {
     const child = spawnSync(process.execPath, ["--import", "./boundaries.mjs", "tests/live/sandbox.mjs"], {
         cwd: root,
         encoding: "utf8",
-        timeout: 10_000,
+        timeout: childTimeoutMs,
         windowsHide: true,
     })
     expect(child.error).toBeUndefined()

@@ -816,6 +816,7 @@ test.each(modes)("%s projects guild creation availability without polluting guil
 })
 
 test.each(modes)("%s connects from READY across paired cache and hydration states", async (mode) => {
+    sdkClock()
     for (const { cache, ready } of [
         { cache: {}, ready: { guilds: [] } },
         { cache: resourceCache, ready: { guilds: [{ id: "20", unavailable: true }] } },
@@ -1954,6 +1955,7 @@ test.each(modes)(
 )
 
 test.each(modes)("%s shares member read rate state without blocking guild reads", async (mode) => {
+    const clock = sdkClock()
     let calls = 0
     rest(async (url) => {
         calls++
@@ -1962,7 +1964,10 @@ test.each(modes)("%s shares member read rate state without blocking guild reads"
     })
     const api = await setup(mode)
     await expect(api.member(target, { timeoutMs: 20 })).rejects.toMatchObject({ reason: "rateLimit" })
-    await expect(api.member(target, { timeoutMs: 20 })).rejects.toMatchObject({ reason: "timeout" })
+    const blocked = expect(api.member(target, { timeoutMs: 20 })).rejects.toMatchObject({ reason: "timeout" })
+    await clock.waiting(20)
+    await clock.advance(20)
+    await blocked
     expect(calls).toBe(1)
     expect((await api.guild()).id).toBe("20")
 })

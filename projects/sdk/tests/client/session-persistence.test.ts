@@ -80,7 +80,9 @@ describeBothApis("sharding.sessions", (mode) => {
     })
 
     test("resumes a snapshot saved within the 60-second window", async () => {
-        const savedAt = Date.now() - 59_000
+        const now = 1_700_000_000_000
+        vi.spyOn(Date, "now").mockReturnValue(now)
+        const savedAt = now - 59_999
         const { sessions } = store({
             sessionId: "saved-session",
             sequence: 41,
@@ -98,12 +100,13 @@ describeBothApis("sharding.sessions", (mode) => {
     })
 
     test.each([
-        { name: "older than 60 seconds", snapshot: (now: number) => ({ savedAt: now - 60_000 }) },
+        { name: "at the 60-second expiry boundary", snapshot: (now: number) => ({ savedAt: now - 60_000 }) },
         { name: "for another gateway endpoint", snapshot: () => ({ resumeUrl: "wss://elsewhere.example/?v=1" }) },
         { name: "for another shard plan", snapshot: () => ({ totalShards: 2 }) },
         { name: "malformed", snapshot: () => ({ sequence: -1 }) },
     ])("ignores a snapshot $name and starts a new session", async ({ snapshot }) => {
-        const now = Date.now()
+        const now = 1_700_000_000_000
+        vi.spyOn(Date, "now").mockReturnValue(now)
         const { sessions } = store({
             sessionId: "saved-session",
             sequence: 41,

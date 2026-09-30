@@ -1,3 +1,6 @@
+import { createServer } from "node:http"
+import { once } from "node:events"
+import { setImmediate as turn } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { Effect, Fiber } from "effect"
 import { expect, onTestFinished, test, vi } from "vitest"
@@ -32,6 +35,26 @@ async function childGateway() {
 
 test("a delayed child grant cannot compress actual cross-process Identify sends", async () => {
     const { url, identifies } = await childGateway()
+    const sends: number[] = []
+    const sent = Promise.withResolvers<void>()
+    const reports = createServer((request, response) => {
+        const at = Number(new URL(request.url ?? "/", "http://127.0.0.1").searchParams.get("at"))
+        if (!Number.isFinite(at) || at <= 0) {
+            response.writeHead(400).end()
+            return
+        }
+        sends.push(at)
+        if (sends.length === 2) sent.resolve()
+        response.writeHead(204).end()
+    })
+    reports.listen(0, "127.0.0.1")
+    await once(reports, "listening")
+    onTestFinished(async () => {
+        reports.closeAllConnections()
+        await new Promise<void>((resolve) => reports.close(() => resolve()))
+    })
+    const address = reports.address()
+    if (!address || typeof address === "string") throw new Error("Missing Identify send proof address")
     const managed = supervisor.create({
         entry: fixture("supervisor-worker.js"),
         totalShards: 2,
@@ -42,6 +65,7 @@ test("a delayed child grant cannot compress actual cross-process Identify sends"
         childEnvironment: {
             FLUXERLY_SUPERVISOR_GATEWAY: url,
             FLUXERLY_SUPERVISOR_MODE: "delayed",
+            FLUXERLY_SUPERVISOR_SEND_PROOF: `http://127.0.0.1:${address.port}`,
         },
     })
     let cleaned = false
@@ -54,7 +78,9 @@ test("a delayed child grant cannot compress actual cross-process Identify sends"
     try {
         expect((await managed.start()).isOk()).toBe(true)
         await vi.waitFor(() => expect(identifies).toHaveLength(2), { interval: 5, timeout: 5_000 })
-        expect(identifies[1]! - identifies[0]!).toBeGreaterThanOrEqual(995)
+        await sent.promise
+        sends.sort((left, right) => left - right)
+        expect(sends[1]! - sends[0]!).toBeGreaterThanOrEqual(995)
         expect((await managed.shutdown()).isOk()).toBe(true)
         expect((await managed.waitForClose()).isOk()).toBe(true)
     } finally {
@@ -248,6 +274,7 @@ test("a canceled native terminal observer detaches without stopping its supervis
 }, 5_000)
 
 test("a replacement that misses its own startup budget fails after a successful initial start", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
     const managed = supervisor.create({
         entry: fixture("supervisor-restart-worker.js"),
         totalShards: 1,
@@ -258,9 +285,19 @@ test("a replacement that misses its own startup budget fails after a successful 
         childEnvironment: { FLUXERLY_SUPERVISOR_MODE: "exit-then-never-ready" },
     })
     onTestFinished(async () => {
+        // Also release any held cleanup deadline when an assertion fails.
+        await vi.runAllTimersAsync()
+        vi.useRealTimers()
         await managed.shutdown()
     })
+    // Child startup uses real IPC, but its deadline cannot expire before initial readiness.
     expect((await managed.start()).isOk()).toBe(true)
+    while (managed.status().children[0]?.state !== "restarting") await turn()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(managed.status().children[0]).toMatchObject({ generation: 2, restarts: 1 })
+    // Only the replacement's startup budget and forced-stop grace are advanced.
+    await vi.advanceTimersByTimeAsync(400)
+    await vi.advanceTimersByTimeAsync(30)
     const closed = await managed.waitForClose()
     expect(closed.isErr() && closed.error).toMatchObject({ childId: "replacement", reason: "startupTimeout" })
     expect(managed.status().children[0]).toMatchObject({ generation: 2, restarts: 1, pid: null, state: "failed" })

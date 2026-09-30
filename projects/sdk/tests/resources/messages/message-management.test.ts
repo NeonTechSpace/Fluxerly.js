@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import { MessageOperationError } from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { defaultApi } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { startRestServer } from "../../support/rest-server.js"
 import { settle } from "../../support/settle.js"
@@ -18,9 +19,12 @@ const wire = (content = "original") => ({
     author: { id: "30", username: "fixture" },
 })
 const realFetch = globalThis.fetch
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
-async function fixture() {
+async function fixture(now = () => performance.now()) {
     const requests: { method: string; path: string; body: any; contentType: string | undefined; at: number }[] = []
     const control = {
         respond: (response: ServerResponse, body: any, method: string) => {
@@ -38,7 +42,7 @@ async function fixture() {
                 path: request.query.size ? `${request.path}?${request.query}` : request.path,
                 body: request.body,
                 contentType: request.headers["content-type"],
-                at: performance.now(),
+                at: now(),
             })
             control.respond(response, request.body, request.method)
         },
@@ -226,7 +230,8 @@ test("fetch and edit reject malformed or mismatched snapshots; delete requires 2
 })
 
 test("route limits group message IDs by method/channel without blocking other methods", async () => {
-    const server = await fixture()
+    const clock = sdkClock()
+    const server = await fixture(clock.now)
     const client = defaultApi({ token })
     server.control.respond = (response, body, method) => {
         if (method === "PATCH" && server.requests.filter((r) => r.method === "PATCH").length === 1) {
@@ -234,11 +239,13 @@ test("route limits group message IDs by method/channel without blocking other me
         } else response.end(JSON.stringify(wire(body?.content)))
     }
     const edit = client.messages.edit(target, { content: "stable" })
-    await vi.waitFor(() => expect(server.requests).toHaveLength(1))
+    await clock.waiting(250)
     await settle(client.messages.fetch(target))
+    expect(server.requests.map((r) => r.method)).toEqual(["PATCH", "GET"])
+    await clock.advance(250)
     await settle(edit)
     expect(server.requests.map((r) => r.method)).toEqual(["PATCH", "GET", "PATCH"])
-    expect(server.requests[2]!.at - server.requests[0]!.at).toBeGreaterThanOrEqual(230)
+    expect(server.requests[2]!.at - server.requests[0]!.at).toBe(250)
     expect(server.requests[2]!.body).toEqual(server.requests[0]!.body)
     server.control.respond = (response) => {
         response.setHeader("x-ratelimit-remaining", "0")
@@ -246,8 +253,12 @@ test("route limits group message IDs by method/channel without blocking other me
         response.end(JSON.stringify(wire()))
     }
     await settle(client.messages.fetch(target))
-    const queued = await client.messages.fetch({ ...target, id: "11" }, { timeoutMs: 30 })
-    expect(queued.isErr() && queued.error).toMatchObject({ reason: "timeout", outcome: "notDispatched" })
+    const queued = client.messages.fetch({ ...target, id: "11" }, { timeoutMs: 30 })
+    await clock.waiting(30)
+    await clock.advance(30)
+    const expired = await queued
+    expect(expired.isErr() && expired.error).toMatchObject({ reason: "timeout", outcome: "notDispatched" })
+    expect(server.requests).toHaveLength(4)
 })
 
 test("native interruption cancels only its request and permits subsequent work", async () => {

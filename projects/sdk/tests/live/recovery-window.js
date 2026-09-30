@@ -24,6 +24,12 @@ let probe
 let token
 let guildId
 let botId
+let recoveryTransitions = 0
+
+// Reconnect observations run synchronously while the established client is Recovering, before its new connection
+const observe = (observation) => {
+    if (observation.type === "reconnect" && client.state === "Recovering") recoveryTransitions++
+}
 
 const api = (path) => readSandbox(path, token, { exact: true })
 
@@ -248,7 +254,7 @@ async function verifyPostRecovery(cycle) {
 
 async function createDriver(sdk) {
     if (mode === "default") {
-        client = sdk.createClient({ token, connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 } })
+        client = sdk.createClient({ token, observe, connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 } })
         return {
             connect: () => value(client.connect()),
             close: () => value(client.shutdown()),
@@ -259,7 +265,7 @@ async function createDriver(sdk) {
     try {
         client = await value(
             sdk
-                .createClient({ token, connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 } })
+                .createClient({ token, observe, connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 } })
                 .pipe(Scope.provide(scope)),
         )
     } catch (error) {
@@ -332,22 +338,21 @@ try {
         stage = `cycle_${cycle}_owned_socket_loss`
         assert.equal(activeSocket.readyState, WebSocket.OPEN)
         const delayed = cycle === 2 ? probe.armHelloDelay(activeSocket) : undefined
+        const transitionsBefore = recoveryTransitions
         activeSocket.terminate()
         report(stage, { testOwnedSocketOnly: true })
 
         stage = `cycle_${cycle}_recovery`
         const deadline = performance.now() + recoveryTimeoutMs
-        let recoveringObserved = false
         let recovered
         while (performance.now() < deadline) {
-            recoveringObserved ||= client.state === "Recovering"
             assert.notEqual(client.state, "Closed")
             recovered = probe.recoveryAfter(activeSocket, cycle + 1)
             if (recovered?.ready && recovered.heartbeatObserved && client.state === "Connected") break
             await sleep(5)
         }
         assert.ok(recovered?.ready && recovered.heartbeatObserved)
-        assert.ok(recoveringObserved)
+        assert.ok(recoveryTransitions > transitionsBefore)
         assert.notEqual(recovered.socket, activeSocket)
         assert.equal(activeSocket.readyState, WebSocket.CLOSED)
         assert.ok(Number.isFinite(client.gatewayLatencyMs) && client.gatewayLatencyMs >= 0)

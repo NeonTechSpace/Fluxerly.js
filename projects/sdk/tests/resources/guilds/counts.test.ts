@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import { createClient } from "../../../src/index.js"
 import { createClient as createEffectClient } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { wsTarget } from "../../support/ws-redirect.js"
@@ -519,6 +520,7 @@ test("native gateway counts copy IDs at execution rather than Effect constructio
 
 for (const mode of modes) {
     test(`${mode} times out or cancels locally without resend, and recovery/closure release pending counts`, async () => {
+        const clock = sdkClock()
         const fixture = await gatewayFixture()
         const client = await driver(mode)
         try {
@@ -528,6 +530,8 @@ for (const mode of modes) {
                 interval: 5,
             })
             const timeoutNonce = command(fixture, 15).nonce
+            await clock.waiting(10)
+            await clock.advance(10)
             await expect(timedOut).resolves.toMatchObject({ kind: "failure", error: { reason: "timeout" } })
             fixture.dispatch("GUILD_COUNTS_UPDATE", {
                 nonce: timeoutNonce,

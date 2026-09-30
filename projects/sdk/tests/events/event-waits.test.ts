@@ -1,16 +1,22 @@
 import { setImmediate as turn } from "node:timers/promises"
 import { runInNewContext } from "node:vm"
 import { Effect, Exit, Fiber, Scope } from "effect"
-import { afterEach, expect, onTestFinished, test, vi } from "vitest"
+import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../../src/index.js"
 import { createClient as createNative } from "../../src/effect.js"
 import { startHostedLoopback } from "../support/instance.js"
+import { sdkClock, type SdkClock } from "../support/client-clock.js"
 import { settle, typedResult } from "../support/settle.js"
 
 vi.mock("ws", (original) => import("../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
 
+let clock: SdkClock
+beforeEach(() => {
+    clock = sdkClock()
+})
 afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
 })
 
 const wire = (id: string, content: string) => ({
@@ -37,10 +43,10 @@ async function waitForFilter(
     seen: readonly string[],
     content = "probe",
 ) {
-    for (let attempt = 0; attempt < 20 && !seen.includes(content); attempt++) {
-        dispatch(content, String(100 + attempt))
-        await new Promise((resolve) => setTimeout(resolve, 5))
-    }
+    // The deadline sleep is installed only after intake registration. SDK time stays frozen while loopback I/O runs
+    while (![...clock.pending].some((item) => item.delay === 1_000)) await turn()
+    dispatch(content, "100")
+    while (!seen.includes(content)) await turn()
     expect(seen).toContain(content)
 }
 
@@ -124,6 +130,7 @@ test("native waits are lazy and use observed filter delivery rather than fork sc
                 const interruptedSeen: string[] = []
                 const interrupted = yield* Effect.forkScoped(
                     client.waitFor("messageCreate", {
+                        timeoutMs: 1_000,
                         filter: (message) => {
                             interruptedSeen.push(message.content)
                             return false
@@ -152,7 +159,10 @@ test("event waits retain typed timeout and safe filter failures", async () => {
         await defaultApi.shutdown()
     })
     await settle(defaultApi.connect())
-    const timeout = await defaultApi.waitFor("messageCreate", { timeoutMs: 20 })
+    const timingOut = defaultApi.waitFor("messageCreate", { timeoutMs: 20 })
+    while (![...clock.pending].some((item) => item.delay === 20)) await turn()
+    await clock.advance(20)
+    const timeout = await timingOut
     expect(timeout.isErr() && timeout.error).toMatchObject({ _tag: "EventWaitError", reason: "timeout" })
     const invalidTimeout = await defaultApi.waitFor("messageCreate", { timeoutMs: Infinity } as never)
     expect(invalidTimeout.isErr() && invalidTimeout.error).toMatchObject({
@@ -161,6 +171,7 @@ test("event waits retain typed timeout and safe filter failures", async () => {
     })
     const filterCalls: string[] = []
     const failed = defaultApi.waitFor("messageCreate", {
+        timeoutMs: 1_000,
         filter: (message) => {
             filterCalls.push(message.content)
             if (message.content === "probe") return false
@@ -185,6 +196,7 @@ test("event waits retain typed timeout and safe filter failures", async () => {
                 const fiber = yield* Effect.forkIn(
                     Effect.exit(
                         native.waitFor("messageCreate", {
+                            timeoutMs: 1_000,
                             filter: (message) => {
                                 nativeSeen.push(message.content)
                                 if (message.content === "probe") return false
@@ -343,6 +355,7 @@ test("event wait cancellation releases intake before later dispatch", async () =
     const seen: string[] = []
     const waiting = client.waitFor("messageCreate", {
         signal: controller.signal,
+        timeoutMs: 1_000,
         filter: (message) => {
             seen.push(message.content)
             return false

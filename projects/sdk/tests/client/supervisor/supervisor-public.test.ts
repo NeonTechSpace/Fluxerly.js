@@ -52,16 +52,13 @@ function document(origin: string) {
 
 async function loopbackGateway({
     totalShards,
-    closeFirstAfterReady = false,
     holdConfigureForShard,
 }: {
     readonly totalShards: number
-    readonly closeFirstAfterReady?: boolean
     readonly holdConfigureForShard?: number
 }) {
     let origin = ""
     let ready = false
-    let firstClosed = false
     let closed = false
     let readySends = 0
     let configureReleased = holdConfigureForShard === undefined
@@ -155,10 +152,6 @@ async function loopbackGateway({
                         : { session_id: `loopback-${shardId}`, shard: [shardId, totalShards] },
             }),
         )
-        if (closeFirstAfterReady && !firstClosed) {
-            firstClosed = true
-            setTimeout(() => socket.terminate(), 25)
-        }
     }
     gateway.on("connection", (socket) => {
         socket.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } }))
@@ -223,6 +216,11 @@ async function loopbackGateway({
         configureEntered: configureEntered.promise,
         malformedGatewayPackets,
         readySends: () => readySends,
+        disconnectCurrent() {
+            const socket = [...gateway.clients].at(-1)
+            if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("No open gateway to disconnect")
+            socket.terminate()
+        },
         releaseReady() {
             ready = true
             for (const [socket, shard] of awaitingReady) sendReady(socket, shard)
@@ -350,9 +348,17 @@ test.each(modes)(
     async (mode) => {
         const fixture = await loopbackGateway({ totalShards: 1 })
         const owner = await managed(mode, options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000))
+        // Readiness is controlled by the held READY packet, not by the time needed to start a real child.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
         onTestFinished(async () => {
-            await owner.shutdown()
-            await fixture.close()
+            try {
+                const closing = owner.shutdown()
+                if (vi.isFakeTimers()) await vi.runAllTimersAsync()
+                await closing
+                await fixture.close()
+            } finally {
+                vi.useRealTimers()
+            }
         })
         await owner.start()
         expect(owner.status().state).toBe("running")
@@ -361,6 +367,7 @@ test.each(modes)(
         fixture.releaseReady()
         await waiting
         expect(owner.status()).toMatchObject({ children: [{ id: "only", connectionState: "Connected" }] })
+        vi.useRealTimers()
         await owner.shutdown()
         await owner.waitForClose()
     },
@@ -765,15 +772,24 @@ test.each(modes)(
     async (mode) => {
         const fixture = await loopbackGateway({ totalShards: 1 })
         const owner = await managed(mode, options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000))
+        // Observer cancellation must not race the unrelated real child's cold startup.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
         onTestFinished(async () => {
-            await owner.shutdown()
-            await fixture.close()
+            try {
+                const closing = owner.shutdown()
+                if (vi.isFakeTimers()) await vi.runAllTimersAsync()
+                await closing
+                await fixture.close()
+            } finally {
+                vi.useRealTimers()
+            }
         })
         await owner.start()
         expect(await owner.cancelReadiness()).toBe(true)
         expect(owner.status()).toMatchObject({ state: "running", children: [{ id: "only", pid: expect.any(Number) }] })
         fixture.releaseReady()
         await owner.waitForReady()
+        vi.useRealTimers()
         await owner.shutdown()
         await owner.waitForClose()
     },
@@ -882,18 +898,36 @@ test.each(modes)(
     "%s public supervisor bypasses its gate for resume and gates the next fresh Identify",
     async (mode) => {
         const minimumSpacingMs = 2_000
-        const fixture = await loopbackGateway({ totalShards: 1, closeFirstAfterReady: true })
-        const owner = await managed(
-            mode,
-            options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], minimumSpacingMs),
-        )
+        const fixture = await loopbackGateway({ totalShards: 1 })
+        const freshIdentifyEntered = Promise.withResolvers<void>()
+        const releaseFreshIdentify = Promise.withResolvers<void>()
+        let permits = 0
+        const owner = await managed(mode, {
+            ...options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], minimumSpacingMs),
+            identify: {
+                coordinator: {
+                    async permit() {
+                        permits += 1
+                        if (permits === 2) {
+                            freshIdentifyEntered.resolve()
+                            await releaseFreshIdentify.promise
+                        }
+                    },
+                },
+            },
+        })
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
         let cleaned = false
         const cleanup = async () => {
             if (cleaned) return
             cleaned = true
+            releaseFreshIdentify.resolve()
             try {
-                await owner.shutdown()
+                const closing = owner.shutdown()
+                if (vi.isFakeTimers()) await vi.runAllTimersAsync()
+                await closing
             } finally {
+                vi.useRealTimers()
                 await fixture.close()
             }
         }
@@ -901,19 +935,28 @@ test.each(modes)(
         try {
             await owner.start()
             fixture.releaseReady()
-            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 10_000 })
+            await owner.waitForReady()
+            vi.useRealTimers()
+            fixture.disconnectCurrent()
+            await Promise.race([
+                freshIdentifyEntered.promise,
+                owner.waitForClose().then(() => {
+                    throw new Error("Supervisor closed before requesting a fresh Identify permit")
+                }),
+            ])
+            // Resume reached the gateway while the next fresh Identify permit remains held.
+            // A gated Resume would consume this permit instead and could not reach the gateway.
             expect(fixture.resumes).toHaveLength(1)
-            expect(fixture.resumes[0]!.at - fixture.identifies[0]!.at).toBeLessThan(minimumSpacingMs)
+            expect(fixture.identifies).toHaveLength(1)
+            expect(permits).toBe(2)
+            releaseFreshIdentify.resolve()
+            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 10_000 })
             expect(fixture.malformedGatewayPackets).toEqual([])
             await vi.waitFor(() =>
                 expect(fixture.signals.filter((signal) => signal.operation === 2 && signal.mode === mode)).toHaveLength(
                     2,
                 ),
             )
-            const sends = fixture.signals
-                .filter((signal) => signal.operation === 2 && signal.mode === mode)
-                .sort((left, right) => left.at - right.at)
-            expect(sends[1]!.at - sends[0]!.at).toBeGreaterThanOrEqual(minimumSpacingMs)
             await owner.shutdown()
             await owner.waitForClose()
             await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(1))

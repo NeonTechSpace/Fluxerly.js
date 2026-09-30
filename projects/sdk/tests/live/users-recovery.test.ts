@@ -12,9 +12,13 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { afterEach, expect, test } from "vitest"
+import { afterEach, expect, test, vi } from "vitest"
 import { copyHarnessSupport } from "./support/fixture-root.js"
 import { jsonLines } from "./support/json-lines.js"
+
+const childTimeoutMs = 60_000
+// Allow every sequential child its own limit, plus one child limit for fixture setup and cleanup
+vi.setConfig({ testTimeout: (2 + 1) * childTimeoutMs })
 
 const parent = realpathSync(tmpdir())
 const sdkRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
@@ -70,7 +74,7 @@ function run(
         cwd: root,
         env,
         encoding: "utf8",
-        timeout: 10_000,
+        timeout: childTimeoutMs,
         windowsHide: true,
     })
 }

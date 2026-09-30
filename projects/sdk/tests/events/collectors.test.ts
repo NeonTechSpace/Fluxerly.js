@@ -17,6 +17,7 @@ import { sdkClock } from "../support/client-clock.js"
 import { startHostedLoopback } from "../support/instance.js"
 import { sendJson } from "../support/rest-server.js"
 import { settle } from "../support/settle.js"
+import { ownedResources } from "../support/owned-resources.js"
 import { wsTarget } from "../support/ws-redirect.js"
 
 vi.mock("ws", (original) => import("../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
@@ -634,31 +635,21 @@ test.each(modes)("%s fails on a real connection gap even when resume succeeds", 
     expect(await after.wait()).toMatchObject({ reason: "limit" })
 })
 
-/**
- * Wait on event-loop turns, without creating a timer, until no referenced host timer remains, and return what is left.
- * Only Timeout entries count: Immediate entries include the runner's own turn work, and the fixture's sockets stay open
- * until teardown. A snapshot taken before the client is no baseline, because the runner's throttled progress timer
- * comes and goes on its own and expect.poll adds its own timeout timer. The deadline only bounds a hung test
- */
-async function remainingTimers() {
-    const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === "Timeout")
-    const deadline = performance.now() + 2_000
-    while (timers().length > 0 && performance.now() < deadline) await turn()
-    return timers()
-}
-
 test.each(modes)("%s shutdown fails collectors and removes scheduled work before fixture teardown", async (mode) => {
     const server = await fixture()
-    const api = await driver(mode)
+    const resources = ownedResources()
+    const api = await resources.run(() => driver(mode))
     const filter = vi.fn(() => true)
     // The default 30-second collector deadline keeps a host timer armed until shutdown releases it
-    const collector = await api.open({ filter })
+    const collector = await resources.run(() => api.open({ filter }))
+    expect(resources.remaining()).toContain("Timeout")
     server.deliver(wire("10"))
     await api.shutdown()
     expect(await collector.wait()).toMatchObject({ _tag: "ClientClosedError" })
     expect(filter).not.toHaveBeenCalled()
     expect(api.state()).toBe("Closed")
-    expect(await remainingTimers()).toEqual([])
+    await resources.released()
+    expect(resources.remaining()).toEqual([])
     for (const socket of wsTarget.sockets) {
         expect(socket.readyState).toBe(3)
         expect(socket.listenerCount("message")).toBe(0)

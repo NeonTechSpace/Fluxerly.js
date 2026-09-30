@@ -1,9 +1,13 @@
 import { afterEach, expect, test, vi } from "vitest"
 import { modes, setup as setupClient, type Mode } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { settle } from "../../support/settle.js"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 const setup = (mode: Mode) => setupClient(mode, { token: "fixture_only", cache: { guilds: true } })
 
 test.each(modes)("%s preserves remote rejection details without retrying or retaining private data", async (mode) => {
@@ -27,8 +31,11 @@ test.each(modes)("%s preserves remote rejection details without retrying or reta
 })
 
 test.each(modes)("%s aborts the transport at the vanity deadline and remains usable", async (mode) => {
+    const clock = sdkClock()
     const client = await setup(mode)
     let aborted = false
+    let entered!: () => void
+    const dispatched = new Promise<void>((resolve) => (entered = resolve))
     stubFetchWithHostedDiscovery(
         (_url: string, init: RequestInit) =>
             new Promise((_resolve, reject) => {
@@ -38,12 +45,15 @@ test.each(modes)("%s aborts the transport at the vanity deadline and remains usa
                 }
                 if (init.signal?.aborted) abort()
                 else init.signal?.addEventListener("abort", abort, { once: true })
+                entered()
             }),
     )
-    await expect(settle(client.guilds.editVanityUrl("200", "fixture-code", { timeoutMs: 20 }))).rejects.toMatchObject({
-        reason: "timeout",
-        outcome: "unknown",
-    })
+    const pending = settle(client.guilds.editVanityUrl("200", "fixture-code", { timeoutMs: 20 }))
+    const failure = expect(pending).rejects.toMatchObject({ reason: "timeout", outcome: "unknown" })
+    await dispatched
+    await clock.waiting(20)
+    await clock.advance(20)
+    await failure
     expect(aborted).toBe(true)
     stubFetchWithHostedDiscovery(async () => Response.json({ code: null, uses: 0 }))
     expect((await settle(client.guilds.fetchVanityUrl("200"))).code).toBeNull()

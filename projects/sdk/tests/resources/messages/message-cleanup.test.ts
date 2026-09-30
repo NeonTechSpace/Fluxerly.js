@@ -6,7 +6,7 @@ import { MessageCleanupError, SdkDefect, createClient, type FailureReport } from
 import { apiErrorDetail } from "../../../src/api-errors.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { modes } from "../../support/both-apis.js"
-import { monotonicClock } from "../../support/clock.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 
 const configuration = { token: "fixture-only-not-a-credential" }
@@ -58,7 +58,10 @@ async function cleanupApi(mode: (typeof modes)[number]) {
     }
 }
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 test.each(modes)("%s cleanup validation reports safe facts before reading or deleting", async (mode) => {
     const fetch = vi.fn()
@@ -546,15 +549,13 @@ test.each(modes)(
 )
 
 test.each(modes)("%s shares one cleanup deadline across batches and submits no batch after it passes", async (mode) => {
-    const clock = monotonicClock()
+    const clock = sdkClock()
     const source = Array.from({ length: 101 }, (_, index) => wire(String(1_000 - index)))
     let reads = 0
     let posts = 0
     stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
         if (init.method === "POST") {
             posts++
-            // The first batch uses the whole 100 ms budget without host waiting
-            clock.advance(100)
             return new Response(null, { status: 204 })
         }
         reads++
@@ -563,7 +564,15 @@ test.each(modes)("%s shares one cleanup deadline across batches and submits no b
     const api = await cleanupApi(mode)
     try {
         const plan = await api.preview("20", { authorId: "30", maxScanned: 101, maxSelected: 101 })
-        await expect(api.cleanup(plan, { timeoutMs: 100 })).rejects.toMatchObject({
+        await expect(
+            api.cleanup(plan, {
+                timeoutMs: 100,
+                onProgress(event) {
+                    // Spend the shared budget only once the first batch's success is known
+                    if (event.state === "submitted") void clock.advance(100)
+                },
+            }),
+        ).rejects.toMatchObject({
             _tag: "MessageCleanupError",
             phase: "cleanup",
             reason: "timeout",
@@ -577,7 +586,7 @@ test.each(modes)("%s shares one cleanup deadline across batches and submits no b
 })
 
 test.each(modes)("%s awaits the timed-out batch response cleanup before failing", async (mode) => {
-    const clock = monotonicClock()
+    const clock = sdkClock()
     const source = Array.from({ length: 101 }, (_, index) => wire(String(1_000 - index)))
     let reads = 0
     let posts = 0
@@ -590,8 +599,8 @@ test.each(modes)("%s awaits the timed-out batch response cleanup before failing"
         if (init.method === "POST") {
             posts++
             if (posts === 1) {
-                // The first batch leaves 100 ms of the shared budget, enough to dispatch the second on a slow host
-                clock.advance(100)
+                // Leave exactly 100 logical ms, which no amount of host scheduling can consume
+                await clock.advance(100)
                 return new Response(null, { status: 204 })
             }
             return new Promise<Response>((resolve) => {
@@ -610,6 +619,8 @@ test.each(modes)("%s awaits the timed-out batch response cleanup before failing"
             (error: unknown) => error,
         )
         await vi.waitFor(() => expect(posts).toBe(2))
+        await clock.waiting(100)
+        await clock.advance(100)
         await aborted
         let settled = false
         void result.then(() => {

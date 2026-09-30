@@ -9,6 +9,9 @@ const origin = new URL(originValue)
 if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1")
     throw new Error("Unexpected loopback supervisor origin")
 
+// Retry jitter is not under test in this fixture. Keep recovery and invalid-session delays deterministic.
+Math.random = () => 0
+
 const nativeFetch = globalThis.fetch
 globalThis.fetch = async (input, init) => {
     const target = new URL(input instanceof Request ? input.url : input instanceof URL ? input.href : String(input))

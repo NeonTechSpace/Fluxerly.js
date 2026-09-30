@@ -16,19 +16,30 @@ function runChild(mode: string, url: string) {
     })
     const open = Promise.withResolvers<void>()
     const completed = Promise.withResolvers<void>()
+    const closeDeadline = Promise.withResolvers<number>()
+    const forcedClose = Promise.withResolvers<void>()
+    let hasCompleted = false
     let stderr = ""
     child.stderr?.on("data", (data: Buffer) => {
         stderr += data.toString()
     })
-    child.on("message", (message: { event: string }) => {
+    child.on("message", (message: { event: string; durationMs?: number }) => {
         if (message.event === "open") open.resolve()
-        if (message.event === "completed") completed.resolve()
+        if (message.event === "completed") {
+            hasCompleted = true
+            completed.resolve()
+        }
+        if (message.event === "close-deadline") closeDeadline.resolve(message.durationMs!)
+        if (message.event === "forced-close") forcedClose.resolve()
     })
     const exited = once(child, "exit")
     return {
         child,
         open: open.promise,
         completed: completed.promise,
+        closeDeadline: closeDeadline.promise,
+        forcedClose: forcedClose.promise,
+        hasCompleted: () => hasCompleted,
         stderr: () => stderr,
         exited,
         stop: async () => {
@@ -58,6 +69,14 @@ test.each(["default", "native", "default-pending", "native-pending", "default-fo
                 )
                 await run.open
                 run.child.send!("shutdown")
+                if (mode.endsWith("forced")) {
+                    await server.receivedClose
+                    expect(await run.closeDeadline).toBe(5_000)
+                    expect(run.hasCompleted()).toBe(false)
+                    run.child.send!("expire-close")
+                    await run.forcedClose
+                    await server.peerClosed
+                }
             }
             await run.completed
             const [code, signal] = await run.exited

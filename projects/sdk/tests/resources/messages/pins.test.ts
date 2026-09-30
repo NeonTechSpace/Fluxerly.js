@@ -12,6 +12,7 @@ import {
     nativeApi as createNativeApi,
     type Mode,
 } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { startSynchronousGateway } from "../../support/messages-gateway.js"
 import { settle, typedResult } from "../../support/settle.js"
@@ -374,12 +375,16 @@ test.each(modes)("%s pin mutations prevent older in-flight reads from repopulati
 })
 
 test.each(modes)("%s shares the pin rate bucket across pin, unpin and pin reads", async (mode) => {
+    const clock = sdkClock()
     const api = await fixture(mode)
     let calls = 0
     rest(async () =>
         ++calls === 1 ? Response.json({ retry_after: 0.01 }, { status: 429 }) : new Response(null, { status: 204 }),
     )
-    await api.mutate("pin")
+    const pinning = api.mutate("pin")
+    await clock.waiting(10)
+    await clock.advance(10)
+    await pinning
     expect(calls).toBe(2)
     rest(async () => {
         calls++
@@ -387,10 +392,13 @@ test.each(modes)("%s shares the pin rate bucket across pin, unpin and pin reads"
     })
     await expect(api.mutate("unpin", target, { timeoutMs: 10 })).rejects.toMatchObject({ reason: "rateLimit" })
     const before = calls
-    await expect(api.pins({}, "20", { timeoutMs: 10 })).rejects.toMatchObject({
+    const blocked = expect(api.pins({}, "20", { timeoutMs: 10 })).rejects.toMatchObject({
         reason: "timeout",
         outcome: "notDispatched",
     })
+    await clock.waiting(10)
+    await clock.advance(10)
+    await blocked
     expect(calls).toBe(before)
 })
 
