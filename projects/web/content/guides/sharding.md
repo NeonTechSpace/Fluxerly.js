@@ -43,6 +43,12 @@ Automatic sizing suits one process that owns every shard. Processes that split s
 
 </details>
 
+## Command pacing across reconnects
+
+Outgoing presence, member requests, counts and `gateway.send` commands share a rolling send budget on each shard. A Resume within the same running client retains that send history, so reconnecting does not allow a second burst in the same window. A fresh Identify starts a new session and clears the history. Heartbeats, Identify and Resume bypass ordinary command pacing
+
+Waiting custom commands fail when the connection is lost and are not replayed. Retained presence intent is published on the next ready connection using its latest value. Send history is kept in memory only and is not part of a saved session snapshot
+
 ## Resume after a restart
 
 A restarted bot normally starts new sessions and misses the events sent while it was down. Fluxer keeps a disconnected session for 60 seconds. A session store saves each shard's session at shutdown and offers it at the next startup, so a quick restart, such as a deploy, resumes and receives the missed events within Fluxer's replay limits
@@ -91,8 +97,8 @@ Snapshots are saved only during a clean shutdown, after each socket has closed, 
 A snapshot older than 60 seconds, a malformed one or one for another gateway address is ignored and logged at Warn.
 A failed `load` or `save`, or one that takes longer than 5 seconds, is logged in full at Error.
 In every case the shard starts a new session, so a store problem never stops the bot.
-If Fluxer no longer holds the session, the resume fails and the shard starts a new session as it would after any lost connection.
-A resumed session receives no community data. Once every shard is ready, the SDK refills the enabled community, role and channel caches through REST, one request at a time, and logs `lifecycle.cacheRefill`. Set `sharding.refillCaches` to `false` to skip the refill
+If Fluxer no longer holds the session, the resume fails and the shard starts a new session as it would after any lost connection. If only part of the saved session's replay arrived first, the shard clears those cached community observations and their dependent resources before starting the new session. Reads cached during that wait are cleared again at READY. A successful resume retains the replayed observations.
+Resume replays missed dispatches but sends no fresh community snapshot. Once every shard is ready, the SDK refills the enabled community, role and channel caches through REST, one request at a time, and logs `lifecycle.cacheRefill`. Set `sharding.refillCaches` to `false` to keep only observations from replay, later events and requests
 
 </details>
 
@@ -194,9 +200,11 @@ if (result.isErr()) {
 
 Start the parent with `node --env-file=.env supervisor.js`. Children inherit its environment and Node.js flags, so they read the same token. With TypeScript, point `entry` at `shard-worker.ts`
 
-The supervisor installs no signal handlers of its own, which is why the parent handles SIGINT and SIGTERM and calls `shutdown()`. That asks every child to stop, waits for them to exit and force-terminates a child that takes longer than 5 seconds. A stopping child first lets running handlers and requests finish for up to 4 seconds, one second less than `shutdownTimeoutMs`. Each child's output appears in the parent's output with a `[shard N]` or `[child id]` label, and the parent logs child starts, exits, crashes and restarts. Under systemd, add `KillMode=mixed` as described in [deploying](/docs/{{version}}/deploying/)
+The supervisor installs no signal handlers of its own, which is why the parent handles SIGINT and SIGTERM and calls `shutdown()`. That asks every child to stop, waits for them to exit and force-terminates a child that takes longer than 5 seconds. In both APIs, a child stopped by the parent first lets running handlers, queued handler events and REST requests finish for up to 4 seconds, one second less than `shutdownTimeoutMs`. The same drain applies to children stopped while an automatic plan grows. A child stopped by its own failure or a lost parent message channel cancels running work without draining. Each child's output appears in the parent's output with a `[shard N]` or `[child id]` label, and the parent logs child starts, exits, crashes and restarts. Under systemd, add `KillMode=mixed` as described in [deploying](/docs/{{version}}/deploying/)
 
 A successful `start()` means every child accepted its shards and finished `configure`, not that every gateway session is ready. Use `workers.waitForReady()` to wait for connected sessions and `workers.status()` for a snapshot of each child. The Effect entry point exports a `supervisor` with the same options
+
+Unknown keys in supervisor creation, assignment, restart, Identify and child-run options fail with `ConfigurationError`, with a suggested name when one is close. Child-run options are checked before waiting for the parent. The default API also checks the options passed to `waitForReady`, which accepts only `signal`. The Effect wait is cancelled by interruption instead
 
 To resume sessions across a deploy, give each child the [session store](/docs/{{version}}/sharding/#resume-after-a-restart) from above through `clientOptions: { sharding: { sessions } }` in `supervisor.child.run`. The parent still assigns the shards, so `sessions` is the only sharding setting a child accepts
 

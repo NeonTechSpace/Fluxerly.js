@@ -27,7 +27,7 @@ When a stream is not a terminal, such as under a process manager or in a contain
 
 Readable output is colored on a terminal. Set `FLUXERLY_LOG_COLOR` to `1`, `true`, `yes` or `on` to force color, or to `0`, `false`, `no` or `off` to turn it off. The `NO_COLOR` variable also turns color off
 
-A failed handler is printed at Error with its message, stack and cause chain, because the error came from the bot's own code. Stack frames inside the SDK and Effect collapse into one line, so the bot's own frames stand out
+A failed handler is printed at Error with its message, stack and cause chain, because the error came from the bot's own code. Credentials are masked in names, application error codes, messages and stacks, including causes. Stack frames inside the SDK and Effect collapse into one line, so the bot's own frames stand out
 
 ```text
 2026-09-26 21:27:52.689 ERROR events     [events.handlerFailed] The messageCreate handler failed: Cannot read properties of undefined (reading 'content') event=messageCreate subscriptionId=messageCreate#1 messageId=1456074443980800005 channelId=1456074443980800002 guildId=1456074443980800001
@@ -45,7 +45,9 @@ An expected SDK error, such as a rejected request, prints its code, hint and det
       Details: operation=send reason=rejected outcome=rejected status=403 apiError=MISSING_PERMISSIONS
 ```
 
-When the handler handles such a rejection itself, or passes it to an `onError` hook, a 401 or 403 rejection logs a `rest.rejected` Warn instead, because it usually points at a token or permission problem that persists. Repeats of it [collapse](/docs/{{version}}/logging/#collapse-repeated-errors) like other Warn records
+A 401 or 403 rejection waits up to one second for its handler to finish. If the handler fails with that same rejection, directly or in its cause chain, and no `onError` hook receives it, only the handler's failure record appears. A handler that fails more than one second later also logs its failure, because the `rest.rejected` Warn has already appeared. Different requests with the same status and code remain separate rejections
+
+When the handler handles such a rejection itself, or passes it to an `onError` hook, the `rest.rejected` Warn still appears, because it usually points at a token or permission problem that persists. Repeats of it [collapse](/docs/{{version}}/logging/#collapse-repeated-errors) like other Warn records
 
 ```text
 2026-09-26 21:27:52.802 WARN  rest       [rest.rejected] POST /channels/:id/messages was rejected for channel 1456074443980800002: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403) route=/channels/:id/messages status=403 method=POST apiError=MISSING_PERMISSIONS hint="Grant the bot's role View Channel and Send Messages in this channel, plus Embed Links or Attach Files when the message has them, in the community settings or the channel's permission overrides"
@@ -57,7 +59,7 @@ Every record has a stable code, shown in brackets in readable output. The [error
 
 | Code | Meaning |
 | --- | --- |
-| `rest.rejected` | Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem. It is logged even when the application handles the Result. A handler that fails with the rejection logs only its own failure record. A bot that expects these rejections can set the `rest` [category](/docs/{{version}}/logging/#choose-levels-and-categories) to `error` |
+| `rest.rejected` | Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem. It is logged even when the application handles the Result. A handler that fails with the rejection within one second and has no `onError` hook logs only its own failure record. A later failure logs both. A bot that expects these rejections can set the `rest` [category](/docs/{{version}}/logging/#choose-levels-and-categories) to `error` |
 | `rest.responseRejected` | A successful response to an SDK operation did not match the expected shape. The failing field is in `fields.field` |
 | `sdk.unknownEnvironmentValue` | The `FLUXERLY_LOG_FORMAT` or `FLUXERLY_LOG_COLOR` variable has a value the SDK does not recognize, so it is ignored |
 
@@ -211,7 +213,7 @@ export function healthSnapshot(client: Client) {
 
 ## Debug payloads safely
 
-The setting `unsafe: { payloads: true }` adds Trace records with gateway and REST payload bodies, for all categories or the listed ones. Payloads can contain private message content, so the client prints a Warn banner once, at startup or before the first payload record, even when the level hides warnings. A category set to `silent` prints no payloads, and a received REST body shows at most its first 64 KiB. Tokens, Authorization headers, client secrets and invite codes stay masked even then. Leave it off in production
+The setting `unsafe: { payloads: true }` adds Trace records with gateway and REST payload bodies, for all categories or the listed ones. Payloads can contain private message content, so the client prints a Warn banner once, at startup or before the first payload record, even when the level hides warnings. A category set to `silent` prints no payloads, and a received REST body shows at most its first 64 KiB. Tokens, Authorization headers, client secrets, passwords, cookies and invite codes stay masked even then, including credential-key values in truncated JSON text. Leave it off in production
 
 ```ts
 import { createClient } from "@neontechspace/fluxerly"
@@ -246,6 +248,8 @@ Debug and Trace records chosen by the SDK settings bypass the Effect minimum log
 
 Pass an `observe` function to the client to receive a measurement each time the SDK finishes a piece of work: A REST request attempt with its method, route template, status and duration, a rate-limit wait, a reconnection attempt, a resumed session, and a handler or command run with its duration and outcome. Each measurement is an `Observation` whose `type` field says which kind it is. Observations never contain tokens, payloads or message content, so they can go to any monitoring system. Both entry points accept the same option
 
+A command router emits one handler observation per message, including event and command middleware in its duration. A matched command supplies its canonical name in `command`, even when a guard denies it or middleware stops it. A reported failure gives `outcome: "failure"` even if middleware recovers, interruption gives `"cancelled"`, and other completions give `"success"`. Messages with no command match still produce an observation without `command`
+
 This example records durations and reconnection attempts with an OpenTelemetry meter. The `Meter` interface lists only the methods the example calls, so the code needs no extra package, and the meter from `metrics.getMeter("bot")` in `@opentelemetry/api` fits it
 
 ```ts
@@ -273,7 +277,11 @@ export function meterObserver(meter: Meter) {
                 status: observation.status ?? "none",
             })
         else if (observation.type === "handler")
-            handlers.record(observation.durationMs, { event: observation.event, outcome: observation.outcome })
+            handlers.record(observation.durationMs, {
+                event: observation.event,
+                ...(observation.command === undefined ? {} : { command: observation.command }),
+                outcome: observation.outcome,
+            })
         else if (observation.type === "reconnect") reconnects.add(1, { shard: observation.shardId })
     }
 }
@@ -285,7 +293,7 @@ export function runObservedBot(token: string | undefined, meter: Meter) {
 
 The SDK calls `observe` while it finishes the measured work, so the function should only record values and leave sending them to the exporter. An `observe` function that throws does not change what the bot does, and each throw is counted in `diagnostics().counters.sinkFailures`
 
-In a native program, the SDK also opens spans named `fluxerly.gateway.connect`, `fluxerly.rest.request`, `fluxerly.event.handle` and `fluxerly.command.execute`, and updates the metrics `fluxerly_rest_duration_ms`, `fluxerly_ratelimit_wait_ms`, `fluxerly_gateway_reconnects_total`, `fluxerly_events_dropped_total` and `fluxerly_handler_failures_total`. Without a tracer or metric exporter they cost almost nothing. Provide the Layer from `@effect/opentelemetry`, the Effect value that supplies the exporter, to the native program to export them
+In a native program, the SDK also opens spans named `fluxerly.gateway.connect`, `fluxerly.rest.request`, `fluxerly.event.handle` and `fluxerly.command.execute`, and updates the metrics `fluxerly_rest_duration_ms`, `fluxerly_ratelimit_wait_ms`, `fluxerly_gateway_reconnects_total`, `fluxerly_events_dropped_total` and `fluxerly_handler_failures_total`. A command span covers its middleware, guards, argument conversion, cooldown and execution. Command failure metrics use the canonical command name. Without a tracer or metric exporter they cost almost nothing. Provide the Layer from `@effect/opentelemetry`, the Effect value that supplies the exporter, to the native program to export them
 
 ```ts
 import { Effect, type Layer } from "effect"

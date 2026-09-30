@@ -2,7 +2,7 @@ import { Effect, Fiber } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 import { defaultApi as createDefault, modes, nativeApi, type Mode } from "../../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
-import { settle } from "../../support/settle.js"
+import { settle, typedResult } from "../../support/settle.js"
 
 const target = { id: "10", channelId: "20" }
 const other = { id: "11", channelId: "20" }
@@ -23,7 +23,7 @@ function mockRest(handler: (url: string, init: RequestInit) => Promise<Response>
 async function setup(mode: Mode) {
     // Unlike settle(), this forwards a caller signal so Effect.runPromise interrupts the native operation on abort
     const run = async <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) => {
-        const result = await Effect.runPromise(Effect.result(effect), signal ? { signal } : undefined)
+        const result = await Effect.runPromise(typedResult(effect), signal ? { signal } : undefined)
         if (result._tag === "Failure") throw result.failure
         return result.success
     }

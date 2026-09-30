@@ -613,7 +613,8 @@ export interface EventWaitOptions<K extends EventName, M extends MessageCore = M
 }
 
 /** Queue limits, parallelism, ordering and overflow behavior for one on callback registration.
- * Callbacks are not retried. A callback failure is reported with its original error and does not stop later event delivery.
+ * Callbacks are not retried. A callback or middleware failure, including a synchronous throw, is reported and releases
+ * the invocation's slot and partition key without stopping later event delivery.
  * Closure waits for active callback cleanup. The type parameter T is the event payload that a partition function receives
  *
  * @category Events and collectors

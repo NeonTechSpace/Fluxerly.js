@@ -13,6 +13,7 @@ import { ClientClosedError } from "#sdk/errors"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { MemberChunkError, type MemberChunk, type MemberChunkFailure } from "#sdk/member-chunks"
 import { GatewayRequestBudget } from "./gateway-requests.js"
+import type { InternalSubmission } from "./gateway/commands.js"
 import { decodeMember } from "./guilds.js"
 import { fieldsOnce, identifier, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller, suspendMarked, thrownCause } from "./defects.js"
@@ -388,7 +389,7 @@ export class MemberChunkSource {
     }
 }
 
-type Sender = (payload: Readonly<Record<string, unknown>>, nonce: string) => void
+type Sender = (payload: Readonly<Record<string, unknown>>, nonce: string) => InternalSubmission
 
 /** One admitted member stream per connection, sharing four local slots with count requests */
 export class MemberChunkOwner {
@@ -455,18 +456,27 @@ export class MemberChunkOwner {
             const release = this.budget.acquire()
             if (!release) return yield* Effect.fail(new MemberChunkError({ reason: "busy" }))
             let source: MemberChunkSource | undefined
+            let withdraw: (() => void) | undefined
             try {
                 source = new MemberChunkSource(randomUUID().replaceAll("-", ""), config, this.logical, () => {
                     if (this.#active === source) {
                         this.#active = undefined
                         this.#activeShard = undefined
                     }
+                    withdraw?.()
+                    withdraw = undefined
                     release()
                 })
                 this.#active = source
                 this.#activeShard = shardId
                 source.start()
-                sender(config.payload, source.nonce)
+                const submission = sender(config.payload, source.nonce)
+                if (typeof submission === "string") {
+                    const error = new MemberChunkError({ reason: submission === "busy" ? "busy" : "connectionLost" })
+                    source.fail(error)
+                    return yield* Effect.fail(error)
+                }
+                withdraw = submission?.cancel
                 return source
             } catch (error) {
                 source?.defect(error)

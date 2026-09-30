@@ -20,7 +20,8 @@ export interface FluxerlyErrorOptions {
 }
 
 /**
- * The JSON form of an SDK error, produced by toJSON. Credential patterns are masked in every message
+ * The JSON form of an SDK error, produced by toJSON. Credential patterns are masked in error names and messages,
+ * including summarized causes. SDK codes remain fixed identifiers
  *
  * @category Errors
  */
@@ -51,7 +52,8 @@ export interface FluxerlyErrorJson {
 function causeJson(cause: unknown, depth: number): NonNullable<FluxerlyErrorJson["cause"]> {
     try {
         if (cause instanceof FluxerlyError && depth < 5) return errorJson(cause, depth + 1)
-        if (cause instanceof Error) return { name: String(cause.name), message: maskText(String(cause.message)) }
+        if (cause instanceof Error)
+            return { name: maskText(String(cause.name)), message: maskText(String(cause.message)) }
     } catch {
         // allow-silent: an Error whose name or message getters throw is summarized by the guarded fallback below
     }
@@ -64,7 +66,7 @@ function causeJson(cause: unknown, depth: number): NonNullable<FluxerlyErrorJson
 function errorJson(error: FluxerlyError, depth: number): FluxerlyErrorJson {
     return {
         _tag: error._tag,
-        name: error.name,
+        name: maskText(error.name),
         code: error.code,
         message: maskText(error.message),
         ...(error.hint === undefined ? {} : { hint: error.hint }),
@@ -80,8 +82,8 @@ function errorJson(error: FluxerlyError, depth: number): FluxerlyErrorJson {
  * Messages the SDK writes and details never include tokens or other credentials.
  * ApplicationError and SdkDefect messages quote application-supplied error text with credential patterns masked, while
  * the cause property keeps the original value unchanged.
- * Use describeError for a readable multi-line summary, and toJSON for a structured summary whose messages, including
- * those in the cause chain, have credential patterns masked. Built-in JSON log output uses the LogRecord shape instead
+ * Use describeError for a readable multi-line summary, and toJSON for a structured summary whose names and messages,
+ * including those in the cause chain, have credential patterns masked. Built-in JSON log output uses the LogRecord shape instead
  *
  * @category Errors
  */
@@ -102,7 +104,9 @@ export abstract class FluxerlyError extends Error {
         this.details = Object.freeze({ ...options.details })
     }
 
-    /** Return a plain JSON-safe summary with tag, code, message, hint, details and a summarized cause chain */
+    /** Return a plain JSON-safe summary with tag, code, message, hint, details and a summarized cause chain.
+     * Credential patterns in names and messages are masked, while the original cause remains unchanged
+     */
     toJSON(): FluxerlyErrorJson {
         return errorJson(this, 0)
     }

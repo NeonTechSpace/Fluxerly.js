@@ -16,7 +16,7 @@ import {
 } from "../../support/both-apis.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
-import { settle } from "../../support/settle.js"
+import { expectFailure, settle, typedResult } from "../../support/settle.js"
 
 vi.mock("ws", (original) => import("../../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
 
@@ -604,7 +604,15 @@ test.each(modes)(
         await disabled.fetch()
         expect(await disabled.get()).toBeUndefined()
         expect(calls).toHaveLength(1)
-        await expect(disabled.get("bad")).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
+        if (disabled.native) {
+            const cause = await expectFailure(disabled.native.channels.get("bad"))
+            expect(cause.reasons).toEqual([
+                expect.objectContaining({
+                    _tag: "Die",
+                    defect: expect.objectContaining({ reason: "input", outcome: "notDispatched" }),
+                }),
+            ])
+        } else await expect(disabled.get("bad")).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
 
         const api = await setup(mode, { channels: true })
         expect(await api.get()).toBeUndefined()
@@ -869,7 +877,7 @@ test.each(modes)("%s awaits active channel request cleanup on cancellation and s
 
 /** Run a native Effect with an optional AbortSignal, throwing its typed failure */
 async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Promise<A> {
-    const result = await Effect.runPromise(Effect.result(effect), signal ? { signal } : undefined)
+    const result = await Effect.runPromise(typedResult(effect), signal ? { signal } : undefined)
     if (result._tag === "Failure") throw result.failure
     return result.success
 }

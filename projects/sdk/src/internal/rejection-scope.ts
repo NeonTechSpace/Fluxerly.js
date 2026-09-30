@@ -1,8 +1,9 @@
 /**
  * Rejection scope: Holds the rest.rejected Warn records of one handler invocation, so a rejected token or permission
- * that fails the handler is logged once, as the handler's failure record, instead of as a Warn and then an Error.
+ * that fails the handler within one second is logged once, as the handler's failure record, instead of as a Warn and then an Error.
  * Invariant: A held record is logged when the invocation ends, after at most holdMs, or never, when the handler's
- * failure is logged at Error for the same status and Fluxer code. A failure that reaches an onError hook claims
+ * failure is logged at Error for that rejection's identity, directly or in its cause chain. A handler that fails more
+ * than one second after the rejection also logs its failure, because the Warn has already been flushed. A failure that reaches an onError hook claims
  * nothing, so the Warn still shows a rejection that the application handles. Native handlers find the scope in their
  * fiber context. Default-API handler code runs in async context storage, which an operation reads when it starts and
  * passes on in its fiber context.
@@ -20,6 +21,16 @@ interface HeldRecord {
     readonly logger: ClientLogger
     readonly input: LogInput
     readonly context: Context.Context<never> | undefined
+    readonly error: object
+}
+
+/** Private identity links keep domain error conversion from changing which rejection a handler reports */
+const rejectionSources = new WeakMap<object, object>()
+
+/** Link a converted failure to its source without changing the public error's cause or retaining either globally */
+export function linkRejectionError<A>(error: A, source: object): A {
+    if (typeof error === "object" && error !== null) rejectionSources.set(error, source)
+    return error
 }
 
 export class RejectionScope {
@@ -28,9 +39,9 @@ export class RejectionScope {
     #ended = false
 
     /** Hold a rejection record for this invocation. False when the invocation already ended, so the caller logs it */
-    hold(logger: ClientLogger, input: LogInput, context: Context.Context<never> | undefined): boolean {
+    hold(logger: ClientLogger, input: LogInput, context: Context.Context<never> | undefined, error: object): boolean {
         if (this.#ended) return false
-        this.#held.push({ logger, input, context })
+        this.#held.push({ logger, input, context, error })
         if (this.#timer === undefined) {
             this.#timer = setTimeout(() => this.flush(), holdMs)
             this.#timer.unref?.()
@@ -38,26 +49,26 @@ export class RejectionScope {
         return true
     }
 
-    /** Drop the held records with the status and Fluxer code of a failure that the handler failure record reports */
+    /** Drop only records for this failure's identity, following a bounded cause chain and domain conversion links */
     claim(error: unknown) {
-        if (this.#held.length === 0 || typeof error !== "object" || error === null) return
-        let status: unknown
-        let code: unknown
-        try {
-            const failure = error as {
-                readonly status?: unknown
-                readonly apiError?: { readonly providerCode?: unknown } | null
+        if (this.#held.length === 0) return
+        const identities = new Set<object>()
+        for (let depth = 0; depth <= 4 && typeof error === "object" && error !== null; depth++) {
+            if (identities.has(error)) break
+            let source: object | undefined = error
+            for (let links = 0; links <= 4 && source !== undefined; links++) {
+                if (identities.has(source)) break
+                identities.add(source)
+                source = rejectionSources.get(source)
             }
-            status = failure.status
-            code = failure.apiError?.providerCode
-        } catch {
-            // allow-silent: A thrown value with hostile getters claims nothing, so its rejection record is still logged
-            return
+            try {
+                error = (error as { readonly cause?: unknown }).cause
+            } catch {
+                // allow-silent: A hostile cause getter ends traversal, while already matched identities remain usable
+                break
+            }
         }
-        if (status !== 401 && status !== 403) return
-        this.#held = this.#held.filter(
-            ({ input }) => input.status !== status || (input.fields?.apiError ?? undefined) !== (code ?? undefined),
-        )
+        this.#held = this.#held.filter(({ error }) => !identities.has(error))
     }
 
     /** Log every held record */

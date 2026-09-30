@@ -10,6 +10,13 @@ import { identifier, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller } from "./defects.js"
 import { validCalendarTimestamp } from "./decode/timestamp.js"
 import { Opcode } from "./protocol/gateway.js"
+import type { InternalSubmission, QueuedCommand } from "./gateway/commands.js"
+
+type PresenceSend = (update: GatewayPresenceUpdate, settled?: (sent: boolean) => void) => InternalSubmission
+type MemberSubscriptionSend = (
+    subscriptions: GatewayPresenceMemberSubscriptions,
+    settled?: (sent: boolean) => void,
+) => InternalSubmission
 
 const statuses = new Set<PresenceStatus>(["online", "idle", "dnd", "invisible"])
 const presenceIntervalMs = 4_000
@@ -46,11 +53,7 @@ export interface GatewayPresenceMemberSubscriptions {
 }
 
 export interface PresenceGatewayOwner {
-    attach(
-        send: (update: GatewayPresenceUpdate) => void,
-        sendMemberSubscriptions?: (subscriptions: GatewayPresenceMemberSubscriptions) => void,
-        mode?: "identify" | "resume",
-    ): void
+    attach(send: PresenceSend, sendMemberSubscriptions?: MemberSubscriptionSend, mode?: "identify" | "resume"): void
     detach(): void
     guildCreate(guildId: string): void
 }
@@ -321,8 +324,11 @@ type MemberSelection = { readonly members: readonly string[]; readonly shardId: 
 
 type PresenceSession = {
     readonly shardId: number
-    readonly send: (update: GatewayPresenceUpdate) => void
-    readonly sendMemberSubscriptions: ((subscriptions: GatewayPresenceMemberSubscriptions) => void) | undefined
+    readonly send: PresenceSend
+    readonly sendMemberSubscriptions: MemberSubscriptionSend | undefined
+    pending: QueuedCommand | undefined
+    memberPending: QueuedCommand | undefined
+    memberPendingGuild: string | undefined
     sentVersion: number
     nextSendAt: number
     timer: unknown
@@ -360,7 +366,10 @@ export class PresenceOwner implements PresenceGatewayOwner {
                 ? Object.freeze({ status: next.status, customStatus: this.#intent.customStatus })
                 : next
         this.#version += 1
-        for (const session of this.#sessions.values()) this.#schedule(session)
+        for (const session of this.#sessions.values()) {
+            if (session.pending) this.#flush(session)
+            else this.#schedule(session)
+        }
         return undefined
     }
 
@@ -369,8 +378,8 @@ export class PresenceOwner implements PresenceGatewayOwner {
      * A fresh identify drops its prior clear intents, while a resume retries the latest attempted clear on the owning shard
      */
     attach(
-        send: (update: GatewayPresenceUpdate) => void,
-        sendMemberSubscriptions?: (subscriptions: GatewayPresenceMemberSubscriptions) => void,
+        send: PresenceSend,
+        sendMemberSubscriptions?: MemberSubscriptionSend,
         mode: "identify" | "resume" = "identify",
         shardId = 0,
     ): void {
@@ -380,6 +389,9 @@ export class PresenceOwner implements PresenceGatewayOwner {
             shardId,
             send,
             sendMemberSubscriptions,
+            pending: undefined,
+            memberPending: undefined,
+            memberPendingGuild: undefined,
             sentVersion: 0,
             nextSendAt: 0,
             timer: undefined,
@@ -492,7 +504,12 @@ export class PresenceOwner implements PresenceGatewayOwner {
             }
             const ownerShard = previous?.shardId ?? this.#memberTouched.get(guildId) ?? routedShard
             if (this.#memberTouched.has(guildId)) this.#markMemberDirty(ownerShard, guildId)
-            else this.#sessions.get(ownerShard)?.memberDirty.delete(guildId)
+            else {
+                const session = this.#sessions.get(ownerShard)
+                if (session) this.#withdrawMemberSelection(session, guildId)
+                session?.memberDirty.delete(guildId)
+                if (session) this.#scheduleMembers(session)
+            }
         } else {
             this.#memberSelections.set(guildId, { members, shardId: routedShard })
             this.#memberCount += members.length - (previous?.members.length ?? 0)
@@ -514,17 +531,28 @@ export class PresenceOwner implements PresenceGatewayOwner {
         if (selection !== undefined) {
             this.#memberSelections.delete(guildId)
             this.#memberCount -= selection.members.length
-            this.#sessions.get(selection.shardId)?.memberDirty.delete(guildId)
+            const session = this.#sessions.get(selection.shardId)
+            if (session) this.#withdrawMemberSelection(session, guildId)
+            session?.memberDirty.delete(guildId)
+            if (session) this.#scheduleMembers(session)
         }
         if (touchedShard !== undefined) {
             this.#memberTouched.delete(guildId)
-            this.#sessions.get(touchedShard)?.memberDirty.delete(guildId)
+            const session = this.#sessions.get(touchedShard)
+            if (session) this.#withdrawMemberSelection(session, guildId)
+            session?.memberDirty.delete(guildId)
+            if (session) this.#scheduleMembers(session)
         }
     }
 
     #detachSession(session: PresenceSession) {
         this.#cancel(session)
         this.#cancelMemberTimer(session)
+        session.pending?.cancel()
+        session.memberPending?.cancel()
+        session.pending = undefined
+        session.memberPending = undefined
+        session.memberPendingGuild = undefined
         if (this.#sessions.get(session.shardId) === session) this.#sessions.delete(session.shardId)
     }
 
@@ -533,23 +561,46 @@ export class PresenceOwner implements PresenceGatewayOwner {
             this.#sessions.get(session.shardId) !== session ||
             !this.#intent ||
             session.sentVersion === this.#version ||
+            session.pending !== undefined ||
             session.timer !== undefined
         )
             return
         const delay = Math.max(0, session.nextSendAt - this.timer.now())
-        session.timer = this.timer.set(() => {
+        let fired = false
+        const timer = this.timer.set(() => {
+            fired = true
             session.timer = undefined
             this.#flush(session)
         }, delay)
+        // A zero-delay logical timer may run before set returns, so do not retain an already-fired handle
+        if (!fired) session.timer = timer
     }
 
     #flush(session: PresenceSession) {
         const intent = this.#intent
         if (this.#sessions.get(session.shardId) !== session || !intent || session.sentVersion === this.#version) return
-        session.send(presenceUpdate(activePresence(intent)))
-        session.sentVersion = this.#version
-        session.nextSendAt = this.timer.now() + presenceIntervalMs
-        this.#schedule(session)
+        const version = this.#version
+        const update = presenceUpdate(activePresence(intent))
+        let completed = false
+        const settled = (sent: boolean) => {
+            completed = true
+            session.pending = undefined
+            if (!sent || this.#sessions.get(session.shardId) !== session) return
+            session.sentVersion = version
+            session.nextSendAt = this.timer.now() + presenceIntervalMs
+            this.#schedule(session)
+        }
+        if (session.pending) {
+            session.pending.replace(update, settled)
+            return
+        }
+        const submission = session.send(update, settled)
+        if (typeof submission === "string") {
+            // Preserve intent under queue pressure and retry without creating another queued command
+            session.nextSendAt = this.timer.now() + presenceIntervalMs
+            this.#schedule(session)
+        } else if (!submission) settled(true)
+        else if (!completed) session.pending = submission
     }
 
     #cancel(session: PresenceSession) {
@@ -562,9 +613,17 @@ export class PresenceOwner implements PresenceGatewayOwner {
         return new Set([...this.#memberSelections.keys(), ...this.#memberTouched.keys()]).size
     }
 
+    #withdrawMemberSelection(session: PresenceSession, guildId: string) {
+        if (session.memberPendingGuild !== guildId) return
+        session.memberPending?.cancel()
+        session.memberPending = undefined
+        session.memberPendingGuild = undefined
+    }
+
     #markMemberDirty(shardId: number, guildId: string) {
         const session = this.#sessions.get(shardId)
         if (!session) return
+        this.#withdrawMemberSelection(session, guildId)
         session.memberDirty.add(guildId)
         this.#scheduleMembers(session)
     }
@@ -574,14 +633,18 @@ export class PresenceOwner implements PresenceGatewayOwner {
             this.#sessions.get(session.shardId) !== session ||
             !session.sendMemberSubscriptions ||
             session.memberDirty.size === 0 ||
+            session.memberPending !== undefined ||
             session.memberTimer !== undefined
         )
             return
         const delay = Math.max(0, session.nextMemberSendAt - this.timer.now())
-        session.memberTimer = this.timer.set(() => {
+        let fired = false
+        const timer = this.timer.set(() => {
+            fired = true
             session.memberTimer = undefined
             this.#flushMembers(session)
         }, delay)
+        if (!fired) session.memberTimer = timer
     }
 
     #flushMembers(session: PresenceSession) {
@@ -593,12 +656,29 @@ export class PresenceOwner implements PresenceGatewayOwner {
         )
             return
         session.memberDirty.delete(guildId)
-        this.#memberTouched.set(guildId, session.shardId)
-        session.sendMemberSubscriptions(
+        let completed = false
+        const settled = (sent: boolean) => {
+            completed = true
+            session.memberPending = undefined
+            session.memberPendingGuild = undefined
+            if (!sent || this.#sessions.get(session.shardId) !== session) return
+            this.#memberTouched.set(guildId, session.shardId)
+            session.nextMemberSendAt = this.timer.now() + memberSelectionIntervalMs
+            this.#scheduleMembers(session)
+        }
+        const submission = session.sendMemberSubscriptions(
             memberSubscriptions(guildId, this.#memberSelections.get(guildId)?.members ?? []),
+            settled,
         )
-        session.nextMemberSendAt = this.timer.now() + memberSelectionIntervalMs
-        this.#scheduleMembers(session)
+        if (typeof submission === "string") {
+            session.memberDirty.add(guildId)
+            session.nextMemberSendAt = this.timer.now() + memberSelectionIntervalMs
+            this.#scheduleMembers(session)
+        } else if (!submission) settled(true)
+        else if (!completed) {
+            session.memberPending = submission
+            session.memberPendingGuild = guildId
+        }
     }
 
     #cancelMemberTimer(session: PresenceSession) {

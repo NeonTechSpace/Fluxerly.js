@@ -38,12 +38,13 @@ With `processSignals: true`, the SDK listens for SIGINT and SIGTERM and for no o
 - Signals the handlers still running to stop through their `signal`
 - Closes the command router and every event subscription
 - Closes each gateway connection, giving it up to 5 seconds to close normally
-- Waits for the SDK's own cleanup of sockets, requests and collector callbacks, and saves resumable sessions when a [session store](/docs/{{version}}/sharding/#resume-after-a-restart) is configured
+- Saves resumable sessions when a [session store](/docs/{{version}}/sharding/#resume-after-a-restart) is configured. Saves for local shards run in parallel, each with a 5-second timeout
+- Waits for the SDK's own cleanup of sockets, requests and collector callbacks
 - Finally logs `Shutdown complete` with its duration, removes its signal listeners and resolves the `runBot` Result
 
-The SDK never calls `process.exit`. The process exits once nothing else keeps Node.js running, so close database connections, timers and servers the application opened after `runBot` resolves. Promises started by handlers are not awaited, so track work that must finish before exit, as shown in [application supervision](/docs/{{version}}/application-supervision/#drain-application-owned-work)
+The SDK never calls `process.exit`. The process exits once nothing else keeps Node.js running. After `runBot` resolves, close database connections, timers and servers the application opened. A returned handler Promise and its REST requests get the drain window to finish. Track detached Promises, timers, background jobs and work that needs more than that window, as shown in [application supervision](/docs/{{version}}/application-supervision/#drain-application-owned-work)
 
-Give the process manager a stop timeout of at least 10 seconds before it force-kills the bot: Up to 5 seconds for running handlers and up to 5 seconds to close the connection. Allow more when `drainMs` is larger. Each listener handles only the first signal of its kind, so sending the same signal again during shutdown gets Node.js's default handling and usually ends the process at once
+Use a 30-second stop timeout before the process manager force-kills the bot. With the default `drainMs`, allow up to 5 seconds for the drain, up to 5 seconds to close gateway connections and up to 5 seconds for parallel session saves when a store is configured, plus time for remaining SDK cleanup and the application's cleanup after `runBot` resolves. Increase the timeout when `drainMs` is larger or application cleanup needs longer. A force-kill before session saves finish can prevent resuming after restart. Each listener handles only the first signal of its kind, so sending the same signal again during shutdown gets Node.js's default handling and usually ends the process at once
 
 ## Logs
 
@@ -62,7 +63,7 @@ module.exports = {
             script: "bot.js",
             node_args: "--env-file=.env",
             exp_backoff_restart_delay: 1000,
-            kill_timeout: 10000,
+            kill_timeout: 30000,
         },
     ],
 }
@@ -137,11 +138,11 @@ The `node:24-slim` image tracks the newest Node.js 24 release. Adjust the copy a
 
 ```sh
 docker build -t fluxer-bot .
-docker run -d --name fluxer-bot --init --restart unless-stopped --env-file .env fluxer-bot
+docker run -d --name fluxer-bot --init --stop-timeout 30 --restart unless-stopped --env-file .env fluxer-bot
 docker logs -f fluxer-bot
 ```
 
-The token reaches the container only at run time through `--env-file`. The `--init` flag runs a small init process that forwards signals to Node.js. The `docker stop` command sends SIGTERM and force-kills the container after 10 seconds, and `--stop-timeout 30` on `docker run` allows longer. With `--restart unless-stopped`, Docker restarts the bot after it exits unless it was stopped on purpose
+The token reaches the container only at run time through `--env-file`. The `--init` flag runs a small init process that forwards signals to Node.js. The `docker stop` command sends SIGTERM, and `--stop-timeout 30` on `docker run` gives shutdown 30 seconds before a force-kill. With `--restart unless-stopped`, Docker restarts the bot after it exits unless it was stopped on purpose
 
 ## Restart policy
 

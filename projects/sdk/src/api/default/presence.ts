@@ -17,6 +17,8 @@ export interface Presence {
      * The input is validated and frozen when the call runs.
      * Omitted customStatus keeps the previous request, and null clears it.
      * Expired custom statuses are not restored after reconnect.
+     * Each shard retains at most one unsent status update, replacing it with the latest intent even while gateway pacing waits.
+     * The four-second interval starts when an update reaches the socket, not when it is queued.
      * Success means the request was accepted locally and scheduled for each shard, not acknowledged by Fluxer.
      * Shutdown releases this intent and its timer
      *
@@ -48,10 +50,12 @@ export interface Presence {
      * Up to 1,000 distinct decimal IDs are accepted, but the full UTF-8 gateway frame must fit 4,096 bytes.
      * Long IDs therefore reduce the effective per-community maximum.
      * The client retains selections for at most 100 communities and 10,000 IDs.
-     * Clearing an unsent selection releases its slot immediately.
+     * Clearing an unsent selection withdraws its queued command and releases its slot immediately.
+     * Changes to a selection that has not reached the socket replace that unsent request.
      * Clearing a selection already sent keeps one bounded session slot until fresh Identify or confirmed community leave, because a local socket write cannot confirm that Fluxer applied a clear
      *
-     * After READY or RESUMED, the latest selection or clear is combined and attempted at most once per 125 ms.
+     * After READY or RESUMED, the latest selection or clear is combined and sent at most once per 125 ms per shard.
+     * This interval starts at actual socket transmission, and at most one member-selection command waits per shard.
      * Sending the same list again deliberately requests a refresh.
      * A matching guild creation also retries the latest selection or a previously sent clear.
      * None of these attempts guarantees an event or proves provider acceptance.

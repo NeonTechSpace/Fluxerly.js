@@ -18,6 +18,8 @@ interface ShardSession {
     ready: boolean
     sessionId: string
     sequence: number
+    /** Identify filtering belongs to the retained session and survives Resume */
+    ignoredEvents: ReadonlySet<string>
 }
 
 /** A ws-compatible socket whose server side is the test gateway */
@@ -73,6 +75,25 @@ class FakeSocket extends EventEmitter {
 function recordedData(op: number, d: unknown): unknown {
     if ((op !== Opcode.identify && op !== Opcode.resume) || typeof d !== "object" || d === null) return d
     return { ...d, token: "[redacted]" }
+}
+
+/**
+ * Fluxer exempts direct, here and everyone mentions from ignored MESSAGE_CREATE dispatches. Role-only mentions,
+ * own messages and DMs are not exempt in a production session. Pinned to session_dispatch:ignored_event_must_dispatch
+ * and session_passive:is_user_mentioned at fluxerapp/fluxer commit 841fb7af4174fc8fc025307776e87e7dba51a669
+ */
+function mentionedMessage(type: string, payload: unknown, userId: string): boolean {
+    if (type !== "MESSAGE_CREATE" || typeof payload !== "object" || payload === null) return false
+    const message = payload as { mention_everyone?: unknown; mention_here?: unknown; mentions?: unknown }
+    return (
+        message.mention_everyone === true ||
+        message.mention_here === true ||
+        (Array.isArray(message.mentions) &&
+            message.mentions.some(
+                (user: unknown) =>
+                    typeof user === "object" && user !== null && (user as { id?: unknown }).id === userId,
+            ))
+    )
 }
 
 /** Fluxer's shard for a guild ID under a shard count */
@@ -147,6 +168,7 @@ export class TestGateway {
             ready: false,
             sessionId: `fixture-session-${shardId}-${++this.#sessions}`,
             sequence: 1,
+            ignoredEvents: new Set((d as { ignored_events?: readonly string[] } | null)?.ignored_events ?? []),
         }
         this.#shards.set(shardId, session)
         queueMicrotask(() => {
@@ -240,6 +262,13 @@ export class TestGateway {
             throw new ConfigurationError("event", "Emitted payloads must be JSON-serializable wire data", { cause })
         }
         const session = this.#connected(shardId, `emit(${JSON.stringify(type)})`)
+        // MANY is generated from ADD after its ignored-event gate and bypasses filtering of the generated name
+        // (session_dispatch:flush_reaction_buffer and session_dispatch_voice:dispatch_reaction_add_many at the pinned commit)
+        const filteredType = type === "MESSAGE_REACTION_ADD_MANY" ? "MESSAGE_REACTION_ADD" : type
+        if (session.ignoredEvents.has(filteredType) && !mentionedMessage(type, payload, this.settings.user.id))
+            throw new ConfigurationError("event", `Fluxer would not send ${type} to this test gateway session`, {
+                hint: `Register the event handler before ready() when gateway.ignoredEvents is "auto", or remove ${filteredType} from the explicit gateway.ignoredEvents list (use [] to disable suppression). Create a new test client to apply these changes, since Resume keeps the session's filtering`,
+            })
         session.sequence += 1
         const frame = {
             op: Opcode.dispatch,

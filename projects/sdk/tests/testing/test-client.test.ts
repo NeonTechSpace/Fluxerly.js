@@ -1,5 +1,6 @@
+import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit, Fiber, Scope } from "effect"
-import { describe, expect, onTestFinished, test } from "vitest"
+import { describe, expect, onTestFinished, test, vi } from "vitest"
 import {
     ClientClosedError,
     ConfigurationError,
@@ -84,6 +85,167 @@ async function misuse(run: () => Promise<unknown>): Promise<unknown> {
 }
 
 describe.each(modes)("%s test client", (mode) => {
+    test("rejects auto-suppressed events registered after READY without consuming a sequence", async () => {
+        const driver = await open(mode, { gateway: { ignoredEvents: "auto" } })
+        await driver.ready()
+        const deliveries: unknown[] = []
+        await driver.on("typingStart", (event) => void deliveries.push(event))
+        const raw = first<EventMap["raw"]>()
+        await driver.on("raw", raw.handler)
+        const error = await misuse(() => driver.emit("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1 }))
+        expect(error).toBeInstanceOf(ConfigurationError)
+        expect(error).toMatchObject({ field: "event", hint: expect.any(String) })
+        await driver.emit("FIXTURE_ONLY_UNKNOWN", {})
+        expect(await raw.promise).toMatchObject({ t: "FIXTURE_ONLY_UNKNOWN", s: 2 })
+        expect(deliveries).toEqual([])
+    })
+
+    test("Resume retains automatic filtering after late registrations", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] })
+        const driver = await open(mode, { gateway: { ignoredEvents: "auto" } })
+        try {
+            await driver.ready()
+            const deliveries: unknown[] = []
+            await driver.on("typingStart", (event) => void deliveries.push(event))
+            const wire = { channel_id: "20", user_id: "30", timestamp: 1 }
+            const recover = async (ready: () => boolean) => {
+                for (let step = 0; step < 20 && !ready(); step++) {
+                    await turn()
+                    await vi.advanceTimersByTimeAsync(1_000)
+                    await turn()
+                }
+                expect(ready()).toBe(true)
+            }
+            await driver.disconnect()
+            await recover(() => driver.test.counters().resumes === 1 && driver.test.client.state === "Connected")
+            expect(await misuse(() => driver.emit("TYPING_START", wire))).toBeInstanceOf(ConfigurationError)
+            expect(driver.test.commands().filter((command) => command.op === 2)).toHaveLength(1)
+            expect(deliveries).toEqual([])
+        } finally {
+            await driver.shutdown()
+            vi.useRealTimers()
+        }
+    })
+
+    test.each(["early handler", "disabled filtering"] as const)(
+        "delivers events with %s at Identify",
+        async (configuration) => {
+            const driver = await open(mode, {
+                gateway: { ignoredEvents: configuration === "early handler" ? "auto" : [] },
+            })
+            const typed = first<EventMap["typingStart"]>()
+            if (configuration === "early handler") await driver.on("typingStart", typed.handler)
+            await driver.ready()
+            if (configuration === "disabled filtering") await driver.on("typingStart", typed.handler)
+            await driver.emit("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1 })
+            expect(await typed.promise).toMatchObject({ channelId: "20", userId: "30" })
+        },
+    )
+
+    test("explicit suppression rejects registered and unknown event types", async () => {
+        const driver = await open(mode, { gateway: { ignoredEvents: ["typing_start", "FIXTURE_ONLY_UNKNOWN"] } })
+        await driver.on("raw", () => {})
+        await driver.on("typingStart", () => {})
+        await driver.ready()
+        for (const type of ["TYPING_START", "FIXTURE_ONLY_UNKNOWN"])
+            expect(await misuse(() => driver.emit(type, {}))).toBeInstanceOf(ConfigurationError)
+    })
+
+    test("auto filtering retains the source of registered reaction batches", async () => {
+        const driver = await open(mode, {
+            gateway: { ignoredEvents: "auto", flags: { debounceMessageReactions: true } },
+        })
+        const received = first<EventMap["messageReactionAddMany"]>()
+        await driver.on("messageReactionAddMany", received.handler)
+        await driver.ready()
+        const identify = driver.test.commands().find((command) => command.op === 2)!
+        expect((identify.d as { ignored_events: readonly string[] }).ignored_events).not.toContain(
+            "MESSAGE_REACTION_ADD",
+        )
+        const fixtures = driver.test.fixtures
+        const id = fixtures.nextId()
+        await driver.emit("MESSAGE_REACTION_ADD_MANY", {
+            channel_id: fixtures.ids.channel,
+            message_id: id,
+            reactions: [{ user_id: fixtures.ids.user, emoji: { name: "thumbs-up" } }],
+        })
+        expect(await received.promise).toMatchObject({ channelId: fixtures.ids.channel, id })
+    })
+
+    test.each([
+        { ignored: "MESSAGE_REACTION_ADD", delivered: false },
+        { ignored: "MESSAGE_REACTION_ADD_MANY", delivered: true },
+    ])("applies $ignored suppression to generated reaction batches", async ({ ignored, delivered }) => {
+        const driver = await open(mode, { gateway: { ignoredEvents: [ignored] } })
+        const received = first<EventMap["messageReactionAddMany"]>()
+        await driver.on("messageReactionAddMany", received.handler)
+        await driver.ready()
+        const warning = driver.test.logs().find((record) => record.code === "gateway.ignoredEventRegistered")
+        if (delivered) expect(warning).toBeUndefined()
+        else expect(warning).toMatchObject({ fields: { events: "messageReactionAddMany" } })
+        const fixtures = driver.test.fixtures
+        const wire = {
+            channel_id: fixtures.ids.channel,
+            message_id: fixtures.nextId(),
+            reactions: [{ user_id: fixtures.ids.user, emoji: { name: "thumbs-up" } }],
+        }
+        if (delivered) {
+            await driver.emit("MESSAGE_REACTION_ADD_MANY", wire)
+            expect(await received.promise).toMatchObject({ channelId: fixtures.ids.channel, id: wire.message_id })
+        } else
+            expect(await misuse(() => driver.emit("MESSAGE_REACTION_ADD_MANY", wire))).toBeInstanceOf(
+                ConfigurationError,
+            )
+    })
+
+    test.each([
+        { name: "ordinary messages", mention: "none", delivered: false },
+        { name: "other-user mentions", mention: "other", delivered: false },
+        { name: "role-only mentions", mention: "role", delivered: false },
+        { name: "direct messages without mentions", mention: "dm", delivered: false },
+        { name: "own messages without mentions", mention: "own", delivered: false },
+        { name: "bot mentions", mention: "bot", delivered: true },
+        { name: "everyone mentions", mention: "everyone", delivered: true },
+        { name: "here mentions", mention: "here", delivered: true },
+    ])("applies ignored MESSAGE_CREATE to $name", async ({ mention, delivered }) => {
+        const driver = await open(mode, { gateway: { ignoredEvents: ["MESSAGE_CREATE"] } })
+        const received = first<EventMap["messageCreate"]>()
+        await driver.on("messageCreate", received.handler)
+        await driver.ready()
+        const fixtures = driver.test.fixtures
+        const wire = {
+            ...fixtures.message(),
+            ...(mention === "other" ? { mentions: [fixtures.user()] } : {}),
+            ...(mention === "bot" ? { mentions: [fixtures.botUser()] } : {}),
+            ...(mention === "role" ? { mention_roles: [fixtures.ids.guild] } : {}),
+            ...(mention === "dm" ? { guild_id: undefined } : {}),
+            ...(mention === "own" ? { author: fixtures.botUser() } : {}),
+            ...(mention === "everyone" ? { mention_everyone: true } : {}),
+            ...(mention === "here" ? { mention_here: true } : {}),
+        }
+        if (delivered) {
+            await driver.emit("MESSAGE_CREATE", wire)
+            expect(await received.promise).toMatchObject({ id: wire.id })
+        } else expect(await misuse(() => driver.emit("MESSAGE_CREATE", wire))).toBeInstanceOf(ConfigurationError)
+    })
+
+    test("mention exceptions use the configured session user rather than the default fixture bot", async () => {
+        const user = defaultTesting.createFixtures().botUser({ id: "999" })
+        const driver = await open(mode, { user, gateway: { ignoredEvents: ["MESSAGE_CREATE"] } })
+        const received = first<EventMap["messageCreate"]>()
+        await driver.on("messageCreate", received.handler)
+        await driver.ready()
+        const fixtures = driver.test.fixtures
+        expect(
+            await misuse(() =>
+                driver.emit("MESSAGE_CREATE", { ...fixtures.message(), mentions: [fixtures.botUser()] }),
+            ),
+        ).toBeInstanceOf(ConfigurationError)
+        const wire = { ...fixtures.message(), mentions: [user] }
+        await driver.emit("MESSAGE_CREATE", wire)
+        expect(await received.promise).toMatchObject({ id: wire.id })
+    })
+
     test("connects through the fake gateway with READY for Identify and records commands without the token", async () => {
         const driver = await open(mode)
         await driver.ready()

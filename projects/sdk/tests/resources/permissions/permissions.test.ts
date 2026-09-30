@@ -1,3 +1,4 @@
+import { typedResult } from "../../support/settle.js"
 import { Cause, Clock, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
@@ -62,7 +63,7 @@ const unwrap = <A, E>(value: { isErr(): boolean; value?: A; error?: E }): A => {
     return value.value!
 }
 async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Promise<A> {
-    const result = await Effect.runPromise(Effect.result(effect), signal ? { signal } : undefined)
+    const result = await Effect.runPromise(typedResult(effect), signal ? { signal } : undefined)
     if (result._tag === "Failure") throw result.failure
     return result.success
 }

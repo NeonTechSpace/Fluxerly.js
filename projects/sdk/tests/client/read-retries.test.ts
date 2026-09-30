@@ -1,3 +1,4 @@
+import { typedResult } from "../support/settle.js"
 import { Cause, Effect, Exit, Random, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
@@ -76,7 +77,7 @@ async function setup(mode: Mode, logging?: ReturnType<typeof retryTime>["logging
     const random = vi.fn(() => 0)
     const run = <A>(effect: Effect.Effect<A, MessageOperationFailure>, signal?: AbortSignal) =>
         Effect.runPromise(
-            Effect.result(
+            typedResult(
                 effect.pipe(Effect.provideService(Random.Random, { nextDoubleUnsafe: random, nextIntUnsafe: () => 0 })),
             ),
             signal ? { signal } : undefined,
@@ -288,10 +289,18 @@ test.each(modes)(
             return new Response(null, { status: 503, headers: { "retry-after": "60" } })
         })
         const api = await setup(mode)
-        const started = performance.now()
-        const error = await api.read("fetch", { timeoutMs: 5_000 }).catch((failure: unknown) => failure)
+        fakeHostTime()
+        let completed = false
+        const pending = api
+            .read("fetch", { timeoutMs: 5_000 })
+            .catch((failure: unknown) => failure)
+            .finally(() => {
+                completed = true
+            })
+        await hostTurnsUntil(() => completed)
+        const error = await pending
         expect(error).toMatchObject({ reason: "rejected", status: 503, retryAfterMs: 60_000 })
-        expect(performance.now() - started).toBeLessThan(5_000)
+        expect(performance.now()).toBe(0)
         expect(calls).toBe(1)
     },
 )

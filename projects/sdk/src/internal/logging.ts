@@ -120,9 +120,9 @@ export function errorInfo(
             const stack: unknown = value.stack
             const info: ErrorInfo = Object.freeze({
                 origin: sdk ? (apiError ? "provider" : origin === "application" ? "application" : "sdk") : origin,
-                name: String(value.name),
+                name: maskText(String(value.name), secrets),
                 message: maskText(String(value.message), secrets),
-                ...(code === undefined ? {} : { code }),
+                ...(code === undefined ? {} : { code: sdk ? code : maskText(code, secrets) }),
                 ...(sdk && value.hint !== undefined ? { hint: value.hint } : {}),
                 ...(typeof stack === "string" ? { stack: maskText(stack, secrets) } : {}),
                 ...(cause === undefined || depth >= 4 ? {} : { cause: errorInfo(cause, origin, secrets, depth + 1) }),

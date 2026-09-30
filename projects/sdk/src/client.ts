@@ -296,10 +296,13 @@ export interface GatewayOptions {
      * may hold at most 256 names that encode to at most 2,560 bytes, keeping Identify within Fluxer's 4,096-byte limit.
      * Creation rejects READY, RESUMED and the request replies GUILD_MEMBERS_CHUNK, RATE_LIMITED, GUILD_COUNTS_UPDATE and
      * CHANNEL_MEMBER_COUNTS_UPDATE, and any type an enabled cache category needs to stay current, with ConfigurationError.
-     * Fluxer still delivers MESSAGE_CREATE for a message that mentions the bot, @here or @everyone, and a suppressed
-     * dispatch uses no sequence number. The list is fixed for each session, so a change needs a new client.
-     * Registering an event whose every dispatch type is listed receives nothing, and each new session logs
-     * gateway.ignoredEventRegistered at Warn for such registrations
+     * Fluxer still delivers MESSAGE_CREATE for a message that directly mentions the bot, @here or @everyone, but not
+     * merely for a role mention, a direct message or a message the bot authored. A suppressed dispatch uses no sequence
+     * number. MESSAGE_REACTION_ADD_MANY batches are generated from unsuppressed MESSAGE_REACTION_ADD dispatches, so
+     * ignoring ADD prevents batches, while ignoring MANY alone does not. The list is fixed for each session, so changing
+     * an explicit list needs a new client. Resume retains the session's filtering.
+     * Registering an event whose source dispatch types are all suppressed receives nothing, apart from the message
+     * mention exceptions, and each new session logs gateway.ignoredEventRegistered at Warn for such registrations
      *
      * The value "auto" computes the list at each new-session Identify from the events registered at that moment,
      * through on, subscribe, waitFor, collectors and command routers: Every dispatch type that delivers no registered
@@ -307,8 +310,9 @@ export interface GatewayOptions {
      * clearing (GUILD_DELETE) need, READY, RESUMED, request replies and types this SDK version does not decode. A raw
      * subscriber disables suppression entirely. The tradeoff: A handler registered after a session started does not
      * receive suppressed types until that shard's next new session, which a Resume does not start, so register handlers
-     * before connecting. Cache categories keep their dispatch types whether or not an event is registered, so enabled
-     * caches reduce the savings
+     * before connecting. A messageReactionAddMany registration keeps MESSAGE_REACTION_ADD for Fluxer's batch generator.
+     * Cache categories keep their dispatch types whether or not an event is registered, so enabled caches reduce the
+     * savings
      */
     readonly ignoredEvents?: readonly string[] | "auto"
     /**

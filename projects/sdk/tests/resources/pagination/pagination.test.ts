@@ -111,6 +111,18 @@ async function fixture(mode: Mode, caching = false) {
     return { defaultApi: defaultClient, native, close, iterate, requests, control }
 }
 
+test.each(modes)("%s traverses pin cursors with precision beyond milliseconds", async (mode) => {
+    const api = await fixture(mode)
+    const times = ["2026-09-08T12:00:00.0009Z", "2026-09-08T12:00:00.0008Z", "2026-09-08T14:00:00.0007+02:00"]
+    api.control.respond = async () => {
+        const index = api.requests.length - 1
+        return Response.json({ items: [pin(String(10 + index), times[index]!)], has_more: index < 2 })
+    }
+    const items = await gather(api.iterate("pins", { maxItems: 5, pageSize: 1 }))
+    expect(items).toHaveLength(3)
+    expect(api.requests.map((request) => request.searchParams.get("before"))).toEqual([null, times[0], times[1]])
+})
+
 test.each(modes)(
     "%s traverses four page contracts with frozen snapshots, short-page continuation and pin deduplication",
     async (mode) => {

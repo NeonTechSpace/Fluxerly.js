@@ -336,6 +336,26 @@ const supervisorOptionKeys: readonly string[] = [
     "logging",
 ]
 
+/** Reject malformed supervisor option objects and suggest supported names before their values are read */
+export function supervisorOptionError(
+    options: unknown,
+    supported: readonly string[],
+    field: ConfigurationError["field"],
+    label: string,
+): ConfigurationError | undefined {
+    if (!record(options)) return new ConfigurationError(field, `${label} must be an object`)
+    const unsupported = Object.keys(options).find((key) => !supported.includes(key))
+    return unsupported === undefined
+        ? undefined
+        : new ConfigurationError(
+              field,
+              `Unsupported option ${JSON.stringify(unsupported)} in the ${label.charAt(0).toLowerCase()}${label.slice(1)}`,
+              {
+                  hint: unsupportedKeyHint(unsupported, supported),
+              },
+          )
+}
+
 function supervisorSettings(
     options: unknown,
     native: boolean,
@@ -556,6 +576,13 @@ function fixedAssignments(value: unknown, totalShards: number): readonly ChildCo
                 "assignments",
                 "Each supervisor assignment must be an object with id and shardIds",
             )
+        const invalidKeys = supervisorOptionError(
+            current,
+            ["id", "shardIds"],
+            "assignments",
+            "Supervisor assignment options",
+        )
+        if (invalidKeys) return invalidKeys
         if (!hasExactKeys(current, ["id", "shardIds"]))
             return new ConfigurationError(
                 "assignments",
@@ -635,11 +662,17 @@ function restartSettings(restart: unknown): RestartConfiguration | Configuration
 function identifySettings(
     identify: unknown,
 ): { readonly minimumSpacingMs: number; readonly coordinator: CoordinatorPermit | undefined } | ConfigurationError {
-    if (identify !== undefined && (!record(identify) || !hasOnlyKeys(identify, ["minimumSpacingMs", "coordinator"])))
-        return new ConfigurationError(
+    if (identify !== undefined && !record(identify))
+        return new ConfigurationError("identify", "Supervisor Identify options must be an object")
+    if (identify !== undefined) {
+        const invalidKeys = supervisorOptionError(
+            identify,
+            ["minimumSpacingMs", "coordinator"],
             "identify",
-            'The supervisor option "identify" must be an object with only minimumSpacingMs or coordinator',
+            "Supervisor Identify options",
         )
+        if (invalidKeys) return invalidKeys
+    }
     const spacing = identify?.minimumSpacingMs
     const coordinator = identify?.coordinator
     if (coordinator !== undefined) {

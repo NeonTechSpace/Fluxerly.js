@@ -1,7 +1,8 @@
 import { setImmediate as turn } from "node:timers/promises"
-import { Clock, Duration, Effect } from "effect"
+import { Clock, Duration, Effect, Exit } from "effect"
 import type { ResultAsync } from "neverthrow"
 import { expect, vi } from "vitest"
+import { typedFailure } from "./settle.js"
 
 /**
  * Control only the SDK's Effect Clock and jitter, while loopback I/O and test deadlines keep real time
@@ -81,8 +82,8 @@ export async function outcome<A, E>(
     operation: ResultAsync<A, E> | Effect.Effect<A, E>,
 ): Promise<{ value: A } | { error: E }> {
     if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation))
-        return result._tag === "Failure" ? { error: result.failure } : { value: result.success }
+        const exit = await Effect.runPromiseExit(operation)
+        return Exit.isFailure(exit) ? { error: typedFailure(exit.cause) } : { value: exit.value }
     }
     const result = await operation
     return result.isErr() ? { error: result.error } : { value: result.value }

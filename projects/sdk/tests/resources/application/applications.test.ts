@@ -4,7 +4,7 @@ import type { BotApplication } from "../../../src/application.js"
 import { modes, setup as setupClient, type Mode } from "../../support/both-apis.js"
 import { waitUntil } from "../../support/clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
-import { settle } from "../../support/settle.js"
+import { settle, typedResult } from "../../support/settle.js"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -30,7 +30,7 @@ async function setup(mode: Mode) {
             if (mode === "default") return settle(client.application.fetch(options))
             const { signal, ...request } = options ?? {}
             const result = await Effect.runPromise(
-                Effect.result(client.application.fetch(request as never) as Effect.Effect<unknown, unknown>),
+                typedResult(client.application.fetch(request as never) as Effect.Effect<unknown, unknown>),
                 signal ? { signal } : undefined,
             )
             if (result._tag === "Failure") throw result.failure

@@ -16,7 +16,13 @@ import {
 import { attachIdentifyGate } from "#sdk/internal/client"
 import { throwIfErr } from "#sdk/internal/failures"
 import { operationSignalError } from "#sdk/internal/operation-signal"
-import { ChildBridge, childFailureReason, createSupervisor, type SupervisorOwner } from "#sdk/internal/supervisor"
+import {
+    ChildBridge,
+    childFailureReason,
+    createSupervisor,
+    supervisorOptionError,
+    type SupervisorOwner,
+} from "#sdk/internal/supervisor"
 import { childClientOptionsError } from "#sdk/internal/configuration"
 import {
     SupervisorChildError,
@@ -46,7 +52,8 @@ export interface DefaultSupervisorChildContext {
 }
 
 /**
- * Bot credentials, client settings and setup callback for a JavaScript module launched by a supervisor
+ * Bot credentials, client settings and setup callback for a JavaScript module launched by a supervisor.
+ * Unknown option keys fail with ConfigurationError before waiting for the parent, with a suggested name when one is close
  *
  * @category Sharding and supervision
  */
@@ -89,6 +96,7 @@ export interface DefaultSupervisor {
      * A signal returns CancelledError only for this wait and never stops or restarts a child.
      * An already-aborted signal takes precedence even when the children are ready.
      * A malformed signal returns ConfigurationError with field signal without starting observation.
+     * Unknown option keys return ConfigurationError before observation, with a suggested name when one is close.
      * An idle, stopping or closed supervisor returns SupervisorError with reason closed. A failed supervisor returns its retained failure
      */
     waitForReady(
@@ -111,6 +119,7 @@ export interface DefaultSupervisor {
  */
 export interface DefaultSupervisorTools {
     /** Validate and copy options now and return an idle supervisor. Invalid options throw ConfigurationError.
+     * Unknown keys in parent, assignment, restart and Identify options include a suggested name when one is close.
      * Each option is read once. A throwing option getter throws SdkDefect with code application.defect and the thrown
      * value as its cause, while another unexpected fault uses sdk.defect.
      * Does not start a process or check whether the entry module can execute. Launch failures are reported by start
@@ -120,7 +129,9 @@ export interface DefaultSupervisorTools {
     readonly child: {
         /** Receive the parent's assignment, create a client, finish configure, then run the client until stop or failure.
          * Owns client shutdown and removal of parent-message listeners before returning its result.
-         * A normal parent stop returns Ok. Running outside a connected supervisor child returns SupervisorChildError with reason disconnected.
+         * A normal parent stop drains running handlers, queued handler events and REST requests for the parent's drain allowance before returning Ok.
+         * Failure stops the client without draining. Running outside a connected supervisor child returns SupervisorChildError with reason disconnected.
+         * Unknown child option keys return ConfigurationError before waiting for IPC, with a suggested name when one is close.
          * Invalid client settings return ConfigurationError. Client execution can return ConnectError or CancelledError.
          * Message-channel loss or invalid coordination data returns SupervisorChildError.
          * A stop during configure never starts the client afterward.
@@ -166,6 +177,13 @@ function bridgeResult<A>(effect: Effect.Effect<A, SupervisorChildError>): Promis
 function readyResult(owner: SupervisorOwner, options?: SupervisorWaitOptions) {
     // Reading the caller options and calling the caller signal are marked as application input
     const readiness = suspendMarked((): Effect.Effect<void, SupervisorError | CancelledError | ConfigurationError> => {
+        const invalidOptions =
+            options === undefined
+                ? undefined
+                : readCaller(() =>
+                      supervisorOptionError(options, ["signal"], "configuration", "Supervisor readiness options"),
+                  )
+        if (invalidOptions) return Effect.fail(invalidOptions)
         const signal = readCaller(() => options?.signal)
         const invalidSignal = readCaller(() => operationSignalError(signal))
         if (invalidSignal) return Effect.fail(invalidSignal)
@@ -201,6 +219,13 @@ interface ChildSettings {
  * from reading the caller options
  */
 function readChildOptions(options: DefaultSupervisorChildOptions): ChildSettings | ConfigurationError {
+    const invalidOptions = supervisorOptionError(
+        options,
+        ["token", "clientOptions", "configure"],
+        "configuration",
+        "Supervisor child options",
+    )
+    if (invalidOptions) return invalidOptions
     const clientOptions = options.clientOptions
     const invalid = childClientOptionsError(clientOptions)
     if (invalid) return invalid

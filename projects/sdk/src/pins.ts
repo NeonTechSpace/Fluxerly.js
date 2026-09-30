@@ -10,7 +10,8 @@ export interface MessagePinsQuery {
     /** Maximum pins requested in this page, an integer from 1 through 50, default 50 */
     readonly limit?: number
     /** Pin-time cursor as an ISO 8601 timestamp with seconds and a Z or ±hh:mm offset, such as "2026-01-01T00:00:00Z".
-     * Any fraction length is accepted and the value is sent unchanged. Select older pin times. Omit to use Fluxer's
+     * Any fraction length is accepted and the value is sent unchanged. Page ordering and cursor progress retain every fractional digit
+     * and compare timestamps by instant across timezone offsets. Select older pin times. Omit to use Fluxer's
      * current-time default. Other forms and impossible calendar dates are rejected before dispatch
      */
     readonly before?: string

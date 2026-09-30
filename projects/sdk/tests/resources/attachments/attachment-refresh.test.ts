@@ -7,7 +7,7 @@ import { modes, setup as createApi, type Mode } from "../../support/both-apis.js
 import { fakeHostTime } from "../../support/client-clock.js"
 import { waitUntil } from "../../support/clock.js"
 import { hostedOperationCalls, stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
-import { settle } from "../../support/settle.js"
+import { settle, typedResult } from "../../support/settle.js"
 
 const operationUrl = "https://api.fluxer.app/v1/attachments/refresh-urls"
 
@@ -30,9 +30,7 @@ async function setup(mode: Mode) {
             // Unlike settle(), the native path forwards the caller signal to Effect.runPromise
             const { signal, ...request } = options ?? {}
             const result = await Effect.runPromise(
-                Effect.result(
-                    client.attachments.refreshUrls(urls, request as never) as Effect.Effect<unknown, unknown>,
-                ),
+                typedResult(client.attachments.refreshUrls(urls, request as never) as Effect.Effect<unknown, unknown>),
                 signal ? { signal } : undefined,
             )
             if (result._tag === "Failure") throw result.failure

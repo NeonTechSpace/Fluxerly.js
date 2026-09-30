@@ -17,6 +17,7 @@ export interface AuditLogs {
     /**
      * Fetch one filtered audit page with referenced users and webhook metadata that excludes tokens.
      * Supply cursors and filters in AuditLogQuery.
+     * A deletion duration that cannot be represented as safe integer milliseconds fails with reason response, without returning a partial page.
      * The returned page is frozen and remains in memory while the caller retains it
      */
     fetchPage(
@@ -31,6 +32,7 @@ export interface AuditLogs {
      * An empty page or maxItems ends the scan, not a short page.
      * Invalid traversal input, a stalled cursor or reaching the page budget fails with PaginationError.
      * Remote failures keep auditLogs.fetchPage's errors.
+     * Deletion durations are rounded to whole milliseconds, and one whose milliseconds are not a safe integer fails its page before that page's entries are delivered.
      * Each consumption is independent, and client closure releases the page and fails the next pull.
      * Already delivered entries remain with the caller, and concurrent changes can prevent a complete scan.
      * Use fetchPage instead to also receive referenced users or webhooks

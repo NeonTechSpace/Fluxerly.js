@@ -81,6 +81,7 @@ import type { ClientLogger } from "../logging.js"
 import type { LogicalScheduler } from "../logical-scheduler.js"
 import { metrics } from "../metrics.js"
 import { emitObservation } from "../observer.js"
+import { linkRejectionError } from "../rejection-scope.js"
 import { rateRoute, routeTemplate } from "../rate-limits.js"
 import { defaultHttpTransport, type HttpTransport } from "../transport/index.js"
 import { RestAdmission } from "./admission.js"
@@ -468,18 +469,21 @@ export class RestOwner<M extends MessageCore = Message> {
             ).pipe(
                 mapFailureCause((error) =>
                     error instanceof RestFailure
-                        ? new MessageError({
-                              reason: error.reason === "notFound" ? "rejected" : error.reason,
-                              outcome: error.outcome,
-                              status: error.status,
-                              retryAfterMs: error.retryAfterMs,
-                              apiError: error.apiError,
-                              inputValidation: error.inputValidation,
-                              providerCode: error.providerCode,
-                              responseField: error.responseField,
-                              // Keep the transport failure visible, as the other operation errors do
-                              ...(error.cause === undefined ? {} : { cause: error.cause }),
-                          })
+                        ? linkRejectionError(
+                              new MessageError({
+                                  reason: error.reason === "notFound" ? "rejected" : error.reason,
+                                  outcome: error.outcome,
+                                  status: error.status,
+                                  retryAfterMs: error.retryAfterMs,
+                                  apiError: error.apiError,
+                                  inputValidation: error.inputValidation,
+                                  providerCode: error.providerCode,
+                                  responseField: error.responseField,
+                                  // Keep the transport failure visible, as the other operation errors do
+                                  ...(error.cause === undefined ? {} : { cause: error.cause }),
+                              }),
+                              error,
+                          )
                         : error,
                 ),
             )
@@ -1012,6 +1016,7 @@ export class RestOwner<M extends MessageCore = Message> {
                             status: 429,
                             retryAfterMs: response.retry,
                             apiError: response.apiError,
+                            providerCode: response.providerCode ?? null,
                         }),
                     )
                 until = runtime.logical.now() + response.retry
@@ -1039,6 +1044,7 @@ export class RestOwner<M extends MessageCore = Message> {
                             status: 429,
                             retryAfterMs: response.retry,
                             apiError: response.apiError,
+                            providerCode: response.providerCode ?? null,
                         }),
                     )
                 }

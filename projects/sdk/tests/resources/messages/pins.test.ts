@@ -14,7 +14,7 @@ import {
 } from "../../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { startSynchronousGateway } from "../../support/messages-gateway.js"
-import { settle } from "../../support/settle.js"
+import { settle, typedResult } from "../../support/settle.js"
 import { wsTarget } from "../../support/ws-redirect.js"
 
 vi.mock("ws", (original) => import("../../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
@@ -58,7 +58,7 @@ async function fixture(mode: Mode) {
     onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
     /** Run a native Effect with an optional AbortSignal, throwing its typed failure */
     const run = async <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) => {
-        const r = await Effect.runPromise(Effect.result(effect), signal ? { signal } : undefined)
+        const r = await Effect.runPromise(typedResult(effect), signal ? { signal } : undefined)
         if (r._tag === "Failure") throw r.failure
         return r.success
     }
@@ -188,6 +188,20 @@ test.each(modes)("%s lists explicit frozen timestamp pages without traversal or 
         "https://api.fluxer.app/v1/channels/20/messages/pins?limit=50&before=2026-09-08T12%3A00%3A00.000Z",
     )
     expect(await api.get()).toBeUndefined()
+})
+
+test.each(modes)("%s rejects ascending pin times and cursor violations below millisecond precision", async (mode) => {
+    let body = {
+        items: [pin("10", "2026-09-08T12:00:00.0008Z"), pin("11", "2026-09-08T12:00:00.0009Z")],
+        has_more: false,
+    }
+    rest(async () => Response.json(body))
+    const api = await fixture(mode)
+    await expect(api.pins()).rejects.toMatchObject({ reason: "response" })
+    body = { items: [pin("10", "2026-09-08T14:00:00.0009+02:00")], has_more: false }
+    await expect(api.pins({ before: "2026-09-08T12:00:00.0008Z" })).rejects.toMatchObject({ reason: "response" })
+    body = { items: [pin("10", "2026-09-08T14:00:00.000800+02:00")], has_more: false }
+    expect((await api.pins({ before: "2026-09-08T12:00:00.0008Z" })).items).toHaveLength(1)
 })
 
 test.each(modes)("%s preserves supplied metadata from pin pages without hydration", async (mode) => {

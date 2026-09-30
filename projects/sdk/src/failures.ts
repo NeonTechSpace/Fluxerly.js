@@ -28,6 +28,8 @@ export interface FailureMessageReference {
 
 /**
  * A failure outside any returned result, delivered to an onError hook or logged at Error with its full error.
+ * Reports delivered to a hook log at Debug without repeating the error. A handler failure caused by an HTTP 401 or 403
+ * rejection replaces that rejection's Warn only when reported within one second, otherwise both records appear.
  * The error is the real value that the application callback threw or rejected with, or the SDK error that stopped the work.
  * The report holds IDs only, never message content
  *
@@ -46,6 +48,8 @@ export interface FailureReport {
     readonly subscriptionId?: string
     /** IDs of the message being handled, when there was one */
     readonly message?: FailureMessageReference
-    /** Readable multi-line summary with the error, its stack and cause chain, with credentials masked */
+    /** Readable multi-line summary with the error's name, application code, message, stack and cause chain.
+     * Credential patterns and the client's configured credentials are masked, without changing the original error
+     */
     describe(): string
 }

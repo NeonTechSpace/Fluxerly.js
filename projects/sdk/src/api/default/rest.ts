@@ -17,6 +17,9 @@ export interface RestRequests {
      * or HTTP 500, 502, 503 or 504. Another method is never sent again after an uncertain outcome.
      * Invalid input fails with RestRequestError reason input before any request, a non-2xx status fails with its status
      * and sanitized apiError, and closure fails with ClientClosedError. Message and resource caches are not updated.
+     * Percent-encoded unreserved letters cannot bypass the reserved /v1 prefix or token-webhook route checks, which remain case-sensitive.
+     * Network causes retain sanitized transport facts, not raw errors. Unknown uppercase provider codes remain in details.providerCode,
+     * including on HTTP 429 when its wait exceeds the deadline.
      * Logs, metrics and spans name only the route template, never the query, body or response
      */
     request<T = unknown>(

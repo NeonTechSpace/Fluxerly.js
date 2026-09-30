@@ -135,7 +135,10 @@ export interface BotCommandsOptions<
  * Configure one Effect bot with client settings, optional stop signals, event handlers, prefix commands and startup work.
  * The token accepts an unvalidated environment value, and a missing or blank value is misuse that dies with
  * ConfigurationError. Client settings, including messageFields and cache callbacks, retain their native semantics.
- * Handlers and commands are registered when the Effect runs, before the gateway starts
+ * Handlers and commands are registered when the Effect runs, before the gateway starts.
+ * Reports before client creation use the configured logging settings and mask the normalized token, including a token
+ * enclosed in matching quotes. If an option getter throws, readable token, logging and reportFailure settings are retained
+ * independently for reporting. Unreadable logging uses the native default output, and unreadable reportFailure enables reporting
  *
  * @category Client and lifecycle
  */
@@ -290,6 +293,22 @@ function readNativeBotOptions(options: BotOptions<unknown, unknown, unknown, unk
     return { events, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions }
 }
 
+/** Recover each reporting setting independently after an option getter throws, without replacing that original defect */
+function readNativeBotReportingOptions(options: BotOptions<unknown, unknown, unknown, unknown>) {
+    const clientOptions: Record<string, unknown> = {}
+    let reportFailure: unknown
+    for (const key of ["token", "logging", "reportFailure"] as const) {
+        try {
+            const value = options[key]
+            if (key === "reportFailure") reportFailure = value
+            else clientOptions[key] = value
+        } catch {
+            // allow-silent: An unreadable reporting setting falls back independently, preserving the original option defect
+        }
+    }
+    return { clientOptions, reportFailure }
+}
+
 /**
  * End a native run on misuse or a throwing option getter before any client exists. The error is a defect in the
  * native API, and it is reported like any failure that stops the bot, logged once and setting process.exitCode to 1
@@ -342,6 +361,11 @@ export function installNativeTestBot(
  * lifecycle.botFailed unless the client already logged that error, and sets process.exitCode to 1, so running the
  * Effect needs no further handling.
  * Set reportFailure to false when the application handles the failure and exit status itself.
+ * Reports before client creation use the configured logging settings and mask the token after removing surrounding
+ * whitespace and one pair of matching quotes. An option getter that throws remains the original defect. For that report,
+ * token, logging and reportFailure are read independently and may be read again if the option snapshot already read them.
+ * A throwing reporting getter does not discard the other readable settings. Unusable logging uses the native default
+ * output, and an unreadable reportFailure setting keeps reporting enabled.
  * No separate runtime is created and the process is not exited
  *
  * @example
@@ -407,7 +431,8 @@ export function runBot<
         try {
             read = readNativeBotOptions(botOptions)
         } catch (error) {
-            return misuse(error, {}, undefined)
+            const { clientOptions, reportFailure } = readNativeBotReportingOptions(botOptions)
+            return misuse(error, clientOptions, reportFailure)
         }
         const { events, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions } = read
         let prepared: PreparedNativeBot

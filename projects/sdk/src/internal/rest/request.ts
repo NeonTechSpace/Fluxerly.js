@@ -60,7 +60,15 @@ function pathFailure(path: unknown): InputValidationFailure | undefined {
             "format",
             "REST paths may contain only URL path characters and valid percent escapes, with the query in query and no fragment",
         )
-    const segments = path.slice(1).split("/")
+    const segments = path
+        .slice(1)
+        .split("/")
+        .map((segment) =>
+            segment.replace(/%([0-9A-Fa-f]{2})/g, (encoded, hex: string) => {
+                const character = String.fromCharCode(parseInt(hex, 16))
+                return /^[A-Za-z0-9\-._~]$/.test(character) ? character : encoded
+            }),
+        )
     if (
         segments.some((segment) => {
             const decoded = segment.replace(/%2e/gi, ".")

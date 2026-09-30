@@ -11,7 +11,7 @@ import {
 } from "../../../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
-import { settle } from "../../support/settle.js"
+import { expectFailure, settle } from "../../support/settle.js"
 import { monotonicClock } from "../../support/clock.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
@@ -319,10 +319,10 @@ test.each(modes)("%s rejects invalid user and conversation operations before dis
     for (const operation of [
         () => api.fetchUser("bad"),
         () => api.fetchSelf({ timeoutMs: 0 }),
-        () => api.getUser("bad"),
+        ...(api.native ? [] : [() => api.getUser("bad")]),
         () => api.open("bad"),
         () => api.fetchDirectMessage("bad"),
-        () => api.getDirectMessage("bad"),
+        ...(api.native ? [] : [() => api.getDirectMessage("bad")]),
         () => api.editGroup("10", {}),
         () => api.editGroup("10", { icon: "https://example.test/icon.png" }),
         () => api.editGroup("10", { nicknames: { bad: "name" } }),
@@ -330,6 +330,13 @@ test.each(modes)("%s rejects invalid user and conversation operations before dis
         () => api.removeRecipient("10", "bad"),
     ])
         await expect(operation()).rejects.toMatchObject({ outcome: "notDispatched" })
+    if (api.native)
+        for (const operation of [api.native.users.get("bad"), api.native.directMessages.get("bad")]) {
+            const cause = await expectFailure<unknown, never>(operation)
+            expect(cause.reasons).toEqual([
+                expect.objectContaining({ _tag: "Die", defect: expect.objectContaining({ outcome: "notDispatched" }) }),
+            ])
+        }
     // The explanation names the invalid group field, because the path is the whole input
     for (const [input, field] of [
         [{ name: "" }, "name"],

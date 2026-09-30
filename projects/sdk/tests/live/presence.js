@@ -1,5 +1,6 @@
 // Interactive presence selection for one currently authorized member: selected-member transitions,
 // selection restoration after a socket resume and selection clearing. Creates no journal and no remote resources
+import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
 import {
@@ -63,7 +64,7 @@ async function createDriver(token) {
     const { createClient } = await import("@neontechspace/fluxerly/effect")
     const scope = Scope.makeUnsafe()
     const value = async (operation) => {
-        const result = await Effect.runPromise(Effect.result(operation))
+        const result = await Effect.runPromise(typedResult(Effect, operation))
         if (result._tag === "Failure") throw result.failure
         return result.success
     }

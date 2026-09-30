@@ -192,7 +192,10 @@ export interface BotCommandsOptions<
 }
 
 /**
- * Configure a bot: Client settings, event handlers, prefix commands, optional startup work and stop signals
+ * Configure a bot: Client settings, event handlers, prefix commands, optional startup work and stop signals.
+ * A reported commands-registration failure before client creation uses the configured logging settings and masks the
+ * normalized token, including a token enclosed in matching quotes. Misuse and option-getter failures instead throw
+ * synchronously without a runner report or exit-status change
  *
  * @category Client and lifecycle
  */
@@ -236,8 +239,11 @@ export interface BotOptions<
  * By default a failed run is also logged once, with code lifecycle.botFailed unless the client already logged that
  * error, and sets process.exitCode to 1, so `await runBot({...})` needs no further handling.
  * Set reportFailure to false when the application handles the returned failure and exit status itself.
+ * A reported commands-registration failure before client creation uses the configured logging settings and masks the
+ * token after removing surrounding whitespace and one pair of matching quotes. Unusable logging settings are misuse.
  * An option getter that throws while the options are checked throws SdkDefect with code application.defect and the
- * thrown value as the cause, before any client exists
+ * thrown value as the cause, before any client exists. Misuse and option-getter failures throw synchronously without a
+ * runner report or exit-status change, regardless of reportFailure
  *
  * @remarks
  * Aborting the optional signal requests a normal stop, not a cancellation Err. A requested stop first stops accepting

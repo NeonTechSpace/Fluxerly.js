@@ -18,7 +18,7 @@ import { readCaller, readInput, suspendMarked } from "./defects.js"
 import { operationSignalError } from "./operation-signal.js"
 import { clientServices } from "./client-registry.js"
 import { ClientLogger, loggingConfiguration } from "./logging.js"
-import { validateConfiguration } from "./configuration.js"
+import { normalizeToken, validateConfiguration } from "./configuration.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import { EventBus } from "./events.js"
 import { shutdownDrainMs } from "./client/drain.js"
@@ -198,7 +198,8 @@ export function standaloneBotLogger(clientOptions: Readonly<Record<string, unkno
         // allow-silent: A throwing logging getter is itself the misuse the caller reports through the default logger below
     }
     if (!(logger instanceof ClientLogger)) logger = loggingConfiguration(undefined, native) as ClientLogger
-    if (typeof clientOptions.token === "string") logger.addSecret(clientOptions.token.trim())
+    const token = normalizeToken(clientOptions.token)
+    if (typeof token === "string") logger.addSecret(token)
     return logger
 }
 

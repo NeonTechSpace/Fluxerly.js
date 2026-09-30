@@ -1,3 +1,4 @@
+import { typedResult } from "../../support/settle.js"
 import { Effect, Exit, Scope, Stream } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type MemberSearchQuery, type MemberSearchIterationLimits } from "../../../src/index.js"
@@ -58,7 +59,7 @@ async function setup(mode: Mode) {
 
 async function collect(source: ReturnType<Awaited<ReturnType<typeof setup>>["iterate"]>) {
     if (Stream.isStream(source)) {
-        const result = await Effect.runPromise(Effect.result(Stream.runCollect(source)))
+        const result = await Effect.runPromise(typedResult(Stream.runCollect(source)))
         if (result._tag === "Failure") throw result.failure
         return [...result.success]
     }

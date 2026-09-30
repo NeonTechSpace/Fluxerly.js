@@ -75,7 +75,9 @@ function options(value: unknown): AuditLogOptions | undefined {
         (value.channel_id !== undefined && typeof value.channel_id !== "string") ||
         (value.count !== undefined && !finite(value.count)) ||
         (value.delete_member_days !== undefined && typeof value.delete_member_days !== "string") ||
-        (value.delete_message_seconds !== undefined && !finite(value.delete_message_seconds)) ||
+        (value.delete_message_seconds !== undefined &&
+            (!finite(value.delete_message_seconds) ||
+                !Number.isSafeInteger(Math.round(value.delete_message_seconds * 1000)))) ||
         (value.id !== undefined && typeof value.id !== "string") ||
         (value.integration_type !== undefined && !finite(value.integration_type)) ||
         (value.message_id !== undefined && typeof value.message_id !== "string") ||
@@ -96,7 +98,7 @@ function options(value: unknown): AuditLogOptions | undefined {
         // Fluxer records seconds, and the SDK reports milliseconds like the ban input
         ...(value.delete_message_seconds === undefined
             ? {}
-            : { deleteMessagesMs: (value.delete_message_seconds as number) * 1000 }),
+            : { deleteMessagesMs: Math.round((value.delete_message_seconds as number) * 1000) }),
         ...(value.id === undefined ? {} : { id: value.id }),
         ...(value.integration_type === undefined ? {} : { integrationType: value.integration_type }),
         ...(value.message_id === undefined ? {} : { messageId: value.message_id }),

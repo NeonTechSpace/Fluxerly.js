@@ -33,6 +33,7 @@ import * as Effect from "effect/Effect"
 import { nowMs } from "./clock.js"
 import type { ClientLogger } from "./logging.js"
 import { editDistance, unsupportedKeyHint } from "./suggest.js"
+import { identifyCommand } from "./events.js"
 
 const commandName = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 const maxDurationMs = 2_147_483_647
@@ -737,12 +738,17 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R, M
     ) =>
         Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis
-            const feedback =
+            const selected =
                 adapter.reject === undefined
                     ? undefined
                     : adapter.feedback === undefined
                       ? "callback"
                       : adapter.feedback(definition)
+            // A false guard has no automatic reply, but custom callbacks still receive every rejection
+            const feedback =
+                selected === "reply" && rejection._tag === "CommandGuardRejected" && rejection.reason === undefined
+                    ? undefined
+                    : selected
             const suppressed =
                 feedback === "reply" &&
                 limit !== undefined &&
@@ -796,7 +802,12 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R, M
             return
         }
         const matched = resolved
-        const run = matchedCommand(matched)
+        yield* identifyCommand(matched.definition.name)
+        const run = matchedCommand(matched).pipe(
+            Effect.withSpan("fluxerly.command.execute", {
+                attributes: { "fluxerly.command": matched.definition.name },
+            }),
+        )
         if (adapter.failed === undefined) return yield* run
         return yield* run.pipe(
             Effect.catchCause((cause) =>
@@ -893,11 +904,7 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R, M
             // Measured on the dispatch's Effect Clock, so a TestClock controls the reported duration
             const clock = yield* Clock.Clock
             const startedAt = nowMs(clock)
-            yield* adapter.execute(matched.definition, executionContext).pipe(
-                Effect.withSpan("fluxerly.command.execute", {
-                    attributes: { "fluxerly.command": matched.definition.name },
-                }),
-            )
+            yield* adapter.execute(matched.definition, executionContext)
             adapter.logger?.log({
                 level: "debug",
                 category: "commands",
@@ -912,6 +919,7 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R, M
 
 /**
  * Impersonal reply text for a rejected command, used by `onReject: "reply"`.
+ * A guard denial without a reason returns undefined, so a false verdict has no generic reply.
  * Argument rejections name the argument, what was expected and the command's usage.
  * Cooldown replies measure the remaining time from `now`, the dispatch Clock's wall time
  */
@@ -920,10 +928,10 @@ export function rejectionReply(
     command: PrefixCommandMetadata | undefined,
     prefix: string,
     now: number,
-): string {
+): string | undefined {
     switch (rejection._tag) {
         case "CommandGuardRejected":
-            return rejection.reason ?? "This command cannot be used here"
+            return rejection.reason
         case "CommandCooldownActive": {
             const seconds = Math.max(1, Math.ceil((rejection.retryAtMs - now) / 1_000))
             return `This command is on cooldown. Try again in ${seconds} ${seconds === 1 ? "second" : "seconds"}`

@@ -15,7 +15,7 @@ import { decodeVoiceState, decodeVoiceStateSnapshot } from "../../src/internal/g
 import { defaultApi as fixtureClient } from "../support/both-apis.js"
 import { startHostedLoopback } from "../support/instance.js"
 import { sendJson } from "../support/rest-server.js"
-import { settle } from "../support/settle.js"
+import { settle, typedResult } from "../support/settle.js"
 
 vi.mock("ws", (original) => import("../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
 afterEach(() => {
@@ -744,7 +744,7 @@ test.each(["default", "native"] as const)(
                             yield* client.on("messageDeleteBulk", () => Effect.sync(received))
                             yield* client.connect()
                             server.dispatch(event, body)
-                            expect(yield* Effect.result(client.waitForClose())).toMatchObject({
+                            expect(yield* typedResult(client.waitForClose())).toMatchObject({
                                 _tag: "Failure",
                                 failure: { _tag: "ConnectionError", reason: "protocol" },
                             })

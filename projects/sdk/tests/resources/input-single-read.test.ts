@@ -4,7 +4,7 @@ import { Effect } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 import { defaultApi, modes, nativeApi } from "../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
-import { settle } from "../support/settle.js"
+import { settle, typedResult } from "../support/settle.js"
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -69,7 +69,7 @@ test.each(modes)("%s waitFor reads each wait option once and uses the validated 
             mode === "default"
                 ? await defaultApi().waitFor("messageCreate", options.value as never)
                 : await Effect.runPromise(
-                      Effect.result((await nativeApi()).waitFor("messageCreate", options.value as never)),
+                      typedResult((await nativeApi()).waitFor("messageCreate", options.value as never)),
                   )
         // The wait runs with the validated values and ends at its deadline instead of failing validation
         expect(failure).toMatchObject(
@@ -90,9 +90,9 @@ test.each(modes)("%s presence and count requests read each caller ID once", asyn
         expect(await client.guilds.fetchCounts(guilds.value)).toMatchObject({ error: { reason: "notConnected" } })
     } else {
         const client = await nativeApi()
-        const selected = await Effect.runPromise(Effect.result(client.presence.setMembers("40", members.value)))
+        const selected = await Effect.runPromise(typedResult(client.presence.setMembers("40", members.value)))
         expect(selected).not.toMatchObject({ failure: { reason: "input" } })
-        const counted = await Effect.runPromise(Effect.result(client.guilds.fetchCounts(guilds.value)))
+        const counted = await Effect.runPromise(typedResult(client.guilds.fetchCounts(guilds.value)))
         expect(counted).toMatchObject({ failure: { reason: "notConnected" } })
     }
     expect([members.reads.count, guilds.reads.count]).toEqual([1, 1])

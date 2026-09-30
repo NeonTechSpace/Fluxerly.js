@@ -45,7 +45,8 @@ export interface CustomStatusInput {
  * Set the status this bot should publish on its gateway connections.
  * Use `customStatus: null` to request clearing the custom status.
  * Omission preserves this client's latest custom-status request, or leaves the provider value unchanged if there is no retained request.
- * The client copies the latest accepted settings and replaces earlier updates that have not been sent.
+ * The client copies the latest accepted settings and retains at most one unsent update per local shard, replacing its payload with the latest intent.
+ * Status updates are at least four seconds apart, measured from each actual socket transmission, not queue admission.
  * It publishes those settings on ready local shards and restores them after READY or RESUMED.
  * A successful call means the client accepted the settings. It does not mean every shard published them at once or that another user can see them.
  * Shutdown clears the saved settings and pending local timers

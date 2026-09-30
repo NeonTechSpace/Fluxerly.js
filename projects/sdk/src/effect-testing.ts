@@ -194,7 +194,8 @@ export interface TestClient<M extends MessageCore = Message> {
     readonly rest: TestRest
     /**
      * Connect the client to the test gateway and succeed once every shard it owns is READY, like client.connect.
-     * Running it again while connected succeeds without opening another socket.
+     * Running it again while connected succeeds without opening another socket. With gateway.ignoredEvents set to "auto",
+     * register handlers before running this Effect, because Identify chooses filtering from those registrations.
      * It fails with the connect failure, such as ConnectionError when a handler closed the connection
      */
     ready(): Effect.Effect<void, ConnectError>
@@ -203,8 +204,13 @@ export interface TestClient<M extends MessageCore = Message> {
      * The type is the Fluxer wire dispatch name, such as MESSAGE_CREATE or GUILD_MEMBER_ADD, and the payload is the wire
      * body in snake_case, so it passes through the SDK's real decoders, cache updates and handlers.
      * Handlers run afterwards on their own schedule. Start client.waitFor before emitting to await delivery.
-     * Unknown types are delivered too, as Fluxer would send them, and malformed payloads follow the client's
+     * Unknown types are delivered too unless explicitly suppressed, and malformed payloads follow the client's
      * gateway.onMalformedDispatch policy.
+     * Dies with ConfigurationError without consuming a sequence when the session's Identify filtering would suppress
+     * the dispatch. Suppressed MESSAGE_CREATE still arrives for a direct bot mention, @here or @everyone. Role-only
+     * mentions, direct-message delivery and bot authorship alone do not exempt it. Generated MESSAGE_REACTION_ADD_MANY is
+     * gated by MESSAGE_REACTION_ADD, not its generated name. Register handlers before ready when gateway.ignoredEvents
+     * is "auto", or remove the source type from the explicit list (use [] to disable suppression). Resume keeps the list.
      * READY and RESUMED are reserved for the handshake. Dies with ConfigurationError before ready or for a shard this
      * client does not own
      */
@@ -256,7 +262,8 @@ export interface TestClient<M extends MessageCore = Message> {
 /**
  * Create a real native client wired to an in-memory Fluxer for application tests, owned by the caller's Scope.
  * Creation opens no connection and starts no timers. Run ready to connect. Closing the scope shuts the client down
- * and closes the test transport
+ * and closes the test transport. The gateway enforces gateway.ignoredEvents, so register handlers before ready when
+ * automatic filtering is enabled
  *
  * @remarks
  * Invalid options are a defect carrying ConfigurationError, as with createClient, and supplying transport or instance
@@ -409,7 +416,8 @@ export interface TestBot<M extends MessageCore = Message> extends Omit<TestClien
  * same handler contexts, delivery defaults and command router as runBot. Pass the bot's own options object: Its
  * signal, processSignals, reportFailure and drainMs settings are ignored, an undefined token uses the fixture token, and
  * transport and instance belong to the test client. Handlers and commands are registered when the Effect runs, and ready runs setup before connecting, as runBot
- * does. The creating Scope cleans the client up, as with createTestClient
+ * does. The creating Scope cleans the client up, as with createTestClient. Automatic gateway filtering sees the bot's
+ * handlers, commands and setup registrations, and emit dies for dispatches that list suppresses
  *
  * @remarks
  * Invalid options die with ConfigurationError, as in runBot, and a commands register callback that throws fails with

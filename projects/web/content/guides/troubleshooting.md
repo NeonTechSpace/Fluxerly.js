@@ -36,7 +36,7 @@ The [error and log codes](/docs/{{version}}/error-and-log-codes/) page lists eve
 | `events.registeredAfterShutdown` | A handler, subscription or command router was registered after shutdown began, often from a handler still running at the time. It received an already-closed handle and never runs | Nothing during shutdown. At other times, register everything before stopping the client |
 | `gateway.ignoredEventRegistered` | A handler is registered for an event whose dispatch types are all listed in `gateway.ignoredEvents` | Remove those types from `gateway.ignoredEvents`, or remove the handler. See [configuration](/docs/{{version}}/configuration/) |
 | `gateway.dispatchRejected` | Fluxer sent an event the SDK could not validate, so it was skipped | Update the SDK. The record names the event type and failing field. Cached entries it could affect were cleared |
-| `commands.rejected` and `commands.unmatched` (Debug) | A command guard, cooldown or argument rejected a message, or no command matched | With `runBot`, a rejected command gets a reply unless `onReject` is `"silent"`. Add `onReject` to a router from `commands.create`, and `onUnmatched` where users need feedback for unknown commands |
+| `commands.rejected` and `commands.unmatched` (Debug) | A command guard, cooldown or argument rejected a message, or no command matched | With `runBot`, argument errors, active cooldowns and guards with a deny reason get a reply unless `onReject` is `"silent"`. A guard returning `false` sends nothing, even with the reply default. Add `onReject` to a router from `commands.create`, and `onUnmatched` where users need feedback for unknown commands |
 | A rejected `SdkDefect` with code `sdk.defect` | An unexpected SDK or cleanup fault | Report it with the output of `describeError`. Code `application.defect` instead points at application code: The callback named in its cause, or a property getter on passed options or input that threw the cause |
 
 Run with `FLUXERLY_DEBUG=1` to add Debug records for every area, or `FLUXERLY_DEBUG=rest,ratelimit` for selected ones. See [logging](/docs/{{version}}/logging/)
@@ -87,7 +87,7 @@ Check these in order:
 1. The bot is running, and the message is from a person, not a bot. The starter answers only the exact text `!ping`
 2. The bot can view the channel and send messages there
 3. A command router uses the expected prefix, and the attached router is the one returned by the last `register` or `registerMany` call. Each call returns a new router, so attaching an earlier one misses later commands
-4. No guard, cooldown or argument rejected the command. Rejected and unmatched commands are logged at Debug and counted in `diagnostics().counters`. With `runBot`, a rejected command gets a reply that explains why unless `onReject` is `"silent"`. A router from `commands.create` needs `onReject` for that, and `onUnmatched` answers unknown commands
+4. No guard, cooldown or argument rejected the command. Rejected and unmatched commands are logged at Debug and counted in `diagnostics().counters`. With `runBot`, argument errors, active cooldowns and guards with a deny reason get an explanation unless `onReject` is `"silent"`. A guard returning `false` intentionally sends nothing. A router from `commands.create` needs `onReject` for that, and `onUnmatched` answers unknown commands
 5. The reply did not fail. The starter returns its reply, so a failed reply is logged as `events.handlerFailed` with a message that tells local validation, provider rejection, timeout and delivery uncertainty apart
 
 A callback that returns an `Err` result fails like one that throws, so its error reaches `onError` or the log. Handle an expected failure inside the callback when it should not count as a failure. See [commands](/docs/{{version}}/commands/) and [failure handling](/docs/{{version}}/reliability/)
@@ -108,7 +108,7 @@ Enable two-factor authentication on the account that owns the bot's application,
 
 ## The gateway is connected but commands stopped
 
-Look for `events.dropped` records and `diagnostics().counters.eventsDropped`, which mean handlers are slower than incoming events. A handler failure does not stop its subscription, and a full queue drops the oldest waiting event instead of stopping
+Look for `events.dropped` records and `diagnostics().counters.eventsDropped`, which mean handlers are slower than incoming events. A handler or middleware failure, including a synchronous throw, releases its handler slot and partition key without stopping the subscription. A full queue drops the oldest waiting event instead of stopping
 
 <details>
 <summary>Subscriptions that stop on overflow</summary>

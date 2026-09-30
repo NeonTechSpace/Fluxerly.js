@@ -166,8 +166,9 @@ export interface RestRequest {
     readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
     /** API path after /v1, such as /users/@me, of at most 2,048 characters. It must start with one slash and contain
      * only URL path characters with valid percent escapes, without empty, dot or dot-dot segments, a query or a fragment.
-     * Token-authenticated webhook routes (/webhooks/{id}/{token}) are rejected because their credential is part of the
-     * path. Logs, metrics and spans name the route with numeric IDs and other non-word segments replaced by placeholders
+     * The /v1 prefix and token-authenticated webhook routes (/webhooks/{id}/{token}) are rejected, including percent-encoded
+     * unreserved characters in those route names. These checks are case-sensitive and do not decode reserved characters.
+     * Logs, metrics and spans name the route with numeric IDs and other non-word segments replaced by placeholders
      */
     readonly path: string
     /** Query parameters appended to the path in insertion order. Undefined values are omitted, numbers must be finite,

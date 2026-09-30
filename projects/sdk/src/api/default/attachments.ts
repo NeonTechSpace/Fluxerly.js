@@ -54,7 +54,8 @@ export interface Attachments {
      * Cancellation waits for response-reader cleanup, but cannot undo bytes already received
      *
      * Size and expiry metadata do not prove that the URL is available or the bytes are safe.
-     * Expected failures contain a safe reason and status, including busy, without the URL or response body
+     * Expected failures contain a safe reason and status, including busy, without the URL or response body.
+     * Discovery and download transport failures retain a sanitized cause with a safe transport code when available, never the raw error
      */
     download(
         attachment: Attachment,
@@ -77,6 +78,7 @@ export interface Attachments {
      * The timeoutMs option defaults to the client's rest.defaultTimeoutMs, 30,000 unless configured, for the whole download, including pauses between chunks.
      * Ending consumption early, cancellation, failure and client shutdown cancel the body, wait for reader cleanup and release the media slot.
      * Expected failures include safe local busy, network, response, limit and deadline reasons and client closure.
+     * Transport failures during discovery, opening or reading retain sanitized causes with safe transport codes when available, never raw errors.
      * Size and expiry metadata do not establish availability or byte safety
      *
      * @remarks

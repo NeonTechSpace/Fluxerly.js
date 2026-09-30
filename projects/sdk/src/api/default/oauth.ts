@@ -55,7 +55,8 @@ export interface OAuthClient extends AsyncDisposable {
      * Supply the redirect URI, scopes, caller-generated state and S256 PKCE challenge, which binds the callback code to the private verifier.
      * The application must retain state correlation and the PKCE verifier.
      * Bot community and permission parameters are consent hints, not proof of installation or authorization.
-     * This returns the URL without opening it
+     * This returns the URL without opening it.
+     * Network failures retain only sanitized transport facts in cause
      */
     authorizationUrl(
         input: OAuthAuthorizationInput,
@@ -66,7 +67,8 @@ export interface OAuthClient extends AsyncDisposable {
      * Supply the matching redirect URI and PKCE verifier.
      * The application must store the returned tokens.
      * After dispatch, cancellation or a lost response cannot tell whether Fluxer consumed the one-use code.
-     * Do not retry that exchange when its outcome is unknown
+     * Do not retry that exchange when its outcome is unknown.
+     * Network failures retain only sanitized transport facts in cause
      */
     exchangeCode(
         input: OAuthCodeExchangeInput,
@@ -78,7 +80,8 @@ export interface OAuthClient extends AsyncDisposable {
      * Invalid values fail locally rather than being normalized, and this also applies to revoke and introspect tokens.
      * Fluxer rotates refresh tokens.
      * The application must coordinate refreshes and atomically replace both stored tokens after success, so it never stores a mixed pair.
-     * A refresh with an unknown outcome must not be retried, because it may have rotated the token
+     * A refresh with an unknown outcome must not be retried, because it may have rotated the token.
+     * Network failures retain only sanitized transport facts in cause
      */
     refresh(
         refreshToken: string,
@@ -87,7 +90,8 @@ export interface OAuthClient extends AsyncDisposable {
     /**
      * Revoke an access or refresh token, with an optional token-type hint.
      * The token and hint are captured once when execution starts, then validated and transmitted from that snapshot.
-     * A lost response can still mean the token was revoked
+     * A lost response can still mean the token was revoked.
+     * Network failures retain only sanitized transport facts in cause
      */
     revoke(
         input: {
@@ -101,7 +105,9 @@ export interface OAuthClient extends AsyncDisposable {
     /**
      * Fetch the delegated user's identity with an access token granted the identify scope.
      * Additional identity fields depend on the token's scopes.
-     * The access token is not retained by this client
+     * The access token is not retained by this client.
+     * Failures identify a read in details.read, so errors.isRetryable can classify transient failures without implying a token change.
+     * Requests are not retried automatically, and network causes retain only sanitized transport facts
      */
     fetchIdentity(
         accessToken: string,
@@ -111,7 +117,9 @@ export interface OAuthClient extends AsyncDisposable {
      * Fetch one bounded page of the delegated user's community memberships.
      * Use an access token with Fluxer's guilds scope.
      * Optionally supply pagination settings in GuildListQuery, where limit defaults to 200 and accepts 1–200, and before and after are mutually exclusive cursors.
-     * This uses bearer authentication with the supplied access token, never the bot token
+     * This uses bearer authentication with the supplied access token, never the bot token.
+     * Failures identify a read in details.read for errors.isRetryable. Requests are not retried automatically,
+     * and network causes retain only sanitized transport facts
      */
     fetchGuilds(
         accessToken: string,
@@ -120,7 +128,9 @@ export interface OAuthClient extends AsyncDisposable {
     ): ResultAsync<readonly GuildListSummary[], OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the delegated user's full connections list with a connections-scoped access token.
-     * The client neither creates, verifies, reorders nor retains those connections
+     * The client neither creates, verifies, reorders nor retains those connections.
+     * Failures identify a read in details.read for errors.isRetryable. Requests are not retried automatically,
+     * and network causes retain only sanitized transport facts
      */
     fetchConnections(
         accessToken: string,
@@ -128,7 +138,9 @@ export interface OAuthClient extends AsyncDisposable {
     ): ResultAsync<readonly OAuthConnection[], OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Inspect an access or refresh token using this client's ID and secret through HTTP Basic authentication.
-     * An inactive result does not explain expiry or revocation, prove token ownership or establish whether it ever existed
+     * An inactive result does not explain expiry or revocation, prove token ownership or establish whether it ever existed.
+     * Failures identify a read in details.read for errors.isRetryable. Requests are not retried automatically,
+     * and network causes retain only sanitized transport facts
      */
     introspect(
         token: string,

@@ -4,8 +4,8 @@
  * Invariant: A command is sent only on an open socket while the session is running, every send failure ends the attempt
  * as a retryable send failure, and credentials never reach log records because payload logging masks them.
  * Pacing: Session control (heartbeat, Identify and Resume) is sent immediately and never waits behind other commands.
- * Every other command shares one per-socket budget of applicationCommandBudget sends in any rolling
- * commandWindowMs window, sent in submission order. Fluxer accepts 600 client payloads per WebSocket in a rolling
+ * Every other command shares one per-session budget of applicationCommandBudget sends in any rolling
+ * commandWindowMs window, retained across Resume and reset for Identify, sent in submission order. Fluxer accepts 600 client payloads per WebSocket in a rolling
  * 60-second window and 600 per session in each fixed 60-second bucket, and exceeding either closes with 4008, so the
  * remaining 100 payloads stay reserved for control commands, which the budget does not count.
  * Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
@@ -22,7 +22,7 @@ import { Opcode, opcodeName } from "../protocol/gateway.js"
 import { SocketState, type GatewaySocket } from "../transport/index.js"
 import type { Session } from "./session.js"
 
-/** Paced sends one socket may make in any rolling commandWindowMs window, leaving 100 of Fluxer's 600 for control */
+/** Paced sends one session may make in any rolling commandWindowMs window, leaving 100 of Fluxer's 600 for control */
 const applicationCommandBudget = 500
 /** Length of the rolling pacing window in milliseconds, matching Fluxer's per-socket window */
 const commandWindowMs = 60_000
@@ -84,10 +84,23 @@ export function commandSender(options: {
 /** Why a gateway.send submission could not be handed to the socket */
 export type SubmitFailure = "closed" | "busy"
 
+/** Most internal commands one socket holds while they wait for the pacing budget */
+const maxPendingInternalCommands = 500
+
+/** Ownership of one internal command until transmission. Operations after transmission are no-ops */
+export interface QueuedCommand {
+    readonly cancel: () => void
+    readonly replace: (d: unknown, settled: (sent: boolean) => void) => void
+}
+
+/** Synchronous test transports need no queued-command handle */
+export type InternalSubmission = QueuedCommand | SubmitFailure | void
+export type PacedSend = (op: number, d: unknown, settled?: (sent: boolean) => void) => InternalSubmission
+
 /** One socket's paced path for every command except session control */
 export interface CommandPacer {
-    /** Send now when the budget allows and nothing waits, otherwise queue behind earlier commands */
-    readonly send: (op: number, d: unknown) => void
+    /** Send now or queue within the bounded internal budget. The owner may withdraw or replace unsent work */
+    readonly send: PacedSend
     /** Queue one gateway.send command. Succeeds once the socket took the frame. Interruption withdraws an unsent command */
     readonly submit: (op: number, d: unknown) => Effect.Effect<void, SubmitFailure>
     /** Background loop that sends queued commands as the rolling budget frees. Fork it in the session scope */
@@ -98,10 +111,10 @@ export interface CommandPacer {
 
 interface PendingCommand {
     readonly op: number
-    readonly d: unknown
-    /** Present for gateway.send commands, told whether the socket took the frame */
-    readonly settle: ((sent: boolean) => void) | undefined
-    cancelled: boolean
+    d: unknown
+    settled: ((sent: boolean) => void) | undefined
+    readonly application: boolean
+    pending: boolean
 }
 
 /** Build the rolling-window pacer over a socket's send path */
@@ -111,46 +124,61 @@ export function commandPacer(options: {
     readonly now: () => number
     readonly logger: ClientLogger | undefined
     readonly shardId: number | undefined
+    /** Send history owned by the resumable session, not the socket attempt */
+    readonly sentAt?: number[]
     readonly budget?: number
     readonly windowMs?: number
 }): CommandPacer {
-    const { send, now, logger, shardId, budget = applicationCommandBudget, windowMs = commandWindowMs } = options
-    /** Send times inside the current window, oldest first */
-    const sentAt: number[] = []
+    const {
+        send,
+        now,
+        logger,
+        shardId,
+        sentAt = [],
+        budget = applicationCommandBudget,
+        windowMs = commandWindowMs,
+    } = options
     const queue: PendingCommand[] = []
     let pendingApplication = 0
+    let pendingInternal = 0
     let closed = false
     let wake = Deferred.makeUnsafe<void>()
     const prune = (time: number) => {
         while (sentAt.length > 0 && sentAt[0]! <= time - windowMs) sentAt.shift()
     }
+    const release = (item: PendingCommand) => {
+        if (!item.pending) return
+        item.pending = false
+        if (item.application) pendingApplication -= 1
+        else pendingInternal -= 1
+    }
+    const cancel = (item: PendingCommand) => {
+        if (!item.pending) return
+        const index = queue.indexOf(item)
+        if (index !== -1) queue.splice(index, 1)
+        release(item)
+        // Dropping payloads immediately keeps cancelled requests out of queue memory while the loop sleeps
+        item.d = undefined
+        item.settled = undefined
+    }
     const dispatch = (item: PendingCommand) => {
+        release(item)
         const sent = send(item.op, item.d)
         if (sent) sentAt.push(now())
-        if (item.settle) {
-            pendingApplication -= 1
-            if (sent)
-                logger?.log({
-                    level: "debug",
-                    category: "gateway",
-                    code: "gateway.commandSent",
-                    message: `Sent a gateway.send command with opcode ${item.op} (${opcodeName(item.op) ?? "UNKNOWN"})`,
-                    shardId,
-                    fields: { opcode: item.op },
-                })
-            item.settle(sent)
-        }
+        if (sent && item.application)
+            logger?.log({
+                level: "debug",
+                category: "gateway",
+                code: "gateway.commandSent",
+                message: `Sent a gateway.send command with opcode ${item.op} (${opcodeName(item.op) ?? "UNKNOWN"})`,
+                shardId,
+                fields: { opcode: item.op },
+            })
+        item.settled?.(sent)
     }
     const enqueue = (item: PendingCommand) => {
-        if (item.settle) pendingApplication += 1
-        if (closed) {
-            // Queued SDK commands are re-sent by their owners after the next READY, and waiting submissions fail
-            if (item.settle) {
-                pendingApplication -= 1
-                item.settle(false)
-            }
-            return
-        }
+        if (item.application) pendingApplication += 1
+        else pendingInternal += 1
         if (queue.length === 0) {
             prune(now())
             if (sentAt.length < budget) return dispatch(item)
@@ -163,25 +191,31 @@ export function commandPacer(options: {
             yield* Deferred.await(wake)
             wake = Deferred.makeUnsafe<void>()
             while (queue.length > 0 && !closed) {
-                const head = queue[0]!
-                if (head.cancelled) {
-                    queue.shift()
-                    pendingApplication -= 1
-                    continue
-                }
                 const time = now()
                 prune(time)
                 if (sentAt.length >= budget) {
                     yield* Effect.sleep(Math.max(1, sentAt[0]! + windowMs - time))
                     continue
                 }
-                queue.shift()
-                dispatch(head)
+                dispatch(queue.shift()!)
             }
         }
     })
     return {
-        send: (op, d) => enqueue({ op, d, settle: undefined, cancelled: false }),
+        send: (op, d, settled) => {
+            if (closed) return "closed"
+            if (pendingInternal >= maxPendingInternalCommands) return "busy"
+            const item: PendingCommand = { op, d, settled, application: false, pending: true }
+            enqueue(item)
+            return {
+                cancel: () => cancel(item),
+                replace: (d: unknown, settled: (sent: boolean) => void) => {
+                    if (!item.pending) return
+                    item.d = d
+                    item.settled = settled
+                },
+            }
+        },
         submit: (op, d) =>
             Effect.suspend(() => {
                 if (closed) return Effect.fail("closed" as const)
@@ -190,16 +224,13 @@ export function commandPacer(options: {
                 const item: PendingCommand = {
                     op,
                     d,
-                    settle: (sent) => Deferred.doneUnsafe(done, Effect.succeed(sent)),
-                    cancelled: false,
+                    settled: (sent) => Deferred.doneUnsafe(done, Effect.succeed(sent)),
+                    application: true,
+                    pending: true,
                 }
                 enqueue(item)
                 return Deferred.await(done).pipe(
-                    Effect.onInterrupt(() =>
-                        Effect.sync(() => {
-                            item.cancelled = true
-                        }),
-                    ),
+                    Effect.onInterrupt(() => Effect.sync(() => cancel(item))),
                     Effect.flatMap((sent) => (sent ? Effect.void : Effect.fail("closed" as const))),
                 )
             }),
@@ -207,11 +238,12 @@ export function commandPacer(options: {
         close: () => {
             if (closed) return
             closed = true
-            for (const item of queue.splice(0))
-                if (item.settle && !item.cancelled) {
-                    pendingApplication -= 1
-                    item.settle(false)
-                }
+            for (const item of queue.splice(0)) {
+                release(item)
+                item.settled?.(false)
+                item.d = undefined
+                item.settled = undefined
+            }
         },
     }
 }
@@ -230,17 +262,20 @@ export interface IdentifyFields {
 export interface GatewayCommands {
     /** Send Resume when the session retained an ID and sequence at attempt start, otherwise Identify */
     readonly authenticate: () => void
-    readonly presence: (update: GatewayPresenceUpdate) => void
-    readonly memberSubscriptions: (subscriptions: GatewayPresenceMemberSubscriptions) => void
-    readonly guildCounts: (guildIds: readonly string[], nonce: string) => void
-    readonly memberChunks: (payload: Readonly<Record<string, unknown>>, nonce: string) => void
-    readonly channelMemberCounts: (guildId: string, channelIds: readonly string[], nonce: string) => void
+    readonly presence: (update: GatewayPresenceUpdate, settled?: (sent: boolean) => void) => InternalSubmission
+    readonly memberSubscriptions: (
+        subscriptions: GatewayPresenceMemberSubscriptions,
+        settled?: (sent: boolean) => void,
+    ) => InternalSubmission
+    readonly guildCounts: (guildIds: readonly string[], nonce: string) => InternalSubmission
+    readonly memberChunks: (payload: Readonly<Record<string, unknown>>, nonce: string) => InternalSubmission
+    readonly channelMemberCounts: (guildId: string, channelIds: readonly string[], nonce: string) => InternalSubmission
 }
 
 /** Build the typed commands over the immediate control path and the paced path */
 export function gatewayCommands(
     control: SendCommand,
-    paced: (op: number, d: unknown) => void,
+    paced: PacedSend,
     identity: {
         readonly token: Redacted.Redacted<string>
         /** Read at send time, so Resume carries the latest session ID and sequence */
@@ -273,8 +308,8 @@ export function gatewayCommands(
                 ...(fields.flags ? { flags: fields.flags } : {}),
             })
         },
-        presence: (update) => paced(Opcode.presenceUpdate, update),
-        memberSubscriptions: (subscriptions) => paced(Opcode.memberSubscriptions, subscriptions),
+        presence: (update, settled) => paced(Opcode.presenceUpdate, update, settled),
+        memberSubscriptions: (subscriptions, settled) => paced(Opcode.memberSubscriptions, subscriptions, settled),
         guildCounts: (guildIds, nonce) => paced(Opcode.requestGuildCounts, { guild_ids: guildIds, nonce }),
         memberChunks: (payload, nonce) => paced(Opcode.requestGuildMembers, { ...payload, nonce }),
         channelMemberCounts: (guildId, channelIds, nonce) =>

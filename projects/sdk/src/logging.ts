@@ -33,8 +33,8 @@ export type LogCategory =
     | "sdk"
 
 /** Readable facts about an error attached to a log record or failure report.
- * Application errors keep their full message, stack and cause chain. SDK errors add their stable code and hint.
- * Credentials are masked in every string
+ * Application errors keep their name, string code, message, stack and cause chain with credentials masked.
+ * SDK errors add their fixed code and hint
  *
  * @category Logging and diagnostics
  */
@@ -45,7 +45,7 @@ export interface ErrorInfo {
     readonly name: string
     /** Error message, or a text form of a thrown non-Error value */
     readonly message: string
-    /** Stable SDK error code, or a string code property of an application error */
+    /** Fixed SDK error code, or a string code property of an application error with credentials masked */
     readonly code?: string
     /** Suggested next step from an SDK error */
     readonly hint?: string
@@ -114,6 +114,9 @@ export type LogSink = (record: LogRecord) => void
  * rate-limit waits of at least one second, shutdown and full application errors.
  * The FLUXERLY_DEBUG environment variable, read when the client is created, enables Debug records:
  * 1, true or * for every category, or a comma-separated list such as gateway,rest.
+ * HTTP 401 and 403 rejections log a rest.rejected Warn even when handled. An unhandled handler failure with that same
+ * rejection, directly or in its cause chain, replaces its Warn if it happens within one second. A later handler failure
+ * also logs its own record, because the Warn has already been emitted.
  * Logging never changes operation results, and records never contain credentials
  *
  * @category Logging and diagnostics
@@ -159,7 +162,8 @@ export interface LoggingOptions {
      * Payloads can contain private message content, so the SDK prints a Warn banner once, at startup or before the first
      * payload record, whichever comes first, even when the level would hide Warn records.
      * Received REST bodies show at most their first 65,536 bytes.
-     * Tokens, Authorization headers, client secrets and invite codes stay masked even in this mode
+     * Tokens, Authorization headers, client secrets, passwords, cookies and invite codes stay masked even in this mode,
+     * including credential-key values in a truncated JSON response
      */
     readonly unsafe?: {
         /** Must be true to acknowledge that payload bodies can contain private content */

@@ -7,6 +7,7 @@
 // identity and absence are verified, remaining test roles must have zero permissions, and children are removed before
 // categories. Emoji absence does not prove image-blob erasure. Moderation recovery refuses to remove unrelated timeout
 // or ban state
+import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { randomUUID, createHash } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -4395,7 +4396,7 @@ try {
                     if (moderation) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
-                            const result = await Effect.runPromise(Effect.result(operation))
+                            const result = await Effect.runPromise(typedResult(Effect, operation))
                             if (result._tag === "Failure") throw result.failure
                             return result.success
                         }
@@ -4430,7 +4431,7 @@ try {
                     if (batchDelete) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
-                            const result = await Effect.runPromise(Effect.result(operation))
+                            const result = await Effect.runPromise(typedResult(Effect, operation))
                             if (result._tag === "Failure") throw result.failure
                             return result.success
                         }
@@ -4459,7 +4460,7 @@ try {
                     }
                     if (cleanupCheck) {
                         const run = async (operation) => {
-                            const result = await Effect.runPromise(Effect.result(operation))
+                            const result = await Effect.runPromise(typedResult(Effect, operation))
                             if (result._tag === "Failure") throw result.failure
                             return result.success
                         }
@@ -4487,7 +4488,7 @@ try {
                     if (optionalTools) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
-                            const result = await Effect.runPromise(Effect.result(operation))
+                            const result = await Effect.runPromise(typedResult(Effect, operation))
                             if (result._tag === "Failure") throw result.failure
                             return result.success
                         }
@@ -4554,7 +4555,7 @@ try {
                     if (guilds) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
-                            const result = await Effect.runPromise(Effect.result(operation))
+                            const result = await Effect.runPromise(typedResult(Effect, operation))
                             if (result._tag === "Failure") throw result.failure
                             return result.success
                         }
@@ -4631,7 +4632,7 @@ try {
                     if (channels) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
-                            const result = await Effect.runPromise(Effect.result(operation))
+                            const result = await Effect.runPromise(typedResult(Effect, operation))
                             if (result._tag === "Failure") throw result.failure
                             return result.success
                         }
@@ -4671,7 +4672,7 @@ try {
                     if (pins) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
-                            const result = await Effect.runPromise(Effect.result(operation))
+                            const result = await Effect.runPromise(typedResult(Effect, operation))
                             if (result._tag === "Failure") throw result.failure
                             return result.success
                         }
@@ -4702,7 +4703,7 @@ try {
                     if (reactions) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
-                            const result = await Effect.runPromise(Effect.result(operation))
+                            const result = await Effect.runPromise(typedResult(Effect, operation))
                             if (result._tag === "Failure") reportFailure(result.failure)
                             assert.equal(result._tag, "Success")
                             return result.success
@@ -4765,7 +4766,7 @@ try {
                                             stop: () => run(collector.close()),
                                             wait: async () => {
                                                 const result = await Effect.runPromise(
-                                                    Effect.result(collector.result()),
+                                                    typedResult(Effect, collector.result()),
                                                 )
                                                 if (result._tag === "Failure") throw result.failure
                                                 return result.success
@@ -4774,7 +4775,10 @@ try {
                                     },
                                     users: async (target, emoji, query) => {
                                         const result = await Effect.runPromise(
-                                            Effect.result(client.messages.fetchReactionUsers(target, emoji, query)),
+                                            typedResult(
+                                                Effect,
+                                                client.messages.fetchReactionUsers(target, emoji, query),
+                                            ),
                                         )
                                         if (result._tag === "Failure") throw result.failure
                                         return result.success
@@ -4800,7 +4804,7 @@ try {
                     if (embeds || attachments || attachmentSources) {
                         const scope = yield* Effect.scope
                         const run = async (operation) => {
-                            const result = await Effect.runPromise(Effect.result(operation))
+                            const result = await Effect.runPromise(typedResult(Effect, operation))
                             if (result._tag === "Failure") reportFailure(result.failure)
                             assert.equal(result._tag, "Success")
                             return result.success
@@ -4809,7 +4813,7 @@ try {
                             send: (input, options) => run(client.messages.send(channel.id, input, options)),
                             sendFailure: async (input, options) => {
                                 const result = await Effect.runPromise(
-                                    Effect.result(client.messages.send(channel.id, input, options)),
+                                    typedResult(Effect, client.messages.send(channel.id, input, options)),
                                 )
                                 assert.equal(result._tag, "Failure")
                                 return result.failure
@@ -4829,7 +4833,7 @@ try {
                             },
                             refreshUrls: async (urls, options) => {
                                 const result = await Effect.runPromise(
-                                    Effect.result(client.attachments.refreshUrls(urls, options)),
+                                    typedResult(Effect, client.attachments.refreshUrls(urls, options)),
                                 )
                                 if (result._tag === "Failure") throw result.failure
                                 return result.success

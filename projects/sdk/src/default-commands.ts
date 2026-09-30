@@ -53,6 +53,7 @@ import {
     withRejectionScope,
 } from "#sdk/internal/rejection-scope"
 import type { ClientLogger } from "#sdk/internal/logging"
+import { recordCommandFailure } from "#sdk/internal/events"
 import type { ResultAsync } from "neverthrow"
 import type { Client, EventHandlerOptions, FailureReport, Subscription } from "./index.js"
 
@@ -143,6 +144,7 @@ export interface DefaultPrefixCommandUnmatchedContext<M extends MessageCore = Me
  * Decide whether a matched command may run, from raw context before argument conversion.
  * Return true to allow it, false to deny it silently, or `{ deny: "reason" }` to deny it with text that
  * `onReject: "reply"` sends. A promise of those values is awaited.
+ * A false verdict is still counted, logged at Debug and passed to a custom onReject callback, but never sends an automatic reply.
  * The built-in `guards` cover common checks. Throws, rejected promises, Err results and other values use subscription error reporting
  *
  * @category Commands
@@ -174,7 +176,8 @@ export type DefaultPrefixCommandMiddleware<M extends MessageCore = Message> = (
 /**
  * Rejection feedback for a command: `"reply"` sends a short explanation, such as the missing argument and the command's
  * usage, the guard's deny reason or the cooldown's remaining time. `"silent"` sends nothing, and the rejection is still
- * logged at Debug. A function receives the context and rejection instead
+ * logged at Debug. A guard returning false never sends an automatic reply, even with "reply" selected.
+ * A function receives the context and rejection instead, including false guard denials
  *
  * So that repeated attempts do not make the bot repeat itself, `"reply"` answers an active cooldown key once until its
  * retry time, and a guard denial once per user and command every 5 seconds. Argument rejections are always answered.
@@ -206,7 +209,7 @@ export interface DefaultPrefixCommandsOptions<M extends MessageCore = Message> e
     ) => unknown
     /**
      * Rejection feedback for commands that do not set their own `onReject`. Omit it to give no feedback, except in
-     * runBot, which replies by default
+     * runBot, which replies by default. Guards returning false never send an automatic reply
      */
     readonly onReject?: DefaultPrefixCommandRejectionFeedback<M>
     /** Middleware run around every matched command, in order. See DefaultPrefixCommandMiddleware */
@@ -415,6 +418,10 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
      * A failed onUnmatched callback, prefix resolver or custom parser is reported the same way without a command name.
      * The router owns one bounded queue for its `onError` hook, which receives reports one at a time in order, as for client.on.
      * Rejected and unmatched commands are counted and logged at Debug in the commands category.
+     * The observe option receives one handler observation per router invocation, including event and command middleware.
+     * A matched command supplies its canonical command name, even when a guard denies it or middleware stops it.
+     * Reported failures produce outcome failure, cancellation produces cancelled, and other completions produce success.
+     * A message with no command match still produces an observation without a command name.
      * Each attachment dispatches independently, so attaching twice can run the same command twice.
      * Call `subscription.close()` to detach it and signal cancellation, without shutting down the client.
      * The returned `subscription.waitForClose()` observes SDK cleanup, not completion of arbitrary application promises.
@@ -575,6 +582,7 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
         const report =
             (services: ClientServices) => (message: M, name: string | undefined, cause: Cause.Cause<unknown>) =>
                 Effect.withFiber((fiber) => {
+                    recordCommandFailure(name, cause, fiber.context)
                     try {
                         const internal = makeReport(
                             {
@@ -708,9 +716,8 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
                     const metadata = registry.commands.find((command) =>
                         sameCommandPath(command.path ?? [command.name], path),
                     )
-                    return defaultCallback(() =>
-                        context.reply(rejectionReply(rejection, metadata, context.prefix, now)),
-                    )
+                    const text = rejectionReply(rejection, metadata, context.prefix, now)
+                    return text === undefined ? Effect.void : defaultCallback(() => context.reply(text))
                 }
                 return defaultCallback(() => feedback(context, rejection))
             },

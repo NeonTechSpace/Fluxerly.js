@@ -398,7 +398,7 @@ export const logCodes = {
         meaning: "A connection-state observer was still busy, so an intermediate state was replaced by a newer one",
     },
     "lifecycle.observerFailed": {
-        levels: ["error"],
+        levels: ["debug", "error"],
         meaning: "A connection-state observer threw or rejected",
         action: "Fix the observer callback",
     },
@@ -483,7 +483,7 @@ export const logCodes = {
     "rest.rejected": {
         levels: ["warn"],
         meaning:
-            "Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem that persists. The message names the target channel or community when the route has one. It is logged even when the application handles the Result. When a handler or command fails with this rejection and no onError hook receives the failure, the handler's failure record reports it instead, so it is logged once. Webhook and OAuth clients log rejected webhook tokens and OAuth client credentials the same way",
+            "Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem that persists. The message names the target channel or community when the route has one. It is logged even when the application handles the Result. When a handler or command fails with this rejection within one second and no onError hook receives the failure, the handler's failure record reports it instead. A later handler failure also logs its own record, because the Warn has already been emitted. Webhook and OAuth clients log rejected webhook tokens and OAuth client credentials the same way",
         action: "Follow fields.hint. A bot that expects these rejections can lower the rest category level",
     },
     "rest.responseRejected": {
@@ -511,7 +511,7 @@ export const logCodes = {
         action: "Raise timeoutMs, or send fewer requests on that route",
     },
     "events.handlerFailed": {
-        levels: ["error"],
+        levels: ["debug", "error"],
         meaning: "An event handler threw or failed. Other events keep running",
         action: "Fix the handler, or handle the failure with onError",
     },
@@ -521,7 +521,7 @@ export const logCodes = {
         action: "Fix the onError hook",
     },
     "events.overflow": {
-        levels: ["warn", "error"],
+        levels: ["debug", "warn", "error"],
         meaning: "A subscription's queue exceeded its limit, so the subscription stopped",
         action: "Handle events faster, raise the pending limits or choose a dropping overflow policy",
     },
@@ -550,7 +550,7 @@ export const logCodes = {
         meaning: "A command did not run because middleware did not continue",
     },
     "commands.failed": {
-        levels: ["error"],
+        levels: ["debug", "error"],
         meaning: "A command threw or failed",
         action: "Fix the command, or handle the failure with the router's onError",
     },
@@ -560,12 +560,12 @@ export const logCodes = {
             "The bot user ID needed for mention prefixes could not be read, so mention commands are skipped for a while",
     },
     "collectors.callbackFailed": {
-        levels: ["error"],
+        levels: ["debug", "error"],
         meaning: "A collector callback threw or failed",
         action: "Fix the callback",
     },
     "collectors.filterFailed": {
-        levels: ["error"],
+        levels: ["debug", "error"],
         meaning: "A collector filter threw or returned a non-boolean",
         action: "Make the filter return true or false without throwing",
     },
@@ -579,12 +579,12 @@ export const logCodes = {
         meaning: "A full collector ignored an event while its last callback finished",
     },
     "cache.policyFailed": {
-        levels: ["error"],
+        levels: ["debug", "error"],
         meaning: "A message cache maxAgeMs function or a cache.onChange listener threw or returned an invalid value",
         action: "Fix that function or listener",
     },
     "cleanup.progressFailed": {
-        levels: ["error"],
+        levels: ["debug", "error"],
         meaning: "A message cleanup progress callback threw",
         action: "Fix the onProgress callback",
     },

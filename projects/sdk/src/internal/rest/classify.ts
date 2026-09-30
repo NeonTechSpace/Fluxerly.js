@@ -14,6 +14,8 @@ import {
     type InputValidationDetail,
 } from "#sdk/input-validation"
 import { record } from "../decode/primitives.js"
+import { TransportError } from "../effect-failures.js"
+import { linkRejectionError } from "../rejection-scope.js"
 
 /** Whether an operation's request may have reached Fluxer */
 export type Outcome = MessageOperationError["outcome"]
@@ -67,18 +69,21 @@ export class RestFailure extends Error {
 
     /** The same failure recorded under the operation's current outcome */
     withOutcome(outcome: Outcome): RestFailure {
-        return new RestFailure({
-            reason: this.reason,
-            outcome,
-            status: this.status,
-            retryAfterMs: this.retryAfterMs,
-            retryableRead: this.retryableRead,
-            apiError: this.apiError,
-            inputValidation: this.inputValidation,
-            providerCode: this.providerCode,
-            responseField: this.responseField,
-            cause: this.cause,
-        })
+        return linkRejectionError(
+            new RestFailure({
+                reason: this.reason,
+                outcome,
+                status: this.status,
+                retryAfterMs: this.retryAfterMs,
+                retryableRead: this.retryableRead,
+                apiError: this.apiError,
+                inputValidation: this.inputValidation,
+                providerCode: this.providerCode,
+                responseField: this.responseField,
+                cause: this.cause,
+            }),
+            this,
+        )
     }
 }
 
@@ -102,19 +107,22 @@ export function operationFailure<Operation extends string, Failure>(
     operation: NoInfer<Operation>,
 ): Failure | ClientClosedError {
     if (!(error instanceof RestFailure)) return error
-    return new ErrorType({
-        operation,
-        reason: error.reason,
-        outcome: error.outcome,
-        status: error.status,
-        retryAfterMs: error.retryAfterMs,
-        apiError: error.apiError,
-        inputValidation: error.inputValidation,
-        providerCode: error.providerCode,
-        responseField: error.responseField,
-        ...(error.read ? { read: true } : {}),
-        ...(error.cause === undefined ? {} : { cause: error.cause }),
-    })
+    return linkRejectionError(
+        new ErrorType({
+            operation,
+            reason: error.reason,
+            outcome: error.outcome,
+            status: error.status,
+            retryAfterMs: error.retryAfterMs,
+            apiError: error.apiError,
+            inputValidation: error.inputValidation,
+            providerCode: error.providerCode,
+            responseField: error.responseField,
+            ...(error.read ? { read: true } : {}),
+            ...(error.cause === undefined ? {} : { cause: error.cause }),
+        }),
+        error,
+    )
 }
 
 /** Translate an instance-discovery failure into the operation's not-dispatched failure */
@@ -124,8 +132,13 @@ export function instanceFailure(error: unknown): RestFailure | ClientClosedError
     if (error instanceof RateLimitError)
         return new RestFailure({ reason: "rateLimit", outcome: "notDispatched", retryAfterMs: error.retryAfterMs })
     if (error instanceof ConnectionError)
-        return new RestFailure({ reason: "network", outcome: "notDispatched", status: error.status })
-    return new RestFailure({ reason: "network", outcome: "notDispatched" })
+        return new RestFailure({
+            reason: "network",
+            outcome: "notDispatched",
+            status: error.status,
+            cause: new TransportError(error),
+        })
+    return new RestFailure({ reason: "network", outcome: "notDispatched", cause: new TransportError(error) })
 }
 
 function retryAfter(response: Response, now: number): number | null {
@@ -290,6 +303,7 @@ export type ResponseClass =
           readonly retry: number
           readonly global: boolean
           readonly apiError: ApiErrorDetail | null
+          readonly providerCode: string | undefined
       }
 
 function collect(context: ClassifyContext, read: ApiErrorRead) {
@@ -330,13 +344,20 @@ export async function classifyResponse(response: Response, context: ClassifyCont
                 outcome: progress.outcome,
                 status: 429,
                 apiError: apiRead.detail,
+                providerCode: apiRead.providerCode,
             })
         const retry = Math.ceil(delay)
         const global = headerGlobal || apiRead.global
         const until = context.now() + retry
         if (global) context.pauseGlobal(until)
         else context.pauseBucket(until)
-        return { kind: "retry", retry, global, apiError: apiRead.detail }
+        return {
+            kind: "retry",
+            retry,
+            global,
+            apiError: apiRead.detail,
+            providerCode: apiRead.providerCode ?? undefined,
+        }
     }
     if (response.ok) return { kind: "accepted" }
     let apiRead: ApiErrorRead | undefined

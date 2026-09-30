@@ -1,14 +1,14 @@
 ---
 title: Make bot operations reliable
 navTitle: Reliability
-description: Report failures once, retry only when it is safe, set deadlines and handle uncertain writes
+description: Report failures, retry only when it is safe, set deadlines and handle uncertain writes
 ---
 
-Most bots need little code for reliability. The SDK reconnects on its own, keeps running when a handler fails and reports each failure once with its full cause. A handler only has to return the Result of its reply, and retry only when the SDK confirms that retrying is safe
+Most bots need little code for reliability. The SDK reconnects on its own, keeps running when a handler fails and reports callback failures with their full cause. A handler only has to return the Result of its reply, and retry only when the SDK confirms that retrying is safe
 
 ## Return the reply's Result
 
-The default API returns expected failures, such as a missing permission or a network error, in a [`Result`](/docs/{{version}}/glossary/#result) instead of throwing. A handler that returns that Result hands a failure to the SDK, which reports it once
+The default API returns expected failures, such as a missing permission or a network error, in a [`Result`](/docs/{{version}}/glossary/#result) instead of throwing. A handler that returns that Result hands a failure to the SDK. An HTTP 401 or 403 rejection is logged once unless the handler returns its failure more than one second after the rejection, when its `rest.rejected` Warn has already appeared. See [rejection logging](/docs/{{version}}/logging/#read-the-default-output)
 
 ```ts
 import { errors, runBot } from "@neontechspace/fluxerly"
@@ -166,7 +166,7 @@ The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) explains s
 <details>
 <summary>Request queue and capacity</summary>
 
-A client runs 4 API requests at a time and lets 256 wait by default. A request that finds the queue full fails at once with reason `busy` and was never sent, so it is safe to retry later.
+By default, a client runs up to 4 API requests at a time per local shard, capped at 64 for the client, and lets 256 requests wait. An explicit `rest.concurrency` stays fixed instead of scaling with the shard count. A request that finds the queue full fails at once with reason `busy` and was never sent, so it is safe to retry later.
 The `rest` client option changes these limits, as described in [configuration](/docs/{{version}}/configuration/#connection-and-requests)
 
 </details>

@@ -11,6 +11,19 @@ import { decodeMessage } from "./message.js"
 import { identifier, record } from "./decode/primitives.js"
 import { timestamp } from "./decode/timestamp.js"
 
+/** Compare validated pin timestamps by instant, retaining every fractional digit and normalizing timezone offsets */
+export function comparePinTimestamps(left: string, right: string): number {
+    const fraction = /\.(\d+)/
+    const leftFraction = fraction.exec(left)?.[1] ?? ""
+    const rightFraction = fraction.exec(right)?.[1] ?? ""
+    const seconds = Date.parse(left.replace(fraction, "")) - Date.parse(right.replace(fraction, ""))
+    if (seconds !== 0) return seconds
+    const length = Math.max(leftFraction.length, rightFraction.length)
+    const first = leftFraction.padEnd(length, "0")
+    const second = rightFraction.padEnd(length, "0")
+    return first < second ? -1 : first > second ? 1 : 0
+}
+
 export function encodePinsQuery(channel: unknown, query: unknown) {
     const input = query === undefined ? {} : query
     if (!identifier(channel))
@@ -62,17 +75,17 @@ export function decodePinsPage(
     const items: MessagePin<MessageCore>[] = []
     const ids = new Set<string>()
     const before = query.params.get("before")
-    let previous = before === null ? Infinity : Date.parse(before)
+    let previous = before
     for (const item of value.items) {
         if (!record(item) || !timestamp(item.pinned_at)) return undefined
         const message = decode(item.message)
-        const time = Date.parse(item.pinned_at)
+        const time = item.pinned_at
         if (
             !message ||
             message.channelId !== channel ||
             (record(item.message) && item.message.pinned === false) ||
             ids.has(message.id) ||
-            time > previous
+            (previous !== null && comparePinTimestamps(time, previous) > 0)
         )
             return undefined
         previous = time

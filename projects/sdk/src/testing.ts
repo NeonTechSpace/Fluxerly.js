@@ -122,7 +122,8 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
     readonly rest: TestRest
     /**
      * Connect the client to the test gateway and resolve once every shard it owns is READY, like client.connect.
-     * Calling it again while connected resolves without opening another socket.
+     * Calling it again while connected resolves without opening another socket. With gateway.ignoredEvents set to "auto",
+     * register handlers before this call, because Identify chooses the session's filtering from those registrations.
      * The promise rejects with the connect failure, such as ConnectionError when a handler closed the connection,
      * so a failed start fails the test
      */
@@ -132,8 +133,13 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
      * The type is the Fluxer wire dispatch name, such as MESSAGE_CREATE or GUILD_MEMBER_ADD, and the payload is the wire
      * body in snake_case, so it passes through the SDK's real decoders, cache updates and handlers.
      * Handlers run afterwards on their own schedule. Register client.waitFor before emitting to await delivery.
-     * Unknown types are delivered too, as Fluxer would send them, and malformed payloads follow the client's
+     * Unknown types are delivered too unless explicitly suppressed, and malformed payloads follow the client's
      * gateway.onMalformedDispatch policy.
+     * Throws ConfigurationError without consuming a sequence when the session's Identify filtering would suppress the
+     * dispatch. Suppressed MESSAGE_CREATE still arrives for a direct bot mention, @here or @everyone. Role-only mentions,
+     * direct-message delivery and bot authorship alone do not exempt it. Generated MESSAGE_REACTION_ADD_MANY is gated by
+     * MESSAGE_REACTION_ADD, not its generated name. Register handlers before ready when gateway.ignoredEvents is "auto",
+     * or remove the source type from the explicit list (use [] to disable suppression). Resume keeps the current list.
      * READY and RESUMED are reserved for the handshake. Throws ConfigurationError before ready or for a shard this
      * client does not own
      */
@@ -185,7 +191,8 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
 
 /**
  * Create a real default-API client wired to an in-memory Fluxer for application tests.
- * Creation opens no connection and starts no timers. Call ready to connect, and shutdown or `await using` to clean up
+ * Creation opens no connection and starts no timers. Call ready to connect, and shutdown or `await using` to clean up.
+ * The gateway enforces gateway.ignoredEvents, so register handlers before ready when automatic filtering is enabled
  *
  * @remarks
  * Invalid options throw ConfigurationError as createClient does, and supplying transport or instance also throws
@@ -268,7 +275,8 @@ export type TestBotOptions<
  * Create a test client that runs a bot written for runBot: Its events, commands and setup callback, with the same
  * handler contexts, delivery defaults and command router as runBot. Handlers and commands are registered at once,
  * and ready runs setup before connecting, as runBot does, so a test drives the bot exactly as Fluxer would.
- * It returns the same test client as createTestClient, and shutdown or `await using` cleans it up
+ * It returns the same test client as createTestClient, and shutdown or `await using` cleans it up. Automatic gateway
+ * filtering sees the bot's handlers, commands and setup registrations, and emit rejects dispatches that list suppresses
  *
  * @remarks
  * Invalid options throw ConfigurationError, as runBot does, and a commands register callback that throws throws its

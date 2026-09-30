@@ -137,7 +137,7 @@ await runBot({
 Here `!purge` runs only in a community, for a member with the Manage Messages permission, and at most once every 30 seconds in each channel. With `mentionPrefix`, a mention of the bot also works as a prefix. An unknown command name is ignored unless `onUnmatched` handles it, and its `suggestion` names the closest registered command when one is similar.
 Each unmatched message is logged at Debug with the code `commands.unmatched` and the fields `reason`, `messageId`, `channelId` and, when there is one, `suggestion`
 
-A guard returns `true` to allow the command, `false` to deny it silently or `{ deny: "reason" }` to deny it with a reason. Each built-in guard in `guards` covers one common check and allows only:
+A guard returns `true` to allow the command, `false` to deny it without an automatic reply or `{ deny: "reason" }` to deny it with a reason that `onReject: "reply"` sends. A false verdict stays silent even with the `runBot` reply default, but still counts as a rejection, logs `commands.rejected` at Debug and reaches a custom `onReject` callback. Each built-in guard denies with a specific reason and covers one common check, allowing only:
 
 - Messages sent in a community, with `guards.guildOnly()`
 - Direct and group conversations, with `guards.dmOnly()`
@@ -163,7 +163,7 @@ A full store never turns a user away: It removes expired keys first, then the ke
 <details>
 <summary>How often a rejected command is answered</summary>
 
-So that repeated attempts do not make the bot repeat itself, the `"reply"` feedback answers an active cooldown once until it expires, and a guard denial once per user and command every 5 seconds. Argument errors are answered every time.
+So that repeated attempts do not make the bot repeat itself, the `"reply"` feedback answers an active cooldown once until it expires, and a guard denial with a reason once per user and command every 5 seconds. A guard returning `false` sends nothing. Argument errors are answered every time.
 A skipped answer still counts as a rejection and is logged at Debug. An `onReject` function receives every rejection instead, so it can apply its own limit
 
 </details>

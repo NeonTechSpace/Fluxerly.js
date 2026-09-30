@@ -56,9 +56,40 @@ import {
     type InternalReport,
 } from "./failures.js"
 import { metrics } from "./metrics.js"
-import { RejectionScope, withRejectionScope } from "./rejection-scope.js"
+import { RejectionScope, fiberRejectionScope, withRejectionScope } from "./rejection-scope.js"
 import { emitObservation, failureFacts, observing } from "./observer.js"
 import { editDistance, unsupportedKeyHint } from "./suggest.js"
+
+/** Mutable facts shared by the event worker and a command router that handles this invocation */
+interface InvocationOutcome {
+    command: string | undefined
+    failure: Cause.Cause<unknown> | undefined
+}
+
+// Rejection scopes already cross both the native fiber and default Promise boundaries of one invocation
+const invocationOutcomes = new WeakMap<RejectionScope, InvocationOutcome>()
+
+/** Select the canonical command name once a router matches, before its guards and middleware run */
+export function identifyCommand(name: string): Effect.Effect<void> {
+    return Effect.withFiber((fiber) => {
+        const scope = fiberRejectionScope(fiber.context)
+        const outcome = scope === undefined ? undefined : invocationOutcomes.get(scope)
+        if (outcome) outcome.command = name
+        return Effect.void
+    })
+}
+
+/** Keep a reported command failure visible to the enclosing handler observation, even when dispatch recovers */
+export function recordCommandFailure(
+    name: string | undefined,
+    cause: Cause.Cause<unknown>,
+    context: Context.Context<never>,
+): void {
+    const scope = fiberRejectionScope(context)
+    const outcome = scope === undefined ? undefined : invocationOutcomes.get(scope)
+    if (outcome) outcome.failure ??= cause
+    metrics.handlerFailure(name ?? "messageCreate", context)
+}
 
 /** One admitted event with the shard and received frame size it arrived with */
 interface Delivery<A> {
@@ -942,7 +973,7 @@ export class EventBus<M extends MessageCore = Message> {
                 // Failures after a middleware's next are reported where they occur, so next itself never fails and a
                 // middleware cannot hide a handler failure. Interruption still ends the whole invocation. The outcome
                 // records the first reported failure of one invocation for its handler observation
-                type Outcome = { failure: Cause.Cause<unknown> | undefined }
+                type Outcome = InvocationOutcome
                 const failed = (outcome: Outcome, cause: Cause.Cause<unknown>, message: EventMap<M>[K]) => {
                     outcome.failure ??= cause
                     return report("handler", cause, message)
@@ -979,7 +1010,7 @@ export class EventBus<M extends MessageCore = Message> {
                         subscriptionId: source.id,
                     }) as EventInvocation<MessageCore>
                     const step = (index: number): Effect.Effect<unknown, unknown, R> => {
-                        if (index === chain.length) return handler(message, context)
+                        if (index === chain.length) return Effect.suspend(() => handler(message, context))
                         return Effect.suspend(() => {
                             let started: Deferred.Deferred<void> | undefined
                             let finished = false
@@ -1003,7 +1034,9 @@ export class EventBus<M extends MessageCore = Message> {
                                     Effect.ensuring(Effect.sync(() => Deferred.doneUnsafe(done, Effect.void))),
                                 )
                             })
-                            return Effect.exit(chain[index]!(invocation, next as Effect.Effect<void>)).pipe(
+                            return Effect.exit(
+                                Effect.suspend(() => chain[index]!(invocation, next as Effect.Effect<void>)),
+                            ).pipe(
                                 Effect.flatMap((exit) => {
                                     finished = true
                                     // A middleware that started next without awaiting it still holds this handler slot until the chain ends
@@ -1027,7 +1060,7 @@ export class EventBus<M extends MessageCore = Message> {
                     emitObservation(logger, {
                         type: "handler",
                         event,
-                        ...(command === undefined ? {} : { command }),
+                        ...(outcome.command === undefined ? {} : { command: outcome.command }),
                         subscriptionId: source.id,
                         shardId: context.shardId,
                         durationMs: performance.now() - startedAt,
@@ -1051,10 +1084,11 @@ export class EventBus<M extends MessageCore = Message> {
                     Effect.withFiber((fiber) => {
                         const { message } = delivery
                         const context = eventContext(delivery)
-                        const outcome: Outcome = { failure: undefined }
+                        const outcome: Outcome = { command, failure: undefined }
                         const startedAt = observing(bus.logging?.()) ? performance.now() : undefined
                         // Rejection records of this invocation wait for its outcome, so a failure is logged once
                         const rejections = new RejectionScope()
+                        invocationOutcomes.set(rejections, outcome)
                         const invocation = Effect.gen(function* () {
                             bus.#handlerFibers.add(fiber.id)
                             yield* Effect.scoped(Effect.suspend(() => invoke(message, context, outcome))).pipe(
@@ -1088,6 +1122,7 @@ export class EventBus<M extends MessageCore = Message> {
                             Effect.ensuring(Effect.sync(() => rejections.end())),
                             Effect.onExit((exit) =>
                                 Effect.sync(() => {
+                                    invocationOutcomes.delete(rejections)
                                     if (startedAt !== undefined) observeInvocation(exit, outcome, context, startedAt)
                                 }),
                             ),

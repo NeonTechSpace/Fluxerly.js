@@ -42,8 +42,8 @@ describe.each(modes)("%s rejection replies", (mode) => {
         remote.deliver("!closed")
         remote.deliver("!slow")
         remote.deliver("!slow")
-        await vi.waitFor(() => expect(remote.replies()).toHaveLength(7))
-        const [missing, invalid, outOfRange, extra, denied, closed, cooldown] = remote.replies() as string[]
+        await vi.waitFor(() => expect(remote.replies()).toHaveLength(6))
+        const [missing, invalid, outOfRange, extra, denied, cooldown] = remote.replies() as string[]
         // Argument replies state the reason and the command's usage. Their wording is not a contract, so only the
         // usage, the argument name and the caller's bounds are checked, outside the usage text
         const usage = "!repeat <text> <count> [note]"
@@ -56,8 +56,6 @@ describe.each(modes)("%s rejection replies", (mode) => {
         // Missing, invalid and extra arguments each get their own explanation
         expect(new Set([reasons[0], reasons[1], reasons[3]]).size).toBe(3)
         expect(denied).toBe("Only moderators can use this")
-        expect(closed).toEqual(expect.any(String))
-        expect(closed!.length).toBeGreaterThan(0)
         expect(cooldown).toMatch(/\b60\b/)
         expect(executed).toEqual(["slow"])
         expect(reports).toEqual([])
@@ -68,7 +66,7 @@ describe.each(modes)("%s rejection replies", (mode) => {
             replyCalls.map(
                 (call) => (call.body as { message_reference?: { message_id?: string } }).message_reference?.message_id,
             ),
-        ).toEqual(["101", "102", "103", "104", "105", "106", "108"])
+        ).toEqual(["101", "102", "103", "104", "105", "108"])
     })
 
     test('onReject "reply" answers an active cooldown once and a guard denial once per user and command every 5 seconds', async () => {

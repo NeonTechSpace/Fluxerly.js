@@ -52,6 +52,7 @@ import type * as Scope from "effect/Scope"
 import { clientServices } from "#sdk/internal/client-registry"
 import { makeReport, messageReference, primaryError, type InternalReport } from "#sdk/internal/failures"
 import type { ClientLogger } from "#sdk/internal/logging"
+import { recordCommandFailure } from "#sdk/internal/events"
 import type { Client, EventHandlerOptions, Subscription } from "./effect.js"
 
 /**
@@ -130,6 +131,7 @@ export interface NativePrefixCommandUnmatchedContext<M extends MessageCore = Mes
  * Decide whether a matched command may run, from raw context before argument conversion.
  * The Effect produces true to allow it, false to deny it silently, or `{ deny: "reason" }` to deny it with text that
  * `onReject: "reply"` sends. The built-in `guards` cover common checks.
+ * A false verdict is still counted, logged at Debug and passed to a custom onReject callback, but never sends an automatic reply.
  * Failures, defects and other values use subscription error reporting
  *
  * @category Commands
@@ -161,7 +163,8 @@ export type NativePrefixCommandMiddleware<E = never, R = never, M extends Messag
 /**
  * Rejection feedback for a command: `"reply"` sends a short explanation, such as the missing argument and the command's
  * usage, the guard's deny reason or the cooldown's remaining time. `"silent"` sends nothing, and the rejection is still
- * logged at Debug. A function returns an Effect that gives feedback instead
+ * logged at Debug. A guard returning false never sends an automatic reply, even with "reply" selected.
+ * A function returns an Effect that gives feedback instead, including for false guard denials
  *
  * So that repeated attempts do not make the bot repeat itself, `"reply"` answers an active cooldown key once until its
  * retry time, and a guard denial once per user and command every 5 seconds, measured with the handler's Effect Clock.
@@ -196,7 +199,7 @@ export interface NativePrefixCommandsOptions<
         | ((message: M) => PrefixCommandPrefixValue | Effect.Effect<PrefixCommandPrefixValue, unknown>)
     /**
      * Rejection feedback for commands that do not set their own `onReject`. Omit it to give no feedback, except in
-     * runBot, which replies by default
+     * runBot, which replies by default. Guards returning false never send an automatic reply
      */
     readonly onReject?: NativePrefixCommandRejectionFeedback<E, R, M>
     /** Middleware run around every matched command, in order. See NativePrefixCommandMiddleware */
@@ -506,6 +509,10 @@ export interface NativePrefixCommandRouter<R = never, M extends MessageCore = Me
      * The router owns one bounded queue for its `onError` hook, which receives reports one at a time in order, as for client.on.
      * Omitted or undefined settings default to eight concurrent commands and overflow dropOldest, so a burst never stops the router.
      * Rejected and unmatched commands are counted and logged at Debug in the commands category.
+     * The observe option receives one handler observation per router invocation, including event and command middleware.
+     * A matched command supplies its canonical command name, even when a guard denies it or middleware stops it.
+     * Reported failures produce outcome failure, interruption produces cancelled, and other completions produce success.
+     * A message with no command match still produces an observation without a command name.
      * Each attachment dispatches independently, so duplicate attachments can execute a command twice
      *
      * Run `subscription.close()` or close the registration scope to detach and interrupt handlers, without shutting down the client.
@@ -692,6 +699,7 @@ class NativePrefixCommandRouterOwner<R = never, M extends MessageCore = Message>
                 services &&
                 ((message: M, name: string | undefined, cause: Cause.Cause<unknown>): Effect.Effect<void> =>
                     Effect.withFiber((fiber) => {
+                        recordCommandFailure(name, cause, fiber.context)
                         try {
                             const internal = makeReport(
                                 {
@@ -833,7 +841,8 @@ class NativePrefixCommandRouterOwner<R = never, M extends MessageCore = Message>
                         sameCommandPath(command.path ?? [command.name], path),
                     )
                     // The remaining cooldown uses the handler's Clock time, the same Clock that claimed the cooldown
-                    return Effect.suspend(() => context.reply(rejectionReply(rejection, metadata, context.prefix, now)))
+                    const text = rejectionReply(rejection, metadata, context.prefix, now)
+                    return text === undefined ? Effect.void : Effect.suspend(() => context.reply(text))
                 }
                 return nativeCallback(
                     () => feedback(context, rejection),

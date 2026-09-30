@@ -59,13 +59,15 @@ export interface ShardingOptions {
     readonly identify?: IdentifyCoordinator
     /**
      * Keep resumable sessions across process restarts, so a restart within Fluxer's 60-second resume window can Resume
-     * instead of starting new sessions. See SessionStore
+     * instead of starting new sessions. A fallback to a new session clears any partial restored replay from that shard's
+     * community caches and dependent resources. A successful Resume retains it. See SessionStore
      */
     readonly sessions?: SessionStore
     /**
      * Whether a shard that resumes a session loaded from sessions refills the enabled community, role and channel
-     * caches through REST, default true. Fluxer calls a community a guild. A resumed session receives no community
-     * data, so without the refill those caches start empty and fill only as events and requests arrive.
+     * caches through REST, default true. Fluxer calls a community a guild. Resume replays missed dispatches but sends no
+     * fresh community snapshot, so without the refill those caches contain only observations from replay, later events
+     * and requests.
      * Once every shard is ready, the SDK lists the bot's communities and fetches each one on a resumed shard, one
      * request at a time, so application requests keep the other REST slots and every request respects rate limits.
      * It logs lifecycle.cacheRefill when done. Set false to skip the refill, for example for a bot that reads no cache
@@ -146,7 +148,9 @@ export interface SessionStore {
      * lifecycle.sessionSnapshotIgnored.
      * A rejection, thrown error or timeout is logged in full at Error with code lifecycle.sessionLoadFailed.
      * Either way the shard starts a new session, so load problems never fail startup.
-     * If Fluxer no longer holds the session, Resume fails and the shard starts a new session as in any recovery
+     * If Fluxer no longer holds the session, Resume fails and the shard starts a new session as in any recovery.
+     * Partial replay can update caches before RESUMED. A fallback to Identify clears that shard's cached communities and
+     * dependent resources, then clears reads cached during the wait again at READY. A successful Resume retains the replay
      *
      * @param shardId The local shard starting up
      */

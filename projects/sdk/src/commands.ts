@@ -353,8 +353,9 @@ export type CommandCooldownClaim =
 export type CommandCooldownPer = "user" | "channel" | "guild"
 
 /**
- * A guard's decision: `true` allows the command, `false` denies it silently, and `{ deny }` denies it with a reason that
- * `onReject: "reply"` sends to the user
+ * A guard's decision: `true` allows the command, `false` denies it without an automatic reply, and `{ deny }` denies it
+ * with a reason that `onReject: "reply"` sends to the user.
+ * Both denials are counted and logged at Debug. A custom onReject callback receives either denial
  *
  * @category Commands
  */

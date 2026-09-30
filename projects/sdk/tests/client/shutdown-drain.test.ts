@@ -1,10 +1,16 @@
 import { Deferred, Effect, Exit, Fiber, Scope } from "effect"
-import { describe, expect, onTestFinished, test, vi } from "vitest"
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest"
+import { fakeHostTime, hostTurnsUntil } from "../support/client-clock.js"
 import { ConfigurationError, runBot, type LogRecord } from "../../src/index.js"
 import { runBot as runNativeBot } from "../../src/effect.js"
 import { createTestClient } from "../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
 import { TestHarness } from "../../src/internal/testing/harness.js"
+
+afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+})
 
 const codes = (logs: readonly LogRecord[]) => logs.map((record) => record.code)
 
@@ -78,9 +84,15 @@ describe("default API drain", () => {
     test("an idle client ends the drain at once without drain records", async () => {
         const test = open()
         await test.ready()
-        const startedAt = Date.now()
-        expect((await test.client.shutdown({ drainMs: 60_000 })).isOk()).toBe(true)
-        expect(Date.now() - startedAt).toBeLessThan(5_000)
+        fakeHostTime()
+        let completed = false
+        const stopping = test.client.shutdown({ drainMs: 60_000 })
+        void stopping.then(() => {
+            completed = true
+        })
+        await hostTurnsUntil(() => completed)
+        expect((await stopping).isOk()).toBe(true)
+        expect(performance.now()).toBe(0)
         expect(codes(test.logs())).not.toContain("lifecycle.draining")
     })
 
@@ -190,10 +202,15 @@ describe("native API drain", () => {
             test.client.on("typingStart", () => test.client.shutdown({ drainMs: 60_000 })).pipe(Scope.provide(scope)),
         )
         await Effect.runPromise(test.ready())
+        fakeHostTime()
         await Effect.runPromise(test.emit("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1 }))
-        const startedAt = Date.now()
-        await Effect.runPromise(test.client.waitForClose())
-        expect(Date.now() - startedAt).toBeLessThan(5_000)
+        let completed = false
+        const closed = Effect.runPromise(test.client.waitForClose()).finally(() => {
+            completed = true
+        })
+        await hostTurnsUntil(() => completed)
+        await closed
+        expect(performance.now()).toBe(0)
         expect(codes(test.logs())).not.toContain("lifecycle.drainTimedOut")
     })
 

@@ -193,6 +193,7 @@ export interface Messages<M extends MessageCore = Message> {
      * At most maxItems IDs are kept to skip duplicates.
      * Valid items on a stalled page can be delivered before cursorStalled on the next pull.
      * The scan stops at maxItems or hasMore false.
+     * Cursor progress uses the full fractional timestamp precision and compares equivalent timezone offsets as the same instant.
      * Pins with equal timestamps can prevent a complete scan even without concurrent edits
      *
      * @remarks
@@ -265,6 +266,7 @@ export interface Messages<M extends MessageCore = Message> {
      * The before option is an ISO timestamp and defaults to the server's current time
      *
      * Use nextBefore for the next page and pinnedAt for each pin's time.
+     * Page ordering and the before bound use every fractional digit and normalize timezone offsets, while equal instants remain valid.
      * Equal timestamps can repeat messages, so skip duplicate IDs and stop if the cursor does not advance.
      * This call neither traverses further pages nor reads or populates the message cache.
      * Visibility and history permissions can limit the page, so an empty page does not prove there are no pins.

@@ -15,6 +15,17 @@ A bot talks to Fluxer in two ways:
 
 Receiving events needs the gateway. Sending a message or reading data does not, so a script that only posts one message can skip connecting
 
+<details>
+<summary>Outgoing gateway commands and presence</summary>
+
+Most outgoing work uses the SDK's named methods. The `gateway.send` method is an escape hatch for a command without one. Outgoing status, member subscriptions, count requests and custom commands share a pacing budget, so a command can wait locally before reaching the socket. An excess custom-command submission fails with reason `busy` when its waiting queue is full. Cancelling an unsent custom command immediately frees its place, and disconnecting abandons it rather than replaying it on the next connection
+
+The `presence.set` method retains the latest requested status for each ready local shard. Changes replace an unsent update instead of building a backlog. The four-second spacing starts when the update reaches the socket, not when it enters the queue. The `presence.setMembers` method follows the same latest-intent rule for an unsent member selection, and clearing it withdraws the queued request
+
+The `guilds.fetchCounts`, `channels.fetchMemberCounts` and `members.iterateChunks` methods require a ready gateway and share a separate request-slot budget. Their deadlines include gateway pacing waits. Cancellation or deadline expiry withdraws unsent commands and releases local capacity, but cannot stop work already sent to Fluxer
+
+</details>
+
 ## The client
 
 A client holds the token, the connection and everything the bot has registered. There are two ways to get one:

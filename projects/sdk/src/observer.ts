@@ -65,7 +65,8 @@ export interface ResumeObservation {
 }
 
 /**
- * One finished event handler or prefix command invocation, including its middleware
+ * One finished event handler or prefix command router invocation, including event and command middleware.
+ * A router emits one observation for every handled message, even when it matches no command
  *
  * @category Logging and diagnostics
  */
@@ -74,7 +75,7 @@ export interface HandlerObservation {
     readonly type: "handler"
     /** Event the handler received, such as messageCreate */
     readonly event: EventName
-    /** Prefix command name, for a command invocation */
+    /** Canonical prefix command name when the router matched one, including denied or middleware-stopped commands. Absent when no command matched */
     readonly command?: string
     /** Identifier of the subscription that ran the handler, such as messageCreate#3 */
     readonly subscriptionId: string
@@ -83,8 +84,10 @@ export interface HandlerObservation {
     /** Milliseconds from the start of the invocation until it finished */
     readonly durationMs: number
     /**
-     * How the invocation ended. The value success means it finished without failing, failure means it failed and was
-     * reported to onError or the log, and cancelled means shutdown or closing the subscription stopped it
+     * How the invocation ended. The value success means it finished without a reported failure, including a command
+     * denial or no command match. The value failure means a handler, command or middleware failure was reported to
+     * onError or the log, even when middleware recovered from it. The value cancelled means interruption stopped the
+     * invocation, such as shutdown or closing the subscription, and takes precedence over an earlier reported failure
      */
     readonly outcome: "success" | "failure" | "cancelled"
     /** Name of the failure's error, such as TypeError, for a failed invocation */

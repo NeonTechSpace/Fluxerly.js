@@ -2,6 +2,7 @@
 // keep-typing refresh confirmed by a human or browser observation, and refresh stop.
 // Journal `.env.test.typing.local` records the sandbox and bot identity and the unique marker and returned ID of
 // one test channel. An existing journal is cleaned up before a new run by deleting only the journaled channel
+import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { createInterface } from "node:readline"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -54,7 +55,7 @@ async function runMode(channel) {
             if (result.isErr()) throw result.error
             return result.value
         }
-        const result = await Effect.runPromise(Effect.result(operation))
+        const result = await Effect.runPromise(typedResult(Effect, operation))
         if (result._tag === "Failure") throw result.failure
         return result.success
     }

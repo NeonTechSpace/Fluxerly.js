@@ -17,7 +17,7 @@ import { suspendInput } from "./defects.js"
 import { memberPage } from "./guilds.js"
 import { guildList } from "./guild-lifecycle.js"
 import { auditLogPage } from "./audit-logs.js"
-import { encodePinsQuery } from "./pins.js"
+import { comparePinTimestamps, encodePinsQuery } from "./pins.js"
 import { encodeReactionUsersQuery, resolveReactionEmoji } from "./reactions.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
@@ -138,7 +138,7 @@ export class Pagination<A, E> {
                     const advances = this.source.advances
                         ? this.source.advances(this.#cursor, page.next)
                         : this.operation === "iteratePins"
-                          ? Date.parse(page.next) < Date.parse(this.#cursor)
+                          ? comparePinTimestamps(page.next, this.#cursor) < 0
                           : this.operation === "iterateHistory" || this.operation === "auditLogs.iterate"
                             ? BigInt(page.next) < BigInt(this.#cursor)
                             : BigInt(page.next) > BigInt(this.#cursor)

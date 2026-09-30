@@ -165,6 +165,14 @@ test("new members are welcomed", async () => {
 })
 ```
 
+## Match gateway event filtering
+
+The test gateway keeps the `gateway.ignoredEvents` list sent at Identify. An `emit` call throws `ConfigurationError` instead of delivering a dispatch Fluxer would suppress, and the rejected dispatch consumes no sequence number. This catches tests that would pass only because the fake gateway delivered an event the real bot cannot receive
+
+With `gateway.ignoredEvents: "auto"`, register handlers, waits and collectors before `ready()` so Identify sees them. A bot's handlers, commands and setup registrations are already installed at that point. A late registration cannot undo the current session's filtering, and Resume keeps that list. A new Identify recomputes automatic filtering. For an explicit list, remove the source dispatch type from the options before creating the client, or use `gateway.ignoredEvents: []` to disable suppression
+
+Suppressed `MESSAGE_CREATE` still arrives for a direct bot mention, `@here` or `@everyone`, but not merely for a role mention, an unmentioned direct message or the bot's own message. Reaction batches use their source event's filter: Ignoring `MESSAGE_REACTION_ADD` prevents `MESSAGE_REACTION_ADD_MANY`, while ignoring `MESSAGE_REACTION_ADD_MANY` alone does not. Under automatic filtering, a `messageReactionAddMany` handler retains that source dispatch
+
 ## Inspect what the bot sent
 
 The test client records everything, without the token or Authorization header:

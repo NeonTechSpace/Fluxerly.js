@@ -47,8 +47,10 @@ export interface Guilds {
      *
      * One call uses one of four client-wide gateway request slots until all shard commands and replies finish.
      * The channels.fetchMemberCounts and members.iterateChunks methods share those slots.
-     * There is no local queue, so excess calls fail with busy.
+     * There is no waiting queue for request slots, so excess calls fail with busy.
+     * Commands may wait for gateway pacing, and a full internal command queue also fails with busy.
      * The default 30,000 ms deadline includes registration, commands and all reply fragments.
+     * Cancellation or deadline expiry withdraws unsent commands and immediately releases local request capacity.
      * Fluxer also limits member and presence work, so a local slot does not guarantee a reply.
      * Only a gateway gap on a participating shard fails with connectionLost, and late replies are ignored.
      * No REST fallback, connection, caching, polling or retries are performed.

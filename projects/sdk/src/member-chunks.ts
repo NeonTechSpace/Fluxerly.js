@@ -120,7 +120,7 @@ export class MemberChunkError extends FluxerlyError {
     readonly inputValidation: InputValidationDetail | null
     /** Failure category.
      * The reason input means invalid selection or settings, and notConnected means the community's shard is absent or not ready.
-     * The reason busy means a member stream or shared request slot is already occupied.
+     * The reason busy means a member stream is already running, shared request capacity is full, or the shard's internal command queue is full.
      * The reason response means malformed or out-of-order batches, and overflow means the unread byte budget was exceeded.
      * The reason timeout means the complete response missed its deadline, and connectionLost means its shard lost the connection.
      * The reason rateLimit means Fluxer confirmed a request rate limit

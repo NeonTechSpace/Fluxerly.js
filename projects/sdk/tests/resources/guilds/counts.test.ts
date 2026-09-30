@@ -7,6 +7,7 @@ import { modes, type Mode } from "../../support/both-apis.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { wsTarget } from "../../support/ws-redirect.js"
+import { typedFailure } from "../../support/settle.js"
 
 vi.mock("ws", (original) => import("../../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
 
@@ -67,10 +68,10 @@ function nativeOutcome<A>(effect: Effect.Effect<A, unknown>): Promise<Outcome<A>
 function outcomeFromExit<A>(exit: Exit.Exit<A, unknown>): Outcome<A> {
     if (Exit.isSuccess(exit)) return { kind: "success", value: exit.value }
     if (Cause.hasInterruptsOnly(exit.cause)) return { kind: "interrupted" }
-    const reason = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-    if (reason?._tag === "Fail")
-        return { kind: "failure", error: reason.error as { readonly _tag: string; readonly reason?: string } }
-    throw new Error("Expected a typed count failure")
+    return {
+        kind: "failure",
+        error: typedFailure(exit.cause) as { readonly _tag: string; readonly reason?: string },
+    }
 }
 
 async function defaultOutcome<A>(operation: ResultAsync<A, unknown>): Promise<Outcome<A>> {

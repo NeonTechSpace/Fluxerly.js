@@ -25,7 +25,7 @@ import {
 } from "../../support/both-apis.js"
 import { waitUntil } from "../../support/clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
-import { settle } from "../../support/settle.js"
+import { settle, typedResult } from "../../support/settle.js"
 import { expectDefect, expectThrown } from "../defects.js"
 import { startSynchronousGateway, type SynchronousGateway } from "../../support/messages-gateway.js"
 import { wsTarget } from "../../support/ws-redirect.js"
@@ -126,9 +126,9 @@ test.each(modes)("%s reaction collector validates registration without network w
         { unknown: true },
         { signal: {} },
     ])
-        await expect(api.collect(options as any)).rejects.toMatchObject({ _tag: "ConfigurationError" })
+        expect(await api.collectMisuse(options as any)).toMatchObject({ _tag: "ConfigurationError" })
     for (const idleMs of [0, -1, 1.5, NaN, Infinity, "1", null, 2_147_483_648])
-        await expect(api.collect({ idleMs } as any)).rejects.toMatchObject({
+        expect(await api.collectMisuse({ idleMs } as any)).toMatchObject({
             _tag: "ConfigurationError",
             field: "idleMs",
         })
@@ -136,7 +136,7 @@ test.each(modes)("%s reaction collector validates registration without network w
         reason: "notConnected",
     })
     for (const message of [null, {}, { id: "x", channelId: "20" }, { id: "10", channelId: "020" }])
-        await expect(api.collect({}, message as MessageReference)).rejects.toMatchObject({
+        expect(await api.collectMisuse({}, message as MessageReference)).toMatchObject({
             _tag: "ConfigurationError",
             field: "message",
         })
@@ -145,7 +145,7 @@ test.each(modes)("%s reaction collector validates registration without network w
     // Shutdown can race a registering handler, so a closed client returns a handle whose result is ClientClosedError,
     // while an invalid target stays misuse
     await expect((await api.collect()).wait()).rejects.toMatchObject({ _tag: "ClientClosedError" })
-    await expect(api.collect({}, {} as MessageReference)).rejects.toMatchObject({ _tag: "ConfigurationError" })
+    expect(await api.collectMisuse({}, {} as MessageReference)).toMatchObject({ _tag: "ConfigurationError" })
 })
 
 // A throwing options getter is application code read by the SDK, so it is classified as an application.defect with
@@ -189,7 +189,7 @@ test.each(modes)("%s rejects malformed emoji selectors locally using the shared 
         { name: "party", id: "50", animated: "yes" },
         { name: "👍", animated: true },
     ]) {
-        await expect(api.collect({ emoji } as any)).rejects.toMatchObject({
+        expect(await api.collectMisuse({ emoji } as any)).toMatchObject({
             _tag: "ConfigurationError",
             field: "emoji",
         })
@@ -823,7 +823,7 @@ test("native reaction registration is lazy, retains its owner clock and releases
     deliverReaction(addition()).deliver()
     expect(await Effect.runPromise(timed.result())).toEqual({ reason: "timeout", reactions: [] })
     await Effect.runPromise(Scope.close(scope, Exit.void))
-    await expect(api.collect({ signal: new AbortController().signal })).rejects.toMatchObject({
+    expect(await api.collectMisuse({ signal: new AbortController().signal })).toMatchObject({
         _tag: "ConfigurationError",
     })
 })
@@ -1477,7 +1477,7 @@ test("native progress can request client shutdown without joining itself", async
             .pipe(Scope.provide(api.collectorScope)),
     )
     deliverReaction(addition()).deliver()
-    const outcome = await Effect.runPromise(Effect.result(collector.result()))
+    const outcome = await Effect.runPromise(typedResult(collector.result()))
     expect(outcome).toMatchObject({ _tag: "Failure", failure: { _tag: "ClientClosedError" } })
     await api.shutdown()
     expect(api.state()).toBe("Closed")
@@ -1548,6 +1548,13 @@ async function setup(mode: Mode) {
         native,
         collectorScope,
         state: () => (defaultApi ?? native)!.state,
+        collectMisuse: async (
+            options?: Omit<DefaultReactionCollectorOptions, "onReaction">,
+            message: MessageReference = target,
+        ) => {
+            if (defaultApi) return expectThrown(() => defaultApi.messages.collectReactions(message, options))
+            return expectDefect(native!.messages.collectReactions(message, options).pipe(Scope.provide(collectorScope)))
+        },
         collect: async (
             options?: Omit<DefaultReactionCollectorOptions, "onReaction">,
             message: MessageReference = target,
@@ -1565,7 +1572,7 @@ async function setup(mode: Mode) {
             return {
                 close: () => settle(source.close()),
                 wait: (signal?: AbortSignal) =>
-                    Effect.runPromise(source.result().pipe(Effect.result), signal ? { signal } : undefined).then(
+                    Effect.runPromise(source.result().pipe(typedResult), signal ? { signal } : undefined).then(
                         (result) => {
                             if (result._tag === "Failure") throw result.failure
                             return result.success

@@ -1,3 +1,4 @@
+import { typedResult } from "../../support/settle.js"
 import { Effect, Fiber } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 import { createClient as createNative } from "../../../src/effect.js"
@@ -210,7 +211,7 @@ test("native deleteOwnMessages operations use exact bodyless routes and preserve
                 const client = yield* createNative(configuration)
                 yield* client.messages.deleteOwnMessages("20", { confirm: true })
                 yield* client.guilds.deleteOwnMessages("30", { confirm: true })
-                const rejected = yield* Effect.result(client.guilds.deleteOwnMessages("30", { confirm: true }))
+                const rejected = yield* typedResult(client.guilds.deleteOwnMessages("30", { confirm: true }))
                 expect(rejected).toMatchObject({
                     _tag: "Failure",
                     failure: {
@@ -249,7 +250,7 @@ test("closed clients reject deleteOwnMessages without dispatch in both entry poi
             Effect.gen(function* () {
                 const native = yield* createNative(configuration)
                 yield* native.shutdown()
-                const result = yield* Effect.result(native.guilds.deleteOwnMessages("30", { confirm: true }))
+                const result = yield* typedResult(native.guilds.deleteOwnMessages("30", { confirm: true }))
                 expect(result).toMatchObject({ _tag: "Failure", failure: { _tag: "ClientClosedError" } })
             }),
         ),

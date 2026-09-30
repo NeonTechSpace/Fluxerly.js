@@ -1,3 +1,4 @@
+import { typedResult } from "../../support/settle.js"
 import type { ChildProcess } from "node:child_process"
 import { EventEmitter } from "node:events"
 import { Effect } from "effect"
@@ -247,7 +248,7 @@ test.each(["default", "native"] as const)(
                     : await Effect.runPromise(nativeSupervisor.create(options))
             const settle = async (operation: unknown) =>
                 Effect.isEffect(operation)
-                    ? Effect.runPromise(Effect.result(operation as Effect.Effect<unknown, unknown>))
+                    ? Effect.runPromise(typedResult(operation as Effect.Effect<unknown, unknown>))
                     : operation
             const ready = () =>
                 vi.waitFor(() => expect(managed.status().children[0]!.state).toBe("running"), { interval: 1 })

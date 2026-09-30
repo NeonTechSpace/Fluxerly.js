@@ -21,8 +21,8 @@ interface ChannelFrame {
 function attachCountShards(owner: CountOwner, guildFrames: GuildFrame[], channelFrames: ChannelFrame[]) {
     for (const shardId of [0, 1]) {
         owner.attach(
-            (guildIds, nonce) => guildFrames.push({ shardId, guildIds, nonce }),
-            (guildId, channelIds, nonce) => channelFrames.push({ shardId, guildId, channelIds, nonce }),
+            (guildIds, nonce) => void guildFrames.push({ shardId, guildIds, nonce }),
+            (guildId, channelIds, nonce) => void channelFrames.push({ shardId, guildId, channelIds, nonce }),
             shardId,
         )
     }
@@ -97,8 +97,8 @@ test("an unrelated shard detach leaves the shared member stream and healthy requ
         readonly nonce: string
     }[] = []
     const members = new MemberChunkOwner(budget, new LogicalScheduler(Effect.runSync(Clock.Clock)), () => 0)
-    members.attach((payload, nonce) => memberFrames.push({ shardId: 0, payload, nonce }), 0)
-    members.attach((payload, nonce) => memberFrames.push({ shardId: 1, payload, nonce }), 1)
+    members.attach((payload, nonce) => void memberFrames.push({ shardId: 0, payload, nonce }), 0)
+    members.attach((payload, nonce) => void memberFrames.push({ shardId: 1, payload, nonce }), 1)
 
     const first = Effect.runPromise(counts.fetchGuilds(["10"]))
     const second = Effect.runPromise(counts.fetchGuilds(["11"]))

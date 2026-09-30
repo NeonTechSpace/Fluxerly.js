@@ -2,6 +2,7 @@
 // lost-response reset each dispatch once, invalidate cached roles and leave every other role field unchanged.
 // Journal `.env.test.role-reset.local` records the sandbox and bot identity and two test roles. An existing
 // journal is cleaned up before a new run by verified test-role deletion
+import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { createGuildTestRole, cleanupGuildTestRole } from "./guild-fixture.mjs"
 import {
@@ -33,7 +34,7 @@ async function value(operation) {
         if (result.isErr()) throw result.error
         return result.value
     }
-    const result = await Effect.runPromise(Effect.result(operation))
+    const result = await Effect.runPromise(typedResult(Effect, operation))
     if (result._tag === "Failure") throw result.failure
     return result.success
 }

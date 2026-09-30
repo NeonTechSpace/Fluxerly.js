@@ -10,6 +10,7 @@ import { freezeInputValidationDetail, type InputValidationDetail } from "./input
  * The reason notOwned means this client does not own the shard, and notReady means the shard is not currently
  * Connected or lost its connection before the command reached the socket.
  * The reason busy means 500 earlier gateway.send commands on that shard are still waiting for the pacing budget.
+ * Cancelling an unsent command immediately releases its queue capacity, even while the pacing window is full.
  * None of these failures sent anything
  *
  * @category Errors

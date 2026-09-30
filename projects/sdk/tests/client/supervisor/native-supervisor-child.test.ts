@@ -33,7 +33,8 @@ function controlledClient() {
 
 async function childTools(control: ReturnType<typeof controlledBridge>, client: ReturnType<typeof controlledClient>) {
     vi.resetModules()
-    vi.doMock("#sdk/internal/supervisor", () => ({
+    vi.doMock("#sdk/internal/supervisor", async (importOriginal) => ({
+        ...(await importOriginal<object>()),
         ChildBridge: { open: () => Effect.succeed(control.bridge) },
         createSupervisor: () => Effect.die("create is outside this child-run boundary"),
     }))

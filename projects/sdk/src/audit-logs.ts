@@ -172,7 +172,8 @@ export interface AuditLogOptions {
     readonly deleteMemberDays?: string
     /**
      * Milliseconds of recent messages deleted for a member ban, in the unit of BanInput deleteMessagesMs.
-     * Present only when Fluxer recorded a positive duration
+     * Present only when Fluxer recorded a positive duration.
+     * The value is rounded to whole milliseconds. A source duration whose milliseconds are not a safe integer rejects the REST page or is a malformed gateway dispatch
      */
     readonly deleteMessagesMs?: number
     /** Decimal overwrite target or other action-specific ID */

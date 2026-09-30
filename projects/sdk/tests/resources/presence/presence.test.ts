@@ -214,7 +214,7 @@ test("presence owner coalesces one latest intent, spaces writes and cancels deta
     const sent: unknown[] = []
     const owner = new PresenceOwner(clock.timer)
     expect(owner.set({ status: "online", customStatus: { text: "retained" } })).toBeUndefined()
-    owner.attach((update) => sent.push(update))
+    owner.attach((update) => void sent.push(update))
     clock.advance(0)
     expect(sent).toEqual([{ status: "online", afk: false, mobile: false, custom_status: { text: "retained" } }])
 
@@ -236,7 +236,7 @@ test("presence owner coalesces one latest intent, spaces writes and cancels deta
     owner.detach()
     clock.advance(4_000)
     expect(sent).toHaveLength(3)
-    owner.attach((update) => sent.push(update))
+    owner.attach((update) => void sent.push(update))
     clock.advance(0)
     expect(sent.at(-1)).toEqual({ status: "online", afk: false, mobile: false, custom_status: null })
 
@@ -257,7 +257,7 @@ test("member presence selections are frozen, replayed on resume and released on 
     selected[0] = "31"
     owner.attach(
         () => undefined,
-        (frame) => memberFrames.push(frame),
+        (frame) => void memberFrames.push(frame),
     )
     clock.advance(0)
     expect(memberFrames).toEqual([{ subscriptions: { "40": { members: ["30"] } } }])
@@ -275,7 +275,7 @@ test("member presence selections are frozen, replayed on resume and released on 
     expect(owner.setMembers("40", [])).toBeUndefined()
     owner.attach(
         () => undefined,
-        (frame) => memberFrames.push(frame),
+        (frame) => void memberFrames.push(frame),
         "resume",
     )
     clock.advance(0)
@@ -287,7 +287,7 @@ test("member presence selections are frozen, replayed on resume and released on 
     owner.detach()
     owner.attach(
         () => undefined,
-        (frame) => memberFrames.push(frame),
+        (frame) => void memberFrames.push(frame),
         "resume",
     )
     clock.advance(0)
@@ -295,7 +295,7 @@ test("member presence selections are frozen, replayed on resume and released on 
     owner.detach()
     owner.attach(
         () => undefined,
-        (frame) => memberFrames.push(frame),
+        (frame) => void memberFrames.push(frame),
         "identify",
     )
     clock.advance(0)
@@ -310,7 +310,7 @@ test("member presence clear before its first send retains no session tombstone",
     expect(owner.setMembers("40", [])).toBeUndefined()
     owner.attach(
         () => undefined,
-        (frame) => memberFrames.push(frame),
+        (frame) => void memberFrames.push(frame),
         "resume",
     )
     clock.advance(0)
@@ -354,7 +354,7 @@ test("member presence validates identifier, per-client capacity and the complete
     expect(owner.setMembers(overLimitGuildId, fitting)).toBe("limit")
     owner.attach(
         () => undefined,
-        (frame) => sent.push(frame),
+        (frame) => void sent.push(frame),
     )
     clock.advance(0)
     expect(sent).toEqual([{ subscriptions: { [exactGuildId]: { members: fitting } } }])
@@ -378,7 +378,7 @@ test("an expiry that elapsed while disconnected is not restored", () => {
         owner.set({ status: "online", customStatus: { text: "temporary", expiresAt: "1970-01-01T00:00:10Z" } }),
     ).toBeUndefined()
     vi.setSystemTime(10_000)
-    owner.attach((update) => sent.push(update))
+    owner.attach((update) => void sent.push(update))
     clock.advance(0)
     expect(sent).toEqual([{ status: "online", afk: false, mobile: false }])
 })

@@ -53,6 +53,8 @@ const gracefulCloseMs = 5_000
 export interface Session {
     id: string | undefined
     sequence: number | null
+    /** Paced send history persists across Resume attempts and is cleared before a fresh Identify */
+    commandSentAt?: number[]
 }
 
 /** Why an attempt ended, for log records. The public failure keeps only reviewed facts */
@@ -280,7 +282,9 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         stopping: () => stopping,
                         failed: ({ error }) => fail(new AttemptFailure(error, true, false, "sendFailed")),
                     })
-                    const pacer = commandPacer({ send, now, logger, shardId })
+                    const sentAt = (session.commandSentAt ??= [])
+                    if (!resuming) sentAt.length = 0
+                    const pacer = commandPacer({ send, now, logger, shardId, sentAt })
                     const commands = gatewayCommands(send, pacer.send, {
                         token,
                         session,

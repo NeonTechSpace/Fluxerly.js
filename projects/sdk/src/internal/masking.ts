@@ -25,6 +25,96 @@ const sensitiveKeys = new Set([
 ])
 const inviteShapeKeys = ["inviter", "max_uses", "temporary", "uses", "max_age"]
 
+function sensitiveKey(key: string): boolean {
+    return sensitiveKeys.has(key.toLowerCase()) || /(?:token|secret)$/i.test(key)
+}
+
+type PayloadRange = { readonly start: number; readonly end: number }
+type PayloadObject = { readonly keys: Set<string>; readonly codes: PayloadRange[] }
+
+/** Mask credential-key values and invite-shaped codes in JSON-like text, including a truncated value */
+function maskPayloadText(text: string, secrets: readonly string[]): string {
+    const keys = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')(\s*:\s*)/g
+    const ranges: PayloadRange[] = []
+    const objects: PayloadObject[] = []
+    const finish = (object: PayloadObject) => {
+        if (
+            inviteShapeKeys.some((key) => object.keys.has(key)) ||
+            (object.keys.has("channel") && object.keys.has("guild"))
+        )
+            ranges.push(...object.codes)
+    }
+    let scanned = 0
+    let scanQuote: string | undefined
+    // Track object boundaries outside strings so a nested diagnostic code does not become an invite code
+    const scanObjects = (until: number) => {
+        for (; scanned < until; scanned++) {
+            const character = text[scanned]!
+            if (scanQuote !== undefined) {
+                if (character === "\\") scanned++
+                else if (character === scanQuote) scanQuote = undefined
+            } else if (character === '"' || character === "'") scanQuote = character
+            else if (character === "{") objects.push({ keys: new Set(), codes: [] })
+            else if (character === "}" && objects.length > 0) finish(objects.pop()!)
+        }
+    }
+    for (let match = keys.exec(text); match !== null; match = keys.exec(text)) {
+        scanObjects(match.index)
+        if (scanQuote !== undefined) continue
+        const quoted = match[1]!
+        let key: string
+        try {
+            key = quoted[0] === '"' ? (JSON.parse(quoted) as string) : quoted.slice(1, -1)
+        } catch {
+            // allow-silent: An invalid quoted key is not a credential key, so free-text masking still applies below
+            continue
+        }
+        const object = objects[objects.length - 1]
+        object?.keys.add(key)
+        const start = keys.lastIndex
+        const first = text[start]
+        const sensitive = sensitiveKey(key)
+        if (!sensitive && first !== '"' && first !== "'") continue
+        let end = start
+        let quote: string | undefined
+        let nesting = 0
+        for (; end < text.length; end++) {
+            const character = text[end]!
+            if (quote !== undefined) {
+                if (character === "\\") end++
+                else if (character === quote) {
+                    quote = undefined
+                    if (nesting === 0) {
+                        end++
+                        break
+                    }
+                }
+            } else if (character === '"' || character === "'") quote = character
+            else if (character === "{" || character === "[") nesting++
+            else if (character === "}" || character === "]") {
+                if (nesting === 0) break
+                if (--nesting === 0) {
+                    end++
+                    break
+                }
+            } else if (nesting === 0 && /[,\s]/.test(character)) break
+        }
+        end = Math.min(end, text.length)
+        keys.lastIndex = end
+        if (sensitive) ranges.push({ start, end })
+        else if (key === "code") object?.codes.push({ start, end })
+    }
+    scanObjects(text.length)
+    for (const object of objects) finish(object)
+    let output = ""
+    let copied = 0
+    for (const { start, end } of ranges.sort((left, right) => left.start - right.start)) {
+        output += text.slice(copied, start) + JSON.stringify(redacted)
+        copied = end
+    }
+    return maskText(output + text.slice(copied), secrets)
+}
+
 // A standalone scheme word is masked only before a token-shaped value: 20 or more token characters including at
 // least one digit or punctuation mark. Ordinary prose such as "Bot processSignals" or "Basic validation" stays readable,
 // while Authorization contexts below mask any value
@@ -65,7 +155,7 @@ export function maskText(text: string, secrets: readonly string[] = []): string 
 export function maskPayload(value: unknown, secrets: readonly string[] = [], limit = 65_536): string {
     const seen = new WeakSet<object>()
     const visit = (item: unknown, depth: number): unknown => {
-        if (typeof item === "string") return maskText(item, secrets)
+        if (typeof item === "string") return maskPayloadText(item, secrets)
         if (typeof item === "bigint") return item.toString()
         if (typeof item !== "object" || item === null) return item
         if (seen.has(item) || depth > 32) return "[circular]"
@@ -76,9 +166,7 @@ export function maskPayload(value: unknown, secrets: readonly string[] = [], lim
         const copy: Record<string, unknown> = {}
         for (const [key, entry] of Object.entries(source))
             copy[key] =
-                sensitiveKeys.has(key.toLowerCase()) ||
-                /(?:token|secret)$/i.test(key) ||
-                (key === "code" && invite && typeof entry === "string")
+                sensitiveKey(key) || (key === "code" && invite && typeof entry === "string")
                     ? redacted
                     : visit(entry, depth + 1)
         return copy

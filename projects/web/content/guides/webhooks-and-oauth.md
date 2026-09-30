@@ -119,7 +119,9 @@ An exchange code works once. A timeout, cancellation or lost response after the 
 
 </details>
 
-A rejected client ID or secret also logs one `rest.rejected` Warn record, while a rejected user access token is only returned, because it concerns one user. The OAuth client accepts the same `logging` option as a bot client.
+A rejected client ID or secret also logs one `rest.rejected` Warn record, while a rejected user access token is only returned, because it concerns one user. The OAuth client accepts the same `logging` option as a bot client
+
+The `fetchIdentity`, `fetchGuilds`, `fetchConnections` and `introspect` methods are reads. Their failures set `details.read`, so `errors.isRetryable` can identify a transient failure without implying that tokens changed. OAuth requests are never retried automatically. Exchange, refresh and revoke requests with an unknown outcome remain unsafe to repeat. Discovery and OAuth transport failures retain only sanitized causes, including a safe transport code such as `ECONNRESET` when available, not the original error text
 
 The default API returns expected webhook and OAuth failures as `Result` values. Handle an `Err` where the helper is called, for example by logging `describeError(result.error)`, and never log the webhook token, client secret or verifier. Operation details are in the [webhook client reference](/docs/{{version}}/api/interfaces/js-ts.WebhookClient/) and the [OAuth client reference](/docs/{{version}}/api/interfaces/js-ts.OAuthClient/)
 

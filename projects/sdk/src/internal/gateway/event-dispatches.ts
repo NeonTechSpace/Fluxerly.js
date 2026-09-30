@@ -55,7 +55,9 @@ const eventDispatchMap = {
     messageDelete: ["MESSAGE_DELETE"],
     messageDeleteBulk: ["MESSAGE_DELETE_BULK"],
     messageReactionAdd: ["MESSAGE_REACTION_ADD"],
-    messageReactionAddMany: ["MESSAGE_REACTION_ADD_MANY"],
+    // Fluxer filters ADD before buffering it, then generates MANY without filtering its name. Filtering follows ADD
+    // (session_dispatch and session_dispatch_voice at fluxerapp/fluxer commit 841fb7af4174fc8fc025307776e87e7dba51a669)
+    messageReactionAddMany: ["MESSAGE_REACTION_ADD"],
     messageReactionRemove: ["MESSAGE_REACTION_REMOVE"],
     messageReactionRemoveAll: ["MESSAGE_REACTION_REMOVE_ALL"],
     messageReactionRemoveEmoji: ["MESSAGE_REACTION_REMOVE_EMOJI"],

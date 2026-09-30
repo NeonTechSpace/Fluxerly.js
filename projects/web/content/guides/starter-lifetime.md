@@ -30,7 +30,7 @@ By default `messageCreate` handlers run up to eight at a time and other events o
 
 The application supplies the token and handlers and decides how to report errors. It also owns everything outside the SDK:
 
-- Promises started by handlers: The runner does not wait for them at shutdown. Track work that must finish, as shown in [application supervision](/docs/{{version}}/application-supervision/#drain-application-owned-work)
+- Work outside the drain: A returned handler Promise and its REST requests get the drain window to finish, 5 seconds by default, set by `drainMs`. Track detached Promises, timers, background jobs and work that needs more than that window, as shown in [application supervision](/docs/{{version}}/application-supervision/#drain-application-owned-work)
 - Other resources: Close database connections, timers and servers after `runBot` resolves, so the process can exit
 - Restarts: A process manager or a new `runBot` call starts a new client. Restarting does not replay missed events or failed handlers
 - Durable work: Store data and jobs that must survive a restart outside the SDK

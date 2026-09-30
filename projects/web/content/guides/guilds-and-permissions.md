@@ -162,6 +162,10 @@ Otherwise Fluxer refuses the request with HTTP 400 after confirming that the bot
 
 To check a community in advance, read the [`mfaLevel`](/docs/{{version}}/api/interfaces/js-ts.Guild/#mfalevel) of the community from `guilds.fetch` or a `guildCreate` event. The value `GuildMfaLevels.Elevated` means the community has this requirement, and `GuildMfaLevels.None` means it does not. The SDK cannot see whether the application owner has two-factor authentication enabled, so an elevated level means a moderation request can fail, not that it will. Fluxer's API reference describes [MFA levels](https://docs.fluxer.app/http-api/guilds/#mfa-levels) and [elevated permissions](https://docs.fluxer.app/http-api/permissions/#elevated-permissions)
 
+## Read audit records
+
+Use `auditLogs.fetchPage` or the bounded `auditLogs.iterate` scan with `ViewAuditLog` permission. Recorded message-deletion durations are exposed in `options.deleteMessagesMs`, rounded to whole milliseconds. A duration that would overflow the safe integer range fails the REST page rather than returning partial entries. The same invalid duration in a gateway audit event follows the configured malformed-dispatch policy
+
 ## Voice controls versus a voice connection
 
 Fluxerly supports observing voice states in communities and moving, disconnecting, community muting and community deafening members who are already in a voice channel. These controls remain subject to Fluxer's permissions

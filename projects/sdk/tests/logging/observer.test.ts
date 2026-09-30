@@ -9,9 +9,12 @@ import { modes, type Mode } from "../support/both-apis.js"
  * One test client per API style that records observations, with the calls these tests need as promises.
  * Handlers fail by throwing in the default API and by failing their Effect in the native API
  */
+// A short first recovery ceiling keeps the reconnect well inside the default wait, instead of racing a one-second backoff
+const connection = { recovery: { minDelayMs: 100 } }
+
 async function open(mode: Mode, observe: (observation: Observation) => void) {
     if (mode === "default") {
-        const test = createTestClient({ observe })
+        const test = createTestClient({ observe, connection })
         onTestFinished(() => test.shutdown().catch(() => undefined))
         return {
             test,
@@ -31,7 +34,7 @@ async function open(mode: Mode, observe: (observation: Observation) => void) {
     }
     const scope = Scope.makeUnsafe()
     onTestFinished(async () => void (await Effect.runPromiseExit(Scope.close(scope, Exit.void))))
-    const test = await Effect.runPromise(createNativeTestClient({ observe }).pipe(Scope.provide(scope)))
+    const test = await Effect.runPromise(createNativeTestClient({ observe, connection }).pipe(Scope.provide(scope)))
     return {
         test,
         ready: () => Effect.runPromise(test.ready()),

@@ -3,6 +3,7 @@
 // Journal `.env.test.command-conveniences-<feature>.local` records sandbox and bot identity, a unique marker and the
 // test channel with its creation and cleanup phases. An existing journal is recovered instead of running the checks: the channel is
 // reconciled by its marker, verified and deleted, and its absence confirmed
+import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -58,7 +59,7 @@ const save = () => journalFile.save(journal)
 
 async function value(operation, signal) {
     if (Effect.isEffect(operation)) {
-        const result = await Effect.runPromise(Effect.result(operation), signal ? { signal } : undefined)
+        const result = await Effect.runPromise(typedResult(Effect, operation), signal ? { signal } : undefined)
         if (result._tag === "Failure") throw result.failure
         return result.success
     }

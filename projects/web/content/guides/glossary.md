@@ -144,11 +144,11 @@ A prefix command is a message that starts with a chosen prefix, such as `!ping` 
 
 ### Rate limit
 
-A rate limit caps how many requests Fluxer accepts in a period. Fluxer answers HTTP 429 when a limit is reached. The SDK then waits for the delay Fluxer names and sends the request again, logging long waits. A request fails at once instead when that wait would pass its deadline. See [Troubleshooting](/docs/{{version}}/troubleshooting/)
+A rate limit caps how many requests Fluxer accepts in a period. Fluxer answers HTTP 429 when a limit is reached. The SDK then waits for the delay Fluxer names and sends the request again, logging long waits. A request fails at once instead when that wait would pass its deadline. An unknown uppercase provider code remains in `details.providerCode`, including when the deadline prevents that wait. See [Troubleshooting](/docs/{{version}}/troubleshooting/)
 
 ### REST
 
-REST is Fluxer's HTTP API for reading and changing resources, such as sending a message or fetching a community. REST requests work without the [gateway](/docs/{{version}}/glossary/#gateway) connection. HTTP 204 is a successful response without a value. For a route without an SDK method, use `client.rest.request`. See the [client reference](/docs/{{version}}/api/interfaces/js-ts.Client/#rest)
+REST is Fluxer's HTTP API for reading and changing resources, such as sending a message or fetching a community. REST requests work without the [gateway](/docs/{{version}}/glossary/#gateway) connection. HTTP 204 is a successful response without a value. For a route without an SDK method, use `client.rest.request` with a path after `/v1`. The method rejects a `/v1` prefix and token-authenticated webhook paths even when unreserved route letters are percent-encoded. These checks remain case-sensitive. Discovery and request transport causes retain only safe facts, not raw error text. See the [client reference](/docs/{{version}}/api/interfaces/js-ts.Client/#rest)
 
 ### Result
 

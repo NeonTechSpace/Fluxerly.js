@@ -3,6 +3,7 @@
 // Journal `.env.test.text-validation.local` records sandbox and bot identity, a unique marker and the test role's two
 // candidate names and returned ID. An existing journal is recovered before a new run: the matching zero-permission
 // role is deleted and its absence verified
+import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { acquireLock, loadSandboxEnvironment, openJournal, verifySandboxIdentity } from "./support/harness.js"
@@ -37,7 +38,7 @@ async function value(operation) {
         if (result.isErr()) throw result.error
         return result.value
     }
-    const result = await Effect.runPromise(Effect.result(operation))
+    const result = await Effect.runPromise(typedResult(Effect, operation))
     if (result._tag === "Failure") throw result.failure
     return result.success
 }

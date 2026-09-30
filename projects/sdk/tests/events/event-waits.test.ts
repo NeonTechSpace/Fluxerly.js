@@ -5,7 +5,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../../src/index.js"
 import { createClient as createNative } from "../../src/effect.js"
 import { startHostedLoopback } from "../support/instance.js"
-import { settle } from "../support/settle.js"
+import { settle, typedResult } from "../support/settle.js"
 
 vi.mock("ws", (original) => import("../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
 
@@ -281,7 +281,7 @@ test.each(["default", "native"] as const)(
                           .waitFor("messageCreate", { filter, timeoutMs: 1_000 })
                           .then((result) => (result.isErr() ? result.error : result.value))
                     : Effect.runPromise(
-                          Effect.result(native!.waitFor("messageCreate", { filter, timeoutMs: 1_000 })),
+                          typedResult(native!.waitFor("messageCreate", { filter, timeoutMs: 1_000 })),
                       ).then((result) => (result._tag === "Failure" ? result.failure : result.success))
                 await waitForFilter((content, id) => server.dispatch(content, id), seen)
                 server.dispatch("invalid", "200")
@@ -317,7 +317,7 @@ test("event registration rejects unknown names and prototype keys in both public
                     expect(() => defaultApi.subscribe(event as never)).toThrow(
                         expect.objectContaining({ _tag: "ConfigurationError", field: "event" }),
                     )
-                    const waited = yield* Effect.result(native.waitFor(event as never))
+                    const waited = yield* typedResult(native.waitFor(event as never))
                     expect(waited._tag === "Failure" && waited.failure).toMatchObject({
                         _tag: "ConfigurationError",
                         field: "event",

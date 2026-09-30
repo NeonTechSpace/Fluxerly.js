@@ -46,6 +46,7 @@ export interface Members {
      * The community must have a ready shard assigned to this client, otherwise the request fails with notConnected.
      * Full-list mode is capped by Fluxer at 100,000 members, and Fluxer's server-enforced 30-second limit per bot and community also applies.
      * Only one member stream runs per client, and it uses one of four client-wide gateway slots shared with counts until consumed or released.
+     * A full request-slot budget or internal command queue fails with MemberChunkError reason busy.
      * Only a gap on this community's shard ends the stream, while work on healthy shards continues.
      * No connection, REST fallback, cache fill, presence subscription, raw-event forwarding or retries are added
      *
@@ -55,7 +56,9 @@ export interface Members {
      * Missing selected user IDs are listed on the final batch.
      * Optional presence data can omit unavailable, offline or invisible users, so omission does not prove offline status
      *
-     * The timeoutMs option defaults to 30,000 for the whole reply.
+     * The timeoutMs option defaults to 30,000 for the whole reply, including waits for gateway pacing.
+     * Cancellation, deadline expiry or ending consumption withdraws an unsent request and releases its local slot.
+     * A request already sent to Fluxer cannot be withdrawn.
      * The maxPendingBytes option defaults to 4 MiB of source-JSON bytes counted for unread gateway batches.
      * This bounds the SDK's byte accounting, not total memory use.
      * Fluxer sends batches without waiting for the reader, so slow readers can overflow.

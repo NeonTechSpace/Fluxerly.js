@@ -405,7 +405,8 @@ export interface DefaultAttachmentDownloadOptions extends AttachmentDownloadOpti
 export interface DefaultAttachmentStreamOptions extends AttachmentDownloadOptions, OperationOptions {}
 
 /**
- * Expected bounded attachment-download failure, without a URL, response body or credential
+ * Expected bounded attachment-download failure, without a URL, response body or credential.
+ * SDK-reported discovery and transport failures retain only a sanitized cause, with a safe transport code when available
  *
  * @category Errors
  */

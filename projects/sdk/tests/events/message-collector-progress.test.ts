@@ -7,7 +7,7 @@ import { createClient as createNative } from "../../src/effect.js"
 import { modes, type Mode } from "../support/both-apis.js"
 import { wsTarget } from "../support/ws-redirect.js"
 import { startHostedLoopback } from "../support/instance.js"
-import { settle } from "../support/settle.js"
+import { settle, typedResult } from "../support/settle.js"
 
 vi.mock("ws", (original) => import("../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
 
@@ -420,7 +420,7 @@ test("native progress can request client shutdown without joining itself", async
     )
     server.deliver("10")
     await vi.waitFor(() => expect(finalized).toBe(true), { interval: 5, timeout: 1_000 })
-    const outcome = await Effect.runPromise(Effect.result(collector.result()))
+    const outcome = await Effect.runPromise(typedResult(collector.result()))
     expect(outcome).toMatchObject({ _tag: "Failure", failure: { _tag: "ClientClosedError" } })
     // Collector cleanup is not the client shutdown barrier, which also owns gateway and REST cleanup
     await api.shutdown()

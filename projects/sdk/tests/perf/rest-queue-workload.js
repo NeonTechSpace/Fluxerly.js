@@ -1,3 +1,4 @@
+import { typedResult } from "../live/support/results.js"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { setTimeout as sleep, setImmediate as turn } from "node:timers/promises"
@@ -157,7 +158,7 @@ if (!child) {
                           result.isOk() ? "success" : result.error.reason,
                       )
                     : effect.Effect.runPromise(
-                          effect.Effect.result(client.messages.send(channelId, input, { timeoutMs })),
+                          typedResult(effect.Effect, client.messages.send(channelId, input, { timeoutMs })),
                       ).then((result) => (result._tag === "Success" ? "success" : result.failure.reason))
             operations.push(
                 operation.then((outcome) => {

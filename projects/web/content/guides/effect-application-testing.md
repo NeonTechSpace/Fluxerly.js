@@ -253,6 +253,8 @@ export const pingTest = Effect.scoped(
 
 Running `pingTest` with `Effect.runPromise` succeeds with the reply's content `"Pong!"` and one reply in total. The `rest.respond` call tells the fake Fluxer API how to answer a request, and `emit` delivers a gateway event as Fluxer would send it. Handlers run after `emit` on their own schedule, so the test waits: The route's `next()` waits for the next request it answers, and `idle()` waits until the bot has stopped working, which shows that `hello` got no reply. Both fail with `TestTimeoutError` after 2 seconds instead of hanging
 
+The test gateway enforces the Identify session's `gateway.ignoredEvents`: The `emit` Effect dies with `ConfigurationError` when Fluxer would suppress that dispatch, without consuming a sequence number. With automatic filtering, register handlers before running `ready()` so Identify sees them. Resume keeps the list, while a new Identify recomputes it. Suppressed message mentions and generated reaction batches follow Fluxer's exceptions, described in [Match gateway event filtering](/docs/{{version}}/testing/#match-gateway-event-filtering)
+
 The `failures()` method returns handler and command failures that no `onError` hook received, including a failed SDK call such as a rejected reply. Closing the Scope dies with `UnhandledTestFailuresError` when such a failure happened and the test did not read it from `failures()`, so a broken handler fails the test. For code that registers handlers with `client.on`, `createTestClient` creates the same test client without bot options. See [Test a bot without Fluxer](/docs/{{version}}/testing/) and the [Effect testing reference](/docs/{{version}}/api/modules/Effect-testing/)
 
 <details>

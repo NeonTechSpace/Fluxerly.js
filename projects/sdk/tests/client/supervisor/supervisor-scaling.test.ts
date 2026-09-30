@@ -15,6 +15,7 @@ import type { SupervisorOptions, SupervisorStatus } from "../../../src/superviso
 import { modes, type Mode } from "../../support/both-apis.js"
 import { startInstance } from "../../support/instance.js"
 import { captureLogs } from "../../support/log-capture.js"
+import { fakeHostTime, hostTurnsUntil } from "../../support/client-clock.js"
 import { sendJson, type RecordedRequest } from "../../support/rest-server.js"
 
 type Message = { readonly type: string; readonly [key: string]: unknown }
@@ -321,9 +322,10 @@ test.each(modes)(
             })
             expect(await owner.start()).toBeUndefined()
             const [first, second] = children as [Child, Child]
+            fakeHostTime()
             first.emit("message", { type: "identify", generation: 1, requestId: 0, shardId: 0 })
             second.emit("message", { type: "identify", generation: 1, requestId: 0, shardId: 1 })
-            await vi.waitFor(() => expect(first.received.map((message) => message.type)).toContain("denied"))
+            await hostTurnsUntil(() => first.received.some((message) => message.type === "denied"))
             expect(first.received.find((message) => message.type === "denied")).toEqual({
                 type: "denied",
                 generation: 1,
@@ -333,12 +335,13 @@ test.each(modes)(
                 expect.objectContaining({ level: "error", fields: expect.objectContaining({ shardId: 0 }) }),
             ])
             // The refusal released the permit, so the second child is granted without the one-second spacing
-            await vi.waitFor(() => expect(second.received.map((message) => message.type)).toContain("grant"))
+            await hostTurnsUntil(() => second.received.some((message) => message.type === "grant"))
             second.emit("message", { type: "sent", generation: 1, requestId: 0 })
             first.emit("message", { type: "identify", generation: 1, requestId: 1, shardId: 0 })
-            const retried = performance.now()
-            await vi.waitFor(() => expect(first.received.filter((message) => message.type === "grant")).toHaveLength(1))
-            expect(performance.now() - retried).toBeLessThan(500)
+            // No host time passes, so a spacing timer cannot account for either grant
+            await hostTurnsUntil(() => first.received.some((message) => message.type === "grant"))
+            expect(first.received.filter((message) => message.type === "grant")).toHaveLength(1)
+            expect(performance.now()).toBe(0)
             expect(permits).toEqual([
                 [0, 2],
                 [1, 2],
@@ -347,6 +350,8 @@ test.each(modes)(
             expect(owner.status().state).toBe("running")
             await owner.shutdown()
         } finally {
+            vi.useRealTimers()
+            vi.restoreAllMocks()
             fork.mockReset()
         }
     },

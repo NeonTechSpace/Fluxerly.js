@@ -1,3 +1,4 @@
+import { typedResult } from "../../support/settle.js"
 import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
@@ -225,7 +226,7 @@ test.each(modes)(
                         })
                         expect(report.selectedMessageIds).toEqual(["30", "29"])
                         expect(events).toEqual(["submitting", "submitted"])
-                        const repeated = yield* Effect.result(client.messages.cleanup(plan))
+                        const repeated = yield* typedResult(client.messages.cleanup(plan))
                         expect(repeated).toMatchObject({
                             _tag: "Failure",
                             failure: { _tag: "MessageCleanupError", reason: "input", outcome: "notDispatched" },
@@ -293,7 +294,7 @@ test.each(modes)("%s cleanup retains submitted and terminal batch knowledge with
                 Effect.gen(function* () {
                     const client = yield* createNative(configuration)
                     const plan = yield* client.messages.previewCleanup("20", selection)
-                    const result = yield* Effect.result(client.messages.cleanup(plan))
+                    const result = yield* typedResult(client.messages.cleanup(plan))
                     expect(result).toMatchObject({
                         _tag: "Failure",
                         failure: {

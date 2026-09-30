@@ -57,10 +57,12 @@ export interface Channels {
      * Omission means unavailable, not zero, and does not explain access or other causes
      *
      * The guilds.fetchCounts method's four shared gateway slots, default 30,000 ms deadline and failure rules apply.
-     * There is no queue, implicit connection, REST fallback, cache write or retry.
+     * There is no waiting queue for request slots, implicit connection, REST fallback, cache write or retry.
+     * Commands may wait for gateway pacing, and a full internal command queue fails with busy.
      * Only a gap on this community's shard fails the request.
      * Counts are separate visibility-filtered observations, not a subscription or a cross-channel snapshot.
-     * Cancellation releases local work but cannot stop the dispatched provider request
+     * Cancellation or deadline expiry withdraws an unsent command and releases local request capacity.
+     * Work already sent to Fluxer cannot be withdrawn
      */
     fetchMemberCounts(
         guildId: string,

@@ -76,8 +76,8 @@ export interface ShardLoopHost<M extends MessageCore> {
     readonly state: () => ConnectionState
     /** Record a shard transition and recompute the client state */
     readonly setShardState: (shard: ShardRuntime, state: ConnectionState) => void
-    /** Release an established shard's guild-scoped cache entries once it needs a new session, and again when that
-     * session is ready, because reads stored during the outage may be stale
+    /** Release a shard's guild-scoped cache entries once an established or restored session needs a new session, and
+     * again when that session is ready, because partial replay and reads stored during the outage may be stale
      */
     readonly newSession?: (shardId: number) => void
     /** Pace a fresh Identify for this shard, or undefined when Identify needs no coordination */
@@ -215,7 +215,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
         const now = () => nowMs(clock)
         const onGuild = guildIntake(host.caches)
         let established = options.established ?? false
-        /** Whether the retained session came from the session store and has not been used yet */
+        /** Whether startup has used a saved session, until readiness, including a fallback after partial replay */
         let restoredSession = false
         let attempts = 0
         let recoveryStep = 0
@@ -356,9 +356,10 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                             fields: { mode: readyMode, shards: plan.totalShards },
                         })
                         if (readyMode === "resume" && restoredSession) host.restored?.(shard.shardId)
-                        restoredSession = false
                         // REST reads stored during the outage may be stale, and a new session replays nothing
-                        if (established && readyMode === "identify") host.newSession?.(shard.shardId)
+                        if ((established || restoredSession) && readyMode === "identify")
+                            host.newSession?.(shard.shardId)
+                        restoredSession = false
                         established = true
                         connectedAt = connectedAtMs
                         disconnectedAt = undefined
@@ -478,7 +479,8 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                     fields: { reason: failure.end },
                 })
             }
-            if (established && nextHandshake(failure, shard.session) === "identify") host.newSession?.(shard.shardId)
+            if ((established || restoredSession) && nextHandshake(failure, shard.session) === "identify")
+                host.newSession?.(shard.shardId)
             // A connection that stayed healthy between anomalies starts the count again
             if (
                 connectedAt !== undefined &&

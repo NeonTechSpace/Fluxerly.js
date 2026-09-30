@@ -19,7 +19,9 @@ export interface GatewayCommands {
      * Data JSON cannot encode, such as a cycle or a BigInt, fails with reason input.
      * Heartbeat, Identify, Resume and server-only opcodes fail with reason reserved.
      * Commands share the shard's outbound pacing with presence and request commands: At most 500 paced commands per
-     * rolling 60 seconds per connection, sent in call order, while heartbeats, Identify and Resume are never delayed.
+     * rolling 60 seconds per session, retained across Resume and reset for a fresh Identify, sent in call order.
+     * Heartbeats, Identify and Resume are never delayed. At most 500 gateway.send commands may wait per shard, and
+     * further submissions fail with reason busy until transmission or cancellation releases queue capacity.
      * Completion means the frame was handed to the connection, not that Fluxer received or accepted it.
      * Fluxer answers an opcode it does not define, missing data or invalid command fields with close code 4001 or 4002.
      * The SDK treats both as permanent, so the client ends. Data must match Fluxer's command schema exactly.
@@ -29,7 +31,8 @@ export interface GatewayCommands {
      *
      * @remarks
      * Cancellation through options.signal withdraws a command that is still waiting for the pacing budget and returns
-     * CancelledError. A command already handed to the connection cannot be withdrawn.
+     * CancelledError. Withdrawal immediately releases its local queue capacity.
+     * A command already handed to the connection cannot be withdrawn.
      * A malformed signal returns ConfigurationError before anything is queued. A throw from the data's own getters or
      * toJSON rejects with SdkDefect code application.defect and the thrown value as its cause.
      * Other unexpected failures reject with SdkDefect

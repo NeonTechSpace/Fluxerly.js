@@ -31,6 +31,11 @@ export interface RunBotOptions {
      * Report a failed run for the process, enabled by default. When the bot stops because of a failure, runBot logs that
      * failure once as an Error record with code lifecycle.botFailed, unless the client already logged the same error, and
      * sets `process.exitCode` to 1 so the process exits with a failure status. The failure is still returned as well.
+     * Reports before client creation use the configured logging settings and mask the token after removing surrounding
+     * whitespace and one pair of matching quotes. Unusable logging settings fall back to the entry point's default output.
+     * In the native API, a throwing option getter does not discard readable token, logging or reportFailure settings.
+     * An unreadable reportFailure setting keeps reporting enabled. Default API misuse and option-getter failures throw
+     * synchronously without a runner report or exit-status change.
      * A normal stop and an interruption report nothing. Set false when the application handles the returned failure and
      * owns the exit status itself
      */

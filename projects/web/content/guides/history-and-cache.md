@@ -30,6 +30,10 @@ The helper returns a [Result](/docs/{{version}}/glossary/#result) with the match
 
 The [`iterateHistory`](/docs/{{version}}/api/interfaces/js-ts.Messages/#iteratehistory) method reads newest first and requests the next page only when the loop needs it, so stopping early saves requests. The required `maxItems` bounds the scan, so older messages can remain unread. To read a single page of up to 100 messages instead, use [`fetchHistory`](/docs/{{version}}/api/interfaces/js-ts.Messages/#fetchhistory), as the [last section](/docs/{{version}}/history-and-cache/#wire-it-up) shows
 
+## Read pinned messages
+
+Use `messages.fetchPins` for one page or `messages.iteratePins` with `maxItems` for a bounded scan. Pins are ordered by pin time, not message creation time. Page ordering and cursor progress compare every fractional timestamp digit and normalize timezone offsets, so distinct pins less than a millisecond apart can advance the scan. Equal instants remain equal and can stall a multi-page scan. Preserve `nextBefore` unchanged in a manual loop and skip duplicate message IDs
+
 ## Search the message index
 
 When the text to look for is known, ask Fluxer's search index for one page of results. The index can lag behind the newest messages

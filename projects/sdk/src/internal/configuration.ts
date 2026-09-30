@@ -265,7 +265,7 @@ export function childClientOptionsError(clientOptions: unknown): ConfigurationEr
 /** Normalize a configured token: Trim whitespace and one layer of matching quotes, which .env files often add.
  * Returns a ConfigurationError that never includes the value when the token is missing or carries an auth scheme
  */
-function normalizeToken(token: unknown): string | ConfigurationError {
+export function normalizeToken(token: unknown): string | ConfigurationError {
     const missing = () =>
         new ConfigurationError("token", "The bot token is missing or empty", {
             hint: "Pass the bot token in the token option. When it comes from an environment variable, set that variable for the process that starts the bot. To load it from a .env file, start the bot with node --env-file=.env bot.js, and check that .env is in the current folder and is not saved as .env.txt",

@@ -5,7 +5,7 @@ import * as Stream from "effect/Stream"
 import type * as Scope from "effect/Scope"
 import { ConfigurationError, type ConnectError } from "#sdk/errors"
 import { attachIdentifyGate } from "#sdk/internal/client"
-import { ChildBridge, childFailureReason, createSupervisor } from "#sdk/internal/supervisor"
+import { ChildBridge, childFailureReason, createSupervisor, supervisorOptionError } from "#sdk/internal/supervisor"
 import { childClientOptionsError } from "#sdk/internal/configuration"
 import { readInput } from "#sdk/internal/defects"
 import type { SessionStore } from "#sdk/sharding"
@@ -34,7 +34,8 @@ export interface NativeSupervisorChildContext {
 /**
  * Bot credentials, native client settings and setup Effect for a module launched by a supervisor.
  * E represents application failures and R represents required services.
- * The helper provides Scope, which closes resources when this child run ends. Other services remain caller-provided
+ * The helper provides Scope, which closes resources when this child run ends. Other services remain caller-provided.
+ * Unknown option keys fail with ConfigurationError before waiting for the parent, with a suggested name when one is close
  *
  * @category Sharding and supervision
  */
@@ -112,6 +113,7 @@ export interface NativeSupervisor {
 export interface NativeSupervisorTools {
     /** Return a lazy Effect that validates and copies options, then succeeds with an idle supervisor.
      * Invalid options are misuse and die with ConfigurationError.
+     * Unknown keys in parent, assignment, restart and Identify options include a suggested name when one is close.
      * Does not start a process or check whether the entry module can execute. Launch failures are reported by start.
      * The parent has no automatic Scope finalizer. Arrange to execute its shutdown Effect when the application stops
      */
@@ -123,10 +125,12 @@ export interface NativeSupervisorTools {
          * A nested Scope owns the client, configuration resources and parent-message listeners until this Effect settles.
          * The helper supplies Scope and requires any remaining R services from the caller
          *
-         * Normal parent stop succeeds. Stop or interruption awaits cleanup, including interrupted configuration branches
+         * Normal parent stop drains running handlers, queued handler events and REST requests for the parent's drain allowance, then succeeds.
+         * Failure or interruption stops the client without draining. Cleanup is awaited, including interrupted configuration branches
          *
          * Running outside a connected supervisor child fails with SupervisorChildError with reason disconnected.
-         * Invalid client settings fail with ConfigurationError. Client execution can fail with ConnectError and application setup with E.
+         * Invalid client settings fail with ConfigurationError. Unknown child option keys fail before waiting for IPC, with a suggested name when one is close.
+         * Client execution can fail with ConnectError and application setup with E.
          * Message-channel loss or invalid coordination data fails with SupervisorChildError
          *
          * Parent stop during configure is not an application configuration failure, but cleanup failures remain in the cause.
@@ -149,6 +153,13 @@ interface ChildSettings<E, R> {
 
 /** Read the child options once, so later getter changes cannot alter the client or configure Effect */
 function readChildOptions<E, R>(options: NativeSupervisorChildOptions<E, R>): ChildSettings<E, R> | ConfigurationError {
+    const invalidOptions = supervisorOptionError(
+        options,
+        ["token", "clientOptions", "configure"],
+        "configuration",
+        "Supervisor child options",
+    )
+    if (invalidOptions) return invalidOptions
     const clientOptions = options.clientOptions
     const invalid = childClientOptionsError(clientOptions)
     if (invalid) return invalid
@@ -276,14 +287,17 @@ export function makeNativeSupervisor(
                             const outcome = yield* Effect.exit(
                                 Effect.raceFirst(
                                     client.run().pipe(Effect.as("client" as const)),
-                                    bridge.waitForStop().pipe(Effect.as("stop" as const)),
+                                    bridge.waitForStop().pipe(
+                                        // Begin the drain before raceFirst interrupts run and its zero-drain finalizer
+                                        Effect.flatMap(() =>
+                                            client.shutdown(
+                                                bridge.drainMs > 0 ? { drainMs: bridge.drainMs } : undefined,
+                                            ),
+                                        ),
+                                        Effect.as("stop" as const),
+                                    ),
                                 ),
                             )
-                            // A stop the parent requested lets running work finish
-                            if (Exit.isSuccess(outcome) && outcome.value === "stop")
-                                return yield* client.shutdown(
-                                    bridge.drainMs > 0 ? { drainMs: bridge.drainMs } : undefined,
-                                )
                             if (Exit.isFailure(outcome)) {
                                 const failure = outcome.cause.reasons.find((reason) => reason._tag === "Fail")
                                 if (failure?._tag !== "Fail") bridge.failed("client")

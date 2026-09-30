@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import type { MessageSearchIterationLimits, MessageSearchQuery } from "../../../src/index.js"
 import { defaultApi, modes, nativeApi, type Mode } from "../../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
-import { settle } from "../../support/settle.js"
+import { settle, typedResult } from "../../support/settle.js"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -74,7 +74,7 @@ async function setup(mode: Mode) {
 
 async function collect(source: ReturnType<Awaited<ReturnType<typeof setup>>["iterate"]>) {
     if (Stream.isStream(source)) {
-        const result = await Effect.runPromise(Effect.result(Stream.runCollect(source)))
+        const result = await Effect.runPromise(typedResult(Stream.runCollect(source)))
         if (result._tag === "Failure") throw result.failure
         return [...result.success]
     }

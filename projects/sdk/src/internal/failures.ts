@@ -194,7 +194,8 @@ function logReport(
 
 /**
  * Log a report that no hook receives. A handler failure caused by a rejected token or permission claims the held
- * rest.rejected record of its invocation, so the rejection is logged once, with the handler that failed. Never throws
+ * rest.rejected record of its invocation by identity, directly or in its cause chain, if the record is still held.
+ * The rejection is logged once unless the handler fails more than one second later. Never throws
  */
 export function logHandlerReport(
     logger: ClientLogger,

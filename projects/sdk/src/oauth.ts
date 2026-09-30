@@ -272,6 +272,8 @@ export const oauthCredential = (operation: OAuthOperation, oauthError: string | 
  * A deadline expiry is also reported here.
  * Inspect outcome before deciding whether to retry a code exchange, refresh or revocation.
  * The SDK does not retry these operations automatically.
+ * Failures of fetchIdentity, fetchGuilds, fetchConnections and introspect set details.read for errors.isRetryable and do not imply a token change.
+ * SDK-reported discovery and transport failures retain sanitized causes with safe transport codes when available.
  * Only reviewed error classifications are retained, not bodies, provider descriptions or credentials
  *
  * @category Errors
@@ -324,6 +326,11 @@ export class OAuthOperationError extends FluxerlyError {
         const inputValidation = options.inputValidation ?? null
         const apiError = options.apiError ?? null
         const providerCode = safeProviderCode(apiError, options.providerCode ?? null)
+        const read =
+            operation === "oauth.fetchIdentity" ||
+            operation === "oauth.fetchGuilds" ||
+            operation === "oauth.fetchConnections" ||
+            operation === "oauth.introspect"
         super(
             operationErrorMessage({
                 subject: "OAuth",
@@ -337,7 +344,7 @@ export class OAuthOperationError extends FluxerlyError {
                         ? (inputValidation?.explanation ?? null)
                         : `Fluxer returned the OAuth error ${oauthError}`,
                 retryAfterMs,
-                facts: { providerCode },
+                facts: { providerCode, read },
             }),
             {
                 code: `oauth.${reason}`,
@@ -350,6 +357,7 @@ export class OAuthOperationError extends FluxerlyError {
                     inputPath: inputValidation?.path ?? null,
                     oauthError,
                     credential: oauthCredential(operation, oauthError),
+                    read,
                 }),
                 cause: options.cause,
                 details: operationDetails({
@@ -360,6 +368,7 @@ export class OAuthOperationError extends FluxerlyError {
                     retryAfterMs,
                     oauthError,
                     providerCode,
+                    read,
                 }),
             },
         )

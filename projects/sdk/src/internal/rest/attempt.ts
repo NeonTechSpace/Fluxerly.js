@@ -134,6 +134,7 @@ export type AttemptResult<A> =
           readonly global: boolean
           readonly bucket: string
           readonly apiError: ApiErrorDetail | null
+          readonly providerCode: string | undefined
       }
 
 /** Run every cleanup action, then rethrow the one failure or an AggregateError of several */
@@ -400,7 +401,7 @@ export function runAttempt<A, M extends MessageCore>(
                         ),
                     },
                 }
-                if (!fiberRejectionScope(fiber.context)?.hold(runtime.logging, rejected, fiber.context))
+                if (!fiberRejectionScope(fiber.context)?.hold(runtime.logging, rejected, fiber.context, rejection))
                     runtime.logging.log(rejected, fiber.context)
             }
             if (!runtime.logging?.enabled("debug", "rest")) return

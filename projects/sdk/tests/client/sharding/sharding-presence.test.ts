@@ -41,14 +41,14 @@ test("presence shards keep independent status timers and route member selections
     expect(owner.setMembers("40", ["30"])).toBeUndefined()
     expect(owner.setMembers("50", ["31"])).toBeUndefined()
     owner.attach(
-        (update) => statusZero.push(update),
-        (subscriptions) => membersZero.push(subscriptions),
+        (update) => void statusZero.push(update),
+        (subscriptions) => void membersZero.push(subscriptions),
         "identify",
         0,
     )
     owner.attach(
-        (update) => statusOne.push(update),
-        (subscriptions) => membersOne.push(subscriptions),
+        (update) => void statusOne.push(update),
+        (subscriptions) => void membersOne.push(subscriptions),
         "identify",
         1,
     )
@@ -71,8 +71,8 @@ test("presence shards keep independent status timers and route member selections
     ])
 
     owner.attach(
-        (update) => statusZero.push(update),
-        (subscriptions) => membersZero.push(subscriptions),
+        (update) => void statusZero.push(update),
+        (subscriptions) => void membersZero.push(subscriptions),
         "resume",
         0,
     )
@@ -102,13 +102,13 @@ test("a detached shard reconciles its own uncertain clear without cancelling ano
     expect(owner.setMembers("50", ["31"])).toBeUndefined()
     owner.attach(
         () => undefined,
-        (subscriptions) => membersZero.push(subscriptions),
+        (subscriptions) => void membersZero.push(subscriptions),
         "identify",
         0,
     )
     owner.attach(
         () => undefined,
-        (subscriptions) => membersOne.push(subscriptions),
+        (subscriptions) => void membersOne.push(subscriptions),
         "identify",
         1,
     )
@@ -126,7 +126,7 @@ test("a detached shard reconciles its own uncertain clear without cancelling ano
 
     owner.attach(
         () => undefined,
-        (subscriptions) => membersZero.push(subscriptions),
+        (subscriptions) => void membersZero.push(subscriptions),
         "resume",
         0,
     )
@@ -148,7 +148,7 @@ test("an unowned guild is rejected before it can consume selection capacity or q
     expect(owner.setMembers("40", ["30"])).toMatchObject({ detail: { path: "guildId", constraint: "relationship" } })
     owner.attach(
         () => undefined,
-        (subscriptions) => frames.push(subscriptions),
+        (subscriptions) => void frames.push(subscriptions),
         "identify",
         0,
     )
@@ -160,7 +160,7 @@ test("clearing a selection before its first flush drops unsent intent without re
     const clock = timers()
     const frames: unknown[] = []
     const owner = new PresenceOwner(clock.timer, () => 1)
-    const send = (subscriptions: unknown) => frames.push(subscriptions)
+    const send = (subscriptions: unknown) => void frames.push(subscriptions)
     owner.attach(() => undefined, send, "identify", 1)
     expect(owner.setMembers("40", ["30"])).toBeUndefined()
     expect(owner.setMembers("40", [])).toBeUndefined()

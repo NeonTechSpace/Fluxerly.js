@@ -22,7 +22,7 @@ import {
 import { createClient as createNative } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { sendJson, startRestServer } from "../../support/rest-server.js"
-import { settle } from "../../support/settle.js"
+import { settle, typedResult } from "../../support/settle.js"
 import { expectDefect } from "../defects.js"
 
 /**
@@ -61,7 +61,7 @@ async function driver(mode: Mode, options: Pick<ClientOptions, "instance" | "upl
         mode === "native" ? await Effect.runPromise(createNative(config).pipe(Scope.provide(scope))) : undefined
     // A typed failure rejects with the error itself. Interruption and defects reject with the Cause so tests can tell them apart
     const run = async <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) => {
-        const exit = await Effect.runPromiseExit(Effect.result(effect), signal ? { signal } : undefined)
+        const exit = await Effect.runPromiseExit(typedResult(effect), signal ? { signal } : undefined)
         if (Exit.isFailure(exit)) throw exit.cause
         if (exit.value._tag === "Failure") throw exit.value.failure
         return exit.value.success
@@ -1896,7 +1896,7 @@ test.each(modes)("%s releases an idle attachment stream during client shutdown",
         await iterator.next()
     } else {
         consumption = Effect.runPromise(
-            Effect.result(
+            typedResult(
                 Stream.runForEach(api.native!.attachments.stream(input, { maxBytes: 2 }), () =>
                     Effect.promise(() => {
                         delivered.resolve()
@@ -2432,7 +2432,7 @@ test.each(
     } else {
         const stream = api.native!.attachments.stream(streamInput, { maxBytes: 2, timeoutMs: 100 })
         pending = Effect.runPromise(
-            Effect.result(
+            typedResult(
                 Stream.runForEach(stream, () => (phase === "idle" ? Effect.promise(() => pause.promise) : Effect.void)),
             ),
         )

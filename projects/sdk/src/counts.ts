@@ -92,7 +92,7 @@ export interface DefaultCountOperationOptions extends CountOperationOptions, Ope
 
 /**
  * A fresh gateway-count call could not return its complete result.
- * A failure releases this call's local wait and request slot without retrying or caching partial counts.
+ * A failure releases this call's local wait and request slot and withdraws its unsent commands without retrying or caching partial counts.
  * It does not cancel provider work already dispatched or establish whether that work continued.
  * Error metadata includes no credential, requested IDs, correlation nonce or provider body
  *
@@ -107,7 +107,7 @@ export class CountOperationError extends FluxerlyError {
     readonly operation: CountOperation
     /** Failure category.
      * The reason input means local validation failed, and notConnected means a routed shard is absent or not ready.
-     * The reason busy means shared request capacity is full, and timeout means the reply deadline expired.
+     * The reason busy means shared request capacity or a shard's internal command queue is full, and timeout means the reply deadline expired.
      * The reason connectionLost means a participating shard lost its connection, and response means a matched reply was malformed
      */
     readonly reason: "input" | "notConnected" | "busy" | "timeout" | "connectionLost" | "response"

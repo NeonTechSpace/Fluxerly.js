@@ -163,6 +163,8 @@ export async function readFirstSmallFile(client: Client, message: Message) {
 
 Check the file type and contents before processing downloaded bytes. The download uses the attachment's media address on the bot's Fluxer instance and does not accept arbitrary URLs from message text
 
+Buffered downloads and `attachments.stream` preserve a sanitized cause for discovery and transport failures, including a safe code such as `ECONNRESET` when available. The original transport error, attachment URL and response body are not retained in that cause
+
 ## Send a requested direct message
 
 Send a private message only after the recipient asks for one, for example through an opt-in command. The `directMessages.send` method opens the conversation with that user and sends the message

@@ -24,7 +24,7 @@ import { loggingConfiguration, type ClientLogger } from "#sdk/internal/logging"
 import type * as Context from "effect/Context"
 import { apiErrorDetail, unrecognizedProviderCode } from "#sdk/api-errors"
 import { ClientClosedError, ConfigurationError, RateLimitError } from "#sdk/errors"
-import { mapFailureCause, withDeadline } from "#sdk/internal/effect-failures"
+import { mapFailureCause, TransportError, withDeadline } from "#sdk/internal/effect-failures"
 import { nowMs } from "#sdk/internal/clock"
 import { defaultHttpTransport, type HttpTransport } from "#sdk/internal/transport/index"
 import { InstanceResolver, instanceConfiguration } from "#sdk/internal/instance"
@@ -226,8 +226,9 @@ function operationError(
     operation: OAuthOperation,
     response: Response | undefined,
     cause: "notDispatched" | "unknown",
-    body?: unknown,
+    details: { readonly body?: unknown; readonly cause?: unknown } = {},
 ): OAuthOperationError {
+    const { body, cause: networkCause } = details
     const apiError = apiErrorDetail(body)
     const providerCode = unrecognizedProviderCode(body)
     const oauthError =
@@ -243,7 +244,8 @@ function operationError(
         ].includes(body.error)
             ? body.error
             : null
-    if (!response) return new OAuthError({ operation, reason: "network", outcome: cause })
+    if (!response)
+        return new OAuthError({ operation, reason: "network", outcome: cause, cause: new TransportError(networkCause) })
     if (response.status === 429)
         return new OAuthError({
             operation,
@@ -459,7 +461,12 @@ export class OAuthOwner {
                                       status: 429,
                                       retryAfterMs: error.retryAfterMs,
                                   })
-                                : new OAuthError({ operation, reason: "network", outcome: "notDispatched" }),
+                                : new OAuthError({
+                                      operation,
+                                      reason: "network",
+                                      outcome: "notDispatched",
+                                      cause: new TransportError(error),
+                                  }),
                     ),
                     Effect.flatMap((endpoints): Effect.Effect<A, OAuthOperationError | ClientClosedError> =>
                         this.#closed || !this.#secret
@@ -733,7 +740,8 @@ export class OAuthOwner {
                                         : emptyResponse && response.ok
                                           ? (await body(response, state), undefined)
                                           : await json(response, state)
-                                if (!response.ok) throw operationError(operation, response, "unknown", decoded)
+                                if (!response.ok)
+                                    throw operationError(operation, response, "unknown", { body: decoded })
                                 if (emptyResponse) return true as A
                                 const result = decode(decoded)
                                 if (result === undefined) throw responseError(operation, response.status)
@@ -745,6 +753,7 @@ export class OAuthOwner {
                                     operation,
                                     response,
                                     state.dispatched ? "unknown" : "notDispatched",
+                                    { cause: error },
                                 )
                             } finally {
                                 state.settleResponse()
@@ -773,7 +782,12 @@ export class OAuthOwner {
                     catch: (error) =>
                         error instanceof OAuthError
                             ? error
-                            : new OAuthError({ operation, reason: "network", outcome: "unknown" }),
+                            : new OAuthError({
+                                  operation,
+                                  reason: "network",
+                                  outcome: "unknown",
+                                  cause: new TransportError(error),
+                              }),
                 }),
             (state) =>
                 Effect.promise(async () => {

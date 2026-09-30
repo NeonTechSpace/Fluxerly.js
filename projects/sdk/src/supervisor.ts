@@ -19,7 +19,8 @@ export interface SupervisorAssignment {
 }
 
 /**
- * Name and shard IDs for one Node process that the supervisor starts and stops
+ * Name and shard IDs for one Node process that the supervisor starts and stops.
+ * Unknown option keys fail with ConfigurationError, with a suggested name when one is close
  *
  * @category Sharding and supervision
  */
@@ -77,7 +78,8 @@ export interface SupervisorRestartOptions {
  * Space out new gateway session starts across the children owned by one supervisor.
  * A new gateway Identify command starts a session. Resuming an existing session does not use this spacing.
  * The parent waits for a child to confirm its send before granting the next permit.
- * Without a coordinator this does not coordinate another supervisor or an application-owned client
+ * Without a coordinator this does not coordinate another supervisor or an application-owned client.
+ * Unknown option keys fail with ConfigurationError, with a suggested name when one is close
  *
  * @category Sharding and supervision
  */
@@ -222,7 +224,8 @@ export interface SupervisorOptions {
 }
 
 /**
- * Credentials and client settings for the default API's child helper. Native child options use native client settings
+ * Credentials and client settings for the default API's child helper. Native child options use native client settings.
+ * Unknown child option keys fail with ConfigurationError before waiting for the parent, with a suggested name when one is close
  *
  * @category Sharding and supervision
  */
@@ -260,7 +263,8 @@ export interface SupervisorChildSharding {
 }
 
 /**
- * Cancel one default-API waitForReady call without stopping or restarting the supervisor
+ * Cancel one default-API waitForReady call without stopping or restarting the supervisor.
+ * Unknown option keys return ConfigurationError before observation, with a suggested name when one is close
  *
  * @category Sharding and supervision
  */

@@ -1,6 +1,7 @@
 // Built default/native client connection, shutdown and the read-only modes selected by the second argument.
 // Creates no journal and changes no server content. The rate-limit mode injects one synthetic 429 and
 // scheduling-header overrides into read-only bot-self and guild requests
+import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
 import WebSocket from "ws"
@@ -616,7 +617,7 @@ try {
                     if (rateLimitsCheck) {
                         yield* Effect.promise(() =>
                             verifyRateLimits(client, guildId, user.id, Effect.runPromise, async (operation) => {
-                                const result = await Effect.runPromise(Effect.result(operation))
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
                                 assert.equal(result._tag, "Failure")
                                 return result.failure
                             }),
@@ -624,7 +625,7 @@ try {
                     } else if (qualityCheck) {
                         yield* Effect.promise(() =>
                             verifyQuality(client, token, Effect.runPromise, async (operation) => {
-                                const result = await Effect.runPromise(Effect.result(operation))
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
                                 assert.equal(result._tag, "Failure")
                                 return result.failure
                             }),

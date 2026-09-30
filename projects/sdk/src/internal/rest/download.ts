@@ -15,7 +15,7 @@ import type { MessageCore } from "#sdk/messages"
 import { inputValidationFailure, unsupportedKeyFailure, type InputValidationConstraint } from "#sdk/input-validation"
 import { record } from "../decode/primitives.js"
 import { readCaller, suspendMarked, thrownCause } from "../defects.js"
-import { mapFailureCause, withDeadline } from "../effect-failures.js"
+import { mapFailureCause, TransportError, withDeadline } from "../effect-failures.js"
 import type { InstanceEndpointContext } from "../instance.js"
 import type { HttpTransport } from "../transport/index.js"
 import { completeCleanup } from "./attempt.js"
@@ -287,7 +287,11 @@ export class AttachmentDownloadSource {
                 this.#failure ??
                 (error instanceof AttachmentDownloadError
                     ? error
-                    : new AttachmentDownloadError({ reason: "network", status: this.#response?.status ?? null })),
+                    : new AttachmentDownloadError({
+                          reason: "network",
+                          status: this.#response?.status ?? null,
+                          cause: new TransportError(error),
+                      })),
         }).pipe(
             Effect.catchIf(
                 () => this.#interrupted,
@@ -408,10 +412,12 @@ function mediaInstance<M extends MessageCore>(runtime: RestRuntime<M>) {
                           ? new AttachmentDownloadError({
                                 reason: error.reason === "busy" ? "busy" : "network",
                                 status: error.status,
+                                ...(error.reason === "busy" ? {} : { cause: new TransportError(error) }),
                             })
                           : new AttachmentDownloadError({
                                 reason: "network",
                                 status: error instanceof ConnectionError ? error.status : null,
+                                cause: new TransportError(error),
                             }),
                 ),
             ))
@@ -486,7 +492,7 @@ export function openAttachmentStream<M extends MessageCore>(
                 catch: (error) =>
                     error instanceof AttachmentDownloadError
                         ? error
-                        : new AttachmentDownloadError({ reason: "network" }),
+                        : new AttachmentDownloadError({ reason: "network", cause: new TransportError(error) }),
             })
             try {
                 source.accept(response, response.ok)
@@ -616,7 +622,11 @@ export function downloadAttachment<M extends MessageCore>(
                 catch: (error) =>
                     error instanceof AttachmentDownloadError
                         ? error
-                        : new AttachmentDownloadError({ reason: "network", status: response?.status ?? null }),
+                        : new AttachmentDownloadError({
+                              reason: "network",
+                              status: response?.status ?? null,
+                              cause: new TransportError(error),
+                          }),
             })
         }).pipe(
             withDeadline(timeout, () => new AttachmentDownloadError({ reason: "timeout" })),

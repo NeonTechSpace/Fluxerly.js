@@ -19,6 +19,7 @@ import { ClientClosedError } from "#sdk/errors"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { withDeadline } from "./effect-failures.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
+import type { InternalSubmission } from "./gateway/commands.js"
 import { identifier, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller, suspendMarked } from "./defects.js"
 
@@ -26,8 +27,8 @@ const defaultTimeoutMs = 30_000
 const maximumUint64 = "18446744073709551615"
 
 interface GatewaySender {
-    readonly guilds: (guildIds: readonly string[], nonce: string) => void
-    readonly channels: (guildId: string, channelIds: readonly string[], nonce: string) => void
+    readonly guilds: (guildIds: readonly string[], nonce: string) => InternalSubmission
+    readonly channels: (guildId: string, channelIds: readonly string[], nonce: string) => InternalSubmission
 }
 
 interface RoutedGuilds {
@@ -43,6 +44,7 @@ interface Request {
     readonly complete: (result: Effect.Effect<GuildCountsResult | ChannelMemberCountsResult, CountFailure>) => void
     readonly release: () => void
     readonly nonces: Set<string>
+    readonly withdraw: Set<() => void>
     readonly counts: Map<string, GuildCount | ChannelMemberCount>
     finished: boolean
 }
@@ -60,8 +62,8 @@ type GatewayRoute = (guildId: string) => number | undefined
 /** Gateway-private bridge for fresh count frames. It retains only active reply correlations, never count observations */
 export interface CountGatewayOwner {
     attach(
-        guilds: (guildIds: readonly string[], nonce: string) => void,
-        channels: (guildId: string, channelIds: readonly string[], nonce: string) => void,
+        guilds: (guildIds: readonly string[], nonce: string) => InternalSubmission,
+        channels: (guildId: string, channelIds: readonly string[], nonce: string) => InternalSubmission,
         shardId?: number,
     ): void
     detach(shardId?: number): void
@@ -197,8 +199,8 @@ export class CountOwner implements CountGatewayOwner {
     ) {}
 
     attach(
-        guilds: (guildIds: readonly string[], nonce: string) => void,
-        channels: (guildId: string, channelIds: readonly string[], nonce: string) => void,
+        guilds: (guildIds: readonly string[], nonce: string) => InternalSubmission,
+        channels: (guildId: string, channelIds: readonly string[], nonce: string) => InternalSubmission,
         shardId = 0,
     ) {
         if (!this.#closed && shard(shardId)) this.#senders.set(shardId, { guilds, channels })
@@ -318,6 +320,7 @@ export class CountOwner implements CountGatewayOwner {
                     complete,
                     release,
                     nonces: new Set(),
+                    withdraw: new Set(),
                     counts: new Map(),
                     finished: false,
                 }
@@ -338,8 +341,22 @@ export class CountOwner implements CountGatewayOwner {
                     }
                     for (const { nonce, pending, sender } of fragments) {
                         if (pendingRequest.finished) break
-                        if (guildRequest) sender.guilds(pending.guildIds, nonce)
-                        else sender.channels(channelGuildId!, copiedIds, nonce)
+                        const submission = guildRequest
+                            ? sender.guilds(pending.guildIds, nonce)
+                            : sender.channels(channelGuildId!, copiedIds, nonce)
+                        if (typeof submission === "string") {
+                            this.#settle(
+                                pendingRequest,
+                                Effect.fail(
+                                    new CountOperationError({
+                                        operation,
+                                        reason: submission === "busy" ? "busy" : "connectionLost",
+                                    }),
+                                ),
+                            )
+                            break
+                        }
+                        if (submission) pendingRequest.withdraw.add(submission.cancel)
                     }
                 } catch (defect) {
                     this.#cancel(pendingRequest)
@@ -439,6 +456,8 @@ export class CountOwner implements CountGatewayOwner {
         request.finished = true
         for (const nonce of request.nonces) this.#pending.delete(nonce)
         request.nonces.clear()
+        for (const withdraw of request.withdraw) withdraw()
+        request.withdraw.clear()
         request.release()
         request.complete(result)
     }
@@ -448,6 +467,8 @@ export class CountOwner implements CountGatewayOwner {
         request.finished = true
         for (const nonce of request.nonces) this.#pending.delete(nonce)
         request.nonces.clear()
+        for (const withdraw of request.withdraw) withdraw()
+        request.withdraw.clear()
         request.release()
     }
 }
