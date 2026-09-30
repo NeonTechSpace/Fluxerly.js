@@ -4,7 +4,9 @@ import { commandVariant } from "../../scripts/command-blocks.js"
 import { firstSentence, summarizeReference } from "../../scripts/reference-summary.js"
 import versions from "../../content/versions.json"
 
+// The generated file types its values from whatever the last generation wrote, so declare the contract instead
 const targets = versions.targets as { version: string; label: string; path: string }[]
+const previewVersion = versions.previewVersion as string | null
 
 type Page = ReturnType<typeof source.getPages>[number]
 
@@ -18,7 +20,7 @@ export function markdownTwinUrl(slugs: string[]) {
 }
 
 function label(version: string) {
-    if (version === "preview") return versions.previewVersion ? `planned ${versions.previewVersion}, unreleased source preview` : "unreleased source preview"
+    if (version === "preview") return previewVersion ? `planned ${previewVersion}, unreleased source preview` : "unreleased source preview"
     const target = targets.find((entry) => entry.path === version)
     return target ? `${target.label} channel, SDK ${target.version}` : `SDK ${version}`
 }

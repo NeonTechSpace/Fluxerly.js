@@ -336,6 +336,65 @@ test("Inline command choices synchronize, survive navigation and reload, and cop
     expect(errors).toEqual([])
 })
 
+test("Back navigation disposes a pending React hydration without errors and preserves command choices", async ({ page, context }) => {
+    const session = await context.newCDPSession(page)
+    await session.send("Emulation.setCPUThrottlingRate", { rate: 6 })
+    await page.addInitScript(() => {
+        const NativeMessageChannel = window.MessageChannel
+        let paused = false
+        const pending: (() => void)[] = []
+        // Hold React's scheduled work without delaying Astro's navigation or DOM preferences
+        window.MessageChannel = class extends NativeMessageChannel {
+            constructor() {
+                super()
+                // Capture delivery too, so work posted before the pause cannot escape the gate
+                this.port1.addEventListener("message", (event) => {
+                    if (!paused) return
+                    event.stopImmediatePropagation()
+                    pending.push(() => this.port1.dispatchEvent(new MessageEvent("message", { data: event.data })))
+                }, { capture: true })
+            }
+        }
+        window.addEventListener("test:pause-react", () => { paused = true })
+        window.addEventListener("test:resume-react", () => {
+            paused = false
+            for (const send of pending.splice(0)) send()
+        })
+    })
+    const errors: string[] = []
+    page.on("pageerror", (error) => errors.push(error.message))
+    await page.goto("/docs/preview/quick-start/")
+    // The shortcut hint appears after React commits, unlike Astro's ssr marker
+    await expect(page.getByRole("button", { name: "Search Ctrl K", exact: true })).toBeVisible()
+    const blocks = page.locator("[data-command-block]")
+    await blocks.first().getByLabel("Package manager", { exact: true }).selectOption("pnpm")
+    await expect(blocks.first().locator("[data-command-code]")).toHaveText("pnpm exec fluxerly agents")
+    await page.evaluate(() => window.dispatchEvent(new Event("test:pause-react")))
+    await page.locator(".docs-content").getByRole("link", { name: /client.s message methods/ }).click()
+    await expect(page.getByRole("heading", { level: 1, name: "Client", exact: true })).toBeVisible()
+    const island = page.locator('astro-island[component-export="Docs"]')
+    await expect(island).not.toHaveAttribute("ssr")
+    const departing = (await island.elementHandle())!
+    // Prove the intended timing window rather than relying on CPU speed
+    expect(await departing.evaluate((element) => {
+        const key = Object.keys(element).find((key) => key.startsWith("__reactContainer"))!
+        const root = (element as unknown as Record<string, { stateNode: { current: { memoizedState: { isDehydrated: boolean } } } }>)[key]
+        return root.stateNode.current.memoizedState.isDehydrated
+    })).toBe(true)
+    await page.goBack()
+    await expect(page.getByRole("heading", { level: 1, name: quickStartTitle, exact: true })).toBeVisible()
+    await expect(blocks.first().getByLabel("Package manager", { exact: true })).toHaveValue("pnpm")
+    expect(await departing.evaluate((element) => element.isConnected)).toBe(false)
+    await page.evaluate(() => window.dispatchEvent(new Event("test:resume-react")))
+    // Deferred teardown must eventually release the outgoing root, not merely hide its error
+    await expect.poll(() => departing.evaluate((element) =>
+        Object.keys(element).some((key) => key.startsWith("__reactContainer") && Reflect.get(element, key) !== null),
+    )).toBe(false)
+    await expect(page.getByRole("button", { name: "Search Ctrl K", exact: true })).toBeVisible()
+    await expect(blocks.first().locator("[data-command-code]")).toHaveText("pnpm exec fluxerly agents")
+    expect(errors).toEqual([])
+})
+
 test("Package manager selector remains keyboard usable on mobile and keeps working without storage", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 900 })
     await page.addInitScript(() => {

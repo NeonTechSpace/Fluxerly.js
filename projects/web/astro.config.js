@@ -1,4 +1,5 @@
 import { defineConfig } from "astro/config"
+import { fileURLToPath } from "node:url"
 import react from "@astrojs/react"
 import mdx from "@astrojs/mdx"
 import tailwindcss from "@tailwindcss/vite"
@@ -12,6 +13,18 @@ import { remarkReferenceLinks } from "./scripts/reference-links.js"
 import { rehypeReferenceCode } from "./scripts/reference-code.js"
 import { docsHosting } from "./scripts/hosting.js"
 
+// Astro can unmount a React island before its first hydration commits, which React reports as error #424.
+// The wrapped client entry holds that teardown until the commit and otherwise keeps Astro's own renderer
+const reactIntegration = react()
+const setupReact = reactIntegration.hooks["astro:config:setup"]
+reactIntegration.hooks["astro:config:setup"] = (context) => setupReact({
+    ...context,
+    addRenderer: (renderer) => context.addRenderer({
+        ...renderer,
+        clientEntrypoint: fileURLToPath(new URL("./src/components/react-client.js", import.meta.url)),
+    }),
+})
+
 export default defineConfig({
     output: "static",
     // Fumadocs normalizes navigation URLs without a trailing slash
@@ -22,6 +35,6 @@ export default defineConfig({
             rehypePlugins: [rehypeSignatureColors, rehypeReferenceCode],
         }),
     },
-    integrations: [react(), mdx({ extendMarkdownConfig: true }), docsHosting()],
+    integrations: [reactIntegration, mdx({ extendMarkdownConfig: true }), docsHosting()],
     vite: { plugins: [tailwindcss()] },
 })
