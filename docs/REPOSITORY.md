@@ -113,7 +113,7 @@ The website and repository documents are outside these formatting commands.
 
 Local networking checks use owned loopback fixtures, not Fluxer credentials or live sessions
 
-SDK tests use at most four workers by default so compiler-backed shape checks do not overload the host alongside deadline-sensitive runtime checks. An explicit `VITEST_MAX_WORKERS` value overrides this limit for local investigation without skipping tests or changing their deadlines
+Local SDK test runs use half the available threads, at most four, because they share the machine with other work. CI runners use every thread. Test files that start child processes run as a second stage with one worker fewer, so their child processes cannot saturate the host. An explicit `VITEST_MAX_WORKERS` value sets the limit for local investigation without skipping tests or changing their deadlines
 
 When changing runtime compatibility, run the packed-consumer check on the SDK manifest's `engines.node` minimum as well as the development runtime.
 Use `pnpm --filter @neontechspace/fluxerly test:package` after building with the development runtime.
