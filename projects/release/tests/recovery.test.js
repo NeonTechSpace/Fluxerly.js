@@ -147,6 +147,42 @@ test("A version whose channel tag never moves fails at the deadline without repu
     assert.equal(state.elapsed, state.timeout)
 })
 
+test("A superseded release on the same line recovers without republishing or restoring the channel tag", async () => {
+    for (const [version, channel, newer] of [
+        ["1000.0.0-rc.1", "rc", "1000.0.0-rc.2"],
+        ["1000.0.1-canary.0", "canary", "1000.0.2-canary.0"],
+        ["1000.0.1", "stable", "1000.0.2"],
+    ]) {
+        const tag = channel === "stable" ? "latest" : channel
+        const state = setup({ version, channel, tags: { [tag]: newer } })
+        state.published = true
+        const result = await publishCandidate(state.candidate, state)
+        assert.deepEqual([result.npm, result.published, result.tag], ["published", "already", tag])
+        assert.equal(state.tags[tag], newer)
+        assert.equal(state.calls, 0)
+        assert.equal(state.baselineChecks, 0)
+    }
+})
+
+test("A superseded channel tag never bypasses verification of the candidate's served bytes", async () => {
+    const state = setup({ version: "1000.0.0-rc.1", channel: "rc", tags: { rc: "1000.0.0-rc.2" } })
+    state.published = true
+    state.served = Buffer.from("Unreviewed bytes")
+    await assert.rejects(publishCandidate(state.candidate, state), /different bytes/)
+    assert.equal(state.calls, 0)
+})
+
+test("An older published line still requires its staging tag for recovery", async () => {
+    const state = setup({ version: "1000.0.0-rc.1", channel: "rc", tags: { rc: "1000.1.0-rc.2" } })
+    state.published = true
+    await assert.rejects(publishCandidate(state.candidate, state), /rc-1000-0 tag does not point to it/)
+    assert.equal(state.calls, 0)
+    state.tags[stagingTag(state.candidate)] = state.candidate.version
+    assert.equal((await publishCandidate(state.candidate, state)).published, "already")
+    assert.equal(state.tags.rc, "1000.1.0-rc.2")
+    assert.equal(state.calls, 0)
+})
+
 test("An older release line publishes under its staging tag and leaves the newer channel tag in place", async () => {
     const state = setup({ version: "1000.0.2-canary.0", tags: { canary: "1000.1.0-canary.3" } })
     const result = await publishCandidate(state.candidate, state)

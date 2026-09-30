@@ -233,8 +233,25 @@ export async function reconcileRelease(
         if (!expected.has(asset.name)) throw new Error("Existing GitHub release contains an unexpected asset")
     }
     for (const [name, bytes] of expected) {
-        const matches = release.assets.filter((asset) => asset.name === name)
+        let matches = release.assets.filter((asset) => asset.name === name)
         if (matches.length > 1) throw new Error("GitHub release contains duplicate named assets")
+        if (matches.length && matches[0].state !== "uploaded") {
+            const incomplete = matches[0]
+            try {
+                await github.deleteAsset(incomplete.id)
+            } catch (error) {
+                if (isDefiniteRejection(error)) throw rejected(error, `${name} asset deletion`)
+                // A failed upload can leave a starter asset. Confirm deletion before attempting its replacement
+            }
+            release = await awaitVisibility(release.id, (item) =>
+                !item.assets.some((asset) => asset.id === incomplete.id),
+            )
+            if (!release || release.assets.some((asset) => asset.id === incomplete.id))
+                throw new Error(
+                    "GitHub release asset deletion is unconfirmed, rerun Release publish with the same candidate",
+                )
+            matches = release.assets.filter((asset) => asset.name === name)
+        }
         if (!matches.length) {
             try {
                 await github.upload(tag, join(directory, name))
@@ -366,14 +383,15 @@ export function createGithub(repository) {
     const root = `repos/${repository}`
     /**
      * @param {string} path
-     * @param {{ input?: unknown, method?: string, binary?: boolean, allowMissing?: boolean }} [options]
+     * @param {{ input?: unknown, method?: string, binary?: boolean, empty?: boolean, allowMissing?: boolean }} [options]
+     * Binary requests ask for raw asset bytes. Empty requests keep the JSON Accept header and skip parsing a body-less response
      */
-    function api(path, { input, method, binary, allowMissing } = {}) {
+    function api(path, { input, method, binary, empty, allowMissing } = {}) {
         const args = ["api", `${root}/${path}`, "-H", "X-GitHub-Api-Version: 2022-11-28"]
         if (method) args.push("--method", method)
         if (input) args.push("--input", "-")
         if (binary) args.push("-H", "Accept: application/octet-stream")
-        return command(args, { input, binary, allowMissing })
+        return command(args, { input, binary: binary || empty, allowMissing })
     }
     /**
      * @param {string} path
@@ -434,6 +452,8 @@ export function createGithub(repository) {
             if (typeof version !== "string") throw new Error("SDK manifest has no version")
             return version
         },
+        /** @param {number} id */
+        deleteAsset: (id) => api(`releases/assets/${id}`, { method: "DELETE", empty: true }),
         /** @param {number} id */
         download: (id) => api(`releases/assets/${id}`, { binary: true }),
         /**

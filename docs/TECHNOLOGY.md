@@ -81,7 +81,7 @@ These examples illustrate versioning, not the current release inventory.
 Use the [SDK source manifest](/projects/sdk/package.json) for the checkout's version and [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions.
 The only release channels are Canary, RC and Stable.
 Their npm distribution tags are `canary`, `rc` and `latest`, with `latest` meaning Stable from the first stable release.
-No stable version exists yet, so `latest` stays at `1000.0.0-rc.0` until the first Stable release.
+Until the first Stable release, `latest` points to a release candidate that the maintainer moves there by hand.
 Release tooling moves only the published channel's tag, so previews never move `latest`.
 Release documentation snapshots use the matching exact package version, including its prerelease suffix
 

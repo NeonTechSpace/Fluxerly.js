@@ -32,7 +32,7 @@ Every step can be rerun with the same inputs. Publication reads npm before uploa
 | `Candidate does not match the externally reviewed checksum` | The checksum input differs from the candidate | Copy the checksum from the preparation summary |
 | `Preparation is not a successful manual run of this repository's release-prepare workflow` | The run ID is wrong or the run failed | Use the ID of a successful Release prepare run |
 | `GitHub rejected the OPERATION with HTTP 4xx` | GitHub refused the request, so nothing changed | Fix the cause, such as App permissions or tag rules, then rerun Release publish |
-| `GitHub release creation is unconfirmed` or `asset contents are unconfirmed` | A network or server failure left the outcome uncertain | Rerun Release publish. Reconciliation reads back instead of writing twice |
+| `GitHub release creation is unconfirmed`, `asset deletion is unconfirmed` or `asset contents are unconfirmed` | A network or server failure left the outcome uncertain | Rerun Release publish. Reconciliation reads back after uncertain writes and replaces incomplete expected assets |
 | `Publish pending changes as a release candidate before stable` | Stable was selected from an RC source that has new changes | Run Release version PR with `channel: rc`, publish that RC, then select Stable |
 | `VERSION is a new major version or epoch` | A big release was selected for Stable without a published RC | Run Release version PR with `channel: rc`, publish that RC, then select Stable. See [release stages](/docs/RELEASING.md#release-stages) |
 | `Release candidate VERSION is pending` | An unreleased RC blocks every other Stable at or above its version | Publish that RC as Stable first, or release a fix below it |
@@ -124,9 +124,9 @@ The candidate commit is only the tag target and must be reachable from `main`
 Release version PR builds the version change in a read-only job, then a separate job opens the pull request.
 Pull request events for pull requests created or updated with `GITHUB_TOKEN` are not guaranteed, so that job also dispatches Check on the version branch
 
-Identical content needs one full Check. The first job of every Check run compares the checked-out git tree with earlier push and dispatched Check runs in this repository.
-When the newest conclusive matching run passed, the check jobs are skipped and the required `check` job passes with a summary that links that run.
-An unfinished matching run is awaited for up to 40 minutes rather than repeated, and a failed or uncertain lookup runs the full Check.
+Identical content needs one full Check. The first job of every Check run compares the checked-out git tree with other push and dispatched Check runs in this repository.
+The newest conclusive matching run by completion time decides, regardless of its run ID. When it passed, the check jobs are skipped and the required `check` job passes with a summary that links that run.
+An unfinished matching attempt is awaited for up to 40 minutes only when it started before the current attempt, so matching runs never wait for each other. A failed or uncertain lookup runs the full Check.
 Pull request runs never serve as evidence, because they check a merge commit rather than the recorded branch head.
 A release therefore runs the full Check once, in the Check dispatched on the version branch. The version pull request run and the `main` push run after merging reuse it while `main` has not moved
 
@@ -147,6 +147,7 @@ Only after both pass does the release App create a short-lived, repository-scope
 
 GitHub reconciliation polls delayed release, asset, tag and latest visibility for one minute per check.
 HTTP 4xx responses are definite rejections and stop reconciliation. Network failures and 5xx responses are uncertain and lead to readback, never a repeated write.
+A rerun deletes an incomplete expected asset, confirms its absence and uploads the reviewed bytes. Uploaded assets are never replaced.
 Source, release notes and asset-content conflicts stop reconciliation
 
 Provider output is logged with token-like values redacted
@@ -154,9 +155,10 @@ Provider output is logged with token-like values redacted
 ### npm distribution tags
 
 The channel tags are `canary`, `rc` and `latest` for Stable.
-Older release lines never move a channel tag backward and publish under a line-specific staging tag, such as `canary-1000-0`
+Recovery accepts a newer channel-tag version on the same `major.minor` line only when npm still serves the candidate's reviewed bytes. It never moves the channel tag backward.
+Older release lines publish under a line-specific staging tag, such as `canary-1000-0`, and still require that tag for recovery
 
-No stable version exists yet, so `latest` stays at `1000.0.0-rc.0`. Release publish never moves it for previews.
+No stable version exists yet, so `latest` points to a release candidate that the maintainer moved there by hand. Release publish never moves it for previews.
 The first stable release moves it to `1000.0.0`
 
 Trusted publishing cannot change tags, so tag corrections need an interactive npm login with two-factor authentication:

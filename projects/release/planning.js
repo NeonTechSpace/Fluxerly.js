@@ -217,8 +217,8 @@ export function stagingTag(candidate) {
 }
 
 /**
- * Reports whether npm distribution tags expose the candidate through its channel tag, or through its line-specific
- * staging tag when the channel tag already points to a newer version
+ * Reports whether the channel tag points to the candidate or a newer version on the same line. Older maintenance
+ * lines require their line-specific staging tag. Confirmation of the candidate's served bytes is checked separately
  * @param {{ version: string, channel: string, line: string }} candidate
  * @param {Record<string, string>} tags
  */
@@ -226,6 +226,7 @@ export function channelTagState(candidate, tags) {
     const { tag, advance } = npmChannelTag(candidate, tags)
     if (tags[tag] === candidate.version) return { tag, confirmed: true }
     if (advance) return { tag, confirmed: false }
+    if (parseVersion(tags[tag]).line === candidate.line) return { tag, confirmed: true }
     const staging = stagingTag(candidate)
     return { tag: staging, confirmed: tags[staging] === candidate.version }
 }

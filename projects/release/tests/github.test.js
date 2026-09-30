@@ -121,6 +121,11 @@ async function fixture(t, { version = "1000.0.0", existing, newer = false } = {}
                 throw new Error("Connection lost after upload")
             }
         },
+        async deleteAsset(id) {
+            mutations.push(`delete:${id}`)
+            release.assets = release.assets.filter((asset) => asset.id !== id)
+            bytes.delete(id)
+        },
         async download(id) {
             return bytes.get(id)
         },
@@ -383,6 +388,89 @@ test("An interrupted asset upload leaves a draft and retry resumes only missing 
     await reconcileRelease(f.candidate, f.directory, f.github)
     assert.equal(f.mutations.filter((value) => value === "upload:notes.md").length, 1)
     assert.equal(f.getRelease().draft, false)
+})
+
+async function interruptedUpload(t) {
+    const f = await fixture(t)
+    const upload = f.github.upload
+    f.github.upload = async (tag, path) => {
+        if (path.endsWith("docs.json")) {
+            f.getRelease().assets.push({ id: 99, name: "docs.json", size: 0, state: "starter" })
+            throw new GitHubCommandError("Server error", 502)
+        }
+        return upload(tag, path)
+    }
+    await assert.rejects(reconcileRelease(f.candidate, f.directory, f.github, { visibilityTimeout: 0 }), /unconfirmed/)
+    assert.equal(f.getRelease().draft, true)
+    assert.deepEqual(f.mutations, ["create", "upload:notes.md"])
+    f.github.upload = upload
+    return f
+}
+
+test("A rerun replaces only an expected starter asset left by a failed upload", async (t) => {
+    const f = await interruptedUpload(t)
+    await reconcileRelease(f.candidate, f.directory, f.github)
+    assert.equal(f.getRelease().draft, false)
+    assert.deepEqual(f.mutations.filter((value) => value.startsWith("delete:")), ["delete:99"])
+    assert.equal(f.mutations.filter((value) => value === "upload:notes.md").length, 1)
+    assert.equal(f.mutations.filter((value) => value === "upload:docs.json").length, 1)
+})
+
+test("An uncertain asset deletion waits for absence without deleting or uploading twice", async (t) => {
+    const f = await interruptedUpload(t)
+    const deleteAsset = f.github.deleteAsset
+    const releaseById = f.github.releaseById
+    let staleReads = 2
+    let elapsed = 0
+    f.github.deleteAsset = async (id) => {
+        await deleteAsset(id)
+        throw new GitHubCommandError("Response lost", 502)
+    }
+    f.github.releaseById = async (id) => {
+        const item = await releaseById(id)
+        if (staleReads-- > 0) item.assets.push({ id: 99, name: "docs.json", size: 0, state: "starter" })
+        return item
+    }
+    await reconcileRelease(f.candidate, f.directory, f.github, {
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    })
+    assert.ok(elapsed >= 10_000)
+    assert.equal(f.mutations.filter((value) => value === "delete:99").length, 1)
+    assert.equal(f.mutations.filter((value) => value === "upload:docs.json").length, 1)
+})
+
+test("An unconfirmed asset deletion stops without a second delete or replacement upload", async (t) => {
+    const f = await interruptedUpload(t)
+    let elapsed = 0
+    f.github.deleteAsset = async (id) => {
+        f.mutations.push(`delete:${id}`)
+        throw new GitHubCommandError("No response", 502)
+    }
+    await assert.rejects(reconcileRelease(f.candidate, f.directory, f.github, {
+        visibilityTimeout: 10_000,
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    }), /asset deletion is unconfirmed/)
+    assert.equal(elapsed, 10_000)
+    assert.equal(f.mutations.filter((value) => value === "delete:99").length, 1)
+    assert.equal(f.mutations.filter((value) => value === "upload:docs.json").length, 0)
+})
+
+test("A definite asset deletion rejection stops before replacement upload or readback", async (t) => {
+    const f = await interruptedUpload(t)
+    let elapsed = 0
+    f.github.deleteAsset = async (id) => {
+        f.mutations.push(`delete:${id}`)
+        throw new GitHubCommandError("Rejected", 403)
+    }
+    await assert.rejects(reconcileRelease(f.candidate, f.directory, f.github, {
+        now: () => elapsed,
+        wait: async (milliseconds) => { elapsed += milliseconds },
+    }), /rejected the docs.json asset deletion with HTTP 403/)
+    assert.equal(elapsed, 0)
+    assert.equal(f.mutations.filter((value) => value === "delete:99").length, 1)
+    assert.equal(f.mutations.filter((value) => value === "upload:docs.json").length, 0)
 })
 
 test("GitHub command failures carry the HTTP status reported by gh", () => {
