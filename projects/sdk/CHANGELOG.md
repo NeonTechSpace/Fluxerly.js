@@ -1,5 +1,59 @@
 # @neontechspace/fluxerly
 
+## 1000.0.0-rc.3
+
+### Patch Changes
+
+- 4ce40a1: Release event handler slots and partition keys after a synchronous handler or middleware throw, including when middleware calls next. The failure is reported once and the invocation emits its failure observation without blocking later events
+
+    Keep guards returning false silent under automatic rejection feedback, including the runBot reply default. Rejection counters, Debug records and custom onReject callbacks still receive the denial, while guards returning an explicit deny reason retain their reply
+
+    Include the matched command's canonical name and reported failure in each command router observation, with one observation spanning event and command middleware. Interrupted commands report cancelled, and messages with no command match remain unnamed observations. Command failure metrics use the same name and command spans cover middleware, guards and execution
+
+- 4ce40a1: Retain the gateway command pacing history across Resume within a running client, so reconnecting cannot restart a full send budget while Fluxer still counts the previous session's commands. A fresh Identify starts a new budget
+
+    Withdraw unsent community-count, channel-member-count and member-chunk requests when cancelled or timed out, preventing stale requests from being sent later. Bound internal waiting commands and report queue pressure through the existing busy failures
+
+    Release a cancelled, unsent `gateway.send` command's local queue capacity immediately, so replacement work can wait instead of failing as busy until the pacing window opens. Queued commands are still abandoned on disconnect rather than replayed
+
+    Coalesce outgoing status changes to one unsent update per shard, keeping only the latest intent while the gateway send budget is full. Measure the four-second interval from actual transmission, and avoid retaining timers that already fired during scheduling
+
+    Replace queued member-presence selections with the latest IDs and withdraw an unsent selection when cleared. Start member-selection spacing at actual transmission, so pacing delays cannot flush obsolete selections or clears together
+
+- 4ce40a1: Match a handler's failed HTTP 401 or 403 request by error identity, including wrapped causes, rather than status and Fluxer code. Unknown codes no longer cause duplicate rejection logs, and a handled request keeps its Warn when a different request with the same code fails the handler. A rejection is logged once unless the handler fails more than one second later, after its Warn has already appeared
+
+    Keep credential-key values masked in unsafe REST payload logging when a response exceeds the 65,536-byte read limit, including passwords and cookies in truncated JSON text. Invite-shaped objects in truncated lists also keep their access codes masked, while unrelated diagnostic and provider codes stay readable
+
+    Mask credential patterns in application error names and string codes in log records, failure descriptions, describeError and native Effect log causes and annotations. SDK error JSON also masks names in summarized causes, without changing the original error or its cause
+
+    List Debug for handled failure reports in the error and log code catalogue, alongside the existing unhandled failure levels
+
+- 4ce40a1: Classify failures from OAuth identity, community and connection reads and token introspection as reads in their messages, hints and details, so `errors.isRetryable` can identify eligible transient failures. Code exchange, refresh and revoke calls with unknown outcomes remain unsafe to repeat, and OAuth requests are not retried automatically
+
+    Preserve sanitized transport causes, including safe codes such as `ECONNRESET`, when discovery failures become resource errors and during OAuth calls and buffered or streamed attachment downloads. Raw transport errors and their private text are not retained
+
+    Retain unknown uppercase Fluxer error codes in `details.providerCode` for HTTP 429 failures, including when the required wait exceeds the operation deadline
+
+    Reject raw REST paths whose reserved `/v1` prefix or token-authenticated webhook route names use percent-encoded unreserved characters. Keep route checks case-sensitive and do not decode reserved characters
+
+    Compare pin page ordering and pagination progress at full fractional timestamp precision, with timezone offsets normalized by instant. Equal timestamps still remain equal
+
+    Reject audit message-deletion durations whose milliseconds fall outside the safe integer range, rather than projecting an overflowed value such as `Infinity`, and round other durations to whole milliseconds. The same validation applies to REST audit pages and gateway audit events
+
+- 4ce40a1: Clear a shard's cached communities and dependent resources when partial replay of a saved session falls back to Identify. Clear reads cached during the outage again at `READY`, while retaining replayed observations after a successful Resume
+
+    Make the in-memory test gateway enforce the session's Identify event filtering, including message mention exceptions and filtering retained across Resume. Emitting a dispatch Fluxer would suppress now fails with `ConfigurationError` instead of making an unrealistic test pass
+
+    Keep `MESSAGE_REACTION_ADD` available under automatic filtering when a `messageReactionAddMany` handler is registered, because Fluxer generates reaction batches only from unsuppressed additions. Test reaction batches use the same source filter, including when an explicit list ignores only the generated batch name
+
+- 4ce40a1: Effect supervised children let running handlers, queued handler events and REST requests finish within the parent's drain allowance before closing when the parent stops them, including a move to a larger automatic shard plan. Failure still stops running work without draining
+
+    Supervisor child-run options and default readiness-wait options reject unsupported keys before waiting for the parent or observing readiness. Misspelled keys include a suggested supported name, as do assignment and Identify options
+
+    Both `runBot` entry points mask the normalized token in failure reports before a client exists, including tokens surrounded by whitespace and matching quotes
+
+    Effect `runBot` retains readable token, logging and `reportFailure` settings when an option getter throws. A throwing getter no longer discards a configured log sink, token masking or `reportFailure: false`
+
 ## 1000.0.0-rc.2
 
 ### Major Changes
