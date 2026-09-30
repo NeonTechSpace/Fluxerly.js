@@ -104,7 +104,7 @@ Run these commands from [projects/](/projects/) using the development Node versi
 | `pnpm --filter fluxerly-docs test:browser` | Check the rendered development documentation in Chromium |
 | `pnpm --filter fluxerly-docs test:versions` | Check Stable history and rolling prerelease documentation using isolated release fixtures |
 | `pnpm --filter fluxerly-docs test:snapshots` | Build every imported release snapshot and check its served pages |
-| `node release/upstream.js` | Compare the pinned Fluxer API and gateway documents with upstream. Add `--update` to record a reviewed upstream commit in the [manifest](/projects/release/upstream/manifest.json) |
+| `node release/upstream.js` | Compare the pinned Fluxer API document, gateway events document and parameterized rate-limit buckets with upstream. The report lists changed endpoints and schema fields, separates wording-only edits and user-session-only surface, and names changed event field tables. Add `--update` to record a reviewed upstream commit in the [manifest](/projects/release/upstream/manifest.json) |
 | `pnpm --filter @neontechspace/fluxerly test:upstream:guild-features` | Opt-in current Fluxer toggle-set and cloning-guard source comparison, requiring authenticated `gh`. No provider requests or mutations |
 
 Formatting runs only within the SDK and respects its [.gitignore](/projects/sdk/.gitignore), excluding build output and local sandbox files.

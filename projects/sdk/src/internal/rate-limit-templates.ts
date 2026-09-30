@@ -5,7 +5,9 @@
  */
 import { createHash } from "node:crypto"
 
-// Pinned to fluxerapp/fluxer@242ed3a93414d61584fee4ad8449cb392a11ccec rate-limit configs.
+// Matches the parameterized buckets in the Fluxer rate-limit configs at the commit pinned by
+// projects/release/upstream/manifest.json, except the oauth_dev buckets of session-only developer routes.
+// The weekly upstream drift check reports bucket changes.
 // Fluxer hashes the unresolved template for the response header, then resolves these parameters for storage,
 // so the hash alone does not distinguish independently limited resources
 const parameterizedTemplates = [
