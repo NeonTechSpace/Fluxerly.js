@@ -19,7 +19,21 @@ Both APIs use the same underlying code
 | Effect testing            | `@neontechspace/fluxerly/effect/testing` | The same test client for Effect programs                     |
 
 The default API does not require learning or setting up Effect.
-Applications that use Effect directly must install the matching version described below
+Applications that use Effect directly must install a version within the Effect range described below
+
+## What Fluxerly includes
+
+Fluxerly is built for developers at every skill level, from a first bot in one file to large bots that need full control
+
+- **One-file start:** `runBot` connects, stops cleanly on Ctrl+C and explains a failed startup with a suggested fix
+- **Visible errors:** Network calls return a Result instead of throwing, and logs show every failure in full without the token. `FLUXERLY_DEBUG=1` or the `logging` option changes what the logs show
+- **Built-in commands:** Prefix commands with typed arguments, guards, cooldowns, command groups and generated help
+- **Tests without a token:** The `/testing` and `/effect/testing` entry points run a bot against an in-memory gateway and HTTP server
+- **Two APIs, one implementation:** Start with async/await, or choose the native Effect API, with the same features and behavior in both
+- **Ready to grow:** Automatic sharding, session resume across restarts, a process supervisor, rate limiting that never blindly repeats an uncertain write, and metrics and traces through the `observe` option
+- **Agent-ready:** `fluxerly agents` adds the SDK's rules to a project's `AGENTS.md`, and the docs publish `llms.txt`
+
+The result is less infrastructure to build, with testing and application structure already in place
 
 ## Requirements
 
@@ -27,7 +41,8 @@ This package is under development and has not reached its first stable release.
 Fluxerly is tested against Node.js 24.15 or newer.
 JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code, with `@types/node` as a development dependency
 
-Keep the package manager's lockfile for reproducible installs and review prerelease changes before upgrading.
+Keep the package manager's lockfile for reproducible installs and review the changelog before upgrading.
+Canary and RC releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer Canary or RC that breaks the API.
 The installed package also contains the changelog as `CHANGELOG.md`
 
 ## Start a bot

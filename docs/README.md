@@ -29,6 +29,20 @@
 >
 > Issues and pull requests are maintainer-only until the first stable release. Contribution guides and templates arrive with that release
 
+## What Fluxerly includes
+
+Fluxerly is built for developers at every skill level, from a first bot in one file to large bots that need full control
+
+- **One-file start:** `runBot` connects, stops cleanly on Ctrl+C and explains a failed startup with a suggested fix
+- **Visible errors:** Network calls return a Result instead of throwing, and logs show every failure in full without the token. `FLUXERLY_DEBUG=1` or the `logging` option changes what the logs show
+- **Built-in commands:** Prefix commands with typed arguments, guards, cooldowns, command groups and generated help
+- **Tests without a token:** The `/testing` and `/effect/testing` entry points run a bot against an in-memory gateway and HTTP server
+- **Two APIs, one implementation:** Start with async/await, or choose the native Effect API, with the same features and behavior in both
+- **Ready to grow:** Automatic sharding, session resume across restarts, a process supervisor, rate limiting that never blindly repeats an uncertain write, and metrics and traces through the `observe` option
+- **Agent-ready:** `fluxerly agents` adds the SDK's rules to a project's `AGENTS.md`, and the docs publish `llms.txt`
+
+The result is less infrastructure to build, with testing and application structure already in place
+
 ## Install
 
 Fluxerly is tested against Node.js 24.15 or newer. JavaScript needs no compiler, and TypeScript typechecking or compilation requires TypeScript 7 and `@types/node` as a development dependency
@@ -51,7 +65,7 @@ pnpm add @neontechspace/fluxerly
 bun add @neontechspace/fluxerly
 ```
 
-> A committed lockfile records the exact installed version and keeps installs reproducible. During prerelease, add `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer prerelease with API changes.
+> A committed lockfile records the exact installed version and keeps installs reproducible. Canary and RC releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer Canary or RC that breaks the API
 
 ## Getting started
 
