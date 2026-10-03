@@ -1,5 +1,51 @@
 # @neontechspace/fluxerly
 
+## 1000.0.0-rc.4
+
+### Major Changes
+
+- abb5d3f: The coding agent guide moved from `consumer/AGENTS.md` to `agents/AGENTS.md` in the installed package. An application's `AGENTS.md` section from an earlier `fluxerly agents` run points at the old path, so run `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` again after updating
+
+    The README now links the documentation's `llms.txt` for agents that read web pages, and its Effect section describes the accepted Effect 4 range instead of an exact version
+
+- abb5d3f: Add `ChannelType.Announcement` (5), `GuildAnnouncementChannel`, `GuildTextChannelBase` and `AnnouncementChannelCreate` to both APIs. Announcement channels now decode into their own shape instead of `GuildUnknownChannel`, so exhaustive channel-type switches need an announcement case
+
+    Allow `ChannelEdit.type` to convert between text (0) and announcement (5), including a type-only patch. A text channel that follows an announcement channel cannot become one. Delete its follower webhooks first. Conversion to text queues asynchronous follower webhook removal, and a `channelUpdate` event replaces the cached channel with its new type
+
+- abb5d3f: Require Effect `^4.0.0` instead of exactly `4.0.0-rc.117`. The SDK is tested against `4.0.0`, the first stable release. Effect is a required peer, so applications that use only the default API must update it too. Update the application's Effect dependency and lockfile together with the SDK
+- abb5d3f: Received `message.messageReference` now has its own type, `MessageContextReference`, separate from the `MessageReference` that message operations take in both APIs. Its `channelId` is required and `id` is optional. Channel-follow notices, which have no message ID, now decode in events and REST reads, including minimal message field selections. A present but malformed ID still fails
+
+    This is a breaking type change: Check that the received context has an ID and build a `MessageReference` from both fields before passing it to fetch, reply or another message operation
+
+    Add `MessageType.ChannelFollowAdd` and the received-only flags `MessageFlags.Crossposted`, `MessageFlags.IsCrosspost` and `MessageFlags.SourceMessageDeleted`. Fluxer sets these publishing flags itself. Sending and editing continue to accept only `SuppressEmbeds` and `SuppressNotifications`, with other flags rejected before sending the request
+
+- abb5d3f: Remove the retired phone-verification level. The `GuildVerificationLevels.VeryHigh` constant is gone and guild edits reject level 4 before the request. Level 4 received from older instances decodes as `High` (3), matching Fluxer. Other out-of-range levels still fail decoding. The `ApiProviderCode` type drops `GUILD_PHONE_VERIFICATION_REQUIRED`, and an unrecognized code stays in `details.providerCode`
+- abb5d3f: Message search no longer fails when a result comes from an unnamed group DM, in both entry points. Fluxer now sends `name: null` for such channels, so `MessageSearchChannel.name` is now `string | null` when present, and code that reads it must handle null
+- abb5d3f: Add `WebhookType` and the `IncomingWebhook`, `ChannelFollowerWebhook` and `UnknownWebhook` shapes to both APIs. Received metadata now requires a kind and preserves future numeric kinds as `type: "unknown"` with `rawType`
+
+    Bot clients can rename, move or delete follower webhooks but cannot change their avatars. Deleting a follower webhook stops its channel following the source. Optional frozen `sourceGuild` and `sourceChannel` snapshots reflect source visibility to the original creator, and their absence does not prove deletion
+
+    Webhook metadata no longer carries tokens. The `CreatedWebhook.webhook` field and webhook-client `fetch` and `edit` results now use `IncomingWebhook`, and creation requires a valid incoming token before returning credentials
+
+### Minor Changes
+
+- abb5d3f: Add `channels.follow`, `channels.fetchFollowerStats`, `messages.publish` and `messages.fetchCrosspostSource` to both APIs for announcement-channel follows, follower counts, message publishing and public source-community lookups. Follow results identify the source channel and the created follower webhook, which can be deleted to stop following. After publishing, the cached source is updated and copies enter the cache only when they arrive. After an unknown outcome, the SDK drops the source from the cache and does not publish again
+
+    The `errors.apiCode` helper now names announcement, follow, conversion, publishing and published-message editing rejections, such as `invalidFollowTargetChannel`
+
+- abb5d3f: Add the `guildHealthUpdate` event with a frozen `GuildHealthUpdate` payload, `{ guildId, degraded }`, in both entry points. Fluxer sends it when the server hosting a community starts or stops lagging. It does not mean that the bot is disconnected or that the community is unavailable, and the SDK neither reconnects nor clears caches because of it
+- abb5d3f: `messages.delete`, `messages.deleteMany`, `messages.pin` and `messages.unpin` accept an `auditReason` option in both entry points, which Fluxer now records in the community's audit log
+- abb5d3f: Webhook message sends, replies and forwards accept an optional `nonce` in both entry points. For five minutes, Fluxer then tries to suppress another send from the same webhook with the same nonce, which helps after a lost response but does not guarantee exactly-once delivery. Webhook sends without a nonce send none, and a forward that sets a nonce both on the message and on its source fails before the request
+
+### Patch Changes
+
+- abb5d3f: API comments now explain recent Fluxer behavior. Member search can fail with `twoFactorRequired` in a community that requires two-factor authentication for moderators, even without filters. The older `nsfw: false` channel field restores inheritance on create and edit, and `nsfwOverride: false` marks a channel as not adult-only. Message search in an age-restricted community can include adult content even when `includeNsfw` is false. Member queries over the gateway match the start of a nickname, global name or username. A rejected bot token or OAuth grant can come from the owning account's standing, which a new token does not fix
+- abb5d3f: Embed media can reference any image or video attachment through `attachment://`, following Fluxer's file-type detection, instead of only PNG, JPEG, WebP and GIF files, in both entry points
+- abb5d3f: A successful emoji or sticker metadata or source lookup no longer pauses unrelated requests such as message sends. Fluxer limits these lookups in one bucket per bot across all emojis or stickers, and the SDK now tracks them that way, so running out of that bucket still delays the next lookup of any emoji or sticker
+- abb5d3f: Gateway member requests, presence member selection and member count requests now reject IDs above 9223372036854775807 before sending, in both entry points. Fluxer ignores such IDs, so a request could wait until its timeout, and an explicit member list made only of such IDs could turn into a request for all members
+- abb5d3f: When the SDK plans to resume a gateway session, it now closes the connection with code 4000 instead of 1000, in both entry points. Fluxer ends a session when the client closes with 1000 or 1001, so a reconnect after a missed heartbeat or a restart from a `SessionStore` had to identify again and lost the events sent in between. A final shutdown without a `SessionStore` still closes with 1000
+- abb5d3f: With the users or direct-message cache enabled, a member update now removes that member's cached user and clears cached direct-message channels before handlers run, in both entry points. Fluxer reports username and other account changes to bots through member updates, so cached users and DM recipients could show the old identity. Automatic gateway event selection keeps member updates for these caches even without a `guildMemberUpdate` handler. Later reads fetch fresh snapshots, and snapshots already returned stay unchanged
+
 ## 1000.0.0-rc.3
 
 ### Patch Changes
