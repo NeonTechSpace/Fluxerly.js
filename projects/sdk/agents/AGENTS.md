@@ -14,7 +14,7 @@ Paths starting with `node_modules/@neontechspace/fluxerly/` point into the insta
 3. Network calls return a Result instead of throwing. Check `result.isErr()` before reading `result.value`, or return the call from a handler so the SDK logs a failure
 4. Read the bot token from the environment, such as `FLUXER_BOT_TOKEN`, and keep it out of code, logs and commits
 5. The SDK is ESM-only and needs Node.js 24.15 or newer. Use `import` in a project whose `package.json` sets `"type": "module"`
-6. Fluxerly is not discord.js. Use only methods declared in the installed type files, and report a missing method instead of inventing one
+6. Use only methods declared in the installed type files, even when a familiar method name seems likely, and report a missing method instead of inventing one
 7. Test a bot with `createTestBot` from `@neontechspace/fluxerly/testing`, which needs no token or network
 
 <!-- fluxerly-rules:end -->
@@ -42,14 +42,14 @@ await runBot({
 
 Run it with `node --env-file=.env bot.js`, where `.env` holds `FLUXER_BOT_TOKEN=...`
 
-## Differences from discord.js
+## Patterns that do not exist in Fluxerly
 
 - No `new Client()` and `client.login(token)`. Use `runBot({ token, ... })`, or `createClient({ token })` and then `client.run()`
 - No intents. Nothing needs to be enabled to receive events
 - No slash commands or interactions. Commands are prefix commands such as `!ping`, through the `commands` option of `runBot`
 - Messages are read-only data without methods, so `message.reply()`, `message.delete()` and `channel.send()` do not exist. Use the `reply` passed to a handler, or `client.messages.send(channelId, content)`
 - A `runBot` event handler receives a context object such as `({ message, reply })`, not the message itself
-- A bot author is detected with `message.author.isBot`, not `message.author.bot`
+- A bot author is detected with `message.author.isBot`. There is no `message.author.bot`
 - Fluxer calls servers communities, and the SDK names them guilds, as in `guildId`
 
 ## Check a Result
