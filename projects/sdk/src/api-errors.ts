@@ -34,6 +34,51 @@ export const apiErrorMappings = {
         code: "cannotModifySystemWebhook",
         explanation: "Fluxer does not allow modifying a system webhook",
     },
+    ANNOUNCEMENT_CHANNEL_REQUIRED: {
+        code: "announcementChannelRequired",
+        explanation: "Fluxer requires an announcement channel for this operation",
+    },
+    CHANNEL_ALREADY_FOLLOWED: {
+        code: "channelAlreadyFollowed",
+        explanation: "The destination channel already receives updates from this announcement channel",
+    },
+    CHANNEL_HAS_FOLLOWED_CHANNELS: {
+        code: "channelHasFollowedChannels",
+        explanation: "The channel receives followed-channel updates and cannot become an announcement channel",
+    },
+    CHANNEL_TYPE_CONVERSION_NOT_SUPPORTED: {
+        code: "channelTypeConversionNotSupported",
+        explanation: "Fluxer rejected the requested channel type conversion",
+    },
+    FOLLOW_TARGET_CONTENT_WARNING_REQUIRED: {
+        code: "followTargetContentWarningRequired",
+        explanation:
+            "The announcement source has a content warning but the destination has no warning or age restriction",
+    },
+    FOLLOW_TARGET_NOT_AGE_RESTRICTED: {
+        code: "followTargetNotAgeRestricted",
+        explanation: "The announcement source is age-restricted but the destination is not",
+    },
+    INVALID_FOLLOW_TARGET_CHANNEL: {
+        code: "invalidFollowTargetChannel",
+        explanation: "Fluxer requires a community text channel as the follow destination",
+    },
+    MESSAGE_ALREADY_CROSSPOSTED: {
+        code: "messageAlreadyCrossposted",
+        explanation: "The message has already been published",
+    },
+    MESSAGE_NOT_CROSSPOSTABLE: {
+        code: "messageNotCrosspostable",
+        explanation: "Fluxer cannot publish replies, system messages, forwarded messages or received crosspost copies",
+    },
+    MESSAGE_CROSSPOST_RATE_LIMITED: {
+        code: "messageCrosspostRateLimited",
+        explanation: "The announcement channel has reached its publishing rate limit",
+    },
+    PUBLISHED_MESSAGE_EDIT_RATE_LIMITED: {
+        code: "publishedMessageEditRateLimited",
+        explanation: "The published message has reached its editing rate limit",
+    },
     CAPTCHA_REQUIRED: { code: "captchaRequired", explanation: "Fluxer requires CAPTCHA verification" },
     INVALID_CAPTCHA: { code: "invalidCaptcha", explanation: "Fluxer rejected the CAPTCHA verification" },
     INVALID_FORM_BODY: { code: "invalidFormBody", explanation: "Fluxer rejected one or more request fields" },
@@ -76,10 +121,6 @@ export const apiErrorMappings = {
     GUILD_VERIFICATION_REQUIRED: {
         code: "guildVerificationRequired",
         explanation: "Fluxer requires community verification for this operation",
-    },
-    GUILD_PHONE_VERIFICATION_REQUIRED: {
-        code: "guildVerificationRequired",
-        explanation: "Fluxer requires community phone verification for this operation",
     },
     GUILD_EMAIL_VERIFICATION_REQUIRED: {
         code: "guildVerificationRequired",
@@ -179,7 +220,9 @@ export const validationErrorMappings = {
 
 /**
  * Stable SDK category of a recognized Fluxer API rejection, read from ApiErrorDetail.code.
- * Branch on this rather than on providerCode when several server codes mean the same thing, such as every resource limit
+ * Branch on this rather than on providerCode when several server codes mean the same thing, such as every resource limit.
+ * Announcement, follow, channel conversion and publishing preconditions have distinct categories. Publishing and
+ * published-message editing limits are separate from the general rateLimited category
  *
  * @category Errors
  */
@@ -190,6 +233,17 @@ export type ApiErrorCode =
     | "cannotSendMessagesToUser"
     | "cannotSendEmptyMessage"
     | "cannotModifySystemWebhook"
+    | "announcementChannelRequired"
+    | "channelAlreadyFollowed"
+    | "channelHasFollowedChannels"
+    | "channelTypeConversionNotSupported"
+    | "followTargetContentWarningRequired"
+    | "followTargetNotAgeRestricted"
+    | "invalidFollowTargetChannel"
+    | "messageAlreadyCrossposted"
+    | "messageNotCrosspostable"
+    | "messageCrosspostRateLimited"
+    | "publishedMessageEditRateLimited"
     | "captchaRequired"
     | "invalidCaptcha"
     | "invalidFormBody"
@@ -239,6 +293,17 @@ export type ApiProviderCode =
     | "CANNOT_SEND_MESSAGES_TO_USER"
     | "CANNOT_SEND_EMPTY_MESSAGE"
     | "CANNOT_MODIFY_SYSTEM_WEBHOOK"
+    | "ANNOUNCEMENT_CHANNEL_REQUIRED"
+    | "CHANNEL_ALREADY_FOLLOWED"
+    | "CHANNEL_HAS_FOLLOWED_CHANNELS"
+    | "CHANNEL_TYPE_CONVERSION_NOT_SUPPORTED"
+    | "FOLLOW_TARGET_CONTENT_WARNING_REQUIRED"
+    | "FOLLOW_TARGET_NOT_AGE_RESTRICTED"
+    | "INVALID_FOLLOW_TARGET_CHANNEL"
+    | "MESSAGE_ALREADY_CROSSPOSTED"
+    | "MESSAGE_NOT_CROSSPOSTABLE"
+    | "MESSAGE_CROSSPOST_RATE_LIMITED"
+    | "PUBLISHED_MESSAGE_EDIT_RATE_LIMITED"
     | "CAPTCHA_REQUIRED"
     | "INVALID_CAPTCHA"
     | "INVALID_FORM_BODY"
@@ -264,7 +329,6 @@ export type ApiProviderCode =
     | "FEATURE_TEMPORARILY_DISABLED"
     | "SLOWMODE_RATE_LIMITED"
     | "GUILD_VERIFICATION_REQUIRED"
-    | "GUILD_PHONE_VERIFICATION_REQUIRED"
     | "GUILD_EMAIL_VERIFICATION_REQUIRED"
     | "TWO_FACTOR_REQUIRED"
     | "BOT_ALREADY_IN_GUILD"
@@ -455,12 +519,27 @@ const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
     unknownResource: "Check the ID. The resource may be deleted or not visible to this bot",
     notFound: "Check the ID. The resource may be deleted or not visible to this bot",
     unauthorized:
-        "Check that the configured value is the whole bot token, or regenerate the token in the application settings",
+        "Check the configured credential. A valid bot token can also be rejected when the application owner's account is closed or disabled. For OAuth, check whether the authorizing user's account is closed or temporarily banned. A new token does not fix an account-standing rejection. The rejection alone does not identify the cause",
     invalidFormBody:
         "Correct the fields named in the message. The error's apiError.validationErrors lists them as data",
     cannotSendMessagesToUser: "The user does not accept direct messages from this bot, so retrying does not help",
     directMessagesDisabled: "The user does not accept direct messages from this bot, so retrying does not help",
     cannotSendEmptyMessage: "Include content, an embed, an attachment or a sticker",
+    announcementChannelRequired: "Use an announcement channel as the source of this operation",
+    channelAlreadyFollowed: "Keep the existing follow or choose a destination that does not already follow this source",
+    channelHasFollowedChannels: "Remove the channel-follower webhooks from this channel before converting it",
+    channelTypeConversionNotSupported:
+        "Convert only between community text and announcement channels, using the channel's current type as the source",
+    followTargetContentWarningRequired:
+        "Use a destination with a content warning or an age restriction, including inherited category or community settings",
+    followTargetNotAgeRestricted:
+        "Use an age-restricted destination, including inherited category or community settings",
+    invalidFollowTargetChannel: "Use a community text channel as the follow destination",
+    messageAlreadyCrossposted: "Edit the source message to update its published copies instead of publishing it again",
+    messageNotCrosspostable:
+        "Publish an ordinary source message rather than a reply, forwarded message or received crosspost copy",
+    messageCrosspostRateLimited: "Wait at least retryAfterMs before publishing another message in this channel",
+    publishedMessageEditRateLimited: "Wait at least retryAfterMs before editing this published message again",
     cannotSendMessagesInNonTextChannel: "Send the message to a text channel",
     cannotEditOtherUserMessage: "Only messages that the bot sent can be edited",
     twoFactorRequired: "The application owner's account needs two-factor authentication enabled for this operation",
@@ -478,7 +557,7 @@ const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
 /** Suggested fixes for the standard OAuth error codes that the SDK keeps in oauthError */
 const oauthErrorHints: Readonly<Record<string, string>> = {
     invalid_grant:
-        "The authorization code or refresh token is invalid, expired, already used or was issued for another redirect URI. Start the authorization again",
+        "Check the authorization code or refresh token for expiry, prior use and the correct redirect URI. Also check whether the authorizing user's account is closed or temporarily banned. A new token or repeated authorization does not fix an account-standing rejection. The rejection alone does not identify the cause",
     invalid_client: "Check the configured OAuth client ID and client secret",
     invalid_request: "Check the request parameters, such as the code and redirectUri",
     invalid_scope: "Request only scopes that the application may use",

@@ -5,7 +5,8 @@
  * U+000C and U+202E and trims surrounding whitespace. It sends the original text unchanged
  *
  * URLs must use HTTP/HTTPS and contain at most 2048 characters, except image and thumbnail URLs may use attachment://filename.
- * An attachment URL must exactly and case-sensitively match one new PNG, JPG, JPEG, WEBP or GIF upload filename in the same send, reply or edit.
+ * An attachment URL must exactly and case-sensitively match one new upload filename in the same send, reply or edit.
+ * Its extension must map to an image or video MIME type in Fluxer's filename lookup, such as PNG, AVIF, MP4 or WebM.
  * Its filename may contain letters, marks, numbers, underscores, dots and hyphens only
  *
  * The SDK does not look up existing attachments, so an existing attachment ID cannot supply an attachment URL.
@@ -50,9 +51,9 @@ export interface EmbedInput {
     readonly author?: EmbedAuthorInput
     /** Footer label and optional icon */
     readonly footer?: EmbedFooterInput
-    /** Full-size HTTP(S) image or attachment://filename for one same-message uploaded image */
+    /** Full-size HTTP(S) image or attachment://filename for one same-message uploaded image or video */
     readonly image?: EmbedMediaInput
-    /** Small HTTP(S) image or attachment://filename for one same-message uploaded image */
+    /** Small HTTP(S) image or attachment://filename for one same-message uploaded image or video */
     readonly thumbnail?: EmbedMediaInput
     /** Up to 25 named sections, in display order. Entries are copied by index when the operation starts */
     readonly fields?: readonly EmbedFieldInput[]
@@ -84,15 +85,15 @@ export interface EmbedFooterInput {
     readonly iconUrl?: string
 }
 
-/** An image or thumbnail to show in a rich card. Use an HTTP(S) URL or attachment://filename for a new image uploaded with the same message.
+/** Media for an image or thumbnail field in a rich card. Use an HTTP(S) image URL or attachment://filename for a new image or video uploaded with the same message.
  * The SDK neither uploads through this object nor fetches remote or retained attachment bytes
  *
  * @category Messages
  */
 export interface EmbedMediaInput {
-    /** Required HTTP(S) image URL or attachment://filename for image and thumbnail fields */
+    /** Required HTTP(S) image URL or attachment://filename naming an uploaded image or video for image and thumbnail fields */
     readonly url: string
-    /** Optional description for readers who cannot see the image, 1–4,096 normalized UTF-16 code units */
+    /** Optional description for readers who cannot see the media, 1–4,096 normalized UTF-16 code units */
     readonly description?: string
 }
 

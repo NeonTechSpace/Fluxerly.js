@@ -77,8 +77,8 @@ export const maxIgnoredEvents = 256
 
 /**
  * How long Fluxer retains a disconnected session for Resume, in milliseconds.
- * A client close with 1000 or 1001 does not end the retained session (fluxer_docs gateway/opcodes-and-close-codes.md
- * at the pinned commit), so the SDK keeps its normal closure code when session persistence is configured
+ * A client close with 1000 or 1001 destroys the session. Other client close codes or an abrupt socket end retain it
+ * (gateway_handler.erl and session_monitor.erl at fluxerapp/fluxer commit cdcaba3)
  */
 export const sessionRetentionMs = 60_000
 
@@ -88,6 +88,11 @@ export const sessionRetentionMs = 60_000
  * closes with 4011
  */
 export const maxGuildsPerShard = 2_500
+
+/** Client-only private-use closure that retains the session for Resume, unlike client codes 1000 and 1001.
+ * Code 4000 is accepted by ws and does not change classification of server-sent closures
+ */
+export const resumePreservingCloseCode = 4000
 
 /** WebSocket and Fluxer gateway close codes the SDK recognizes */
 export const CloseCode = Object.freeze({

@@ -173,7 +173,7 @@ const fixtureEvents = (lines: readonly JsonLine[]) =>
 function run(root: string, environment: Record<string, string> = {}) {
     const lines = spawn(root, ["default"], environment)
     // Recovery fails, so the run never starts new work, keeps its journal and releases the lock
-    expect(lines).toContainEqual(expect.objectContaining({ check: "recover_prior_test", passed: false }))
+    expect(lines).toContainEqual(expect.objectContaining({ check: "recovery_only", passed: false }))
     expect(fixtureEvents(lines)).not.toContain("temporary_channel_created")
     expect(existsSync(join(root, ".env.test.messages.local"))).toBe(true)
     expect(lockFiles(root)).toEqual([])

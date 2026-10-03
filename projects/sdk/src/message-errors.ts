@@ -158,6 +158,8 @@ export class MessageOperationError extends FluxerlyError {
         | "messages.get"
         | "typing"
         | "fetch"
+        | "publish"
+        | "fetchCrosspostSource"
         | "fetchHistory"
         | "search"
         | "fetchReactionUsers"

@@ -19,6 +19,7 @@ const manual = (lockClass) => Object.freeze({ lockClass, level: "manual" })
 /** Declarations by harness file, then by scenario arguments in sorted order joined with spaces */
 export const checkClasses = Object.freeze({
     "administration.js": { "": sdkWork("shared-state") },
+    "announcements.js": { "": sdkWork("test-owned") },
     "bot-runner.js": { "": sdkWork("read-only") },
     "command-conveniences.js": {
         waits: sdkWork("test-owned"),
@@ -76,7 +77,7 @@ export const checkClasses = Object.freeze({
     "oauth.js": { "": manual("shared-state"), "--no-consent": sdkWork("read-only") },
     "own-history.js": { "": sdkWork("test-owned"), "--guild": manual("shared-state") },
     "presence.js": { "": manual("shared-state") },
-    "recovery-window.js": { "": sdkWork("read-only") },
+    "recovery-window.js": { "": sdkWork("read-only"), "--session-restart": sdkWork("read-only") },
     "role-display-reset.js": { "": manual("shared-state") },
     "sandbox.js": { "": sdkWork("read-only") },
     "sdk.js": {

@@ -32,6 +32,7 @@ const shared = {
         "OAuthScopes",
         "Permissions",
         "TimestampStyles",
+        "WebhookType",
     ],
     "public error classes": [
         "ApplicationError",

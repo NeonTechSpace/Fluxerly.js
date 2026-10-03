@@ -86,6 +86,8 @@ export interface ShardLoopHost<M extends MessageCore> {
     readonly identifyFields: (shardId: number) => IdentifyFields
     /** Configured session persistence, loaded once at the first attempt */
     readonly sessions: SessionStore | undefined
+    /** Whether shutdown will save this shard's session after its socket closes */
+    readonly saveSessionOnClose: (shardId: number) => boolean
     /** Observe each accepted READY body, which carries the bot's own user and the shard's communities */
     readonly readyUser?: (body: unknown, shardId: number) => void
     /**
@@ -436,6 +438,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                         invalidate: (type, body) => invalidateDispatch(host.caches, type, body),
                     },
                     sockets: host.sockets,
+                    preserveSessionOnInterrupt: () => host.saveSessionOnClose(shard.shardId),
                 })
             })
             const result = yield* Effect.uninterruptibleMask((restore) =>

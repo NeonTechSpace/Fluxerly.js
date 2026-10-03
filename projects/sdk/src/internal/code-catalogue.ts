@@ -76,7 +76,7 @@ export const errorCodes = {
         error: "AuthenticationError",
         meaning:
             "Fluxer rejected the bot token when the client connected, reconnected or counted communities for automatic sharding",
-        action: "Check that the configured value is the whole bot token, or regenerate it. The SDK does not retry a rejected token",
+        action: "Check the whole bot token and the application owner's account standing. A valid token can be rejected if that account is closed or disabled, which a new token cannot fix. The rejection alone does not identify the cause. The SDK does not retry it",
     },
     "connection.<phase>.<reason>": {
         error: "ConnectionError",
@@ -165,8 +165,8 @@ export const errorCodes = {
     "message.<reason>": {
         error: "MessageOperationError",
         values: operationReasons,
-        meaning: operationMeaning("message"),
-        action: operationAction,
+        meaning: `${operationMeaning("message")}. Publishing requires an unpublished source message in an announcement channel, excluding replies, system messages, forwarded messages and received crosspost copies. Publishing and editing a published message have separate rate limits`,
+        action: `${operationAction}. For publishing preconditions, check the source channel and message. For rate limits, wait at least retryAfterMs before repeating the call`,
     },
     "guild.<reason>": {
         error: "GuildOperationError",
@@ -177,8 +177,8 @@ export const errorCodes = {
     "channel.<reason>": {
         error: "ChannelOperationError",
         values: operationReasons,
-        meaning: operationMeaning("channel"),
-        action: operationAction,
+        meaning: `${operationMeaning("channel")}. Announcement operations require an announcement source. Following requires a community text destination that does not already follow that source and has compatible content warnings or age restrictions. Only text and announcement channels can convert into each other`,
+        action: `${operationAction}. Choose a compatible follow destination. Before converting a text channel to an announcement channel, remove its channel-follower webhooks`,
     },
     "user.<reason>": {
         error: "UserOperationError",
@@ -189,8 +189,8 @@ export const errorCodes = {
     "webhook.<reason>": {
         error: "WebhookOperationError",
         values: operationReasons,
-        meaning: operationMeaning("webhook"),
-        action: operationAction,
+        meaning: `${operationMeaning("webhook")}. Moving a channel-follower webhook requires a community text destination that does not already follow its source and has compatible content warnings or age restrictions. Editing a published webhook message can reach the published-message edit rate limit`,
+        action: `${operationAction}. Choose a compatible destination for a follower webhook. For a published-message edit rate limit, wait at least retryAfterMs before editing again`,
     },
     "application.<reason>": {
         error: "BotApplicationOperationError",

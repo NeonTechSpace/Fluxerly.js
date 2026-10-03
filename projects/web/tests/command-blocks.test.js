@@ -12,7 +12,7 @@ const managers = ["npm", "pnpm", "bun"]
 test("Authored guide command blocks render with supported metadata", async () => {
     const processor = await createMarkdownProcessor({ remarkPlugins: [remarkCommandBlocks] })
     for (const guide of await authoredGuides()) {
-        const content = guide.content.replaceAll("{{effect-version}}", "4.0.0-rc.117")
+        const content = guide.content.replaceAll("{{effect-version}}", "4.0.0")
         await assert.doesNotReject(() => processor.render(content), guide.slug)
     }
 })
@@ -35,8 +35,13 @@ test("SDK install variants pin a prerelease exactly and keep the normal range fo
 })
 
 test("Effect add and list use the chosen manager, while node execution follows the example language", () => {
-    const add = { kind: "add", package: "effect", version: "4.0.0-rc.29" }
-    assert.deepEqual(managers.map((manager) => commandVariant(add, manager).command), [
+    // A stable Effect is installed at the tested version with the normal range, so later Effect 4 releases still satisfy it
+    const add = { kind: "add", package: "effect", version: "4.0.0" }
+    assert.deepEqual(managers.map((manager) => commandVariant(add, manager).command),
+        ["npm install effect@4.0.0", "pnpm add effect@4.0.0", "bun add effect@4.0.0"])
+    // Older SDK snapshots required one exact Effect release candidate, which stays pinned
+    const candidate = { ...add, version: "4.0.0-rc.29" }
+    assert.deepEqual(managers.map((manager) => commandVariant(candidate, manager).command), [
         "npm install --save-exact effect@4.0.0-rc.29",
         "pnpm add --save-exact effect@4.0.0-rc.29",
         "bun add --exact effect@4.0.0-rc.29",

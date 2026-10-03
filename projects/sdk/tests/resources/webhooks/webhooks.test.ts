@@ -4,7 +4,13 @@ import { once } from "node:events"
 import { setImmediate as turn } from "node:timers/promises"
 import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { ConfigurationError, createClient, createWebhookClient, type WebhookClientOptions } from "../../../src/index.js"
+import {
+    ConfigurationError,
+    createClient,
+    createWebhookClient,
+    MessageFlags,
+    type WebhookClientOptions,
+} from "../../../src/index.js"
 import { createClient as createNative, createWebhookClient as createNativeWebhook } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { hostedOperationCalls, stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
@@ -16,6 +22,7 @@ const metadata = (extra = {}) => ({
     id: "100",
     guild_id: "200",
     channel_id: "300",
+    type: 1,
     name: "Deployments",
     avatar: null,
     token: secret,
@@ -109,7 +116,14 @@ test.each(modes)("%s manages webhooks with token-free snapshots and explicit cre
     const created = await settle(
         bot.webhooks.create("300", { name: "Deployments" }, { auditReason: "Created for deployment" }),
     )
-    expect(created.webhook).toEqual({ id: "100", guildId: "200", channelId: "300", name: "Deployments", avatar: null })
+    expect(created.webhook).toEqual({
+        id: "100",
+        guildId: "200",
+        channelId: "300",
+        type: 1,
+        name: "Deployments",
+        avatar: null,
+    })
     expect(Object.isFrozen(created.webhook)).toBe(true)
     expect(created.credentials.revealToken()).toBe(secret)
     expect(JSON.stringify(created)).not.toContain(secret)
@@ -187,6 +201,7 @@ test.each(modes)("%s manages its webhook through token routes without closing lo
         id: "100",
         guildId: "200",
         channelId: "300",
+        type: 1,
         name: "Deployments",
         avatar: null,
     })
@@ -199,6 +214,18 @@ test.each(modes)("%s manages its webhook through token routes without closing lo
         [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "DELETE", undefined, null],
         [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "GET", undefined, null],
     ])
+})
+
+test.each(modes)("%s rejects non-incoming metadata on token-authenticated routes", async (mode) => {
+    const { webhook } = await setup(mode)
+    for (const type of [2, 99]) {
+        stubFetchWithHostedDiscovery(vi.fn(async () => Response.json(metadata({ type }))))
+        for (const operation of [webhook.fetch(), webhook.edit({ name: "Renamed" })]) {
+            const failure = await expectErr(operation)
+            expect(failure).toMatchObject({ reason: "response" })
+            expect(JSON.stringify(failure)).not.toContain(secret)
+        }
+    }
 })
 
 test.each(modes)("%s uses initially validated shared webhook settings", async (mode) => {
@@ -446,31 +473,54 @@ test.each(modes)("%s does not replay unknown sends, but retries confirmed rate l
     expect(attempts).toBe(2)
 })
 
-test.each(modes)("%s supports non-voice webhook flags and rejects invalid flags without dispatch", async (mode) => {
-    const bodies: Record<string, unknown>[] = []
-    const hostedFetch = stubFetchWithHostedDiscovery(
-        vi.fn(async (_url: string, init: RequestInit) => {
-            bodies.push(JSON.parse(String(init.body)))
-            return Response.json(message())
-        }),
-    )
-    const { webhook } = await setup(mode)
-    await settle(webhook.send({ content: "quiet", flags: 4100 }))
-    await settle(webhook.editMessage("400", { flags: 4 }))
-    await settle(webhook.editMessage("400", { flags: 0 }))
-    expect(bodies.map((body) => body.flags)).toEqual([4100, 4, 0])
-    for (const flags of [8192, -1, 1.5, 2 ** 32 + 4]) {
-        await expect(settle(webhook.send({ content: "quiet", flags }))).rejects.toMatchObject({
-            reason: "input",
-            outcome: "notDispatched",
-        })
-        await expect(settle(webhook.editMessage("400", { flags }))).rejects.toMatchObject({
-            reason: "input",
-            outcome: "notDispatched",
-        })
-    }
-    expect(hostedOperationCalls(hostedFetch)).toHaveLength(3)
-})
+test.each(modes)(
+    "%s accepts only writable webhook flags and rejects unsupported flags without dispatch",
+    async (mode) => {
+        const bodies: Record<string, unknown>[] = []
+        const hostedFetch = stubFetchWithHostedDiscovery(
+            vi.fn(async (_url: string, init: RequestInit) => {
+                bodies.push(JSON.parse(String(init.body)))
+                return Response.json(message())
+            }),
+        )
+        const { webhook } = await setup(mode)
+        await settle(webhook.send({ content: "quiet", flags: 4100 }))
+        await settle(webhook.editMessage("400", { flags: 4 }))
+        await settle(webhook.editMessage("400", { flags: 0 }))
+        expect(bodies.map((body) => body.flags)).toEqual([4100, 4, 0])
+        for (const flags of [
+            MessageFlags.Crossposted,
+            MessageFlags.IsCrosspost,
+            MessageFlags.SourceMessageDeleted,
+            8192, // Fluxer's VoiceMessage bit has no writable SDK constant
+            MessageFlags.Crossposted | MessageFlags.SuppressEmbeds,
+            -1,
+            1.5,
+            2 ** 32 + 4,
+        ]) {
+            for (const input of [
+                { content: "quiet", flags },
+                {
+                    content: "quiet",
+                    flags,
+                    messageReference: { type: "reply", target: { id: "401", channelId: "300" } },
+                },
+                { flags, messageReference: { type: "forward", source: { source: { id: "401", channelId: "300" } } } },
+            ] as const)
+                await expect(settle(webhook.send(input))).rejects.toMatchObject({
+                    reason: "input",
+                    outcome: "notDispatched",
+                    inputValidation: { path: "flags" },
+                })
+            await expect(settle(webhook.editMessage("400", { flags }))).rejects.toMatchObject({
+                reason: "input",
+                outcome: "notDispatched",
+                inputValidation: { path: "flags" },
+            })
+        }
+        expect(hostedOperationCalls(hostedFetch)).toHaveLength(3)
+    },
+)
 
 test.each(modes)("%s snapshots binary uploads and replays identical multipart after 429", async (mode) => {
     let calls = 0

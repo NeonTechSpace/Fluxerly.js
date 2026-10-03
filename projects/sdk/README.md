@@ -95,18 +95,18 @@ For direct control over connection and shutdown, use `createClient`. Both are av
 
 The Effect API also provides the one-object `runBot` configuration. Its handlers return Effects instead of Promises and Results. The runner uses the application's Effect runtime and services, and waits for cleanup before finishing. The file `examples/starter/bot-effect.ts` shows the complete bot
 
-Before running the Effect example, add Effect to the bot project's dependencies. Use the exact version listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`.
-For example, run `npm install effect@VERSION`, `pnpm add effect@VERSION` or `bun add effect@VERSION`, replacing `VERSION` with that value
-
-Do not substitute Effect's latest release for the SDK's declared version
+Before running the Effect example, add Effect 4 to the bot project's dependencies with `npm install effect@4`, `pnpm add effect@4` or `bun add effect@4`.
+The SDK accepts the Effect range listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. The lowest version in that range is the one the SDK is tested against, and later Effect 4 releases are accepted. Effect 3 and Effect 4 prereleases are not
 
 Run `npm ls effect`, `pnpm list effect` or `bun why effect` in the bot project to inspect the installed version.
 Recheck the SDK manifest when upgrading the SDK
 
 ## For coding agents
 
-Agent tools do not read instructions inside dependencies on their own. Run `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` in the bot project to copy the SDK's rules into its `AGENTS.md`, which agents read automatically. Run it again after an SDK update to refresh them.
-The complete guide is `consumer/AGENTS.md` inside the installed package. It explains which API to use, how to start and stop the client, and how to check the result
+Agent tools do not read instructions inside dependencies on their own. Run `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` in the bot project to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Run it again after an SDK update to refresh them.
+The complete guide is `agents/AGENTS.md` inside the installed package. It explains which API to use, how to start and stop the client, and how to check the result
+
+Agents that read web pages can start from the docs' [llms.txt](https://preview.fluxerly.neontechspace.com/llms.txt), which links each documentation version's Markdown guides and condensed API reference
 
 The installed `package.json` lists the supported Node.js version and import paths.
 The files listed in the `types` entries inside `exports` contain the API reference and examples

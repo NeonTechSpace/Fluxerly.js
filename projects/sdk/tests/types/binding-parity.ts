@@ -2,7 +2,7 @@
 // identical to the member of the hand-written namespace interface that the public declarations show. It uses the same
 // normalization and strict comparator as the default/native parity check in tests/contract/fixtures/public-client-parity.
 // The derived default members type their options without the default signal field, which the normalization omits
-import type { Client as DefaultClient, Message } from "../../src/index.js"
+import type { Client as DefaultClient, Message, SelectedMessage } from "../../src/index.js"
 import type { Client as NativeClient } from "../../src/effect.js"
 import type { DefaultNamespaces } from "../../src/internal/binding/default.js"
 import type { NativeNamespaces } from "../../src/internal/binding/native.js"
@@ -28,3 +28,15 @@ type Mismatches<Derived, Public> =
 
 export type DefaultBindingParity = AssertNever<Mismatches<DefaultNamespaces<Table>, DefaultClient<Message>>>
 export type NativeBindingParity = AssertNever<Mismatches<NativeNamespaces<Table>, NativeClient<Message>>>
+
+// A selected-message client must keep the same selection through every bound operation, including publish
+// Comparing full Message alone cannot catch an operation that accidentally returns the unselected shape
+type Selected = SelectedMessage<readonly ["attachments"]>
+type SelectedTable = OperationTable<Selected>
+
+export type DefaultSelectedBindingParity = AssertNever<
+    Mismatches<DefaultNamespaces<SelectedTable>, DefaultClient<Selected>>
+>
+export type NativeSelectedBindingParity = AssertNever<
+    Mismatches<NativeNamespaces<SelectedTable>, NativeClient<Selected>>
+>

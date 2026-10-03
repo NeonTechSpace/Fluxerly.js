@@ -3,7 +3,7 @@ import { DocsPage, type BreadcrumbProps, type DocsPageProps } from "fumadocs-ui/
 import { RootProvider } from "fumadocs-ui/provider/astro"
 import type { Root } from "fumadocs-core/page-tree"
 import type { AstroProviderProps } from "fumadocs-core/framework/astro"
-import { Fragment, type ReactNode } from "react"
+import { Fragment, useEffect, useState, type ReactNode } from "react"
 import { navigate } from "astro:transitions/client"
 import { BooksIcon, CaretRightIcon } from "@phosphor-icons/react"
 import { SidebarItem } from "fumadocs-ui/components/sidebar/base"
@@ -13,6 +13,24 @@ import type { Breadcrumb } from "../lib/docs-tree"
 import { referenceEntries, referenceEntryForUrl } from "../../scripts/reference-entries.js"
 
 type ReferenceCategories = Record<string, { title: string; anchor: string }[]>
+
+// Category links differ from their entry point only by hash, which the server never sees, so the hash is undefined
+// until the browser reads it. Same-page hash navigation does not always fire hashchange, so a category click also
+// sets it directly
+function useLocationHash() {
+    const [hash, setHash] = useState<string>()
+    useEffect(() => {
+        const update = () => setHash(decodeURIComponent(location.hash.slice(1)))
+        update()
+        window.addEventListener("hashchange", update)
+        window.addEventListener("popstate", update)
+        return () => {
+            window.removeEventListener("hashchange", update)
+            window.removeEventListener("popstate", update)
+        }
+    }, [])
+    return [hash, setHash] as const
+}
 
 export function Docs({
     tree,
@@ -37,8 +55,10 @@ export function Docs({
     searchUrl: string
     referenceCategories: ReferenceCategories
 }) {
+    const currentPath = pathname.replace(/\/$/, "")
     // The server sends only the reference entries this sidebar renders
     const ReferenceFolder: SidebarPageTreeComponents["Folder"] = ({ item, children }) => {
+        const [hash, setHash] = useLocationHash()
         const landing = item.index ?? item.children.find((child) => child.type === "page" && /\/api\/?$/.test(child.url))
         if (!landing || landing.type !== "page" || !/\/api\/?$/.test(landing.url)) return <>{children}</>
         const url = landing.url.replace(/\/$/, "")
@@ -53,21 +73,34 @@ export function Docs({
                 return [{ url: child.url, entry, categories: categories.length > 1 ? categories : [] }]
             })
             .sort((left, right) => referenceEntries.indexOf(left.entry) - referenceEntries.indexOf(right.entry))
+        // Exactly one link is active: the selected category, else the entry point owning the page or its symbol
+        // pages such as interfaces/js-ts.Messages, else the reference landing for other reference pages
+        const here = (target: string) => currentPath === target.replace(/\/$/, "")
+        const symbolPath = currentPath.startsWith(`${url}/`) ? currentPath.slice(url.length + 1) : ""
+        const owner = entries.find(({ url, entry }) => here(url) || new RegExp(`^[a-z]+/${entry.name}[.]`).test(symbolPath))
+        const onEntryPage = owner !== undefined && here(owner.url)
+        const category = onEntryPage ? owner.categories.find((category) => category.anchor === hash) : undefined
+        // On an entry point page neither the entry nor a category is current until the hash is known. Marking the
+        // entry first would make the sidebar scroll to it and away from the category link just clicked
+        const entryActive = owner !== undefined && (!onEntryPage || (hash !== undefined && !category))
         return (
             <div className="reference-nav">
-                <SidebarItem href={url} active={pathname === url || pathname.startsWith(`${url}/`)}
+                <SidebarItem href={url} active={currentPath === url || (symbolPath !== "" && !owner)}
                     className="reference-nav-link">
                     API reference
                 </SidebarItem>
                 {entries.map(({ url, entry, categories }) => (
                     <Fragment key={url}>
-                        <SidebarItem href={url} className="reference-nav-link reference-nav-entry">
+                        <SidebarItem href={url} active={owner?.url === url && entryActive}
+                            onClick={() => here(url) && setHash("")} className="reference-nav-link reference-nav-entry">
                             {entry.title}
                         </SidebarItem>
-                        {categories.map((category) => (
-                            <SidebarItem key={category.anchor} href={`${url}#${category.anchor}`}
+                        {/* Another entry point can have a category with the same anchor, so only this page's links set it */}
+                        {categories.map((link) => (
+                            <SidebarItem key={link.anchor} href={`${url}#${link.anchor}`}
+                                active={owner?.url === url && category === link} onClick={() => here(url) && setHash(link.anchor)}
                                 className="reference-nav-link reference-nav-category">
-                                {category.title}
+                                {link.title}
                                 {/* Entry points share category names, so link names carry their entry point for link lists */}
                                 <span className="sr-only"> ({entry.title})</span>
                             </SidebarItem>

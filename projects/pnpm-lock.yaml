@@ -226,8 +226,8 @@ importers:
         specifier: 8.18.1
         version: 8.18.1
       effect:
-        specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117
+        specifier: 4.0.0
+        version: 4.0.0
       npm:
         specifier: 12.0.2
         version: 12.0.2
@@ -3152,8 +3152,8 @@ packages:
     resolution: {integrity: sha512-2QF/g9/zTaPDc3BjNcVTGoBbXBgYfMTTceLaYcFJ/W9kggFUkhxD/hMEeuLKbugyef9SqAx8cpgwlIP/jinUTA==}
     engines: {node: '>=4'}
 
-  effect@4.0.0-rc.117:
-    resolution: {integrity: sha512-UUyi9QiOW4nySFIBM3KnYbNMd9EZliOdKfBcyLD0mPMPheO2fkuXS5y0opjWc9oqzlJxPQICEGm8gGw3kh9j/w==}
+  effect@4.0.0:
+    resolution: {integrity: sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ==}
 
   electron-to-chromium@1.5.427:
     resolution: {integrity: sha512-n14zb3FdsChZ2BNobqNHAJMcP3ifFv4paox2LvCrfVAQcqGiSURgbJl+PfMpHVCNFkStnNc+RRVtPBTVW5PDgw==}
@@ -7562,7 +7562,7 @@ snapshots:
 
   dset@3.1.4: {}
 
-  effect@4.0.0-rc.117: {}
+  effect@4.0.0: {}
 
   electron-to-chromium@1.5.427: {}
 

@@ -245,7 +245,9 @@ export class MessageBuilder<HasBody extends boolean = false> {
         return this
     }
 
-    /** Replace the numeric message flags and return this builder. Only writable MessageFlags are accepted by message operations */
+    /** Replace the numeric message flags and return this builder, without validating the value.
+     * Message operations accept only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications and reject other bits before dispatch
+     */
     flags(value: number): this {
         this.flagsValue = value
         return this

@@ -1,7 +1,7 @@
 // Public consumer features: user profiles, attachment-backed embeds, forwards, attachment metadata edits and
 // suppress flags, creating only a journaled test channel and its messages.
 // Journal `.env.test.consumer-features.local` records the server ID and the test channel's unique marker and returned
-// ID. An existing journal is recovered before a new run: the channel is matched by its marker, deleted and its
+// ID. An existing journal triggers recovery only: The channel is matched by its marker, deleted and its
 // removal verified
 import assert from "node:assert/strict"
 import { Effect, Exit, Scope } from "effect"
@@ -335,47 +335,52 @@ try {
     stage = "recover_prior_test"
     if (journalFile.exists()) {
         journal = journalFile.read()
+        stage = "recovery_only"
         await cleanup()
-    }
-    journal = { guildId }
-    journalFile.create(journal)
-    stage = "create_test_channel"
-    const channel = await createGuildChannelFixture(journal, save, "explicitChild", { type: 0 }, (input) =>
-        api("POST", `/guilds/${guildId}/channels`, input).then((response) => {
-            assert.equal(response.status, 200)
-            return {
-                id: response.data?.id,
-                guildId: response.data?.guild_id,
-                type: response.data?.type,
-                name: response.data?.name,
-            }
-        }),
-    )
-    assert.equal(channel.guildId, guildId)
-    report(stage)
+        report(stage)
+    } else {
+        journal = { guildId }
+        journalFile.create(journal)
+        stage = "create_test_channel"
+        const channel = await createGuildChannelFixture(journal, save, "explicitChild", { type: 0 }, (input) =>
+            api("POST", `/guilds/${guildId}/channels`, input).then((response) => {
+                assert.equal(response.status, 200)
+                return {
+                    id: response.data?.id,
+                    guildId: response.data?.guild_id,
+                    type: response.data?.type,
+                    name: response.data?.name,
+                }
+            }),
+        )
+        assert.equal(channel.guildId, guildId)
+        report(stage)
 
-    const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
-    if (mode === "default") client = sdk.createClient({ token })
-    else {
-        scope = Scope.makeUnsafe()
-        client = await Effect.runPromise(sdk.createClient({ token }).pipe(Effect.provideService(Scope.Scope, scope)))
+        const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
+        if (mode === "default") client = sdk.createClient({ token })
+        else {
+            scope = Scope.makeUnsafe()
+            client = await Effect.runPromise(
+                sdk.createClient({ token }).pipe(Effect.provideService(Scope.Scope, scope)),
+            )
+        }
+        await verifyProfiles({ fetchProfile: (id, query) => value(client.users.fetchProfile(id, query)) })
+        await verifyConsumerMessages(
+            {
+                send: (id, input) => value(client.messages.send(id, input)),
+                forward: (id, input) => value(client.messages.forward(id, input)),
+                forwardFailure: (id, input) => client.messages.forward(id, input),
+                edit: (target, input) => value(client.messages.edit(target, input)),
+                editFailure: (target, input) => client.messages.edit(target, input),
+                fetch: (target) => value(client.messages.fetch(target)),
+            },
+            sdk.MessageFlags,
+            channel.id,
+        )
+        stage = "client_shutdown"
+        await value(client.shutdown())
+        report(stage)
     }
-    await verifyProfiles({ fetchProfile: (id, query) => value(client.users.fetchProfile(id, query)) })
-    await verifyConsumerMessages(
-        {
-            send: (id, input) => value(client.messages.send(id, input)),
-            forward: (id, input) => value(client.messages.forward(id, input)),
-            forwardFailure: (id, input) => client.messages.forward(id, input),
-            edit: (target, input) => value(client.messages.edit(target, input)),
-            editFailure: (target, input) => client.messages.edit(target, input),
-            fetch: (target) => value(client.messages.fetch(target)),
-        },
-        sdk.MessageFlags,
-        channel.id,
-    )
-    stage = "client_shutdown"
-    await value(client.shutdown())
-    report(stage)
 } catch (error) {
     report(stage, false, {
         ...(error?.code === "ERR_ASSERTION"

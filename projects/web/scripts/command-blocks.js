@@ -33,11 +33,10 @@ export function commandVariant(metadata, manager = "npm", language = "js") {
     const commands = packageManagers[manager]
     let command
     let note = ""
-    // A prerelease SDK's API can change between versions, so its install pins the exact version, and a Stable install
-    // keeps the package manager's normal range. The Effect add always pins, because the SDK's Effect peer is one exact
-    // version
+    // A prerelease's API can change between versions, so its install pins the exact version, and a Stable install keeps
+    // the package manager's normal range. Older SDKs required one exact Effect release candidate, which stays pinned
     if (value.kind === "install" || value.kind === "add") {
-        const exact = value.kind === "add" || value.version.includes("-")
+        const exact = value.version.includes("-")
         command = `${commands.add}${exact ? ` ${commands.exact}` : ""} ${value.package}@${value.version}`
     } else if (value.kind === "agents") command = `${commands.exec} fluxerly agents`
     else if (value.kind === "dev") command = `${commands.add} ${commands.dev} ${value.package}`

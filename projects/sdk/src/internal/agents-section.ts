@@ -1,5 +1,5 @@
 /**
- * Writes the SDK's essential rules into an application's AGENTS.md, which coding agents load automatically.
+ * Writes the SDK's essential rules into an application's AGENTS.md, which many coding agent tools load automatically.
  * Invariant: Only the text between the Fluxerly markers is replaced, so the rest of the file stays byte for byte
  */
 
@@ -39,17 +39,17 @@ function between(text: string, open: string, close: string, where: string) {
     return { first, last: last + close.length, inner: text.slice(first + open.length, last) }
 }
 
-/** Build the section for one SDK version from the rules in the packaged consumer guide */
+/** Build the section for one SDK version from the rules in the packaged agent guide */
 function agentsSection(guide: string, version: string, command: string) {
-    const rules = between(guide, rulesStart, rulesEnd, "The packaged consumer guide")
-    if (!rules) throw new AgentsSectionError("The packaged consumer guide has no rules section")
+    const rules = between(guide, rulesStart, rulesEnd, "The packaged agent guide")
+    if (!rules) throw new AgentsSectionError("The packaged agent guide has no rules section")
     return [
         start,
         "## Fluxerly",
         "",
         `These rules come from @neontechspace/fluxerly ${version}. When the version installed in package.json differs, run \`${command}\` to refresh this section`,
         "",
-        "Read `node_modules/@neontechspace/fluxerly/consumer/AGENTS.md` for the complete guide before writing code with the SDK",
+        "Read `node_modules/@neontechspace/fluxerly/agents/AGENTS.md` for the complete guide before writing code with the SDK",
         "",
         rules.inner.trim(),
         end,
@@ -61,7 +61,7 @@ function agentsSection(guide: string, version: string, command: string) {
  * Line endings follow the existing file. Nothing is written when the section is already current or a marker is broken
  */
 export function writeAgentsSection(project: string, packageRoot: string): AgentsSectionResult {
-    const guide = readFileSync(join(packageRoot, "consumer/AGENTS.md"), "utf8").replaceAll("\r\n", "\n")
+    const guide = readFileSync(join(packageRoot, "agents/AGENTS.md"), "utf8").replaceAll("\r\n", "\n")
     const { version } = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { version: string }
     const section = agentsSection(guide, version, refreshCommand(project))
     const file = join(project, "AGENTS.md")

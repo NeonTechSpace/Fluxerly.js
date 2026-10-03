@@ -30,6 +30,8 @@ The helper returns the community and the member, or the first failed [Result](/d
 
 The bot must be a member of the community for [`Guilds.fetch`](/docs/{{version}}/api/interfaces/js-ts.Guilds/#fetch) to succeed, and the result does not include the member list. The two reads are separate observations, so neither proves that a later role action will still be allowed
 
+The `guildHealthUpdate` event reports lag and recovery of a community's server through `guildId` and `degraded`. A degraded server is lagging, not disconnected or unavailable. The notice does not reconnect the client or invalidate community caches
+
 ## List channels by type
 
 Each channel has a `type`. Comparing it with a `ChannelType` constant tells TypeScript which fields that channel has, such as `topic` for text channels or `bitrate` for voice channels
@@ -42,6 +44,8 @@ function describeChannel(channel: GuildChannel): string {
     switch (channel.type) {
         case ChannelType.Text:
             return `#${name}: ${channel.topic ?? "no topic"}`
+        case ChannelType.Announcement:
+            return `#${name}: announcements, ${channel.topic ?? "no topic"}`
         case ChannelType.Voice:
             return `${name}: voice at ${channel.bitrate ?? "unknown"} bps`
         case ChannelType.Category:
@@ -61,6 +65,12 @@ export async function listChannels(client: Client, guildId: string) {
 ```
 
 The helper returns a Result with one line for each channel the bot can see. A channel type that Fluxer adds later, which this SDK version does not know yet, arrives with `type` set to `"unknown"` and the number Fluxer sent in `rawType`. Handling the `"unknown"` case makes the `switch` complete, so TypeScript can check that every case returns a value
+
+Announcement channels have the same topic and message fields as text channels. See [announcement channels](/docs/{{version}}/announcement-channels/) to create or convert one, publish a message and follow it from a text channel in the same community or another one
+
+## Read the member verification level
+
+The community's `verificationLevel` describes its member verification policy. The `GuildVerificationLevels` constants range from `None` through `High`. Fluxer retired its phone-verification level, so there is no `VeryHigh` constant. This policy is separate from the [two-factor requirement for moderation](/docs/{{version}}/guilds-and-permissions/#communities-that-require-two-factor-authentication)
 
 ## Check permissions using available data
 

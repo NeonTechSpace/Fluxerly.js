@@ -58,7 +58,7 @@ export function commonFiles() {
         ...output,
         ...globSync("examples/starter/*.{js,ts}", { cwd: sdk }).map((path) => path.replaceAll("\\", "/")),
         "README.md",
-        "consumer/AGENTS.md",
+        "agents/AGENTS.md",
         "esm-only.cjs",
         "LICENSE",
         ...(existsSync(join(sdk, "CHANGELOG.md")) ? ["CHANGELOG.md"] : []),

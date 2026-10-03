@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import test from "node:test"
-import { checkUpstream, eventChanges, openapiChanges, rateLimitBuckets, renderReport, validateManifest } from "../upstream.js"
+import { checkUpstream, eventChanges, openapiChanges, rateLimitBuckets, renderReport, runUpstream, validateManifest } from "../upstream.js"
 
 const pinned = "a".repeat(40)
 const current = "b".repeat(40)
@@ -75,7 +77,139 @@ test("Unchanged upstream documents report no drift without reading the pinned co
     assert.equal(result.drift, false)
     assert.equal(result.commit, current)
     assert.ok(source.reads.every((read) => !read.startsWith("a ")))
-    assert.match(renderReport(result), /match the pinned manifest/)
+    assert.match(renderReport(result), /Baseline: .*repository pin/i)
+})
+
+function workspace(t, manifest) {
+    const directory = mkdtempSync(join(tmpdir(), "fluxerly-upstream-"))
+    t.after(() => rmSync(directory, { recursive: true, force: true }))
+    const manifestFile = join(directory, "manifest.json")
+    writeFileSync(manifestFile, JSON.stringify(manifest))
+    return {
+        manifestFile,
+        baselineFile: join(directory, "previous.json"),
+        recordFile: join(directory, "current.json"),
+        summaryFile: join(directory, "summary.md"),
+    }
+}
+
+const changedDocument = { ...document, "events.md": events([["READY", table(["| session_id | integer | Session |"])]]) }
+
+test("The CLI keeps local comparisons and reviewed updates tied to the repository manifest", async (t) => {
+    const { manifest, source } = upstream({ [pinned]: document, [current]: changedDocument })
+    const files = workspace(t, manifest)
+    const result = await runUpstream([], { ...files, source })
+    assert.equal(result.exitCode, 1)
+    assert.equal(result.baseline.kind, "repository-pin")
+    assert.match(result.report, /Baseline: .*repository pin/i)
+    assert.ok(result.report.includes(`https://github.com/${manifest.repository}/compare/${pinned}...${current}`))
+    assert.equal(readFileSync(files.summaryFile, "utf8"), result.report + "\n", "The job summary contains the reported comparison")
+    assert.deepEqual(JSON.parse(readFileSync(files.manifestFile, "utf8")), manifest, "A check never updates the reviewed pin")
+
+    const updated = await runUpstream(["--update"], { ...files, source })
+    assert.equal(updated.exitCode, 0)
+    const nextManifest = JSON.parse(readFileSync(files.manifestFile, "utf8"))
+    assert.equal(nextManifest.commit, current)
+    assert.equal(nextManifest.files.gatewayEvents.sha256, hash(changedDocument["events.md"]))
+    assert.equal((await runUpstream([], { ...files, source })).exitCode, 0)
+})
+
+test("Missing, malformed, invalid and incompatible previous observations fall back visibly and still record current upstream", async (t) => {
+    const { manifest, source } = upstream({ [pinned]: document, [current]: changedDocument })
+    const files = workspace(t, manifest)
+    const cases = [
+        undefined,
+        "{",
+        JSON.stringify({ ...manifest, commit: "main" }),
+        JSON.stringify({ ...manifest, repository: "other/upstream" }),
+        JSON.stringify({ ...manifest, branch: "other" }),
+        JSON.stringify({ ...manifest, files: { ...manifest.files, openapi: { ...manifest.files.openapi, path: "other.json" } } }),
+        JSON.stringify({ ...manifest, rateLimits: { ...manifest.rateLimits, path: "other" } }),
+    ]
+    for (const content of cases) {
+        if (content !== undefined) writeFileSync(files.baselineFile, content)
+        const result = await runUpstream(["--baseline", files.baselineFile, "--record", files.recordFile], { ...files, source })
+        assert.equal(result.exitCode, 1)
+        assert.equal(result.result.pinnedCommit, pinned)
+        assert.equal(result.baseline.kind, "repository-pin")
+        assert.ok(result.baseline.reason, "Fallback has a reason")
+        assert.ok(result.report.includes(result.baseline.reason), "Fallback reason is visible in the report")
+        assert.ok(readFileSync(files.summaryFile, "utf8").includes(result.baseline.reason), "Fallback reason reaches the job summary")
+        const recorded = JSON.parse(readFileSync(files.recordFile, "utf8"))
+        assert.doesNotThrow(() => validateManifest(recorded))
+        assert.equal(recorded.commit, current)
+    }
+    assert.deepEqual(JSON.parse(readFileSync(files.manifestFile, "utf8")), manifest)
+})
+
+test("A failed observation becomes the next run's baseline, passes unchanged, and signals the next upstream change", async (t) => {
+    const next = "c".repeat(40)
+    const nextDocument = { ...changedDocument, [`${limits}/Channel.ts`]: bucket("channel:read::guild_id") }
+    const { manifest, source } = upstream({ [pinned]: document, [current]: changedDocument, [next]: nextDocument })
+    const files = workspace(t, manifest)
+    const args = ["--baseline", files.baselineFile, "--record", files.recordFile]
+    const first = await runUpstream(args, { ...files, source })
+    assert.equal(first.exitCode, 1)
+    const recordedText = readFileSync(files.recordFile, "utf8")
+    const recorded = JSON.parse(recordedText)
+    assert.deepEqual(recorded, {
+        ...manifest,
+        commit: current,
+        files: {
+            openapi: { path: "openapi.json", sha256: hash(changedDocument["openapi.json"]) },
+            gatewayEvents: { path: "events.md", sha256: hash(changedDocument["events.md"]) },
+        },
+        rateLimits: { path: limits, sha256: hash("channel:read::channel_id") },
+    })
+    writeFileSync(files.baselineFile, recordedText)
+    source.reads.length = 0
+    const second = await runUpstream(args, { ...files, source })
+    assert.equal(second.exitCode, 0)
+    assert.equal(second.baseline.kind, "previous-run")
+    assert.deepEqual(second.baseline.manifest, recorded, "The next run reads exactly the recorded observation")
+    assert.match(second.report, /Baseline: .*previous run/i)
+    assert.ok(source.reads.every((read) => !read.startsWith("a ")), "The repository pin is not used as the previous baseline")
+    assert.equal(readFileSync(files.recordFile, "utf8"), recordedText, "Unchanged upstream is still recorded for artifact renewal")
+
+    source.resolveCommit = async () => next
+    const third = await runUpstream(args, { ...files, source })
+    assert.equal(third.exitCode, 1)
+    assert.match(third.report, /Baseline: .*previous run/i)
+    assert.equal(third.result.pinnedCommit, current)
+    assert.deepEqual(third.result.buckets, { added: ["channel:read::guild_id"], removed: ["channel:read::channel_id"] })
+    assert.ok(third.report.includes(`https://github.com/${manifest.repository}/compare/${current}...${next}`))
+    writeFileSync(files.baselineFile, readFileSync(files.recordFile, "utf8"))
+    assert.equal((await runUpstream(args, { ...files, source })).exitCode, 0)
+    assert.deepEqual(JSON.parse(readFileSync(files.manifestFile, "utf8")), manifest)
+})
+
+test("Observation mode signals commit-only changes while local mode still compares document hashes", async (t) => {
+    const { manifest, source } = upstream({ [pinned]: document, [current]: document })
+    const files = workspace(t, manifest)
+    writeFileSync(files.baselineFile, JSON.stringify(manifest))
+    assert.equal((await runUpstream([], { ...files, source })).exitCode, 0)
+    const observed = await runUpstream(["--record", files.recordFile, "--baseline", files.baselineFile], { ...files, source })
+    assert.equal(observed.exitCode, 1)
+    assert.equal(observed.baseline.kind, "previous-run")
+    assert.ok(Object.values(observed.result.files).every((file) => !file.changed))
+    assert.equal(observed.result.rateLimits.changed, false)
+    writeFileSync(files.baselineFile, readFileSync(files.recordFile, "utf8"))
+    assert.equal((await runUpstream(["--baseline", files.baselineFile], { ...files, source })).exitCode, 0)
+})
+
+test("The CLI rejects missing paths, repeated arguments and updates mixed with observation mode before upstream reads", async (t) => {
+    const { manifest, source } = upstream({ [pinned]: document, [current]: document })
+    const files = workspace(t, manifest)
+    for (const args of [
+        ["--baseline"],
+        ["--record", "--baseline", files.baselineFile],
+        ["--baseline", files.baselineFile, "--baseline", files.baselineFile],
+        ["--update", "--record", files.recordFile],
+        ["--update", "--baseline", files.baselineFile],
+        ["--unknown"],
+    ]) await assert.rejects(runUpstream(args, { ...files, source }))
+    assert.deepEqual(source.reads, [])
+    assert.deepEqual(JSON.parse(readFileSync(files.manifestFile, "utf8")), manifest)
 })
 
 test("OpenAPI changes are reported per endpoint and field, with wording-only edits and user-only surface kept apart", () => {

@@ -103,6 +103,18 @@ export interface GuildStickersUpdate {
     readonly items: readonly GuildSticker[]
 }
 
+/** Frozen community-server health notice, without a cache write or automatic reconnect.
+ * A degraded community server is lagging, not disconnected or unavailable
+ *
+ * @category Events and collectors
+ */
+export interface GuildHealthUpdate {
+    /** Community whose server health changed, as a decimal ID */
+    readonly guildId: string
+    /** True while the community's server is lagging, false when it recovers. This does not report disconnection or unavailability */
+    readonly degraded: boolean
+}
+
 /** Frozen community data received with an availability event, plus information about whether this is a new join.
  * The event keeps the Guild fields. REST results and cached Guild values do not gain join state.
  * Subscribe before connecting to receive startup availability events. The `connect` call does not wait for them
@@ -409,6 +421,8 @@ export type EventInvocation<M extends MessageCore = Message> = {
  * @category Events and collectors
  */
 export interface EventMap<M extends MessageCore = Message> extends GuildLifecycleEvents {
+    /** Community-server lag or recovery, without a disconnection, availability change, cache invalidation or automatic reconnect */
+    readonly guildHealthUpdate: GuildHealthUpdate
     /** Current public account data, without private account settings.
      * Updates the enabled account cache and clears the enabled private-conversation cache
      */
@@ -492,7 +506,8 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
     /** A member join observation, not an initial roster or complete community membership view. Updates the enabled member-cache observation */
     readonly guildMemberAdd: import("./guilds.js").GuildMember
     /** Current member data. Fluxer can limit delivery by community size and session visibility, so fetch when current state matters.
-     * Updates the enabled member-cache observation
+     * Updates the enabled member-cache observation. Before handlers run, invalidates the member's enabled account-cache entry
+     * and affected private-conversation snapshots
      */
     readonly guildMemberUpdate: import("./guilds.js").GuildMember
     /** Membership ended, with only community and account IDs supplied. No account lookup or removal-cause inference follows.

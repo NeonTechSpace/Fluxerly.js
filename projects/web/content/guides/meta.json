@@ -9,6 +9,7 @@
         "examples",
         "---Bot guides---",
         "messages",
+        "announcement-channels",
         "commands",
         "events-and-collectors",
         "guilds-and-permissions",

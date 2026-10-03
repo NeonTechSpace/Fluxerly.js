@@ -17,6 +17,42 @@ export interface MessageReference {
     readonly channelId: string
 }
 
+/** A public community snapshot identifying where a published copy or follow notice originated.
+ * This is not a complete Guild and never populates the client's community cache
+ *
+ * @category Messages
+ */
+export interface CrosspostSourceGuild {
+    /** Decimal source community ID */
+    readonly id: string
+    /** Source community name */
+    readonly name: string
+    /** Public discovery description, with null meaning unavailable */
+    readonly description: string | null
+    /** Provider-supplied public badge features, currently VERIFIED, PARTNERED and DISCOVERABLE. Unknown strings are preserved */
+    readonly features: readonly string[]
+    /** Approximate member count, with null meaning unavailable rather than zero */
+    readonly approximateMemberCount: number | null
+    /** Approximate online-member count, with null meaning unavailable rather than zero */
+    readonly approximatePresenceCount: number | null
+    /** Whether the source community is discoverable */
+    readonly discoverable: boolean
+    /** Source icon hash, with null meaning no icon and omission meaning unavailable */
+    readonly icon?: string | null
+    /** Source banner hash, with null meaning no banner and omission meaning unavailable */
+    readonly banner?: string | null
+}
+
+/** Frozen source metadata for a published message copy or a channel-follow notice.
+ * It describes the source community without fetching the original message or retaining a Guild snapshot
+ *
+ * @category Messages
+ */
+export interface CrosspostSource {
+    /** Frozen public source community snapshot */
+    readonly guild: CrosspostSourceGuild
+}
+
 /** Message data returned by a request or delivered through messageCreate and messageUpdate.
  * This object and its nested data cannot be changed. They record what Fluxer returned at that time, not a live message with methods.
  * Later edits, deletions and reaction changes do not update it.
@@ -82,7 +118,9 @@ export interface Message extends MessageReference {
     readonly mentionChannels?: readonly MessageChannelMention[] | null
     /** Reaction counts at observation time, not a list of users or counts that update after delivery */
     readonly reactions?: readonly MessageReactionSummary[] | null
-    /** Reply or forward source address, when supplied. Reading it does not fetch the source message */
+    /** Received context for a reply, forward, published copy or channel-follow notice, when supplied.
+     * A channel-follow notice can identify only a source channel, without a message ID. Reading this field performs no request
+     */
     readonly messageReference?: MessageContextReference | null
     /** Copies captured when Fluxer created a forward. They contain no source ID and do not follow later source edits */
     readonly messageSnapshots?: readonly MessageSnapshot[] | null
@@ -222,12 +260,21 @@ export interface MessageReactionSummary {
     readonly me?: boolean | null
 }
 
-/** Source address supplied for a reply or forward, without the source message's contents.
- * Type 0 identifies a reply and type 1 identifies a forward. Future numeric types are retained
+/** Received source context for a reply, forward, published copy or channel-follow notice.
+ * A channel-follow notice identifies the followed announcement channel without a source message ID.
+ * Type 0 is a default reference and type 1 is a forward. The containing message's type and flags distinguish
+ * replies, published copies and channel-follow notices. Future numeric reference types are retained
+ *
+ * Check that id is present before constructing a MessageReference for a fetch, reply or other message operation.
+ * Reading this context performs no request and does not establish access to the source
  *
  * @category Messages
  */
-export interface MessageContextReference extends MessageReference {
+export interface MessageContextReference {
+    /** Source channel ID as a decimal string, required even when no source message is identified */
+    readonly channelId: string
+    /** Source message ID as a decimal string. A missing or null response value omits this field */
+    readonly id?: string
     /** Source community ID, or null when Fluxer explicitly supplied no community. Absence means unknown */
     readonly guildId?: string | null
     /** Reference kind, when supplied. A partial gateway observation can omit it */
@@ -328,19 +375,31 @@ export interface AllowedMentions {
     readonly repliedUser?: boolean
 }
 
-/** Flags accepted when sending or editing a non-voice message.
- * Combine flags with bitwise OR, for example MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications.
- * Other flag bits are rejected locally
+/** Known bits in a received message's flags, including server-managed publishing state.
+ * Test an observed bit with bitwise AND, such as `(message.flags & MessageFlags.IsCrosspost) !== 0`.
+ * Only SuppressEmbeds and SuppressNotifications are writable through message or webhook send and edit operations.
+ * Combine those two with bitwise OR. Server-managed bits and all other bits are rejected locally before dispatch
  *
  * @category Messages
  */
 export const MessageFlags: Readonly<{
-    /** Hide embeds on this message */
+    /** Server-managed bit on an announcement message that has been published to following channels */
+    readonly Crossposted: 1
+    /** Server-managed bit on a published copy delivered to a following channel. Its messageReference identifies the source */
+    readonly IsCrosspost: 2
+    /** Writable bit that hides embeds on this message */
     readonly SuppressEmbeds: 4
-    /** Suppress message notifications */
+    /** Server-managed bit on a published copy whose source was deleted or can no longer be delivered.
+     * Fluxer replaces the copy's content with "[Original message deleted]" and clears attachments, embeds and stickers
+     */
+    readonly SourceMessageDeleted: 8
+    /** Writable bit that suppresses push and desktop notifications */
     readonly SuppressNotifications: 4096
 }> = Object.freeze({
+    Crossposted: 1,
+    IsCrosspost: 2,
     SuppressEmbeds: 4,
+    SourceMessageDeleted: 8,
     SuppressNotifications: 4096,
 } as const)
 
@@ -366,6 +425,10 @@ export const MessageType: Readonly<{
     readonly ChannelPinnedMessage: 6
     /** A notice that a user joined the community */
     readonly UserJoin: 7
+    /** A notice that this channel began following an announcement channel.
+     * Its messageReference identifies the followed channel without a source message ID
+     */
+    readonly ChannelFollowAdd: 12
     /** A reply to another message, whose messageReference names the target */
     readonly Reply: 19
 }> = Object.freeze({
@@ -377,11 +440,13 @@ export const MessageType: Readonly<{
     ChannelIconChange: 5,
     ChannelPinnedMessage: 6,
     UserJoin: 7,
+    ChannelFollowAdd: 12,
     Reply: 19,
 } as const)
 
 /**
- * One value from MessageFlags. To set multiple flags, combine the values with bitwise OR
+ * One known bit from MessageFlags, including server-managed bits observed in received messages.
+ * Only SuppressEmbeds and SuppressNotifications can be combined for send or edit input
  *
  * @category Messages
  */
@@ -462,7 +527,7 @@ export type MessageContent<A> =
 /** Input for messages.send, including content and optional delivery settings.
  * Supply nonempty text, embeds, new files or sticker IDs. Unknown properties are rejected locally.
  * Notifications are off by default. Use allowedMentions to permit specific existing mentions to notify.
- * An attachment:// embed image or thumbnail must name one matching new image upload in this request.
+ * An attachment:// embed image or thumbnail must name one matching new image or video upload in this request.
  * Each field, including an attachment or allowedMentions field, is read at most once, so the value validated is the value sent.
  * Use messages.forward to copy a source message into an immutable forward
  *
@@ -477,7 +542,9 @@ export type MessageInput = MessageBody & {
     readonly allowedMentions?: AllowedMentions
     /** Reply target address, whose channelId must equal the send destination */
     readonly messageReference?: MessageReference
-    /** Flag set containing only MessageFlags bits. Omit to use Fluxer's default for a new message */
+    /** Writable flag set containing only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
+     * Omit to use Fluxer's default. Server-managed and unsupported bits fail locally before dispatch
+     */
     readonly flags?: number
     /** Ask Fluxer to send the message as text-to-speech. Omit or use false for a normal message.
      * The SDK sends the value unchanged. In a community, a bot without the Send TTS Messages permission gets a normal message and no error, and the returned message's tts field reports false.
@@ -503,7 +570,8 @@ export type ReplyInput = MessageBody & Pick<MessageInput, "allowedMentions" | "f
  * @category Messages
  */
 export interface ForwardMessageInput {
-    /** Application-chosen correlation nonce, or omit for one SDK-generated nonce per forward execution.
+    /** Application-chosen correlation nonce, or omit for one SDK-generated nonce per messages.forward execution.
+     * Webhook forwards send no nonce unless supplied on the message or this source.
      * Fluxer's matching-nonce suppression is best-effort for five minutes after persistence, not guaranteed exactly-once creation
      */
     readonly nonce?: MessageNonce
@@ -523,7 +591,9 @@ export interface ForwardMessageInput {
 export type EditMessageOptions = {
     /** Mentions permitted to notify during this edit, defaulting to none, including the reply author */
     readonly allowedMentions?: AllowedMentions
-    /** Replacement flag set using only MessageFlags bits. Omit to leave flags unchanged, or use 0 to clear both writable flags */
+    /** Replacement writable flags containing only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
+     * Omit to preserve flags, or use 0 to clear both writable bits. Server-managed and unsupported bits fail locally before dispatch
+     */
     readonly flags?: number
 }
 
@@ -610,6 +680,24 @@ export interface MessageOperationOptions {
  * @category Options
  */
 export interface DefaultMessageOperationOptions extends MessageOperationOptions, OperationOptions {}
+
+/** Settings for message deletion, bulk deletion, pinning and unpinning, with an optional audit-log explanation
+ *
+ * @category Options
+ */
+export interface MessageAuditOperationOptions extends MessageOperationOptions {
+    /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
+     * Sent only as the raw X-Audit-Log-Reason header, without URL escaping. Omission sends no header.
+     * Non-ASCII and control characters fail before dispatch. Never included in SDK errors or diagnostics
+     */
+    readonly auditReason?: string
+}
+
+/** Default API settings for audited message mutations. Abort cancels only this call and cannot undo a dispatched change
+ *
+ * @category Options
+ */
+export interface DefaultMessageAuditOperationOptions extends MessageAuditOperationOptions, OperationOptions {}
 
 /** Required confirmation and deadline for deleting this bot's entire authored history in a channel or community.
  * The confirm field must be the literal true, so an accidental call without it fails before any request with reason input

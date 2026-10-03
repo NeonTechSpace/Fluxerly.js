@@ -44,6 +44,13 @@ export function applyEvent<M extends MessageCore, K extends EventName>(
         userCache.complete(guard, [message])
         userCache.invalidate("directMessages")
     }
+    if (event === "guildMemberUpdate") {
+        const member = message as EventMap["guildMemberUpdate"]
+        // Member projections omit complete account fields, so evict rather than fabricate a User snapshot.
+        // A collection fence also covers pending DM reads whose recipients are not known until completion
+        userCache.invalidate("users", member.userId)
+        userCache.invalidate("directMessages")
+    }
     if ((event === "directMessageCreate" || event === "directMessageUpdate") && "recipients" in message) {
         const guard = userCache.begin("directMessages", { id: message.id })
         userCache.complete(guard, [message])
@@ -104,6 +111,7 @@ export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M
         type === "WEBHOOKS_UPDATE" ||
         type === "VOICE_STATE_UPDATE" ||
         type === "GUILD_AUDIT_LOG_ENTRY_CREATE" ||
+        type === "GUILD_HEALTH_UPDATE" ||
         // Calls and entrance sounds feed no cache category
         type.startsWith("CALL_") ||
         type === "ENTRANCE_SOUND_PLAY"
@@ -112,6 +120,11 @@ export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M
     if (type === "USER_UPDATE") {
         userCache.invalidate("users")
         return
+    }
+    if (type === "GUILD_MEMBER_UPDATE") {
+        const userId = value && record(value.user) && identifier(value.user.id) ? value.user.id : undefined
+        userCache.invalidate("users", userId)
+        userCache.invalidate("directMessages")
     }
     const guildId =
         value && identifier(value.guild_id)

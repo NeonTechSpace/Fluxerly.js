@@ -24,7 +24,7 @@ export type MemberChunkQuery = (
           readonly limit?: never
       }
     | {
-          /** Select 1–100 distinct user IDs as positive decimal strings with no leading zeroes, within the unsigned 64-bit range.
+          /** Select 1–100 distinct user IDs as positive decimal strings with no leading zeroes, no greater than 9223372036854775807.
            * Missing IDs are omitted without an explanation
            */
           readonly userIds: readonly string[]
@@ -36,7 +36,7 @@ export type MemberChunkQuery = (
           readonly limit?: never
       }
     | {
-          /** Case-insensitive display-name prefix, at most 4,096 UTF-16 code units and well-formed Unicode.
+          /** Case-insensitive prefix of nickname, global name or username, at most 4,096 UTF-16 code units and well-formed Unicode.
            * The complete encoded request must also fit the 4,096-byte gateway payload budget.
            * Empty selects an initial bounded list, not full-list mode
            */
@@ -60,7 +60,7 @@ export type MemberChunkQuery = (
  * @category Guilds and members
  */
 export interface MemberChunk {
-    /** Requested guild ID as a positive decimal string with no leading zeroes, within the unsigned 64-bit range */
+    /** Requested guild ID as a positive decimal string with no leading zeroes, no greater than 9223372036854775807 */
     readonly guildId: string
     /** Zero-based batch index, delivered in provider order without gaps or duplicate indices */
     readonly index: number

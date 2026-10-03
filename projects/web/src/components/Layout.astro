@@ -26,10 +26,14 @@ const { title, alternates = [] } = Astro.props as { title: string; alternates?: 
       import { setupReferencePreviews } from './reference-previews'
       import { setupExamplePreferences } from './example-preferences'
       import { setupPageMarkdown } from './page-markdown'
+      import { setupSidebarScroll } from './sidebar-scroll'
+      import { setupAnchorSettle } from './anchor-settle'
       setupCommandPreferences()
       setupReferencePreviews()
       setupExamplePreferences()
       setupPageMarkdown()
+      setupSidebarScroll()
+      setupAnchorSettle()
     </script>
   </body>
 </html>

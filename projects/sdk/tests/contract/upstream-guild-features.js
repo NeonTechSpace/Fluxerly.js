@@ -45,8 +45,9 @@ try {
     ]) {
         stage = `${kind.toLowerCase()}_source_opt_in`
         const service = source(`services/content/${kind}Service.ts`)
+        // Upstream writes the missing-guild and missing-feature guard either with optional chaining or as two conditions
         const condition = new RegExp(
-            `if\\s*\\(\\s*!sourceGuild\\s*\\|\\|\\s*!sourceGuild\\.features\\.has\\(GuildFeatures\\.${flag}\\)\\s*\\)\\s*\\{\\s*throw new MissingAccessError\\(\\)`,
+            `if\\s*\\(\\s*(?:!sourceGuild\\?\\.features|!sourceGuild\\s*\\|\\|\\s*!sourceGuild\\.features)\\.has\\(GuildFeatures\\.${flag}\\)\\s*\\)\\s*\\{\\s*throw new MissingAccessError\\(\\)`,
         )
         assert.match(service, condition, "Upstream source-guild cloning guard changed; review its semantics")
     }

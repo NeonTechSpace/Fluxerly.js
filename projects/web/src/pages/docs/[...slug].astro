@@ -38,6 +38,9 @@ const symbolDepth = headings.some((heading) => heading.slug.startsWith('category
 const toc = headings
   .filter((heading) => !isReference || heading.depth <= symbolDepth)
   .map((heading) => ({ depth: heading.depth, title: heading.text, url: `#${heading.slug}` }))
+// The table of contents dot follows its line by sampling the path pixel by pixel, which blocks the page for
+// about a second with a reference page's hundreds of entries. The highlighted line still marks the position
+const tocList = { thumbBox: !isReference }
 const pageTree = source.getPageTree()
 const pageUrl = source.getPage(routeSlugs)!.url
 const referenceMeta = (await getCollection('meta')).find((meta) =>
@@ -51,7 +54,8 @@ const alternates = [
 ---
 <Layout title={entry.data.title} alternates={alternates}>
   <Docs tree={treeForVersion(pageTree, routeVersion)} pathname={Astro.url.pathname} params={Astro.params}
-    page={{ toc, footer: { enabled: !isReference } }} version={routeVersion} channelTabs={channelTabs}
+    page={{ toc, footer: { enabled: !isReference }, tableOfContent: { list: tocList }, tableOfContentPopover: { list: tocList } }}
+    version={routeVersion} channelTabs={channelTabs}
     breadcrumbs={breadcrumbsFor(pageTree, routeVersion, pageUrl)} searchUrl={await searchIndexUrl(routeVersion)}
     referenceCategories={referenceMeta?.data.categories ?? {}} client:load>
     <div id="docs-page-start" tabindex="-1" class="docs-main">

@@ -6,7 +6,7 @@
 import type { ObservedPresenceStatus, PresenceUpdate, PresenceUpdateBulk } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { CustomStatusEmoji, PresenceInput, PresenceStatus } from "#sdk/presence"
-import { identifier, record, snapshotArray } from "./decode/primitives.js"
+import { gatewayIdentifier, identifier, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller } from "./defects.js"
 import { validCalendarTimestamp } from "./decode/timestamp.js"
 import { Opcode } from "./protocol/gateway.js"
@@ -305,8 +305,12 @@ function frozenMemberIds(value: unknown): readonly string[] | InputValidationFai
         return inputValidationFailure("memberIds", "type", "Member IDs must be an array of decimal strings")
     const members = snapshotArray(value, maxMembersPerGuild)
     if (members === undefined) return "limit"
-    if (!members.every(identifier))
-        return inputValidationFailure("memberIds", "format", "Member IDs must be decimal strings")
+    if (!members.every(gatewayIdentifier))
+        return inputValidationFailure(
+            "memberIds",
+            "format",
+            "Member IDs must be positive canonical decimal strings no greater than 9223372036854775807",
+        )
     return new Set(members).size === members.length
         ? (members as readonly string[])
         : inputValidationFailure("memberIds", "unique", "Member IDs must be unique")
@@ -469,8 +473,12 @@ export class PresenceOwner implements PresenceGatewayOwner {
      */
     setMembers(guildId: unknown, memberIds: unknown): InputValidationFailure | "limit" | false | undefined {
         if (this.#closed) return false
-        if (!identifier(guildId))
-            return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+        if (!gatewayIdentifier(guildId))
+            return inputValidationFailure(
+                "guildId",
+                "format",
+                "Guild IDs must be positive canonical decimal strings no greater than 9223372036854775807",
+            )
         // Reading the caller IDs is application code, reported by the calling operation
         const members = readCaller(() => frozenMemberIds(memberIds))
         if (members === "limit" || members instanceof InputValidationFailure) return members

@@ -15,6 +15,7 @@ import type {
     AllowedMentions,
     ForwardMessageInput,
     MessageBody,
+    MessageNonce,
     MessageOperationOptions,
     MessageReference,
 } from "./messages.js"
@@ -22,19 +23,35 @@ import type { EmbedInput } from "./embeds.js"
 import type { EmbedBuilder } from "./builders.js"
 
 /**
- * A webhook's name, avatar and destination when Fluxer last returned it.
- * Webhooks let another application post messages to a channel without signing in as a bot.
- * These read-only details contain no token and do not update when someone edits the webhook
+ * Select a received webhook's shape by comparing its type with these constants.
+ * A future Fluxer kind arrives as UnknownWebhook with type "unknown" and its number in rawType
  *
  * @category Invites and webhooks
  */
-export interface Webhook {
+export const WebhookType: Readonly<{
+    /** A webhook that accepts messages through its own secret token */
+    Incoming: 1
+    /** A webhook created when a text channel follows an announcement channel */
+    ChannelFollower: 2
+}> = Object.freeze({
+    Incoming: 1,
+    ChannelFollower: 2,
+})
+
+/**
+ * Identity, appearance and destination shared by every received webhook kind, without credentials
+ *
+ * @category Invites and webhooks
+ */
+export interface WebhookBase {
     /** Webhook identifier, kept as a decimal string to avoid JavaScript number rounding */
     readonly id: string
     /** ID of the community that owns this webhook */
     readonly guildId: string
     /** ID of the channel that receives its messages, as last reported by Fluxer */
     readonly channelId: string
+    /** A WebhookType constant, or "unknown" for a kind this SDK version does not know. Compare it to select the matching shape */
+    readonly type: (typeof WebhookType)[keyof typeof WebhookType] | "unknown"
     /** Default sender name shown on webhook messages */
     readonly name: string
     /** Identifier for the webhook's avatar image, not a complete URL. Null means no custom avatar */
@@ -42,7 +59,88 @@ export interface Webhook {
 }
 
 /**
- * The secret returned when a webhook is created, kept separate from its public details.
+ * A webhook that accepts token-authenticated operations, selected by type === WebhookType.Incoming.
+ * Its metadata contains no token. Creation returns separate WebhookCredentials for createWebhookClient
+ *
+ * @category Invites and webhooks
+ */
+export interface IncomingWebhook extends WebhookBase {
+    /** Always WebhookType.Incoming */
+    readonly type: typeof WebhookType.Incoming
+}
+
+/**
+ * A frozen snapshot of the community that owns a followed announcement channel.
+ * Fluxer supplies it only while the source exists and the webhook's original creator can view it.
+ * Missing source metadata does not prove the source was deleted
+ *
+ * @category Invites and webhooks
+ */
+export interface WebhookSourceGuild {
+    /** Decimal ID of the source community */
+    readonly id: string
+    /** Source community name when Fluxer returned this snapshot */
+    readonly name: string
+    /** Community icon hash, not a complete URL. Null means no icon, and omission means unavailable */
+    readonly icon?: string | null
+}
+
+/**
+ * A frozen snapshot of a followed announcement channel.
+ * Fluxer supplies it only while the source exists and the webhook's original creator can view it.
+ * Missing source metadata does not prove the source was deleted
+ *
+ * @category Invites and webhooks
+ */
+export interface WebhookSourceChannel {
+    /** Decimal ID of the followed announcement channel */
+    readonly id: string
+    /** Source channel name when Fluxer returned this snapshot */
+    readonly name: string
+}
+
+/**
+ * A webhook that delivers published messages from a followed announcement channel, selected by
+ * type === WebhookType.ChannelFollower. Manage it with a bot client's webhooks.edit and webhooks.delete.
+ * It can be renamed or moved to a text channel in the same community, but its avatar cannot be changed.
+ * Deleting it unfollows the source. It has no exposed token and cannot be used with createWebhookClient
+ *
+ * @category Invites and webhooks
+ */
+export interface ChannelFollowerWebhook extends WebhookBase {
+    /** Always WebhookType.ChannelFollower */
+    readonly type: typeof WebhookType.ChannelFollower
+    /** Source community while it exists and the original creator can view it. Absence does not prove deletion */
+    readonly sourceGuild?: WebhookSourceGuild
+    /** Followed channel while it exists and the original creator can view it. Absence does not prove deletion */
+    readonly sourceChannel?: WebhookSourceChannel
+}
+
+/**
+ * A webhook kind this SDK version does not know, selected by type === "unknown".
+ * Its rawType preserves Fluxer's number and any supplied source snapshots remain readable.
+ * No known WebhookType constant matches this shape, and no token credentials are inferred
+ *
+ * @category Invites and webhooks
+ */
+export interface UnknownWebhook extends WebhookBase, Omit<ChannelFollowerWebhook, "type"> {
+    /** Always "unknown" */
+    readonly type: "unknown"
+    /** Numeric webhook kind Fluxer sent, outside the known WebhookType constants */
+    readonly rawType: number
+}
+
+/**
+ * A frozen snapshot of a webhook's kind, appearance and destination when Fluxer last returned it.
+ * Compare type with WebhookType to select the incoming or channel follower shape, and handle "unknown"
+ * for future kinds. Metadata contains no token and does not update after remote changes
+ *
+ * @category Invites and webhooks
+ */
+export type Webhook = IncomingWebhook | ChannelFollowerWebhook | UnknownWebhook
+
+/**
+ * The secret returned when an incoming webhook is created, kept separate from its public details.
  * Pass this object to createWebhookClient, or call revealToken to save the secret in the application's own secure storage.
  * The SDK does not save the token to disk. Anyone with the ID and token can use this webhook's token-authenticated operations
  *
@@ -61,8 +159,8 @@ export interface WebhookCredentials {
  * @category Invites and webhooks
  */
 export interface CreatedWebhook {
-    /** Read-only details of the newly created webhook, without its token */
-    readonly webhook: Webhook
+    /** Frozen incoming webhook details, without the required token held separately in credentials */
+    readonly webhook: IncomingWebhook
     /** Secret-bearing object for createWebhookClient. Closing a client does not erase this separate object */
     readonly credentials: WebhookCredentials
 }
@@ -85,6 +183,8 @@ export interface WebhookCreate {
  * Changes to an existing webhook made through a bot client's webhooks.edit operation.
  * Supply at least one setting. Omitted settings stay unchanged.
  * Moving the destination channel requires bot authentication and cannot be done by a token-only webhook client.
+ * Follower webhooks can be renamed or moved, but Fluxer rejects an avatar change with field avatar and code INVALID_FORMAT.
+ * A move emits Webhooks Update for the old and new channel. The SDK does not synthesize those events.
  * Fields are sampled once when edit starts, then validated and encoded from that snapshot
  *
  * @category Invites and webhooks
@@ -94,9 +194,9 @@ export interface WebhookEdit {
      * trimming. The original string is sent unchanged
      */
     readonly name?: string
-    /** Base64 image data URI, or null to remove the avatar */
+    /** Base64 image data URI, or null to remove the avatar. Follower webhooks reject any supplied avatar change */
     readonly avatar?: string | null
-    /** Move future messages to this channel in the same community, subject to Fluxer's permission checks */
+    /** Move future messages within the same community, subject to Fluxer's permissions. Followers require a text channel, while incoming webhooks allow text, voice or announcement channels */
     readonly channelId?: string
 }
 
@@ -120,7 +220,9 @@ export interface WebhookReplyReference {
 export interface WebhookForwardReference {
     /** Select forwarding rather than a reply with newly written content */
     readonly type: "forward"
-    /** Source message and optional attachment/embed selections. Fluxer copies the message without a separate SDK fetch */
+    /** Source message and optional attachment/embed selections. Fluxer copies the message without a separate SDK fetch.
+     * A source nonce is used only when the message has no top-level nonce. Supplying both fails locally, even if equal
+     */
     readonly source: ForwardMessageInput
 }
 
@@ -137,7 +239,12 @@ export type WebhookMessageReference = WebhookReplyReference | WebhookForwardRefe
  * @category Invites and webhooks
  */
 export type WebhookMessageOptions = {
-    /** Message behavior flags from MessageFlags. Only the supported non-voice flags are writable, and omission uses Fluxer's default */
+    /** Application-chosen correlation nonce, a string of 1–32 UTF-16 code units or a nonnegative safe integer encoded as a decimal string.
+     * Omission sends no nonce, unless the forward source supplies one. Supplying both locations fails locally.
+     * For five minutes after saving a message, Fluxer tries to suppress another send through this webhook with the same nonce. This does not guarantee exactly-once delivery
+     */
+    readonly nonce?: MessageNonce
+    /** Message behavior flags from MessageFlags. Only SuppressEmbeds and SuppressNotifications are writable, and omission uses Fluxer's default. Crossposted, IsCrosspost and SourceMessageDeleted are server-managed. Those bits and VoiceMessage fail locally before dispatch */
     readonly flags?: number
     /** Which mentions may notify people. By default, mention text does not enable notifications */
     readonly allowedMentions?: AllowedMentions
@@ -153,7 +260,7 @@ export type WebhookMessageOptions = {
  * A message to send through a webhook client, using the webhook's token rather than a bot token.
  * For a new message, supply text, embeds, uploads or stickers and omit messageReference.
  * For a reply, add a reply reference and write the content or attachments normally.
- * For a forward, supply only a forward reference and optional sender, flags or mention overrides.
+ * For a forward, supply only a forward reference and optional nonce, sender, flags or mention overrides.
  * Forwards cannot also contain new text, embeds, stickers or uploads.
  * Fluxer rejects missing or cross-channel reply/forward targets. New messages do not require the destination channel ID.
  * Fluxer never sends a webhook message as text-to-speech, so a tts property fails with reason input before dispatch, like any other unknown property
@@ -172,7 +279,7 @@ export type WebhookMessageInput =
       })
 
 /**
- * Change a webhook's default name or avatar through its token-only client.
+ * Change an incoming webhook's default name or avatar through its token-only client.
  * Supply at least one setting. Omitted settings stay unchanged, and moving channels requires a bot client instead.
  * Fields are sampled once when edit starts, then validated and encoded from that snapshot
  *
@@ -195,7 +302,7 @@ export interface WebhookTokenEdit {
  * @category Invites and webhooks
  */
 export interface WebhookMessageEdit {
-    /** Replace the supported non-voice MessageFlags bits. Omit to preserve them, or use zero to clear both supported bits */
+    /** Replace only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications. Omit to preserve them, or use zero to clear both. Crossposted, IsCrosspost and SourceMessageDeleted are server-managed. Those bits and VoiceMessage fail locally before dispatch */
     readonly flags?: number
     /** New message text, or an empty string to remove the existing text */
     readonly content?: string
@@ -224,7 +331,8 @@ export interface DefaultWebhookOperationOptions extends WebhookOperationOptions,
 
 /**
  * Credentials and limits for createWebhookClient.
- * Supply an ID/token pair from secure storage or the credentials object returned by webhook creation.
+ * Supply an incoming webhook's ID/token pair from secure storage or the credentials object returned by webhook creation.
+ * Follower webhooks expose no token and cannot be executed by a webhook client.
  * Creating the client validates and copies these values locally. It does not send a request or prove the credentials work
  *
  * @category Invites and webhooks

@@ -4,7 +4,7 @@ import { operationErrorFields, operationErrorSettings, operationErrorText, type 
 import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
-/** Choose what a new community channel does: Text messages, voice calls, a category that groups channels, or a link.
+/** Choose what a new community channel does: Text messages, announcements, voice calls, a category that groups channels, or a link.
  * Received channels use the same constants in GuildChannel.type. A future Fluxer type that this SDK version does not
  * know arrives as a GuildUnknownChannel, whose type is "unknown" and whose rawType keeps the number
  *
@@ -17,12 +17,15 @@ export const ChannelType: Readonly<{
     Voice: 2
     /** A grouping parent for community channels */
     Category: 4
+    /** A community announcement channel whose published messages can reach following channels */
+    Announcement: 5
     /** A channel that points to an external URL */
     Link: 998
 }> = Object.freeze({
     Text: 0,
     Voice: 2,
     Category: 4,
+    Announcement: 5,
     Link: 998,
 })
 
@@ -78,13 +81,13 @@ export interface GuildChannelBase {
 }
 
 /**
- * A community text conversation, selected by `type === ChannelType.Text`
+ * Message and topic fields shared by community text and announcement channels
  *
  * @category Channels
  */
-export interface GuildTextChannel extends GuildChannelBase {
-    /** Always ChannelType.Text */
-    readonly type: typeof ChannelType.Text
+export interface GuildTextChannelBase extends GuildChannelBase {
+    /** Text or announcement channel type. Each received shape has its own literal discriminant */
+    readonly type: typeof ChannelType.Text | typeof ChannelType.Announcement
     /** Topic, with null clearing it and omission meaning unavailable */
     readonly topic?: string | null
     /** Last message ID, with null meaning no known message */
@@ -93,6 +96,27 @@ export interface GuildTextChannel extends GuildChannelBase {
     readonly lastPinTimestamp?: string | null
     /** Slowmode delay in seconds */
     readonly rateLimitPerUser?: number
+}
+
+/**
+ * A community text conversation, selected by `type === ChannelType.Text`
+ *
+ * @category Channels
+ */
+export interface GuildTextChannel extends GuildTextChannelBase {
+    /** Always ChannelType.Text */
+    readonly type: typeof ChannelType.Text
+}
+
+/**
+ * A community announcement channel, selected by `type === ChannelType.Announcement`.
+ * It has the same message and topic fields as a text channel
+ *
+ * @category Channels
+ */
+export interface GuildAnnouncementChannel extends GuildTextChannelBase {
+    /** Always ChannelType.Announcement */
+    readonly type: typeof ChannelType.Announcement
 }
 
 /**
@@ -150,7 +174,7 @@ export interface GuildLinkChannel extends GuildChannelBase {
 export interface GuildUnknownChannel
     extends
         GuildChannelBase,
-        Omit<GuildTextChannel, "type">,
+        Omit<GuildTextChannelBase, "type">,
         Omit<GuildVoiceChannel, "type">,
         Omit<GuildLinkChannel, "type"> {
     /** Always "unknown" */
@@ -169,9 +193,14 @@ export interface GuildUnknownChannel
  * @category Channels
  */
 export type GuildChannel =
-    GuildTextChannel | GuildVoiceChannel | GuildCategoryChannel | GuildLinkChannel | GuildUnknownChannel
+    | GuildTextChannel
+    | GuildAnnouncementChannel
+    | GuildVoiceChannel
+    | GuildCategoryChannel
+    | GuildLinkChannel
+    | GuildUnknownChannel
 
-/** Settings shared by new text, voice, category and link channels.
+/** Settings shared by new text, announcement, voice, category and link channels.
  * Supply the matching ChannelCreate type. Fluxer decides which settings apply to that channel type and
  * enforces permissions. Omitted permissionOverwrites inherit from the parent category, while [] requests none.
  * Unknown input keys fail locally. The encoded request body must fit within 4,194,304 bytes
@@ -203,7 +232,10 @@ export interface ChannelCreateBase {
     readonly voiceConnectionLimit?: number | null
     /** Explicit overrides, omitted to inherit a parent category and [] to create no overrides */
     readonly permissionOverwrites?: readonly PermissionOverwrite[]
-    /** Adult-content setting using Fluxer's older NSFW field */
+    /** Adult-content setting using Fluxer's older NSFW field. True marks the channel adult-only, while false inherits
+     * the parent category or community setting like omission. Use nsfwOverride false to mark it not adult-only.
+     * When both are present, nsfwOverride wins
+     */
     readonly nsfw?: boolean
     /** Explicit adult-content override, with null inheriting */
     readonly nsfwOverride?: boolean | null
@@ -225,6 +257,16 @@ export interface ChannelCreateBase {
 export interface TextChannelCreate extends ChannelCreateBase {
     /** Text channel type */
     readonly type: typeof ChannelType.Text
+}
+
+/**
+ * Creates an announcement channel with the same settings as a text channel
+ *
+ * @category Channels
+ */
+export interface AnnouncementChannelCreate extends ChannelCreateBase {
+    /** Announcement channel type */
+    readonly type: typeof ChannelType.Announcement
 }
 
 /**
@@ -262,7 +304,8 @@ export interface LinkChannelCreate extends ChannelCreateBase {
  *
  * @category Channels
  */
-export type ChannelCreate = TextChannelCreate | VoiceChannelCreate | CategoryChannelCreate | LinkChannelCreate
+export type ChannelCreate =
+    TextChannelCreate | AnnouncementChannelCreate | VoiceChannelCreate | CategoryChannelCreate | LinkChannelCreate
 
 /** Change an existing community channel's settings without replacing the channel.
  * Omitted fields stay unchanged. The permissionOverwrites list replaces the whole explicit list, so include entries that
@@ -272,6 +315,14 @@ export type ChannelCreate = TextChannelCreate | VoiceChannelCreate | CategoryCha
  * @category Channels
  */
 export interface ChannelEdit {
+    /** Convert between Text (0) and Announcement (5), alone or with other settings. Omission preserves the type.
+     * Other values fail locally. Fluxer requires ManageChannels and rejects converting a text channel that receives
+     * follows with CHANNEL_HAS_FOLLOWED_CHANNELS. Converting Announcement to Text queues asynchronous follower removal.
+     * Fluxer emits a complete Channel Update with the new type, replacing any cached observation before handlers run.
+     * The edit does not await that event or follower removal
+     * @see https://github.com/fluxerapp/fluxer/blob/597116a0b4bf3a212789bdebe7f284babc33b445/fluxer_api/src/api/channel/services/channel_data/ChannelOperationsService.ts
+     */
+    readonly type?: typeof ChannelType.Text | typeof ChannelType.Announcement
     /** Channel name. Raw input may contain at most 10,000 UTF-16 code units. For validation, Fluxer's general-name
      * rules remove U+000C and U+202E, trim surrounding whitespace, strip provider-defined invisible characters,
      * normalize whitespace and collapse its runs, then require 1–100 UTF-16 code units. The SDK sends the original
@@ -292,7 +343,10 @@ export interface ChannelEdit {
     readonly userLimit?: number | null
     /** Maximum simultaneous voice connections per user, integer 1–100, or null */
     readonly voiceConnectionLimit?: number | null
-    /** Adult-content setting using Fluxer's older NSFW field, with null restoring inheritance */
+    /** Adult-content setting using Fluxer's older NSFW field. True marks the channel adult-only, while false and null
+     * restore inheritance from the parent category or community. Use nsfwOverride false to mark it not adult-only.
+     * When both are present, nsfwOverride wins
+     */
     readonly nsfw?: boolean | null
     /** Explicit adult-content override, with null inheriting */
     readonly nsfwOverride?: boolean | null
@@ -341,6 +395,40 @@ export interface GuildChannelUpdateBulk {
     readonly guildId: string
     /** Frozen channel snapshots delivered in this dispatch */
     readonly channels: readonly GuildChannel[]
+}
+
+/** Subscribe a text channel to messages published from an announcement channel.
+ * Fluxer validates the source, target and permissions without an SDK prefetch
+ *
+ * @category Channels
+ */
+export interface ChannelFollowInput {
+    /** Decimal ID of the receiving community text channel, whose type must be ChannelType.Text */
+    readonly targetChannelId: string
+}
+
+/** A confirmed announcement-channel follow, returned as a frozen value.
+ * Delete webhookId through client.webhooks.delete to stop following
+ *
+ * @category Channels
+ */
+export interface FollowedChannel {
+    /** Decimal ID of the followed announcement channel, not the receiving channel */
+    readonly channelId: string
+    /** Decimal ID of the channel-follower webhook created in the receiving channel */
+    readonly webhookId: string
+}
+
+/** A frozen count of channels and communities following one announcement channel.
+ * Fluxer can cache these counts for up to 60 seconds. They are not live subscriptions
+ *
+ * @category Channels
+ */
+export interface ChannelFollowerStats {
+    /** Number of following channels */
+    readonly channelCount: number
+    /** Number of distinct communities containing following channels */
+    readonly guildCount: number
 }
 
 /**
@@ -392,6 +480,8 @@ export type ChannelOperation =
     | "channels.get"
     | "channels.fetch"
     | "channels.fetchAll"
+    | "channels.follow"
+    | "channels.fetchFollowerStats"
     | "channels.create"
     | "channels.edit"
     | "channels.delete"

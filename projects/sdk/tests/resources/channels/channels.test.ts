@@ -467,7 +467,7 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
         await expect(api.create("20", input)).rejects.toMatchObject({ reason: "input", outcome: "notDispatched" })
     for (const input of [
         {},
-        { type: ChannelType.Text },
+        { type: ChannelType.Voice },
         { parentId: "12" },
         { name: undefined },
         { rateLimitPerUser: -1 },

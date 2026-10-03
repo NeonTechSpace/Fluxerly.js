@@ -1,6 +1,6 @@
 // @ts-check
 
-// Read-only comparison of pinned upstream Fluxer protocol documents with the upstream default branch
+// Comparison of upstream Fluxer protocol documents with a reviewed pin or a previous observation
 import { createHash } from "node:crypto"
 import { appendFile, readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
@@ -36,6 +36,7 @@ const setKeys = new Set(["enum", "required", "type", "tokens"])
  * }} Source
  * @typedef {{ added: string[], removed: string[], changed: { name: string, details: string[] }[], wordingOnly: string[] }} ChangeGroup
  * @typedef {{ application: ChangeGroup, userOnly: ChangeGroup }} SurfaceChanges
+ * @typedef {{ manifest: Manifest, kind: "previous-run" | "repository-pin", reason?: string }} Baseline
  */
 
 const sha256 = (/** @type {Buffer} */ bytes) => createHash("sha256").update(bytes).digest("hex")
@@ -351,12 +352,13 @@ function listChanges(before, after) {
 }
 
 /**
- * Compares the pinned documents and rate-limit buckets with the upstream branch. Only when a hash changed are the
- * pinned copies also read, to describe the difference
+ * Compares the baseline documents and rate-limit buckets with the upstream branch. Only when a hash changed are the
+ * baseline copies also read, to describe the difference. Observation mode also signals a changed commit
  * @param {Manifest} manifest
  * @param {Source} source
+ * @param {{ compareCommit?: boolean }} [options]
  */
-export async function checkUpstream(manifest, source) {
+export async function checkUpstream(manifest, source, { compareCommit = false } = {}) {
     validateManifest(manifest)
     const commit = await source.resolveCommit(manifest.repository, manifest.branch)
     if (!commitPattern.test(commit)) throw new Error("Upstream branch did not resolve to a commit")
@@ -391,7 +393,7 @@ export async function checkUpstream(manifest, source) {
         repository: manifest.repository,
         pinnedCommit: manifest.commit,
         commit,
-        drift: rateLimits.changed || Object.values(files).some((file) => file.changed),
+        drift: (compareCommit && commit !== manifest.commit) || rateLimits.changed || Object.values(files).some((file) => file.changed),
         files: Object.fromEntries(
             Object.entries(files).map(([key, { path, pinned, current, changed }]) => [key, { path, pinned, current, changed }]),
         ),
@@ -467,18 +469,25 @@ function surfaceReport(title, { application, userOnly }) {
     ]
 }
 
-/** @param {Awaited<ReturnType<typeof checkUpstream>>} result */
-export function renderReport(result) {
+/**
+ * @param {Awaited<ReturnType<typeof checkUpstream>>} result
+ * @param {Pick<Baseline, "kind" | "reason">} [baseline]
+ */
+export function renderReport(result, baseline = { kind: "repository-pin" }) {
+    const kind = baseline.kind === "previous-run" ? "Previous run" : "Repository pin"
     const lines = [
         "## Upstream Fluxer drift",
         "",
-        result.drift
-            ? "Upstream documents differ from the pinned manifest. Review the changes, then update the manifest"
-            : "Upstream documents match the pinned manifest",
+        result.drift ? "Upstream changed since the comparison baseline" : "No upstream drift from the comparison baseline",
         "",
-        `Pinned commit: ${escape(result.pinnedCommit)}`,
+        `Baseline: ${kind}`,
         "",
-        `Current ${escape(result.repository)} commit: ${escape(result.commit)}`,
+        ...(baseline.reason ? [`Baseline fallback: ${escape(baseline.reason)}`, ""] : []),
+        `Baseline commit: ${escape(result.pinnedCommit)}`,
+        "",
+        `Current upstream commit: ${escape(result.commit)}`,
+        "",
+        `[Commit range](https://github.com/${result.repository}/compare/${result.pinnedCommit}...${result.commit})`,
         "",
         "| Document | Result |",
         "| --- | --- |",
@@ -561,24 +570,103 @@ const githubSource = {
     },
 }
 
-async function main() {
-    const args = process.argv.slice(2)
-    if (args.length > 1 || (args.length === 1 && args[0] !== "--update")) throw new Error("Use no arguments or --update")
-    const manifest = validateManifest(JSON.parse(await readFile(manifestPath, "utf8")))
-    const result = await checkUpstream(manifest, githubSource)
-    if (args[0] === "--update") {
-        manifest.commit = result.commit
-        for (const [key, file] of Object.entries(result.files))
-            manifest.files[/** @type {keyof Manifest["files"]} */ (key)].sha256 = file.current
-        manifest.rateLimits.sha256 = result.rateLimits.current
-        await writeFile(manifestPath, JSON.stringify(manifest, null, 4) + "\n")
-        console.log(`Pinned ${manifest.repository} at ${result.commit}`)
-        return
+/** @param {string[]} args */
+function parseArguments(args) {
+    /** @type {{ update?: boolean, baseline?: string, record?: string }} */
+    const options = {}
+    for (let index = 0; index < args.length; index++) {
+        const arg = args[index]
+        if (arg === "--update" && !options.update) options.update = true
+        else if ((arg === "--baseline" || arg === "--record") && options[arg.slice(2)] === undefined) {
+            const path = args[++index]
+            if (!path || path.startsWith("--")) throw new Error(`${arg} requires a file path`)
+            options[arg.slice(2)] = path
+        } else throw new Error("Use --update or --baseline <file> and --record <file>, with each argument at most once")
     }
-    const report = renderReport(result)
-    if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, report + "\n")
+    if (options.update && (options.baseline || options.record))
+        throw new Error("Use --update separately from --baseline and --record")
+    return options
+}
+
+/**
+ * @param {Manifest} manifest
+ * @param {string | undefined} path
+ * @returns {Promise<Baseline>}
+ */
+async function readBaseline(manifest, path) {
+    if (!path) return { manifest, kind: "repository-pin" }
+    let text
+    try {
+        text = await readFile(path, "utf8")
+    } catch {
+        return { manifest, kind: "repository-pin", reason: "Previous-run baseline file is missing or unreadable" }
+    }
+    let value
+    try {
+        value = JSON.parse(text)
+    } catch {
+        return { manifest, kind: "repository-pin", reason: "Previous-run baseline file is not valid JSON" }
+    }
+    try {
+        const previous = validateManifest(value)
+        if (
+            previous.repository !== manifest.repository ||
+            previous.branch !== manifest.branch ||
+            previous.files.openapi.path !== manifest.files.openapi.path ||
+            previous.files.gatewayEvents.path !== manifest.files.gatewayEvents.path ||
+            previous.rateLimits.path !== manifest.rateLimits.path
+        ) throw new Error("Baseline target differs from the repository manifest")
+        return { manifest: previous, kind: "previous-run" }
+    } catch {
+        return { manifest, kind: "repository-pin", reason: "Previous-run baseline is invalid or targets different upstream documents" }
+    }
+}
+
+/**
+ * @param {Manifest} manifest
+ * @param {Awaited<ReturnType<typeof checkUpstream>>} result
+ * @returns {Manifest}
+ */
+function observation(manifest, result) {
+    const file = (/** @type {string} */ key) => ({ path: result.files[key].path, sha256: result.files[key].current })
+    return {
+        repository: manifest.repository,
+        branch: manifest.branch,
+        commit: result.commit,
+        files: { openapi: file("openapi"), gatewayEvents: file("gatewayEvents") },
+        rateLimits: { path: result.rateLimits.path, sha256: result.rateLimits.current },
+    }
+}
+
+/**
+ * Runs the CLI check with injectable upstream reads for offline behavior tests
+ * @param {string[]} args
+ * @param {{ source?: Source, manifestFile?: string, summaryFile?: string }} [dependencies]
+ */
+export async function runUpstream(args, {
+    source = githubSource,
+    manifestFile = manifestPath,
+    summaryFile = process.env.GITHUB_STEP_SUMMARY,
+} = {}) {
+    const options = parseArguments(args)
+    const manifest = validateManifest(JSON.parse(await readFile(manifestFile, "utf8")))
+    const baseline = await readBaseline(manifest, options.baseline)
+    const result = await checkUpstream(baseline.manifest, source, { compareCommit: options.baseline !== undefined })
+    const observed = observation(baseline.manifest, result)
+    if (options.update) {
+        await writeFile(manifestFile, JSON.stringify(observed, null, 4) + "\n")
+        return { exitCode: 0, report: `Pinned ${manifest.repository} at ${result.commit}`, result, baseline }
+    }
+    if (options.record) await writeFile(options.record, JSON.stringify(observed, null, 4) + "\n")
+    const report = renderReport(result, baseline)
+    if (summaryFile) await appendFile(summaryFile, report + "\n")
+    return { exitCode: result.drift ? 1 : 0, report, result, baseline }
+}
+
+async function main() {
+    const { exitCode, report } = await runUpstream(process.argv.slice(2))
     console.log(report)
-    if (result.drift) process.exitCode = 1
+    process.exitCode = exitCode
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))

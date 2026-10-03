@@ -39,6 +39,21 @@ const url: Reader = (value) => {
         return undefined
     }
 }
+// Fluxer's MessageHelpers.getContentType uses mime 4.1.0 standard and other image/video mappings,
+// with ContentTypeUtils overriding .ts to text/plain. Starred MIME aliases do not resolve extensions
+const attachmentMediaExtensions: ReadonlySet<string> = Object.freeze(
+    new Set(
+        (
+            "3ds 3g2 3gp 3gpp apng asf asx avci avcs avi avif azv b16 bmp btf btif cgm cmx dds dib djv djvu dng dpx drle " +
+            "dvb dwg dxf emf exr f4v facti fbs fh fh4 fh5 fh7 fhc fits fli flv fpx fst fvt g3 gif h261 h263 h264 heic heics " +
+            "heif heifs hej2 ico ief jaii jais jfif jhc jls jng jp2 jpe jpeg jpf jpg jpg2 jpgm jpgv jph jpm jpx jxl jxr jxra " +
+            "jxrs jxs jxsc jxsi jxss ktx ktx2 m1v m2t m2ts m2v m4s m4u m4v mdi mj2 mjp2 mk3d mks mkv mmr mng mov movie " +
+            "mp4 mp4v mpe mpeg mpg mpg4 mts mxu npx ogv pbm pct pcx pgm pic png pnm ppm psd pti pyv qt ras rgb rlc sgi sid " +
+            "smv svg svgz t38 tap tfx tga tif tiff uvg uvh uvi uvm uvp uvs uvu uvv uvvg uvvh uvvi uvvm uvvp uvvs uvvu uvvv " +
+            "viv vob vtf wbmp wdp webm webp wm wmf wmv wmx wvx xbm xif xpm xwd"
+        ).split(" "),
+    ),
+)
 const attachmentUrl = (value: unknown, uploadedFilenames: readonly string[] | undefined): string | undefined => {
     if (typeof value !== "string" || value.length < 1 || value.length > 2048) return undefined
     if (!value.startsWith("attachment://")) return url(value) as string | undefined
@@ -48,7 +63,7 @@ const attachmentUrl = (value: unknown, uploadedFilenames: readonly string[] | un
     return /^[\p{L}\p{N}\p{M}_.-]+$/u.test(filename) &&
         matches === 1 &&
         extension !== undefined &&
-        ["png", "jpg", "jpeg", "webp", "gif"].includes(extension)
+        attachmentMediaExtensions.has(extension)
         ? value
         : undefined
 }
@@ -194,7 +209,7 @@ const inputMedia = (uploadedFilenames: readonly string[] | undefined): Shape => 
         true,
         [
             "format",
-            "Embed media URL must be an HTTP or HTTPS URL, or attachment://<filename> naming exactly one PNG, JPEG, WebP, or GIF file uploaded with this message",
+            "Embed media URL must be an HTTP or HTTPS URL, or attachment://<filename> naming exactly one uploaded file whose filename maps to an image or video MIME type",
         ],
     ],
     description: [

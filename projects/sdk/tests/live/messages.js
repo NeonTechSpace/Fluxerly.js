@@ -3,7 +3,7 @@
 // `--reactions`, records the server ID, a unique channel marker and the returned channel ID, never message bodies.
 // Reaction, guild and channel scenarios add their emoji, role, category and child markers with returned IDs, and
 // moderation adds its target and exact timeout or ban marker.
-// An existing journal is reconciled before any resource is created: the channel and its messages are removed, emoji
+// An existing journal triggers recovery only: The channel and its messages are removed, emoji
 // identity and absence are verified, remaining test roles must have zero permissions, and children are removed before
 // categories. Emoji absence does not prove image-blob erasure. Moderation recovery refuses to remove unrelated timeout
 // or ban state
@@ -3294,1789 +3294,1849 @@ try {
     stage = "recover_prior_test"
     if (journalFile.exists()) {
         journal = journalFile.read()
+        stage = "recovery_only"
         await cleanup()
-    }
-    journal = { guildId }
-    stage = "create_test_channel"
-    const channel = await createMainTestChannel(api, journal, {
-        create: () => journalFile.create(journal),
-        save: () => journalFile.save(journal),
-    })
-    let typingCacheTarget
-    if (typing) {
-        stage = "typing_cache_seed"
-        const seeded = (await api("POST", `/channels/${channel.id}/messages`, { content: `typing-${randomUUID()}` }))
-            .data
-        assert.match(seeded?.id ?? "", /^\d+$/)
-        typingCacheTarget = { id: seeded.id, channelId: channel.id }
-    }
-    const ping = `ping-${randomUUID()}`
-    const pong = `pong-${randomUUID()}`
-    const sdkRequests = []
-    const typingRequests = []
-    if (cache || search || typing) {
-        // Sandbox setup and independent readback keep using rawFetch. This observes only the SDK's own REST behavior
-        globalThis.fetch = async (...args) => {
-            const url = new URL(args[0])
-            if (cache || search) sdkRequests.push(url.pathname)
-            const response = await rawFetch(...args)
-            if (typing && url.pathname === `/v1/channels/${channel.id}/typing`)
-                typingRequests.push({
-                    at: performance.now(),
-                    body: args[1]?.body,
-                    method: args[1]?.method,
-                    status: response.status,
-                })
-            return response
-        }
-    }
-    if (attachments || attachmentSources)
-        globalThis.fetch = observeUploads(rawFetch, (record) =>
-            console.log(JSON.stringify({ mode, check: stage, ...record })),
-        )
-    let client
-    let seed
-    let reply
-    const states = []
-    if (forceRecovery) gatewayProbe = observeGateway()
-    stage = "sdk_receive_and_reply"
-    if (mode === "default") {
-        const { builders, commands, createClient, format } = await import("@neontechspace/fluxerly")
-        client = createClient({
-            token,
-            ...(cache || typing || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
-            ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
-            ...(channels ? { cache: { channels: true } } : {}),
-            ...(moderation ? { cache: { members: true } } : {}),
-            ...(recover ? { logging: { sink: diagnosticSink } } : {}),
+        report(stage, true)
+    } else {
+        journal = { guildId }
+        stage = "create_test_channel"
+        const channel = await createMainTestChannel(api, journal, {
+            create: () => journalFile.create(journal),
+            save: () => journalFile.save(journal),
         })
-        let stopState
-        let timer
-        try {
-            const cacheGet = async (target) => {
-                if (!cache && !typing && !search) return undefined
-                return client.messages.get(target)
+        let typingCacheTarget
+        if (typing) {
+            stage = "typing_cache_seed"
+            const seeded = (
+                await api("POST", `/channels/${channel.id}/messages`, { content: `typing-${randomUUID()}` })
+            ).data
+            assert.match(seeded?.id ?? "", /^\d+$/)
+            typingCacheTarget = { id: seeded.id, channelId: channel.id }
+        }
+        const ping = `ping-${randomUUID()}`
+        const pong = `pong-${randomUUID()}`
+        const sdkRequests = []
+        const typingRequests = []
+        if (cache || search || typing) {
+            // Sandbox setup and independent readback keep using rawFetch. This observes only the SDK's own REST behavior
+            globalThis.fetch = async (...args) => {
+                const url = new URL(args[0])
+                if (cache || search) sdkRequests.push(url.pathname)
+                const response = await rawFetch(...args)
+                if (typing && url.pathname === `/v1/channels/${channel.id}/typing`)
+                    typingRequests.push({
+                        at: performance.now(),
+                        body: args[1]?.body,
+                        method: args[1]?.method,
+                        status: response.status,
+                    })
+                return response
             }
-            const cacheSend = async (channelId, input) => {
-                const sent = await client.messages.send(channelId, input)
-                assert.ok(sent.isOk())
-                return sent.value
-            }
-            const cacheReply = async (target, input) => {
-                const sent = await client.messages.reply(target, input)
-                assert.ok(sent.isOk())
-                return sent.value
-            }
-            if (nonceOnly)
-                await verifyNonce(
-                    {
-                        send: async (input) => cacheSend(channel.id, input),
-                        reply: async (target, input) => {
-                            const sent = await client.messages.reply(target, input)
-                            assert.ok(sent.isOk())
-                            return sent.value
-                        },
-                        forward: async (destination, input) => {
-                            const sent = await client.messages.forward(destination, input)
-                            assert.ok(sent.isOk())
-                            return sent.value
-                        },
-                        sendUnknown: async (input) => {
-                            const result = await client.messages.send(channel.id, input)
-                            assert.ok(result.isErr())
-                            return result.error
-                        },
-                    },
-                    channel.id,
-                )
-            const done = Promise.withResolvers()
-            stopState = forceRecovery
-                ? client.observeState((state) => {
-                      states.push(state)
-                  })
-                : undefined
-            if (typing) {
-                stage = "typing_one_shot"
-                const oneShot = await client.messages.typing(channel.id)
-                assert.ok(oneShot.isOk())
-                assert.deepEqual(typingRequests, [
-                    { at: typingRequests[0]?.at, body: undefined, method: "POST", status: 204 },
-                ])
-                // This message was created before the SDK client existed. A typing request cannot hydrate or admit it.
-                assert.equal(await cacheGet(typingCacheTarget), undefined)
-                report("typing_one_shot_no_cache_admission", true)
-
-                stage = "typing_scoped_refresh"
-                const scopedStart = typingRequests.length
-                const complete = Promise.withResolvers()
-                const scoped = client.messages.keepTyping(channel.id, () => complete.promise)
-                let completed
-                try {
-                    await waitForTypingRequests(typingRequests, scopedStart + 2)
-                } finally {
-                    complete.resolve("completed")
-                    completed = await scoped
-                }
-                assert.ok(completed.isOk())
-                assert.equal(completed.value, "completed")
-                const refreshes = typingRequests.slice(scopedStart)
-                assert.equal(refreshes.length, 2)
-                assert.ok(
-                    refreshes.every(
-                        (request) => request.method === "POST" && request.body === undefined && request.status === 204,
-                    ),
-                )
-                assert.ok(refreshes[1].at - refreshes[0].at >= 7_900)
-                report(stage, true)
-
-                stage = "typing_completion_cleanup"
-                await assertTypingStopped(typingRequests)
-                report(stage, true)
-
-                stage = "typing_cancellation_cleanup"
-                const cancellation = new AbortController()
-                const entered = Promise.withResolvers()
-                const pending = client.messages.keepTyping(
-                    channel.id,
-                    (signal) =>
-                        new Promise((resolve) => {
-                            entered.resolve()
-                            if (signal.aborted) resolve()
-                            else signal.addEventListener("abort", resolve, { once: true })
-                        }),
-                    { signal: cancellation.signal },
-                )
-                await entered.promise
-                cancellation.abort()
-                const cancelled = await pending
-                assert.ok(cancelled.isErr())
-                assert.equal(cancelled.error._tag, "CancelledError")
-                await assertTypingStopped(typingRequests)
-                report(stage, true)
-                stage = "sdk_receive_and_reply"
-            }
-            if (search) {
-                await verifyMessageSearch(
-                    {
-                        search: async (context, query) => {
-                            const result = await client.messages.search(context, query)
-                            if (result.isErr()) throw result.error
-                            return result.value
-                        },
-                        iterate: async function* (context, filters, limits) {
-                            for await (const result of client.messages.iterateSearch(context, filters, limits)) {
-                                if (result.isErr()) throw result.error
-                                yield result.value
-                            }
-                        },
-                        get: cacheGet,
-                        searchRequests: () => sdkRequests.filter((path) => path === "/v1/search/messages").length,
-                    },
-                    channel.id,
-                )
-                stage = "sdk_receive_and_reply"
-            }
-            if (pagination) {
-                const value = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) throw result.error
-                    return result.value
-                }
-                const items = async function* (iterable) {
-                    for await (const result of iterable) {
-                        if (result.isErr()) throw result.error
-                        yield result.value
-                    }
-                }
-                await verifyPagination(
-                    {
-                        history: (query) => items(client.messages.iterateHistory(channel.id, query)),
-                        members: (query) => items(client.members.iterate(guildId, query)),
-                        users: (target, emoji, query) =>
-                            items(client.messages.iterateReactionUsers(target, emoji, query)),
-                        pins: (query) => items(client.messages.iteratePins(channel.id, query)),
-                        react: (target) => value(client.messages.addReaction(target, "👍")),
-                        pin: (target) => value(client.messages.pin(target)),
-                        unpin: (target) => value(client.messages.unpin(target)),
-                        cancelHistory: async (signal) => {
-                            for await (const result of client.messages.iterateHistory(
-                                channel.id,
-                                { maxItems: 1 },
-                                { signal },
-                            )) {
-                                assert.ok(result.isErr())
-                                assert.equal(result.error._tag, "CancelledError")
-                                return
-                            }
-                            assert.fail("Cancelled traversal unexpectedly completed")
-                        },
-                    },
-                    channel.id,
-                    user.id,
-                )
-            }
-            if (history || cache) {
-                const probe = await prepareHistory(channel.id, user.id)
-                assert.equal(client.state, "Disconnected")
-                for (const check of probe.cases) {
-                    stage = check.name
-                    const page = await client.messages.fetchHistory(channel.id, check.query)
-                    assert.ok(page.isOk())
-                    await probe.verify(page.value, check)
-                    if (cache)
-                        for (const message of page.value) {
-                            const cached = await cacheGet(message)
-                            assert.equal(cached?.content, message.content)
-                        }
-                }
-                if (cache) report("cache_rest_history", true)
-                stage = "sdk_receive_and_reply"
-            }
-            if (manage || cache) {
-                const managed = await prepareManagement(channel.id, user.id)
-                assert.equal(client.state, "Disconnected")
-                stage = "sdk_fetch_disconnected"
-                const fetched = await client.messages.fetch(managed.target)
-                assert.ok(fetched.isOk())
-                await verifyManaged(fetched.value, managed.content, managed)
-                if (cache) {
-                    assert.equal((await cacheGet(managed.target))?.content, managed.content)
-                    report("cache_rest_fetch", true)
-                }
-                stage = "sdk_edit_and_preserve_embed"
-                const edited = await client.messages.edit(fetched.value, {
-                    content: `${managed.content}-edited @everyone`,
-                })
-                assert.ok(edited.isOk())
-                await verifyManaged(edited.value, `${managed.content}-edited @everyone`, managed)
-                if (cache) {
-                    assert.equal((await cacheGet(edited.value))?.content, edited.value.content)
-                    report("cache_rest_edit", true)
-                }
-                stage = "sdk_empty_edit_rejected_without_change"
-                const cleared = await client.messages.edit(edited.value, { content: "" })
-                assert.ok(cleared.isErr())
-                verifyClearRejection(cleared.error)
-                await verifyManaged(edited.value, `${managed.content}-edited @everyone`, managed)
-                stage = "sdk_delete_and_confirm_absence"
-                const deleted = await client.messages.delete(edited.value)
-                assert.ok(deleted.isOk())
-                assert.equal(deleted.value, undefined)
-                assert.equal((await api("GET", `/channels/${channel.id}/messages/${managed.target.id}`)).status, 404)
-                if (cache) {
-                    assert.equal(await cacheGet(managed.target), undefined)
-                    report("cache_rest_delete", true)
-                }
-                report(stage, true)
-                stage = "sdk_missing_target_errors"
-                verifyMissing((await client.messages.fetch(managed.target)).error, "fetch")
-                verifyMissing((await client.messages.edit(managed.target, { content: "gone" })).error, "edit")
-                verifyMissing((await client.messages.delete(managed.target)).error, "delete")
-                report(stage, true)
-                stage = "sdk_receive_and_reply"
-            }
-            let beforeRecovery
-            if (cache) {
-                await verifyCacheRestAdmissionAndExpiry(cacheSend, cacheReply, cacheGet, channel.id)
-                stage = "cache_pre_recovery_rest_intake"
-                beforeRecovery = await cacheSend(channel.id, { content: `cache-before-recovery-${randomUUID()}` })
-                assert.equal((await cacheGet(beforeRecovery))?.content, beforeRecovery.content)
-                report(stage, true)
-                stage = "sdk_receive_and_reply"
-            }
-            if (plainRun)
-                await verifyTextToSpeech(
-                    async (target, input) => {
-                        const result = await client.messages.send(target, input)
-                        return result.isOk() ? { ok: true, value: result.value } : { ok: false, error: result.error }
-                    },
-                    async (target) => {
-                        const result = await client.permissions.fetch({ guildId, userId: user.id, channelId: target })
-                        if (result.isErr()) throw result.error
-                        return result.value
-                    },
-                    channel.id,
-                )
-            const registered = client.on("messageCreate", async (message, signal) => {
-                if (message.channelId !== channel.id || message.author.id !== user.id || message.content !== ping)
-                    return
-                // Deliberately consume this test bot's own seed event; default bot examples filter bot authors
-                const sent = await client.messages.reply(message, { content: pong }, { signal })
-                done.resolve(sent)
-            })
-            const terminal = registered.waitForClose().then(
-                (result) => {
-                    if (result.isErr()) done.resolve(result)
-                },
-                () => done.resolve(null),
+        }
+        if (attachments || attachmentSources)
+            globalThis.fetch = observeUploads(rawFetch, (record) =>
+                console.log(JSON.stringify({ mode, check: stage, ...record })),
             )
-            assert.ok((await client.connect()).isOk())
-            if (moderation) {
-                const run = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) throw result.error
-                    return result.value
+        let client
+        let seed
+        let reply
+        const states = []
+        if (forceRecovery) gatewayProbe = observeGateway()
+        stage = "sdk_receive_and_reply"
+        if (mode === "default") {
+            const { builders, commands, createClient, format } = await import("@neontechspace/fluxerly")
+            client = createClient({
+                token,
+                ...(cache || typing || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
+                ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
+                ...(channels ? { cache: { channels: true } } : {}),
+                ...(moderation ? { cache: { members: true } } : {}),
+                ...(recover ? { logging: { sink: diagnosticSink } } : {}),
+            })
+            let stopState
+            let timer
+            try {
+                const cacheGet = async (target) => {
+                    if (!cache && !typing && !search) return undefined
+                    return client.messages.get(target)
                 }
-                await verifyModeration(
-                    {
-                        timeout: (target, duration, options) => run(client.members.timeout(target, duration, options)),
-                        clearTimeout: (target) => run(client.members.clearTimeout(target)),
-                        fetch: (target) => run(client.members.fetch(target)),
-                        get: async (target) => client.members.get(target),
-                        kick: (target, options) => run(client.members.kick(target, options)),
-                        ban: (target, input, options) => run(client.members.ban(target, input, options)),
-                        unban: (target, options) => run(client.members.unban(target, options)),
-                        bans: () => run(client.members.fetchBans(guildId)),
-                        on: async (event, handler) => {
-                            const subscription = client.on(event, handler)
-                            return async () => {
-                                subscription.close()
-                                await run(subscription.waitForClose())
-                            }
-                        },
-                    },
-                    user.id,
-                )
-            }
-            if (batchDelete) {
-                const run = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) throw result.error
-                    return result.value
+                const cacheSend = async (channelId, input) => {
+                    const sent = await client.messages.send(channelId, input)
+                    assert.ok(sent.isOk())
+                    return sent.value
                 }
-                await verifyBatchDeletion(
-                    {
-                        send: (input) => run(client.messages.send(channel.id, input)),
-                        get: async (target) => client.messages.get(target),
-                        deleteMany: (ids) => run(client.messages.deleteMany(channel.id, ids)),
-                        on: async (handler) => {
-                            const subscription = client.on("messageDeleteBulk", handler)
-                            return async () => {
-                                subscription.close()
-                                await run(subscription.waitForClose())
-                            }
-                        },
-                    },
-                    channel.id,
-                    user.id,
-                )
-            }
-            if (cleanupCheck) {
-                const run = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) throw result.error
-                    return result.value
+                const cacheReply = async (target, input) => {
+                    const sent = await client.messages.reply(target, input)
+                    assert.ok(sent.isOk())
+                    return sent.value
                 }
-                await verifyWorkflowReads(
-                    {
-                        guildList: () => run(client.guilds.fetchPage({ withCounts: true })),
-                        hierarchy: (target) => run(client.members.fetchCanManage(target)),
-                    },
-                    user.id,
-                )
-                await verifyCleanup(
-                    {
-                        send: (input) => run(client.messages.send(channel.id, input)),
-                        preview: (selection) => run(client.messages.previewCleanup(channel.id, selection)),
-                        cleanup: (plan, options) => run(client.messages.cleanup(plan, options)),
-                    },
-                    channel.id,
-                    user.id,
-                )
-            }
-            if (optionalTools) {
-                const run = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) throw result.error
-                    return result.value
+                if (nonceOnly)
+                    await verifyNonce(
+                        {
+                            send: async (input) => cacheSend(channel.id, input),
+                            reply: async (target, input) => {
+                                const sent = await client.messages.reply(target, input)
+                                assert.ok(sent.isOk())
+                                return sent.value
+                            },
+                            forward: async (destination, input) => {
+                                const sent = await client.messages.forward(destination, input)
+                                assert.ok(sent.isOk())
+                                return sent.value
+                            },
+                            sendUnknown: async (input) => {
+                                const result = await client.messages.send(channel.id, input)
+                                assert.ok(result.isErr())
+                                return result.error
+                            },
+                        },
+                        channel.id,
+                    )
+                const done = Promise.withResolvers()
+                stopState = forceRecovery
+                    ? client.observeState((state) => {
+                          states.push(state)
+                      })
+                    : undefined
+                if (typing) {
+                    stage = "typing_one_shot"
+                    const oneShot = await client.messages.typing(channel.id)
+                    assert.ok(oneShot.isOk())
+                    assert.deepEqual(typingRequests, [
+                        { at: typingRequests[0]?.at, body: undefined, method: "POST", status: 204 },
+                    ])
+                    // This message was created before the SDK client existed. A typing request cannot hydrate or admit it.
+                    assert.equal(await cacheGet(typingCacheTarget), undefined)
+                    report("typing_one_shot_no_cache_admission", true)
+
+                    stage = "typing_scoped_refresh"
+                    const scopedStart = typingRequests.length
+                    const complete = Promise.withResolvers()
+                    const scoped = client.messages.keepTyping(channel.id, () => complete.promise)
+                    let completed
+                    try {
+                        await waitForTypingRequests(typingRequests, scopedStart + 2)
+                    } finally {
+                        complete.resolve("completed")
+                        completed = await scoped
+                    }
+                    assert.ok(completed.isOk())
+                    assert.equal(completed.value, "completed")
+                    const refreshes = typingRequests.slice(scopedStart)
+                    assert.equal(refreshes.length, 2)
+                    assert.ok(
+                        refreshes.every(
+                            (request) =>
+                                request.method === "POST" && request.body === undefined && request.status === 204,
+                        ),
+                    )
+                    assert.ok(refreshes[1].at - refreshes[0].at >= 7_900)
+                    report(stage, true)
+
+                    stage = "typing_completion_cleanup"
+                    await assertTypingStopped(typingRequests)
+                    report(stage, true)
+
+                    stage = "typing_cancellation_cleanup"
+                    const cancellation = new AbortController()
+                    const entered = Promise.withResolvers()
+                    const pending = client.messages.keepTyping(
+                        channel.id,
+                        (signal) =>
+                            new Promise((resolve) => {
+                                entered.resolve()
+                                if (signal.aborted) resolve()
+                                else signal.addEventListener("abort", resolve, { once: true })
+                            }),
+                        { signal: cancellation.signal },
+                    )
+                    await entered.promise
+                    cancellation.abort()
+                    const cancelled = await pending
+                    assert.ok(cancelled.isErr())
+                    assert.equal(cancelled.error._tag, "CancelledError")
+                    await assertTypingStopped(typingRequests)
+                    report(stage, true)
+                    stage = "sdk_receive_and_reply"
                 }
-                await verifyOptionalTools(
-                    {
-                        builders,
-                        parseQuoted: commands.parseQuoted,
-                        assertConnected: async () => assert.equal(client.state, "Connected"),
-                        create: async (options) => commands.create(options),
-                        register: async (router, command) => router.register(command),
-                        attach: async (router) => router.attach(client),
-                        send: (input) => run(client.messages.send(channel.id, input)),
-                        reply: (message, input) => run(client.messages.reply(message, input)),
-                        cooldowns: async (claims) => {
-                            const store = commands.memoryCooldowns({ maxEntries: 4 })
-                            return {
-                                store: {
-                                    claim(input) {
-                                        const claim = store.claim(input)
-                                        claims.push(claim)
-                                        return claim
-                                    },
-                                },
-                                clear: () => store.clear(),
-                            }
-                        },
-                        guard: (matches) => {
-                            return ({ message }) => matches(message)
-                        },
-                        execute: (runCommand) => {
-                            return async ({ message }) => runCommand(message)
-                        },
-                        reject:
-                            (onReject) =>
-                            ({ message }, rejection) =>
-                                onReject(message, rejection),
-                        close: async (subscription) => {
-                            subscription.close()
-                            await run(subscription.waitForClose())
-                        },
-                        observe: async (receive) => {
-                            const observer = client.on("messageCreate", receive)
-                            return {
-                                close: async () => {
-                                    observer.close()
-                                    await run(observer.waitForClose())
-                                },
-                            }
-                        },
-                    },
-                    channel.id,
-                    user.id,
-                )
-            }
-            if (guilds) {
-                const run = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) throw result.error
-                    return result.value
-                }
-                await verifyGuildMembers(
-                    {
-                        guild: () => run(client.guilds.fetch(guildId)),
-                        getGuild: async () => client.guilds.get(guildId),
-                        getMember: async (target) => client.members.get(target),
-                        getRole: async (id) => client.roles.get({ guildId, id }),
-                        roles: () => run(client.roles.fetchAll(guildId)),
-                        createRole: (input, options) => run(client.roles.create(guildId, input, options)),
-                        editRole: (id, input, options) => run(client.roles.edit({ guildId, id }, input, options)),
-                        deleteRole: (id, options) => run(client.roles.delete({ guildId, id }, options)),
-                        reorderRoles: (positions, options) => run(client.roles.reorder(guildId, positions, options)),
-                        setHoistPositions: (positions, options) =>
-                            run(client.roles.setHoistPositions(guildId, positions, options)),
-                        member: (target) => run(client.members.fetch(target)),
-                        self: () => run(client.members.fetchSelf(guildId)),
-                        page: () => run(client.members.fetchPage(guildId, { limit: 2 })),
-                        add: (target, roleId, options) => run(client.members.addRole(target, roleId, options)),
-                        remove: (target, roleId, options) => run(client.members.removeRole(target, roleId, options)),
-                        send: () =>
-                            run(client.messages.send(channel.id, { content: "SDK reaction role verification" })),
-                        react: (target) => run(client.messages.addReaction(target, "✅")),
-                        collect: async (message, target, roleId, options) => {
-                            const collector = client.messages.collectReactions(message, {
-                                emoji: "✅",
-                                timeoutMs: 10_000,
-                                filter: (reaction) => reaction.userId === user.id,
-                                onReaction: async (_reaction, signal) => {
-                                    await run(client.members.addRole(target, roleId, { ...options, signal }))
-                                    await run(
-                                        client.messages.edit(message, { content: "SDK role assigned" }, { signal }),
-                                    )
-                                },
-                            })
-                            return { wait: () => run(collector.result()), stop: () => collector.close() }
-                        },
-                        on: async (event, handler) => {
-                            const subscription = client.on(event, handler)
-                            return async () => {
-                                subscription.close()
-                                await run(subscription.waitForClose())
-                            }
-                        },
-                    },
-                    channel.id,
-                    user.id,
-                    () => gatewayProbe.interruptAndWait(client, states),
-                )
-            }
-            if (channels) {
-                const run = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) throw result.error
-                    return result.value
-                }
-                await verifyChannels(
-                    {
-                        get: async (id) => client.channels.get(id),
-                        fetch: (id) => run(client.channels.fetch(id)),
-                        fetchAll: (id) => run(client.channels.fetchAll(id)),
-                        create: (id, input, options) => run(client.channels.create(id, input, options)),
-                        edit: (id, input, options) => run(client.channels.edit(id, input, options)),
-                        delete: (id, options) => run(client.channels.delete(id, options)),
-                        reorder: (id, positions, options) => run(client.channels.reorder(id, positions, options)),
-                        setPermissionOverwrite: (id, overwrite, options) =>
-                            run(client.channels.setPermissionOverwrite(id, overwrite, options)),
-                        removePermissionOverwrite: (id, targetId, options) =>
-                            run(client.channels.removePermissionOverwrite(id, targetId, options)),
-                        on: async (event, handler) => {
-                            const subscription = client.on(event, handler)
-                            return async () => {
-                                subscription.close()
-                                await run(subscription.waitForClose())
-                            }
-                        },
-                    },
-                    channel.id,
-                    user.id,
-                    () => gatewayProbe.interruptAndWait(client, states),
-                )
-            }
-            if (pins) {
-                const run = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) throw result.error
-                    return result.value
-                }
-                await verifyPins(
-                    {
-                        send: (input) => run(client.messages.send(channel.id, input)),
-                        pin: (target) => run(client.messages.pin(target)),
-                        unpin: (target) => run(client.messages.unpin(target)),
-                        pins: (query) => run(client.messages.fetchPins(channel.id, query)),
-                        on: async (event, handler) => {
-                            const subscription = client.on(event, handler)
-                            return async () => {
-                                subscription.close()
-                                await run(subscription.waitForClose())
-                            }
-                        },
-                    },
-                    channel.id,
-                    () => gatewayProbe.interruptAndWait(client, states),
-                )
-            }
-            if (reactions) {
-                const unwrap = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) reportFailure(result.error)
-                    assert.ok(result.isOk())
-                    return result.value
-                }
-                await verifyReactions(
-                    {
-                        send: (input) => unwrap(client.messages.send(channel.id, input)),
-                        add: (target, emoji) => unwrap(client.messages.addReaction(target, emoji)),
-                        remove: (target, emoji) => unwrap(client.messages.removeReaction(target, emoji)),
-                        removeUser: (target, emoji, userId) =>
-                            unwrap(client.messages.removeUserReaction(target, emoji, userId)),
-                        clearEmoji: (target, emoji) => unwrap(client.messages.clearReaction(target, emoji)),
-                        clearAll: (target) => unwrap(client.messages.clearReactions(target)),
-                        fetchEmojis: () => unwrap(client.emojis.fetchAll(guildId)),
-                        fetchEmojiMetadata: (id) => unwrap(client.emojis.fetchMetadata(id)),
-                        parseCustomEmoji: async (value) => format.parseCustomEmoji(value),
-                        reads: async (target) => ({
-                            message: await unwrap(client.messages.fetch(target)),
-                            history: await unwrap(
-                                client.messages.fetchHistory(target.channelId, { around: target.id, limit: 1 }),
-                            ),
-                            pins: await unwrap(client.messages.fetchPins(target.channelId, { limit: 1 })),
-                        }),
-                        collect: async (target, options) => {
-                            const { progressEdit, progressFailure, progressWait, onProgress, ...settings } = options
-                            let count = 0
-                            const collector = client.messages.collectReactions(target, {
-                                ...settings,
-                                ...(progressEdit || progressWait
-                                    ? {
-                                          onReaction: async (_reaction, signal) => {
-                                              onProgress?.("started")
-                                              try {
-                                                  if (progressWait)
-                                                      await new Promise((resolve) => {
-                                                          if (signal.aborted) resolve()
-                                                          else
-                                                              signal.addEventListener("abort", resolve, {
-                                                                  once: true,
-                                                              })
-                                                      })
-                                                  else
-                                                      await unwrap(
-                                                          client.messages.edit(
-                                                              progressFailure ? { ...target, id: "1" } : target,
-                                                              { content: `${progressEdit} ${++count}` },
-                                                              { signal },
-                                                          ),
-                                                      )
-                                              } finally {
-                                                  onProgress?.("cleaned")
-                                              }
-                                          },
-                                      }
-                                    : {}),
-                            })
-                            return {
-                                stop: async () => collector.close(),
-                                wait: async () => {
-                                    const result = await collector.result()
+                if (search) {
+                    await verifyMessageSearch(
+                        {
+                            search: async (context, query) => {
+                                const result = await client.messages.search(context, query)
+                                if (result.isErr()) throw result.error
+                                return result.value
+                            },
+                            iterate: async function* (context, filters, limits) {
+                                for await (const result of client.messages.iterateSearch(context, filters, limits)) {
                                     if (result.isErr()) throw result.error
-                                    return result.value
-                                },
-                            }
+                                    yield result.value
+                                }
+                            },
+                            get: cacheGet,
+                            searchRequests: () => sdkRequests.filter((path) => path === "/v1/search/messages").length,
                         },
-                        users: async (target, emoji, query) => {
-                            const result = await client.messages.fetchReactionUsers(target, emoji, query)
-                            if (result.isErr()) throw result.error
-                            return result.value
-                        },
-                        on: async (event, handler) => {
-                            const subscription = client.on(event, handler)
-                            return async () => {
-                                subscription.close()
-                                await unwrap(subscription.waitForClose())
-                            }
-                        },
-                    },
-                    channel.id,
-                    user.id,
-                    () => gatewayProbe.interruptAndWait(client, states),
-                )
-            }
-            if (embeds || attachments || attachmentSources) {
-                const unwrap = async (operation) => {
-                    const result = await operation
-                    if (result.isErr()) reportFailure(result.error)
-                    assert.ok(result.isOk())
-                    return result.value
+                        channel.id,
+                    )
+                    stage = "sdk_receive_and_reply"
                 }
-                const attachmentOps = {
-                    send: (input, options) => unwrap(client.messages.send(channel.id, input, options)),
-                    sendFailure: async (input, options) => {
-                        const result = await client.messages.send(channel.id, input, options)
-                        assert.ok(result.isErr())
-                        return result.error
-                    },
-                    reply: (target, input) => unwrap(client.messages.reply(target, input)),
-                    edit: (target, input) => unwrap(client.messages.edit(target, input)),
-                    editFailure: async (target, input) => {
-                        const result = await client.messages.edit(target, input)
-                        assert.ok(result.isErr())
-                        return result.error
-                    },
-                    fetch: (target) => unwrap(client.messages.fetch(target)),
-                    history: () => unwrap(client.messages.fetchHistory(channel.id)),
-                    get: async (target) => client.messages.get(target),
-                    collect: async (options) => {
-                        const collector = client.messages.collect(channel.id, options)
-                        return () => unwrap(collector.result())
-                    },
-                    refreshUrls: async (urls, options) => {
-                        const result = await client.attachments.refreshUrls(urls, options)
+                if (pagination) {
+                    const value = async (operation) => {
+                        const result = await operation
                         if (result.isErr()) throw result.error
                         return result.value
-                    },
-                    download: (attachment, options) => unwrap(client.attachments.download(attachment, options)),
-                    downloadFailure: async (attachment, options) => {
-                        const result = await client.attachments.download(attachment, options)
-                        assert.ok(result.isErr())
-                        return result.error
-                    },
-                    stream: async function* (attachment, options) {
-                        for await (const result of client.attachments.stream(attachment, options)) {
-                            assert.ok(result.isOk())
+                    }
+                    const items = async function* (iterable) {
+                        for await (const result of iterable) {
+                            if (result.isErr()) throw result.error
                             yield result.value
                         }
-                    },
-                    cancelDownload: async (attachment, size, signal) => {
-                        const result = await client.attachments.download(attachment, {
-                            maxBytes: size,
-                            timeoutMs: 60_000,
-                            signal,
-                        })
-                        assert.ok(result.isErr())
-                        assert.equal(result.error._tag, "CancelledError")
-                    },
-                }
-                if (attachmentSources)
-                    await verifyAttachmentSources({
-                        ops: attachmentOps,
-                        channelId: channel.id,
-                        rawFetch,
-                        getFetch: () => globalThis.fetch,
-                        setFetch: (value) => (globalThis.fetch = value),
-                        setStage: (value) => (stage = value),
-                        report,
-                    })
-                else await (attachments ? verifyAttachments : verifyEmbeds)(attachmentOps, channel.id)
-            }
-            if (forceRecovery && !reactions && !pins && !guilds && !channels) {
-                if (cache) sdkRequests.length = 0
-                if (collectors)
-                    await verifyCollectors(
-                        async (options) => {
-                            const {
-                                progressReply,
-                                progressWait,
-                                progressCancel,
-                                progressGate,
-                                progressCleanup,
-                                onProgress,
-                                ...settings
-                            } = options
-                            const cancellation = progressCancel ? new AbortController() : undefined
-                            const opened = client.messages.collect(channel.id, {
-                                ...settings,
-                                ...(cancellation ? { signal: cancellation.signal } : {}),
-                                ...(progressReply || progressWait
-                                    ? {
-                                          onMessage: async (message, signal) => {
-                                              onProgress?.("started", message)
-                                              try {
-                                                  if (progressGate) await progressGate(message, signal)
-                                                  if (progressWait)
-                                                      await new Promise((resolve) => {
-                                                          if (signal.aborted) resolve()
-                                                          else signal.addEventListener("abort", resolve, { once: true })
-                                                      })
-                                                  else {
-                                                      const reply = await client.messages.reply(
-                                                          message,
-                                                          { content: `${progressReply}-${message.id}` },
-                                                          { signal },
-                                                      )
-                                                      if (reply.isErr()) throw reply.error
-                                                      onProgress?.("reply", message, reply.value)
-                                                  }
-                                              } finally {
-                                                  if (progressCleanup) {
-                                                      onProgress?.("cleanupStarted", message)
-                                                      await progressCleanup(message)
-                                                  }
-                                                  onProgress?.("cleaned", message)
-                                              }
-                                          },
-                                      }
-                                    : {}),
-                            })
-                            return {
-                                wait: () => opened.result(),
-                                stop: () => opened.close(),
-                                ...(cancellation ? { cancel: () => cancellation.abort(), cancelKind: "signal" } : {}),
-                            }
+                    }
+                    await verifyPagination(
+                        {
+                            history: (query) => items(client.messages.iterateHistory(channel.id, query)),
+                            members: (query) => items(client.members.iterate(guildId, query)),
+                            users: (target, emoji, query) =>
+                                items(client.messages.iterateReactionUsers(target, emoji, query)),
+                            pins: (query) => items(client.messages.iteratePins(channel.id, query)),
+                            react: (target) => value(client.messages.addReaction(target, "👍")),
+                            pin: (target) => value(client.messages.pin(target)),
+                            unpin: (target) => value(client.messages.unpin(target)),
+                            cancelHistory: async (signal) => {
+                                for await (const result of client.messages.iterateHistory(
+                                    channel.id,
+                                    { maxItems: 1 },
+                                    { signal },
+                                )) {
+                                    assert.ok(result.isErr())
+                                    assert.equal(result.error._tag, "CancelledError")
+                                    return
+                                }
+                                assert.fail("Cancelled traversal unexpectedly completed")
+                            },
                         },
-                        cacheSend,
+                        channel.id,
+                        user.id,
+                    )
+                }
+                if (history || cache) {
+                    const probe = await prepareHistory(channel.id, user.id)
+                    assert.equal(client.state, "Disconnected")
+                    for (const check of probe.cases) {
+                        stage = check.name
+                        const page = await client.messages.fetchHistory(channel.id, check.query)
+                        assert.ok(page.isOk())
+                        await probe.verify(page.value, check)
+                        if (cache)
+                            for (const message of page.value) {
+                                const cached = await cacheGet(message)
+                                assert.equal(cached?.content, message.content)
+                            }
+                    }
+                    if (cache) report("cache_rest_history", true)
+                    stage = "sdk_receive_and_reply"
+                }
+                if (manage || cache) {
+                    const managed = await prepareManagement(channel.id, user.id)
+                    assert.equal(client.state, "Disconnected")
+                    stage = "sdk_fetch_disconnected"
+                    const fetched = await client.messages.fetch(managed.target)
+                    assert.ok(fetched.isOk())
+                    await verifyManaged(fetched.value, managed.content, managed)
+                    if (cache) {
+                        assert.equal((await cacheGet(managed.target))?.content, managed.content)
+                        report("cache_rest_fetch", true)
+                    }
+                    stage = "sdk_edit_and_preserve_embed"
+                    const edited = await client.messages.edit(fetched.value, {
+                        content: `${managed.content}-edited @everyone`,
+                    })
+                    assert.ok(edited.isOk())
+                    await verifyManaged(edited.value, `${managed.content}-edited @everyone`, managed)
+                    if (cache) {
+                        assert.equal((await cacheGet(edited.value))?.content, edited.value.content)
+                        report("cache_rest_edit", true)
+                    }
+                    stage = "sdk_empty_edit_rejected_without_change"
+                    const cleared = await client.messages.edit(edited.value, { content: "" })
+                    assert.ok(cleared.isErr())
+                    verifyClearRejection(cleared.error)
+                    await verifyManaged(edited.value, `${managed.content}-edited @everyone`, managed)
+                    stage = "sdk_delete_and_confirm_absence"
+                    const deleted = await client.messages.delete(edited.value)
+                    assert.ok(deleted.isOk())
+                    assert.equal(deleted.value, undefined)
+                    assert.equal(
+                        (await api("GET", `/channels/${channel.id}/messages/${managed.target.id}`)).status,
+                        404,
+                    )
+                    if (cache) {
+                        assert.equal(await cacheGet(managed.target), undefined)
+                        report("cache_rest_delete", true)
+                    }
+                    report(stage, true)
+                    stage = "sdk_missing_target_errors"
+                    verifyMissing((await client.messages.fetch(managed.target)).error, "fetch")
+                    verifyMissing((await client.messages.edit(managed.target, { content: "gone" })).error, "edit")
+                    verifyMissing((await client.messages.delete(managed.target)).error, "delete")
+                    report(stage, true)
+                    stage = "sdk_receive_and_reply"
+                }
+                let beforeRecovery
+                if (cache) {
+                    await verifyCacheRestAdmissionAndExpiry(cacheSend, cacheReply, cacheGet, channel.id)
+                    stage = "cache_pre_recovery_rest_intake"
+                    beforeRecovery = await cacheSend(channel.id, { content: `cache-before-recovery-${randomUUID()}` })
+                    assert.equal((await cacheGet(beforeRecovery))?.content, beforeRecovery.content)
+                    report(stage, true)
+                    stage = "sdk_receive_and_reply"
+                }
+                if (plainRun)
+                    await verifyTextToSpeech(
+                        async (target, input) => {
+                            const result = await client.messages.send(target, input)
+                            return result.isOk()
+                                ? { ok: true, value: result.value }
+                                : { ok: false, error: result.error }
+                        },
+                        async (target) => {
+                            const result = await client.permissions.fetch({
+                                guildId,
+                                userId: user.id,
+                                channelId: target,
+                            })
+                            if (result.isErr()) throw result.error
+                            return result.value
+                        },
+                        channel.id,
+                    )
+                const registered = client.on("messageCreate", async (message, signal) => {
+                    if (message.channelId !== channel.id || message.author.id !== user.id || message.content !== ping)
+                        return
+                    // Deliberately consume this test bot's own seed event; default bot examples filter bot authors
+                    const sent = await client.messages.reply(message, { content: pong }, { signal })
+                    done.resolve(sent)
+                })
+                const terminal = registered.waitForClose().then(
+                    (result) => {
+                        if (result.isErr()) done.resolve(result)
+                    },
+                    () => done.resolve(null),
+                )
+                assert.ok((await client.connect()).isOk())
+                if (moderation) {
+                    const run = async (operation) => {
+                        const result = await operation
+                        if (result.isErr()) throw result.error
+                        return result.value
+                    }
+                    await verifyModeration(
+                        {
+                            timeout: (target, duration, options) =>
+                                run(client.members.timeout(target, duration, options)),
+                            clearTimeout: (target) => run(client.members.clearTimeout(target)),
+                            fetch: (target) => run(client.members.fetch(target)),
+                            get: async (target) => client.members.get(target),
+                            kick: (target, options) => run(client.members.kick(target, options)),
+                            ban: (target, input, options) => run(client.members.ban(target, input, options)),
+                            unban: (target, options) => run(client.members.unban(target, options)),
+                            bans: () => run(client.members.fetchBans(guildId)),
+                            on: async (event, handler) => {
+                                const subscription = client.on(event, handler)
+                                return async () => {
+                                    subscription.close()
+                                    await run(subscription.waitForClose())
+                                }
+                            },
+                        },
+                        user.id,
+                    )
+                }
+                if (batchDelete) {
+                    const run = async (operation) => {
+                        const result = await operation
+                        if (result.isErr()) throw result.error
+                        return result.value
+                    }
+                    await verifyBatchDeletion(
+                        {
+                            send: (input) => run(client.messages.send(channel.id, input)),
+                            get: async (target) => client.messages.get(target),
+                            deleteMany: (ids) => run(client.messages.deleteMany(channel.id, ids)),
+                            on: async (handler) => {
+                                const subscription = client.on("messageDeleteBulk", handler)
+                                return async () => {
+                                    subscription.close()
+                                    await run(subscription.waitForClose())
+                                }
+                            },
+                        },
+                        channel.id,
+                        user.id,
+                    )
+                }
+                if (cleanupCheck) {
+                    const run = async (operation) => {
+                        const result = await operation
+                        if (result.isErr()) throw result.error
+                        return result.value
+                    }
+                    await verifyWorkflowReads(
+                        {
+                            guildList: () => run(client.guilds.fetchPage({ withCounts: true })),
+                            hierarchy: (target) => run(client.members.fetchCanManage(target)),
+                        },
+                        user.id,
+                    )
+                    await verifyCleanup(
+                        {
+                            send: (input) => run(client.messages.send(channel.id, input)),
+                            preview: (selection) => run(client.messages.previewCleanup(channel.id, selection)),
+                            cleanup: (plan, options) => run(client.messages.cleanup(plan, options)),
+                        },
+                        channel.id,
+                        user.id,
+                    )
+                }
+                if (optionalTools) {
+                    const run = async (operation) => {
+                        const result = await operation
+                        if (result.isErr()) throw result.error
+                        return result.value
+                    }
+                    await verifyOptionalTools(
+                        {
+                            builders,
+                            parseQuoted: commands.parseQuoted,
+                            assertConnected: async () => assert.equal(client.state, "Connected"),
+                            create: async (options) => commands.create(options),
+                            register: async (router, command) => router.register(command),
+                            attach: async (router) => router.attach(client),
+                            send: (input) => run(client.messages.send(channel.id, input)),
+                            reply: (message, input) => run(client.messages.reply(message, input)),
+                            cooldowns: async (claims) => {
+                                const store = commands.memoryCooldowns({ maxEntries: 4 })
+                                return {
+                                    store: {
+                                        claim(input) {
+                                            const claim = store.claim(input)
+                                            claims.push(claim)
+                                            return claim
+                                        },
+                                    },
+                                    clear: () => store.clear(),
+                                }
+                            },
+                            guard: (matches) => {
+                                return ({ message }) => matches(message)
+                            },
+                            execute: (runCommand) => {
+                                return async ({ message }) => runCommand(message)
+                            },
+                            reject:
+                                (onReject) =>
+                                ({ message }, rejection) =>
+                                    onReject(message, rejection),
+                            close: async (subscription) => {
+                                subscription.close()
+                                await run(subscription.waitForClose())
+                            },
+                            observe: async (receive) => {
+                                const observer = client.on("messageCreate", receive)
+                                return {
+                                    close: async () => {
+                                        observer.close()
+                                        await run(observer.waitForClose())
+                                    },
+                                }
+                            },
+                        },
+                        channel.id,
+                        user.id,
+                    )
+                }
+                if (guilds) {
+                    const run = async (operation) => {
+                        const result = await operation
+                        if (result.isErr()) throw result.error
+                        return result.value
+                    }
+                    await verifyGuildMembers(
+                        {
+                            guild: () => run(client.guilds.fetch(guildId)),
+                            getGuild: async () => client.guilds.get(guildId),
+                            getMember: async (target) => client.members.get(target),
+                            getRole: async (id) => client.roles.get({ guildId, id }),
+                            roles: () => run(client.roles.fetchAll(guildId)),
+                            createRole: (input, options) => run(client.roles.create(guildId, input, options)),
+                            editRole: (id, input, options) => run(client.roles.edit({ guildId, id }, input, options)),
+                            deleteRole: (id, options) => run(client.roles.delete({ guildId, id }, options)),
+                            reorderRoles: (positions, options) =>
+                                run(client.roles.reorder(guildId, positions, options)),
+                            setHoistPositions: (positions, options) =>
+                                run(client.roles.setHoistPositions(guildId, positions, options)),
+                            member: (target) => run(client.members.fetch(target)),
+                            self: () => run(client.members.fetchSelf(guildId)),
+                            page: () => run(client.members.fetchPage(guildId, { limit: 2 })),
+                            add: (target, roleId, options) => run(client.members.addRole(target, roleId, options)),
+                            remove: (target, roleId, options) =>
+                                run(client.members.removeRole(target, roleId, options)),
+                            send: () =>
+                                run(client.messages.send(channel.id, { content: "SDK reaction role verification" })),
+                            react: (target) => run(client.messages.addReaction(target, "✅")),
+                            collect: async (message, target, roleId, options) => {
+                                const collector = client.messages.collectReactions(message, {
+                                    emoji: "✅",
+                                    timeoutMs: 10_000,
+                                    filter: (reaction) => reaction.userId === user.id,
+                                    onReaction: async (_reaction, signal) => {
+                                        await run(client.members.addRole(target, roleId, { ...options, signal }))
+                                        await run(
+                                            client.messages.edit(message, { content: "SDK role assigned" }, { signal }),
+                                        )
+                                    },
+                                })
+                                return { wait: () => run(collector.result()), stop: () => collector.close() }
+                            },
+                            on: async (event, handler) => {
+                                const subscription = client.on(event, handler)
+                                return async () => {
+                                    subscription.close()
+                                    await run(subscription.waitForClose())
+                                }
+                            },
+                        },
                         channel.id,
                         user.id,
                         () => gatewayProbe.interruptAndWait(client, states),
                     )
-                else await gatewayProbe.interruptAndWait(client, states)
-                if (cache) {
-                    assert.equal(await cacheGet(beforeRecovery), undefined)
-                    assert.deepEqual(sdkRequests, [])
-                    const remote = await api("GET", `/channels/${channel.id}/messages/${beforeRecovery.id}`)
-                    assert.equal(remote.status, 200)
-                    assert.equal(remote.data?.content, beforeRecovery.content)
-                    report("cache_recovery_gap_clears_without_autofetch", true)
                 }
-            }
-            const sent = await client.messages.send(channel.id, { content: ping })
-            assert.ok(sent.isOk())
-            seed = sent.value
-            timer = setTimeout(() => done.resolve(null), 20_000)
-            const replied = await done.promise
-            assert.ok(replied?.isOk())
-            reply = replied.value
-            registered.close()
-            assert.ok((await registered.waitForClose()).isOk())
-            await terminal
-            if (cache) {
-                await verifyCacheGatewayRebuild(cacheGet, channel.id)
-                await verifyCacheProjectionConflict(
-                    cacheSend,
-                    async (target) => {
-                        const result = await client.messages.fetch(target)
+                if (channels) {
+                    const run = async (operation) => {
+                        const result = await operation
+                        if (result.isErr()) throw result.error
+                        return result.value
+                    }
+                    await verifyChannels(
+                        {
+                            get: async (id) => client.channels.get(id),
+                            fetch: (id) => run(client.channels.fetch(id)),
+                            fetchAll: (id) => run(client.channels.fetchAll(id)),
+                            create: (id, input, options) => run(client.channels.create(id, input, options)),
+                            edit: (id, input, options) => run(client.channels.edit(id, input, options)),
+                            delete: (id, options) => run(client.channels.delete(id, options)),
+                            reorder: (id, positions, options) => run(client.channels.reorder(id, positions, options)),
+                            setPermissionOverwrite: (id, overwrite, options) =>
+                                run(client.channels.setPermissionOverwrite(id, overwrite, options)),
+                            removePermissionOverwrite: (id, targetId, options) =>
+                                run(client.channels.removePermissionOverwrite(id, targetId, options)),
+                            on: async (event, handler) => {
+                                const subscription = client.on(event, handler)
+                                return async () => {
+                                    subscription.close()
+                                    await run(subscription.waitForClose())
+                                }
+                            },
+                        },
+                        channel.id,
+                        user.id,
+                        () => gatewayProbe.interruptAndWait(client, states),
+                    )
+                }
+                if (pins) {
+                    const run = async (operation) => {
+                        const result = await operation
+                        if (result.isErr()) throw result.error
+                        return result.value
+                    }
+                    await verifyPins(
+                        {
+                            send: (input) => run(client.messages.send(channel.id, input)),
+                            pin: (target) => run(client.messages.pin(target)),
+                            unpin: (target) => run(client.messages.unpin(target)),
+                            pins: (query) => run(client.messages.fetchPins(channel.id, query)),
+                            on: async (event, handler) => {
+                                const subscription = client.on(event, handler)
+                                return async () => {
+                                    subscription.close()
+                                    await run(subscription.waitForClose())
+                                }
+                            },
+                        },
+                        channel.id,
+                        () => gatewayProbe.interruptAndWait(client, states),
+                    )
+                }
+                if (reactions) {
+                    const unwrap = async (operation) => {
+                        const result = await operation
+                        if (result.isErr()) reportFailure(result.error)
                         assert.ok(result.isOk())
                         return result.value
-                    },
-                    cacheGet,
-                    channel.id,
-                )
-            }
-            if (changes || cache) {
-                const probe = observeMessageChanges(channel.id)
-                const updates = client.on("messageUpdate", (message) => probe.receive("messageUpdate", message))
-                const deletion = client.subscribe("messageDelete")
-                const bulk = client.subscribe("messageDeleteBulk")
-                const consume = async (event, subscription) => {
-                    while (true) {
-                        const result = await subscription.next()
-                        assert.ok(result.isOk())
-                        if (result.value === null) return
-                        probe.receive(event, result.value)
                     }
-                }
-                const readers = [consume("messageDelete", deletion), consume("messageDeleteBulk", bulk)]
-                const readsDone = Promise.allSettled(readers)
-                try {
-                    await probe.exercise(user.id, cache ? cacheGet : undefined)
-                } finally {
-                    updates.close()
-                    deletion.close()
-                    bulk.close()
-                    assert.ok((await updates.waitForClose()).isOk())
-                    assert.ok((await readsDone).every((result) => result.status === "fulfilled"))
-                }
-            }
-        } finally {
-            clearTimeout(timer)
-            // An unproven shutdown may leave a writer alive, so the journal and lock stay for recovery
-            if (!(await shutdownDefaultClient(client, () => stopState?.close()))) {
-                quiescent = false
-                assert.fail("Client shutdown was not proven")
-            }
-        }
-    } else {
-        const { Deferred, Effect, Exit, Fiber, Scope, Stream } = await import("effect")
-        const { builders, commands, createClient, format } = await import("@neontechspace/fluxerly/effect")
-        const effectScope = Scope.makeUnsafe()
-        let exit
-        try {
-            exit = await Effect.runPromiseExit(
-                Effect.gen(function* () {
-                    client = yield* createClient({
-                        token,
-                        ...(cache || typing || embeds || attachments || batchDelete || search
-                            ? { cache: cacheOptions() }
-                            : {}),
-                        ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
-                        ...(channels ? { cache: { channels: true } } : {}),
-                        ...(moderation ? { cache: { members: true } } : {}),
-                        ...(recover ? { logging: { level: "info" } } : {}),
-                    })
-                    const cacheGet = async (target) => {
-                        if (!cache && !search) return undefined
-                        const cached = await Effect.runPromiseExit(client.messages.get(target))
-                        assert.ok(Exit.isSuccess(cached))
-                        return cached.value
-                    }
-                    const cacheSend = (channelId, input) => Effect.runPromise(client.messages.send(channelId, input))
-                    const cacheReply = (target, input) => Effect.runPromise(client.messages.reply(target, input))
-                    if (nonceOnly)
-                        yield* Effect.promise(() =>
-                            verifyNonce(
-                                {
-                                    send: (input) => cacheSend(channel.id, input),
-                                    reply: (target, input) => Effect.runPromise(client.messages.reply(target, input)),
-                                    forward: (destination, input) =>
-                                        Effect.runPromise(client.messages.forward(destination, input)),
-                                    sendUnknown: (input) =>
-                                        Effect.runPromise(client.messages.send(channel.id, input).pipe(Effect.flip)),
-                                },
-                                channel.id,
-                            ),
-                        )
-                    if (search) {
-                        yield* Effect.promise(() =>
-                            verifyMessageSearch(
-                                {
-                                    search: (context, query) =>
-                                        Effect.runPromise(client.messages.search(context, query)),
-                                    iterate: (context, filters, limits) =>
-                                        Stream.toAsyncIterable(client.messages.iterateSearch(context, filters, limits)),
-                                    get: cacheGet,
-                                    searchRequests: () =>
-                                        sdkRequests.filter((path) => path === "/v1/search/messages").length,
-                                },
-                                channel.id,
-                            ),
-                        )
-                        stage = "sdk_receive_and_reply"
-                    }
-                    if (typing) {
-                        stage = "typing_one_shot"
-                        yield* client.messages.typing(channel.id)
-                        assert.deepEqual(typingRequests, [
-                            { at: typingRequests[0]?.at, body: undefined, method: "POST", status: 204 },
-                        ])
-                        // This message was created before the SDK client existed. A typing request cannot hydrate or admit it.
-                        assert.equal(yield* client.messages.get(typingCacheTarget), undefined)
-                        report("typing_one_shot_no_cache_admission", true)
-
-                        stage = "typing_scoped_refresh"
-                        const scopedStart = typingRequests.length
-                        const complete = Deferred.makeUnsafe()
-                        const scoped = yield* Effect.forkChild(
-                            client.messages.keepTyping(channel.id, Deferred.await(complete)),
-                        )
-                        yield* Effect.promise(() => waitForTypingRequests(typingRequests, scopedStart + 2))
-                        Deferred.doneUnsafe(complete, Effect.succeed("completed"))
-                        assert.equal(yield* Fiber.join(scoped), "completed")
-                        const refreshes = typingRequests.slice(scopedStart)
-                        assert.equal(refreshes.length, 2)
-                        assert.ok(
-                            refreshes.every(
-                                (request) =>
-                                    request.method === "POST" && request.body === undefined && request.status === 204,
-                            ),
-                        )
-                        assert.ok(refreshes[1].at - refreshes[0].at >= 7_900)
-                        report(stage, true)
-
-                        stage = "typing_completion_cleanup"
-                        yield* Effect.promise(() => assertTypingStopped(typingRequests))
-                        report(stage, true)
-
-                        stage = "typing_cancellation_cleanup"
-                        const entered = Deferred.makeUnsafe()
-                        const pending = yield* Effect.forkChild(
-                            client.messages.keepTyping(
-                                channel.id,
-                                Effect.sync(() => Deferred.doneUnsafe(entered, Effect.void)).pipe(
-                                    Effect.andThen(Effect.never),
+                    await verifyReactions(
+                        {
+                            send: (input) => unwrap(client.messages.send(channel.id, input)),
+                            add: (target, emoji) => unwrap(client.messages.addReaction(target, emoji)),
+                            remove: (target, emoji) => unwrap(client.messages.removeReaction(target, emoji)),
+                            removeUser: (target, emoji, userId) =>
+                                unwrap(client.messages.removeUserReaction(target, emoji, userId)),
+                            clearEmoji: (target, emoji) => unwrap(client.messages.clearReaction(target, emoji)),
+                            clearAll: (target) => unwrap(client.messages.clearReactions(target)),
+                            fetchEmojis: () => unwrap(client.emojis.fetchAll(guildId)),
+                            fetchEmojiMetadata: (id) => unwrap(client.emojis.fetchMetadata(id)),
+                            parseCustomEmoji: async (value) => format.parseCustomEmoji(value),
+                            reads: async (target) => ({
+                                message: await unwrap(client.messages.fetch(target)),
+                                history: await unwrap(
+                                    client.messages.fetchHistory(target.channelId, { around: target.id, limit: 1 }),
                                 ),
-                            ),
-                        )
-                        yield* Deferred.await(entered)
-                        yield* Fiber.interrupt(pending)
-                        const cancelled = yield* Fiber.await(pending)
-                        assert.ok(Exit.isFailure(cancelled) && Cause.hasInterruptsOnly(cancelled.cause))
-                        yield* Effect.promise(() => assertTypingStopped(typingRequests))
-                        report(stage, true)
-                        stage = "sdk_receive_and_reply"
-                    }
-                    if (pagination)
-                        yield* Effect.promise(() =>
-                            verifyPagination(
-                                {
-                                    history: (query) =>
-                                        Stream.toAsyncIterable(client.messages.iterateHistory(channel.id, query)),
-                                    members: (query) => Stream.toAsyncIterable(client.members.iterate(guildId, query)),
-                                    users: (target, emoji, query) =>
-                                        Stream.toAsyncIterable(
-                                            client.messages.iterateReactionUsers(target, emoji, query),
-                                        ),
-                                    pins: (query) =>
-                                        Stream.toAsyncIterable(client.messages.iteratePins(channel.id, query)),
-                                    react: (target) => Effect.runPromise(client.messages.addReaction(target, "👍")),
-                                    pin: (target) => Effect.runPromise(client.messages.pin(target)),
-                                    unpin: (target) => Effect.runPromise(client.messages.unpin(target)),
-                                    cancelHistory: async (signal) => {
-                                        const result = await Effect.runPromiseExit(
-                                            Stream.runDrain(
-                                                client.messages.iterateHistory(channel.id, { maxItems: 1 }),
-                                            ),
-                                            { signal },
-                                        )
-                                        assert.ok(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause))
+                                pins: await unwrap(client.messages.fetchPins(target.channelId, { limit: 1 })),
+                            }),
+                            collect: async (target, options) => {
+                                const { progressEdit, progressFailure, progressWait, onProgress, ...settings } = options
+                                let count = 0
+                                const collector = client.messages.collectReactions(target, {
+                                    ...settings,
+                                    ...(progressEdit || progressWait
+                                        ? {
+                                              onReaction: async (_reaction, signal) => {
+                                                  onProgress?.("started")
+                                                  try {
+                                                      if (progressWait)
+                                                          await new Promise((resolve) => {
+                                                              if (signal.aborted) resolve()
+                                                              else
+                                                                  signal.addEventListener("abort", resolve, {
+                                                                      once: true,
+                                                                  })
+                                                          })
+                                                      else
+                                                          await unwrap(
+                                                              client.messages.edit(
+                                                                  progressFailure ? { ...target, id: "1" } : target,
+                                                                  { content: `${progressEdit} ${++count}` },
+                                                                  { signal },
+                                                              ),
+                                                          )
+                                                  } finally {
+                                                      onProgress?.("cleaned")
+                                                  }
+                                              },
+                                          }
+                                        : {}),
+                                })
+                                return {
+                                    stop: async () => collector.close(),
+                                    wait: async () => {
+                                        const result = await collector.result()
+                                        if (result.isErr()) throw result.error
+                                        return result.value
                                     },
-                                },
-                                channel.id,
-                                user.id,
-                            ),
-                        )
-                    if (history || cache) {
-                        const probe = yield* Effect.promise(() => prepareHistory(channel.id, user.id))
-                        assert.equal(client.state, "Disconnected")
-                        for (const check of probe.cases) {
-                            stage = check.name
-                            const page = yield* client.messages.fetchHistory(channel.id, check.query)
-                            yield* Effect.promise(() => probe.verify(page, check))
-                            if (cache)
-                                for (const message of page) {
-                                    const cached = yield* Effect.promise(() => cacheGet(message))
-                                    assert.equal(cached?.content, message.content)
                                 }
-                        }
-                        if (cache) report("cache_rest_history", true)
-                        stage = "sdk_receive_and_reply"
-                    }
-                    if (manage || cache) {
-                        const managed = yield* Effect.promise(() => prepareManagement(channel.id, user.id))
-                        assert.equal(client.state, "Disconnected")
-                        stage = "sdk_fetch_disconnected"
-                        const fetched = yield* client.messages.fetch(managed.target)
-                        yield* Effect.promise(() => verifyManaged(fetched, managed.content, managed))
-                        if (cache) {
-                            assert.equal(
-                                (yield* Effect.promise(() => cacheGet(managed.target)))?.content,
-                                managed.content,
-                            )
-                            report("cache_rest_fetch", true)
-                        }
-                        stage = "sdk_edit_and_preserve_embed"
-                        const edited = yield* client.messages.edit(fetched, {
-                            content: `${managed.content}-edited @everyone`,
-                        })
-                        yield* Effect.promise(() =>
-                            verifyManaged(edited, `${managed.content}-edited @everyone`, managed),
-                        )
-                        if (cache) {
-                            assert.equal((yield* Effect.promise(() => cacheGet(edited)))?.content, edited.content)
-                            report("cache_rest_edit", true)
-                        }
-                        stage = "sdk_empty_edit_rejected_without_change"
-                        const cleared = yield* client.messages.edit(edited, { content: "" }).pipe(Effect.flip)
-                        verifyClearRejection(cleared)
-                        yield* Effect.promise(() =>
-                            verifyManaged(edited, `${managed.content}-edited @everyone`, managed),
-                        )
-                        stage = "sdk_delete_and_confirm_absence"
-                        assert.equal(yield* client.messages.delete(edited), undefined)
-                        const absent = yield* Effect.promise(() =>
-                            api("GET", `/channels/${channel.id}/messages/${managed.target.id}`),
-                        )
-                        assert.equal(absent.status, 404)
-                        if (cache) {
-                            assert.equal(yield* Effect.promise(() => cacheGet(managed.target)), undefined)
-                            report("cache_rest_delete", true)
-                        }
-                        report(stage, true)
-                        stage = "sdk_missing_target_errors"
-                        verifyMissing(yield* client.messages.fetch(managed.target).pipe(Effect.flip), "fetch")
-                        verifyMissing(
-                            yield* client.messages.edit(managed.target, { content: "gone" }).pipe(Effect.flip),
-                            "edit",
-                        )
-                        verifyMissing(yield* client.messages.delete(managed.target).pipe(Effect.flip), "delete")
-                        report(stage, true)
-                        stage = "sdk_receive_and_reply"
-                    }
-                    let beforeRecovery
-                    if (cache) {
-                        yield* Effect.promise(() =>
-                            verifyCacheRestAdmissionAndExpiry(cacheSend, cacheReply, cacheGet, channel.id),
-                        )
-                        stage = "cache_pre_recovery_rest_intake"
-                        beforeRecovery = yield* Effect.promise(() =>
-                            cacheSend(channel.id, { content: `cache-before-recovery-${randomUUID()}` }),
-                        )
-                        assert.equal(
-                            (yield* Effect.promise(() => cacheGet(beforeRecovery)))?.content,
-                            beforeRecovery.content,
-                        )
-                        report(stage, true)
-                        stage = "sdk_receive_and_reply"
-                    }
-                    if (forceRecovery)
-                        yield* Effect.forkScoped(
-                            Stream.runForEach(client.observeState(), (state) =>
-                                Effect.sync(() => {
-                                    states.push(state)
-                                }),
-                            ),
-                        )
-                    if (plainRun)
-                        yield* Effect.promise(() =>
-                            verifyTextToSpeech(
-                                (target, input) =>
-                                    Effect.runPromise(
-                                        client.messages.send(target, input).pipe(
-                                            Effect.match({
-                                                onFailure: (error) => ({ ok: false, error }),
-                                                onSuccess: (value) => ({ ok: true, value }),
-                                            }),
-                                        ),
-                                    ),
-                                (target) =>
-                                    Effect.runPromise(
-                                        client.permissions.fetch({ guildId, userId: user.id, channelId: target }),
-                                    ),
-                                channel.id,
-                            ),
-                        )
-                    const done = yield* Deferred.make()
-                    const subscription = yield* client.on("messageCreate", (message) =>
-                        Effect.gen(function* () {
-                            if (
-                                message.channelId !== channel.id ||
-                                message.author.id !== user.id ||
-                                message.content !== ping
-                            )
-                                return
-                            const sent = yield* client.messages.reply(message, { content: pong })
-                            yield* Deferred.succeed(done, sent)
-                        }),
+                            },
+                            users: async (target, emoji, query) => {
+                                const result = await client.messages.fetchReactionUsers(target, emoji, query)
+                                if (result.isErr()) throw result.error
+                                return result.value
+                            },
+                            on: async (event, handler) => {
+                                const subscription = client.on(event, handler)
+                                return async () => {
+                                    subscription.close()
+                                    await unwrap(subscription.waitForClose())
+                                }
+                            },
+                        },
+                        channel.id,
+                        user.id,
+                        () => gatewayProbe.interruptAndWait(client, states),
                     )
-                    yield* client.connect()
-                    if (moderation) {
-                        const scope = yield* Effect.scope
-                        const run = async (operation) => {
-                            const result = await Effect.runPromise(typedResult(Effect, operation))
-                            if (result._tag === "Failure") throw result.failure
-                            return result.success
-                        }
-                        yield* Effect.promise(() =>
-                            verifyModeration(
-                                {
-                                    timeout: (target, duration, options) =>
-                                        run(client.members.timeout(target, duration, options)),
-                                    clearTimeout: (target) => run(client.members.clearTimeout(target)),
-                                    fetch: (target) => run(client.members.fetch(target)),
-                                    get: (target) => run(client.members.get(target)),
-                                    kick: (target, options) => run(client.members.kick(target, options)),
-                                    ban: (target, input, options) => run(client.members.ban(target, input, options)),
-                                    unban: (target, options) => run(client.members.unban(target, options)),
-                                    bans: () => run(client.members.fetchBans(guildId)),
-                                    on: async (event, handler) => {
-                                        const subscription = await run(
-                                            client
-                                                .on(event, (value) => Effect.sync(() => handler(value)))
-                                                .pipe(Scope.provide(scope)),
-                                        )
-                                        return async () => {
-                                            await run(subscription.close())
-                                            await run(subscription.waitForClose())
-                                        }
-                                    },
-                                },
-                                user.id,
-                            ),
-                        )
+                }
+                if (embeds || attachments || attachmentSources) {
+                    const unwrap = async (operation) => {
+                        const result = await operation
+                        if (result.isErr()) reportFailure(result.error)
+                        assert.ok(result.isOk())
+                        return result.value
                     }
-                    if (batchDelete) {
-                        const scope = yield* Effect.scope
-                        const run = async (operation) => {
-                            const result = await Effect.runPromise(typedResult(Effect, operation))
-                            if (result._tag === "Failure") throw result.failure
-                            return result.success
-                        }
-                        yield* Effect.promise(() =>
-                            verifyBatchDeletion(
-                                {
-                                    send: (input) => run(client.messages.send(channel.id, input)),
-                                    get: (target) => run(client.messages.get(target)),
-                                    deleteMany: (ids) => run(client.messages.deleteMany(channel.id, ids)),
-                                    on: async (handler) => {
-                                        const subscription = await run(
-                                            client
-                                                .on("messageDeleteBulk", (notice) => Effect.sync(() => handler(notice)))
-                                                .pipe(Scope.provide(scope)),
-                                        )
-                                        return async () => {
-                                            await run(subscription.close())
-                                            await run(subscription.waitForClose())
-                                        }
-                                    },
-                                },
-                                channel.id,
-                                user.id,
-                            ),
-                        )
+                    const attachmentOps = {
+                        send: (input, options) => unwrap(client.messages.send(channel.id, input, options)),
+                        sendFailure: async (input, options) => {
+                            const result = await client.messages.send(channel.id, input, options)
+                            assert.ok(result.isErr())
+                            return result.error
+                        },
+                        reply: (target, input) => unwrap(client.messages.reply(target, input)),
+                        edit: (target, input) => unwrap(client.messages.edit(target, input)),
+                        editFailure: async (target, input) => {
+                            const result = await client.messages.edit(target, input)
+                            assert.ok(result.isErr())
+                            return result.error
+                        },
+                        fetch: (target) => unwrap(client.messages.fetch(target)),
+                        history: () => unwrap(client.messages.fetchHistory(channel.id)),
+                        get: async (target) => client.messages.get(target),
+                        collect: async (options) => {
+                            const collector = client.messages.collect(channel.id, options)
+                            return () => unwrap(collector.result())
+                        },
+                        refreshUrls: async (urls, options) => {
+                            const result = await client.attachments.refreshUrls(urls, options)
+                            if (result.isErr()) throw result.error
+                            return result.value
+                        },
+                        download: (attachment, options) => unwrap(client.attachments.download(attachment, options)),
+                        downloadFailure: async (attachment, options) => {
+                            const result = await client.attachments.download(attachment, options)
+                            assert.ok(result.isErr())
+                            return result.error
+                        },
+                        stream: async function* (attachment, options) {
+                            for await (const result of client.attachments.stream(attachment, options)) {
+                                assert.ok(result.isOk())
+                                yield result.value
+                            }
+                        },
+                        cancelDownload: async (attachment, size, signal) => {
+                            const result = await client.attachments.download(attachment, {
+                                maxBytes: size,
+                                timeoutMs: 60_000,
+                                signal,
+                            })
+                            assert.ok(result.isErr())
+                            assert.equal(result.error._tag, "CancelledError")
+                        },
                     }
-                    if (cleanupCheck) {
-                        const run = async (operation) => {
-                            const result = await Effect.runPromise(typedResult(Effect, operation))
-                            if (result._tag === "Failure") throw result.failure
-                            return result.success
-                        }
-                        yield* Effect.promise(() =>
-                            verifyWorkflowReads(
-                                {
-                                    guildList: () => run(client.guilds.fetchPage({ withCounts: true })),
-                                    hierarchy: (target) => run(client.members.fetchCanManage(target)),
-                                },
-                                user.id,
-                            ),
+                    if (attachmentSources)
+                        await verifyAttachmentSources({
+                            ops: attachmentOps,
+                            channelId: channel.id,
+                            rawFetch,
+                            getFetch: () => globalThis.fetch,
+                            setFetch: (value) => (globalThis.fetch = value),
+                            setStage: (value) => (stage = value),
+                            report,
+                        })
+                    else await (attachments ? verifyAttachments : verifyEmbeds)(attachmentOps, channel.id)
+                }
+                if (forceRecovery && !reactions && !pins && !guilds && !channels) {
+                    if (cache) sdkRequests.length = 0
+                    if (collectors)
+                        await verifyCollectors(
+                            async (options) => {
+                                const {
+                                    progressReply,
+                                    progressWait,
+                                    progressCancel,
+                                    progressGate,
+                                    progressCleanup,
+                                    onProgress,
+                                    ...settings
+                                } = options
+                                const cancellation = progressCancel ? new AbortController() : undefined
+                                const opened = client.messages.collect(channel.id, {
+                                    ...settings,
+                                    ...(cancellation ? { signal: cancellation.signal } : {}),
+                                    ...(progressReply || progressWait
+                                        ? {
+                                              onMessage: async (message, signal) => {
+                                                  onProgress?.("started", message)
+                                                  try {
+                                                      if (progressGate) await progressGate(message, signal)
+                                                      if (progressWait)
+                                                          await new Promise((resolve) => {
+                                                              if (signal.aborted) resolve()
+                                                              else
+                                                                  signal.addEventListener("abort", resolve, {
+                                                                      once: true,
+                                                                  })
+                                                          })
+                                                      else {
+                                                          const reply = await client.messages.reply(
+                                                              message,
+                                                              { content: `${progressReply}-${message.id}` },
+                                                              { signal },
+                                                          )
+                                                          if (reply.isErr()) throw reply.error
+                                                          onProgress?.("reply", message, reply.value)
+                                                      }
+                                                  } finally {
+                                                      if (progressCleanup) {
+                                                          onProgress?.("cleanupStarted", message)
+                                                          await progressCleanup(message)
+                                                      }
+                                                      onProgress?.("cleaned", message)
+                                                  }
+                                              },
+                                          }
+                                        : {}),
+                                })
+                                return {
+                                    wait: () => opened.result(),
+                                    stop: () => opened.close(),
+                                    ...(cancellation
+                                        ? { cancel: () => cancellation.abort(), cancelKind: "signal" }
+                                        : {}),
+                                }
+                            },
+                            cacheSend,
+                            channel.id,
+                            user.id,
+                            () => gatewayProbe.interruptAndWait(client, states),
                         )
-                        yield* Effect.promise(() =>
-                            verifyCleanup(
-                                {
-                                    send: (input) => run(client.messages.send(channel.id, input)),
-                                    preview: (selection) => run(client.messages.previewCleanup(channel.id, selection)),
-                                    cleanup: (plan, options) => run(client.messages.cleanup(plan, options)),
-                                },
-                                channel.id,
-                                user.id,
-                            ),
-                        )
+                    else await gatewayProbe.interruptAndWait(client, states)
+                    if (cache) {
+                        assert.equal(await cacheGet(beforeRecovery), undefined)
+                        assert.deepEqual(sdkRequests, [])
+                        const remote = await api("GET", `/channels/${channel.id}/messages/${beforeRecovery.id}`)
+                        assert.equal(remote.status, 200)
+                        assert.equal(remote.data?.content, beforeRecovery.content)
+                        report("cache_recovery_gap_clears_without_autofetch", true)
                     }
-                    if (optionalTools) {
-                        const scope = yield* Effect.scope
-                        const run = async (operation) => {
-                            const result = await Effect.runPromise(typedResult(Effect, operation))
-                            if (result._tag === "Failure") throw result.failure
-                            return result.success
+                }
+                const sent = await client.messages.send(channel.id, { content: ping })
+                assert.ok(sent.isOk())
+                seed = sent.value
+                timer = setTimeout(() => done.resolve(null), 20_000)
+                const replied = await done.promise
+                assert.ok(replied?.isOk())
+                reply = replied.value
+                registered.close()
+                assert.ok((await registered.waitForClose()).isOk())
+                await terminal
+                if (cache) {
+                    await verifyCacheGatewayRebuild(cacheGet, channel.id)
+                    await verifyCacheProjectionConflict(
+                        cacheSend,
+                        async (target) => {
+                            const result = await client.messages.fetch(target)
+                            assert.ok(result.isOk())
+                            return result.value
+                        },
+                        cacheGet,
+                        channel.id,
+                    )
+                }
+                if (changes || cache) {
+                    const probe = observeMessageChanges(channel.id)
+                    const updates = client.on("messageUpdate", (message) => probe.receive("messageUpdate", message))
+                    const deletion = client.subscribe("messageDelete")
+                    const bulk = client.subscribe("messageDeleteBulk")
+                    const consume = async (event, subscription) => {
+                        while (true) {
+                            const result = await subscription.next()
+                            assert.ok(result.isOk())
+                            if (result.value === null) return
+                            probe.receive(event, result.value)
                         }
-                        yield* Effect.promise(() =>
-                            verifyOptionalTools(
-                                {
-                                    builders,
-                                    parseQuoted: commands.parseQuoted,
-                                    assertConnected: async () => assert.equal(client.state, "Connected"),
-                                    create: async (options) => commands.create(options),
-                                    register: async (router, command) => router.register(command),
-                                    attach: (router) => run(router.attach(client).pipe(Scope.provide(scope))),
-                                    send: (input) => run(client.messages.send(channel.id, input)),
-                                    reply: (message, input) => run(client.messages.reply(message, input)),
-                                    cooldowns: async (claims) => {
-                                        const store = commands.memoryCooldowns({ maxEntries: 4 })
-                                        const recordClaim = (claim) => Effect.sync(() => claims.push(claim))
-                                        return {
-                                            store: {
-                                                claim: (input) => store.claim(input).pipe(Effect.tap(recordClaim)),
-                                            },
-                                            clear: () => run(store.clear()),
-                                        }
-                                    },
-                                    guard: (matches) => {
-                                        return ({ message }) => Effect.sync(() => matches(message))
-                                    },
-                                    execute: (runCommand) => {
-                                        return ({ message }) => Effect.promise(() => runCommand(message))
-                                    },
-                                    reject:
-                                        (onReject) =>
-                                        ({ message }, rejection) =>
-                                            Effect.promise(() => onReject(message, rejection)),
-                                    close: (subscription) =>
-                                        run(
-                                            Effect.gen(function* () {
-                                                yield* subscription.close()
-                                                yield* subscription.waitForClose()
-                                            }),
-                                        ),
-                                    observe: async (receive) => {
-                                        const observer = await run(
-                                            client
-                                                .on("messageCreate", (message) => Effect.sync(() => receive(message)))
-                                                .pipe(Scope.provide(scope)),
-                                        )
-                                        return {
-                                            close: () =>
-                                                run(
-                                                    Effect.gen(function* () {
-                                                        yield* observer.close()
-                                                        yield* observer.waitForClose()
-                                                    }),
-                                                ),
-                                        }
-                                    },
-                                },
-                                channel.id,
-                                user.id,
-                            ),
-                        )
                     }
-                    if (guilds) {
-                        const scope = yield* Effect.scope
-                        const run = async (operation) => {
-                            const result = await Effect.runPromise(typedResult(Effect, operation))
-                            if (result._tag === "Failure") throw result.failure
-                            return result.success
-                        }
-                        yield* Effect.promise(() =>
-                            verifyGuildMembers(
-                                {
-                                    guild: () => run(client.guilds.fetch(guildId)),
-                                    getGuild: () => run(client.guilds.get(guildId)),
-                                    getMember: (target) => run(client.members.get(target)),
-                                    getRole: (id) => run(client.roles.get({ guildId, id })),
-                                    roles: () => run(client.roles.fetchAll(guildId)),
-                                    createRole: (input, options) => run(client.roles.create(guildId, input, options)),
-                                    editRole: (id, input, options) =>
-                                        run(client.roles.edit({ guildId, id }, input, options)),
-                                    deleteRole: (id, options) => run(client.roles.delete({ guildId, id }, options)),
-                                    reorderRoles: (positions, options) =>
-                                        run(client.roles.reorder(guildId, positions, options)),
-                                    setHoistPositions: (positions, options) =>
-                                        run(client.roles.setHoistPositions(guildId, positions, options)),
-                                    member: (target) => run(client.members.fetch(target)),
-                                    self: () => run(client.members.fetchSelf(guildId)),
-                                    page: () => run(client.members.fetchPage(guildId, { limit: 2 })),
-                                    add: (target, roleId, options) =>
-                                        run(client.members.addRole(target, roleId, options)),
-                                    remove: (target, roleId, options) =>
-                                        run(client.members.removeRole(target, roleId, options)),
-                                    send: () =>
-                                        run(
-                                            client.messages.send(channel.id, {
-                                                content: "SDK reaction role verification",
-                                            }),
-                                        ),
-                                    react: (target) => run(client.messages.addReaction(target, "✅")),
-                                    collect: async (message, target, roleId, options) => {
-                                        const collector = await run(
-                                            client.messages
-                                                .collectReactions(message, {
-                                                    emoji: "✅",
-                                                    timeoutMs: 10_000,
-                                                    filter: (reaction) => reaction.userId === user.id,
-                                                    onReaction: () =>
-                                                        Effect.gen(function* () {
-                                                            yield* client.members.addRole(target, roleId, options)
-                                                            yield* client.messages.edit(message, {
-                                                                content: "SDK role assigned",
-                                                            })
-                                                        }),
-                                                })
-                                                .pipe(Scope.provide(scope)),
-                                        )
-                                        return {
-                                            wait: () => run(collector.result()),
-                                            stop: () => run(collector.close()),
-                                        }
-                                    },
-                                    on: async (event, handler) => {
-                                        const subscription = await run(
-                                            client
-                                                .on(event, (value) => Effect.sync(() => handler(value)))
-                                                .pipe(Scope.provide(scope)),
-                                        )
-                                        return async () => {
-                                            await run(subscription.close())
-                                            await run(subscription.waitForClose())
-                                        }
-                                    },
-                                },
-                                channel.id,
-                                user.id,
-                                () => gatewayProbe.interruptAndWait(client, states),
-                            ),
-                        )
+                    const readers = [consume("messageDelete", deletion), consume("messageDeleteBulk", bulk)]
+                    const readsDone = Promise.allSettled(readers)
+                    try {
+                        await probe.exercise(user.id, cache ? cacheGet : undefined)
+                    } finally {
+                        updates.close()
+                        deletion.close()
+                        bulk.close()
+                        assert.ok((await updates.waitForClose()).isOk())
+                        assert.ok((await readsDone).every((result) => result.status === "fulfilled"))
                     }
-                    if (channels) {
-                        const scope = yield* Effect.scope
-                        const run = async (operation) => {
-                            const result = await Effect.runPromise(typedResult(Effect, operation))
-                            if (result._tag === "Failure") throw result.failure
-                            return result.success
+                }
+            } finally {
+                clearTimeout(timer)
+                // An unproven shutdown may leave a writer alive, so the journal and lock stay for recovery
+                if (!(await shutdownDefaultClient(client, () => stopState?.close()))) {
+                    quiescent = false
+                    assert.fail("Client shutdown was not proven")
+                }
+            }
+        } else {
+            const { Deferred, Effect, Exit, Fiber, Scope, Stream } = await import("effect")
+            const { builders, commands, createClient, format } = await import("@neontechspace/fluxerly/effect")
+            const effectScope = Scope.makeUnsafe()
+            let exit
+            try {
+                exit = await Effect.runPromiseExit(
+                    Effect.gen(function* () {
+                        client = yield* createClient({
+                            token,
+                            ...(cache || typing || embeds || attachments || batchDelete || search
+                                ? { cache: cacheOptions() }
+                                : {}),
+                            ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
+                            ...(channels ? { cache: { channels: true } } : {}),
+                            ...(moderation ? { cache: { members: true } } : {}),
+                            ...(recover ? { logging: { level: "info" } } : {}),
+                        })
+                        const cacheGet = async (target) => {
+                            if (!cache && !search) return undefined
+                            const cached = await Effect.runPromiseExit(client.messages.get(target))
+                            assert.ok(Exit.isSuccess(cached))
+                            return cached.value
                         }
-                        yield* Effect.promise(() =>
-                            verifyChannels(
-                                {
-                                    get: (id) => run(client.channels.get(id)),
-                                    fetch: (id) => run(client.channels.fetch(id)),
-                                    fetchAll: (id) => run(client.channels.fetchAll(id)),
-                                    create: (id, input, options) => run(client.channels.create(id, input, options)),
-                                    edit: (id, input, options) => run(client.channels.edit(id, input, options)),
-                                    delete: (id, options) => run(client.channels.delete(id, options)),
-                                    reorder: (id, positions, options) =>
-                                        run(client.channels.reorder(id, positions, options)),
-                                    setPermissionOverwrite: (id, overwrite, options) =>
-                                        run(client.channels.setPermissionOverwrite(id, overwrite, options)),
-                                    removePermissionOverwrite: (id, targetId, options) =>
-                                        run(client.channels.removePermissionOverwrite(id, targetId, options)),
-                                    on: async (event, handler) => {
-                                        const subscription = await run(
-                                            client
-                                                .on(event, (value) => Effect.sync(() => handler(value)))
-                                                .pipe(Scope.provide(scope)),
-                                        )
-                                        return async () => {
-                                            await run(subscription.close())
-                                            await run(subscription.waitForClose())
-                                        }
-                                    },
-                                },
-                                channel.id,
-                                user.id,
-                                () => gatewayProbe.interruptAndWait(client, states),
-                            ),
-                        )
-                    }
-                    if (pins) {
-                        const scope = yield* Effect.scope
-                        const run = async (operation) => {
-                            const result = await Effect.runPromise(typedResult(Effect, operation))
-                            if (result._tag === "Failure") throw result.failure
-                            return result.success
-                        }
-                        yield* Effect.promise(() =>
-                            verifyPins(
-                                {
-                                    send: (input) => run(client.messages.send(channel.id, input)),
-                                    pin: (target) => run(client.messages.pin(target)),
-                                    unpin: (target) => run(client.messages.unpin(target)),
-                                    pins: (query) => run(client.messages.fetchPins(channel.id, query)),
-                                    on: async (event, handler) => {
-                                        const subscription = await run(
-                                            client
-                                                .on(event, (value) => Effect.sync(() => handler(value)))
-                                                .pipe(Scope.provide(scope)),
-                                        )
-                                        return async () => {
-                                            await run(subscription.close())
-                                            await run(subscription.waitForClose())
-                                        }
-                                    },
-                                },
-                                channel.id,
-                                () => gatewayProbe.interruptAndWait(client, states),
-                            ),
-                        )
-                    }
-                    if (reactions) {
-                        const scope = yield* Effect.scope
-                        const run = async (operation) => {
-                            const result = await Effect.runPromise(typedResult(Effect, operation))
-                            if (result._tag === "Failure") reportFailure(result.failure)
-                            assert.equal(result._tag, "Success")
-                            return result.success
-                        }
-                        yield* Effect.promise(() =>
-                            verifyReactions(
-                                {
-                                    send: (input) => run(client.messages.send(channel.id, input)),
-                                    add: (target, emoji) => run(client.messages.addReaction(target, emoji)),
-                                    remove: (target, emoji) => run(client.messages.removeReaction(target, emoji)),
-                                    removeUser: (target, emoji, userId) =>
-                                        run(client.messages.removeUserReaction(target, emoji, userId)),
-                                    clearEmoji: (target, emoji) => run(client.messages.clearReaction(target, emoji)),
-                                    clearAll: (target) => run(client.messages.clearReactions(target)),
-                                    fetchEmojis: () => run(client.emojis.fetchAll(guildId)),
-                                    fetchEmojiMetadata: (id) => run(client.emojis.fetchMetadata(id)),
-                                    parseCustomEmoji: async (value) => format.parseCustomEmoji(value),
-                                    reads: async (target) => ({
-                                        message: await run(client.messages.fetch(target)),
-                                        history: await run(
-                                            client.messages.fetchHistory(target.channelId, {
-                                                around: target.id,
-                                                limit: 1,
-                                            }),
-                                        ),
-                                        pins: await run(client.messages.fetchPins(target.channelId, { limit: 1 })),
-                                    }),
-                                    collect: async (target, options) => {
-                                        const { progressEdit, progressFailure, progressWait, onProgress, ...settings } =
-                                            options
-                                        let count = 0
-                                        const collector = await run(
-                                            client.messages
-                                                .collectReactions(target, {
-                                                    ...settings,
-                                                    ...(progressEdit || progressWait
-                                                        ? {
-                                                              onReaction: () =>
-                                                                  Effect.gen(function* () {
-                                                                      onProgress?.("started")
-                                                                      if (progressWait) yield* Effect.never
-                                                                      else
-                                                                          yield* client.messages.edit(
-                                                                              progressFailure
-                                                                                  ? { ...target, id: "1" }
-                                                                                  : target,
-                                                                              { content: `${progressEdit} ${++count}` },
-                                                                          )
-                                                                  }).pipe(
-                                                                      Effect.ensuring(
-                                                                          Effect.sync(() => onProgress?.("cleaned")),
-                                                                      ),
-                                                                  ),
-                                                          }
-                                                        : {}),
-                                                })
-                                                .pipe(Scope.provide(scope)),
-                                        )
-                                        return {
-                                            stop: () => run(collector.close()),
-                                            wait: async () => {
-                                                const result = await Effect.runPromise(
-                                                    typedResult(Effect, collector.result()),
-                                                )
-                                                if (result._tag === "Failure") throw result.failure
-                                                return result.success
-                                            },
-                                        }
-                                    },
-                                    users: async (target, emoji, query) => {
-                                        const result = await Effect.runPromise(
-                                            typedResult(
-                                                Effect,
-                                                client.messages.fetchReactionUsers(target, emoji, query),
+                        const cacheSend = (channelId, input) =>
+                            Effect.runPromise(client.messages.send(channelId, input))
+                        const cacheReply = (target, input) => Effect.runPromise(client.messages.reply(target, input))
+                        if (nonceOnly)
+                            yield* Effect.promise(() =>
+                                verifyNonce(
+                                    {
+                                        send: (input) => cacheSend(channel.id, input),
+                                        reply: (target, input) =>
+                                            Effect.runPromise(client.messages.reply(target, input)),
+                                        forward: (destination, input) =>
+                                            Effect.runPromise(client.messages.forward(destination, input)),
+                                        sendUnknown: (input) =>
+                                            Effect.runPromise(
+                                                client.messages.send(channel.id, input).pipe(Effect.flip),
                                             ),
-                                        )
-                                        if (result._tag === "Failure") throw result.failure
-                                        return result.success
                                     },
-                                    on: async (event, handler) => {
-                                        const subscription = await run(
-                                            client
-                                                .on(event, (value) => Effect.sync(() => handler(value)))
-                                                .pipe(Scope.provide(scope)),
-                                        )
-                                        return async () => {
-                                            await run(subscription.close())
-                                            await run(subscription.waitForClose())
-                                        }
+                                    channel.id,
+                                ),
+                            )
+                        if (search) {
+                            yield* Effect.promise(() =>
+                                verifyMessageSearch(
+                                    {
+                                        search: (context, query) =>
+                                            Effect.runPromise(client.messages.search(context, query)),
+                                        iterate: (context, filters, limits) =>
+                                            Stream.toAsyncIterable(
+                                                client.messages.iterateSearch(context, filters, limits),
+                                            ),
+                                        get: cacheGet,
+                                        searchRequests: () =>
+                                            sdkRequests.filter((path) => path === "/v1/search/messages").length,
                                     },
-                                },
-                                channel.id,
-                                user.id,
-                                () => gatewayProbe.interruptAndWait(client, states),
-                            ),
-                        )
-                    }
-                    if (embeds || attachments || attachmentSources) {
-                        const scope = yield* Effect.scope
-                        const run = async (operation) => {
-                            const result = await Effect.runPromise(typedResult(Effect, operation))
-                            if (result._tag === "Failure") reportFailure(result.failure)
-                            assert.equal(result._tag, "Success")
-                            return result.success
+                                    channel.id,
+                                ),
+                            )
+                            stage = "sdk_receive_and_reply"
                         }
-                        const attachmentOps = {
-                            send: (input, options) => run(client.messages.send(channel.id, input, options)),
-                            sendFailure: async (input, options) => {
-                                const result = await Effect.runPromise(
-                                    typedResult(Effect, client.messages.send(channel.id, input, options)),
+                        if (typing) {
+                            stage = "typing_one_shot"
+                            yield* client.messages.typing(channel.id)
+                            assert.deepEqual(typingRequests, [
+                                { at: typingRequests[0]?.at, body: undefined, method: "POST", status: 204 },
+                            ])
+                            // This message was created before the SDK client existed. A typing request cannot hydrate or admit it.
+                            assert.equal(yield* client.messages.get(typingCacheTarget), undefined)
+                            report("typing_one_shot_no_cache_admission", true)
+
+                            stage = "typing_scoped_refresh"
+                            const scopedStart = typingRequests.length
+                            const complete = Deferred.makeUnsafe()
+                            const scoped = yield* Effect.forkChild(
+                                client.messages.keepTyping(channel.id, Deferred.await(complete)),
+                            )
+                            yield* Effect.promise(() => waitForTypingRequests(typingRequests, scopedStart + 2))
+                            Deferred.doneUnsafe(complete, Effect.succeed("completed"))
+                            assert.equal(yield* Fiber.join(scoped), "completed")
+                            const refreshes = typingRequests.slice(scopedStart)
+                            assert.equal(refreshes.length, 2)
+                            assert.ok(
+                                refreshes.every(
+                                    (request) =>
+                                        request.method === "POST" &&
+                                        request.body === undefined &&
+                                        request.status === 204,
+                                ),
+                            )
+                            assert.ok(refreshes[1].at - refreshes[0].at >= 7_900)
+                            report(stage, true)
+
+                            stage = "typing_completion_cleanup"
+                            yield* Effect.promise(() => assertTypingStopped(typingRequests))
+                            report(stage, true)
+
+                            stage = "typing_cancellation_cleanup"
+                            const entered = Deferred.makeUnsafe()
+                            const pending = yield* Effect.forkChild(
+                                client.messages.keepTyping(
+                                    channel.id,
+                                    Effect.sync(() => Deferred.doneUnsafe(entered, Effect.void)).pipe(
+                                        Effect.andThen(Effect.never),
+                                    ),
+                                ),
+                            )
+                            yield* Deferred.await(entered)
+                            yield* Fiber.interrupt(pending)
+                            const cancelled = yield* Fiber.await(pending)
+                            assert.ok(Exit.isFailure(cancelled) && Cause.hasInterruptsOnly(cancelled.cause))
+                            yield* Effect.promise(() => assertTypingStopped(typingRequests))
+                            report(stage, true)
+                            stage = "sdk_receive_and_reply"
+                        }
+                        if (pagination)
+                            yield* Effect.promise(() =>
+                                verifyPagination(
+                                    {
+                                        history: (query) =>
+                                            Stream.toAsyncIterable(client.messages.iterateHistory(channel.id, query)),
+                                        members: (query) =>
+                                            Stream.toAsyncIterable(client.members.iterate(guildId, query)),
+                                        users: (target, emoji, query) =>
+                                            Stream.toAsyncIterable(
+                                                client.messages.iterateReactionUsers(target, emoji, query),
+                                            ),
+                                        pins: (query) =>
+                                            Stream.toAsyncIterable(client.messages.iteratePins(channel.id, query)),
+                                        react: (target) => Effect.runPromise(client.messages.addReaction(target, "👍")),
+                                        pin: (target) => Effect.runPromise(client.messages.pin(target)),
+                                        unpin: (target) => Effect.runPromise(client.messages.unpin(target)),
+                                        cancelHistory: async (signal) => {
+                                            const result = await Effect.runPromiseExit(
+                                                Stream.runDrain(
+                                                    client.messages.iterateHistory(channel.id, { maxItems: 1 }),
+                                                ),
+                                                { signal },
+                                            )
+                                            assert.ok(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause))
+                                        },
+                                    },
+                                    channel.id,
+                                    user.id,
+                                ),
+                            )
+                        if (history || cache) {
+                            const probe = yield* Effect.promise(() => prepareHistory(channel.id, user.id))
+                            assert.equal(client.state, "Disconnected")
+                            for (const check of probe.cases) {
+                                stage = check.name
+                                const page = yield* client.messages.fetchHistory(channel.id, check.query)
+                                yield* Effect.promise(() => probe.verify(page, check))
+                                if (cache)
+                                    for (const message of page) {
+                                        const cached = yield* Effect.promise(() => cacheGet(message))
+                                        assert.equal(cached?.content, message.content)
+                                    }
+                            }
+                            if (cache) report("cache_rest_history", true)
+                            stage = "sdk_receive_and_reply"
+                        }
+                        if (manage || cache) {
+                            const managed = yield* Effect.promise(() => prepareManagement(channel.id, user.id))
+                            assert.equal(client.state, "Disconnected")
+                            stage = "sdk_fetch_disconnected"
+                            const fetched = yield* client.messages.fetch(managed.target)
+                            yield* Effect.promise(() => verifyManaged(fetched, managed.content, managed))
+                            if (cache) {
+                                assert.equal(
+                                    (yield* Effect.promise(() => cacheGet(managed.target)))?.content,
+                                    managed.content,
                                 )
-                                assert.equal(result._tag, "Failure")
-                                return result.failure
-                            },
-                            reply: (target, input) => run(client.messages.reply(target, input)),
-                            edit: (target, input) => run(client.messages.edit(target, input)),
-                            editFailure: (target, input) =>
-                                Effect.runPromise(client.messages.edit(target, input).pipe(Effect.flip)),
-                            fetch: (target) => Effect.runPromise(client.messages.fetch(target)),
-                            history: () => Effect.runPromise(client.messages.fetchHistory(channel.id)),
-                            get: (target) => Effect.runPromise(client.messages.get(target)),
-                            collect: async (options) => {
-                                const collector = await run(
-                                    client.messages.collect(channel.id, options).pipe(Scope.provide(scope)),
+                                report("cache_rest_fetch", true)
+                            }
+                            stage = "sdk_edit_and_preserve_embed"
+                            const edited = yield* client.messages.edit(fetched, {
+                                content: `${managed.content}-edited @everyone`,
+                            })
+                            yield* Effect.promise(() =>
+                                verifyManaged(edited, `${managed.content}-edited @everyone`, managed),
+                            )
+                            if (cache) {
+                                assert.equal((yield* Effect.promise(() => cacheGet(edited)))?.content, edited.content)
+                                report("cache_rest_edit", true)
+                            }
+                            stage = "sdk_empty_edit_rejected_without_change"
+                            const cleared = yield* client.messages.edit(edited, { content: "" }).pipe(Effect.flip)
+                            verifyClearRejection(cleared)
+                            yield* Effect.promise(() =>
+                                verifyManaged(edited, `${managed.content}-edited @everyone`, managed),
+                            )
+                            stage = "sdk_delete_and_confirm_absence"
+                            assert.equal(yield* client.messages.delete(edited), undefined)
+                            const absent = yield* Effect.promise(() =>
+                                api("GET", `/channels/${channel.id}/messages/${managed.target.id}`),
+                            )
+                            assert.equal(absent.status, 404)
+                            if (cache) {
+                                assert.equal(yield* Effect.promise(() => cacheGet(managed.target)), undefined)
+                                report("cache_rest_delete", true)
+                            }
+                            report(stage, true)
+                            stage = "sdk_missing_target_errors"
+                            verifyMissing(yield* client.messages.fetch(managed.target).pipe(Effect.flip), "fetch")
+                            verifyMissing(
+                                yield* client.messages.edit(managed.target, { content: "gone" }).pipe(Effect.flip),
+                                "edit",
+                            )
+                            verifyMissing(yield* client.messages.delete(managed.target).pipe(Effect.flip), "delete")
+                            report(stage, true)
+                            stage = "sdk_receive_and_reply"
+                        }
+                        let beforeRecovery
+                        if (cache) {
+                            yield* Effect.promise(() =>
+                                verifyCacheRestAdmissionAndExpiry(cacheSend, cacheReply, cacheGet, channel.id),
+                            )
+                            stage = "cache_pre_recovery_rest_intake"
+                            beforeRecovery = yield* Effect.promise(() =>
+                                cacheSend(channel.id, { content: `cache-before-recovery-${randomUUID()}` }),
+                            )
+                            assert.equal(
+                                (yield* Effect.promise(() => cacheGet(beforeRecovery)))?.content,
+                                beforeRecovery.content,
+                            )
+                            report(stage, true)
+                            stage = "sdk_receive_and_reply"
+                        }
+                        if (forceRecovery)
+                            yield* Effect.forkScoped(
+                                Stream.runForEach(client.observeState(), (state) =>
+                                    Effect.sync(() => {
+                                        states.push(state)
+                                    }),
+                                ),
+                            )
+                        if (plainRun)
+                            yield* Effect.promise(() =>
+                                verifyTextToSpeech(
+                                    (target, input) =>
+                                        Effect.runPromise(
+                                            client.messages.send(target, input).pipe(
+                                                Effect.match({
+                                                    onFailure: (error) => ({ ok: false, error }),
+                                                    onSuccess: (value) => ({ ok: true, value }),
+                                                }),
+                                            ),
+                                        ),
+                                    (target) =>
+                                        Effect.runPromise(
+                                            client.permissions.fetch({ guildId, userId: user.id, channelId: target }),
+                                        ),
+                                    channel.id,
+                                ),
+                            )
+                        const done = yield* Deferred.make()
+                        const subscription = yield* client.on("messageCreate", (message) =>
+                            Effect.gen(function* () {
+                                if (
+                                    message.channelId !== channel.id ||
+                                    message.author.id !== user.id ||
+                                    message.content !== ping
                                 )
-                                return () => Effect.runPromise(collector.result())
-                            },
-                            refreshUrls: async (urls, options) => {
-                                const result = await Effect.runPromise(
-                                    typedResult(Effect, client.attachments.refreshUrls(urls, options)),
-                                )
+                                    return
+                                const sent = yield* client.messages.reply(message, { content: pong })
+                                yield* Deferred.succeed(done, sent)
+                            }),
+                        )
+                        yield* client.connect()
+                        if (moderation) {
+                            const scope = yield* Effect.scope
+                            const run = async (operation) => {
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
                                 if (result._tag === "Failure") throw result.failure
                                 return result.success
-                            },
-                            download: (attachment, options) => run(client.attachments.download(attachment, options)),
-                            downloadFailure: (attachment, options) =>
-                                Effect.runPromise(client.attachments.download(attachment, options).pipe(Effect.flip)),
-                            stream: (attachment, options) =>
-                                Stream.toAsyncIterable(client.attachments.stream(attachment, options)),
-                            cancelDownload: async (attachment, size, signal) => {
-                                const cancelled = await Effect.runPromiseExit(
-                                    client.attachments.download(attachment, { maxBytes: size, timeoutMs: 60_000 }),
-                                    { signal },
-                                )
-                                assert.ok(Exit.isFailure(cancelled))
-                                if (Exit.isFailure(cancelled))
-                                    assert.equal(Cause.hasInterruptsOnly(cancelled.cause), true)
-                            },
-                        }
-                        yield* Effect.promise(() =>
-                            attachmentSources
-                                ? verifyAttachmentSources({
-                                      ops: attachmentOps,
-                                      channelId: channel.id,
-                                      rawFetch,
-                                      getFetch: () => globalThis.fetch,
-                                      setFetch: (value) => (globalThis.fetch = value),
-                                      setStage: (value) => (stage = value),
-                                      report,
-                                  })
-                                : (attachments ? verifyAttachments : verifyEmbeds)(attachmentOps, channel.id),
-                        )
-                    }
-                    if (forceRecovery && !reactions && !pins && !guilds && !channels) {
-                        if (cache) sdkRequests.length = 0
-                        if (collectors) {
+                            }
                             yield* Effect.promise(() =>
-                                verifyCollectors(
-                                    async (options) => {
-                                        const {
-                                            progressReply,
-                                            progressWait,
-                                            progressCancel,
-                                            progressGate,
-                                            progressCleanup,
-                                            onProgress,
-                                            ...settings
-                                        } = options
-                                        const collectorScope = Scope.makeUnsafe()
-                                        let opened
-                                        try {
-                                            opened = await Effect.runPromise(
-                                                client.messages
-                                                    .collect(channel.id, {
-                                                        ...settings,
-                                                        ...(progressReply || progressWait
-                                                            ? {
-                                                                  onMessage: (message) =>
-                                                                      Effect.gen(function* () {
-                                                                          yield* Effect.sync(() =>
-                                                                              onProgress?.("started", message),
-                                                                          )
-                                                                          if (progressGate)
-                                                                              yield* Effect.promise(() =>
-                                                                                  progressGate(message),
-                                                                              )
-                                                                          if (progressWait) yield* Effect.never
-                                                                          else {
-                                                                              const reply =
-                                                                                  yield* client.messages.reply(
-                                                                                      message,
-                                                                                      {
-                                                                                          content: `${progressReply}-${message.id}`,
-                                                                                      },
-                                                                                  )
-                                                                              yield* Effect.sync(() =>
-                                                                                  onProgress?.("reply", message, reply),
-                                                                              )
-                                                                          }
-                                                                      }).pipe(
-                                                                          Effect.ensuring(
-                                                                              Effect.gen(function* () {
-                                                                                  if (progressCleanup) {
-                                                                                      yield* Effect.sync(() =>
-                                                                                          onProgress?.(
-                                                                                              "cleanupStarted",
-                                                                                              message,
-                                                                                          ),
-                                                                                      )
-                                                                                      yield* Effect.promise(() =>
-                                                                                          progressCleanup(message),
-                                                                                      )
-                                                                                  }
-                                                                                  yield* Effect.sync(() =>
-                                                                                      onProgress?.("cleaned", message),
-                                                                                  )
-                                                                              }),
-                                                                          ),
-                                                                      ),
-                                                              }
-                                                            : {}),
-                                                    })
-                                                    .pipe(Scope.provide(collectorScope)),
+                                verifyModeration(
+                                    {
+                                        timeout: (target, duration, options) =>
+                                            run(client.members.timeout(target, duration, options)),
+                                        clearTimeout: (target) => run(client.members.clearTimeout(target)),
+                                        fetch: (target) => run(client.members.fetch(target)),
+                                        get: (target) => run(client.members.get(target)),
+                                        kick: (target, options) => run(client.members.kick(target, options)),
+                                        ban: (target, input, options) =>
+                                            run(client.members.ban(target, input, options)),
+                                        unban: (target, options) => run(client.members.unban(target, options)),
+                                        bans: () => run(client.members.fetchBans(guildId)),
+                                        on: async (event, handler) => {
+                                            const subscription = await run(
+                                                client
+                                                    .on(event, (value) => Effect.sync(() => handler(value)))
+                                                    .pipe(Scope.provide(scope)),
                                             )
-                                        } catch (error) {
-                                            await Effect.runPromise(Scope.close(collectorScope, Exit.void))
-                                            throw error
-                                        }
-                                        return {
-                                            wait: () =>
-                                                Effect.runPromise(
-                                                    opened.result().pipe(
-                                                        Effect.match({
-                                                            onSuccess: (value) => ({ value }),
-                                                            onFailure: (error) => ({ error }),
+                                            return async () => {
+                                                await run(subscription.close())
+                                                await run(subscription.waitForClose())
+                                            }
+                                        },
+                                    },
+                                    user.id,
+                                ),
+                            )
+                        }
+                        if (batchDelete) {
+                            const scope = yield* Effect.scope
+                            const run = async (operation) => {
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
+                                if (result._tag === "Failure") throw result.failure
+                                return result.success
+                            }
+                            yield* Effect.promise(() =>
+                                verifyBatchDeletion(
+                                    {
+                                        send: (input) => run(client.messages.send(channel.id, input)),
+                                        get: (target) => run(client.messages.get(target)),
+                                        deleteMany: (ids) => run(client.messages.deleteMany(channel.id, ids)),
+                                        on: async (handler) => {
+                                            const subscription = await run(
+                                                client
+                                                    .on("messageDeleteBulk", (notice) =>
+                                                        Effect.sync(() => handler(notice)),
+                                                    )
+                                                    .pipe(Scope.provide(scope)),
+                                            )
+                                            return async () => {
+                                                await run(subscription.close())
+                                                await run(subscription.waitForClose())
+                                            }
+                                        },
+                                    },
+                                    channel.id,
+                                    user.id,
+                                ),
+                            )
+                        }
+                        if (cleanupCheck) {
+                            const run = async (operation) => {
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
+                                if (result._tag === "Failure") throw result.failure
+                                return result.success
+                            }
+                            yield* Effect.promise(() =>
+                                verifyWorkflowReads(
+                                    {
+                                        guildList: () => run(client.guilds.fetchPage({ withCounts: true })),
+                                        hierarchy: (target) => run(client.members.fetchCanManage(target)),
+                                    },
+                                    user.id,
+                                ),
+                            )
+                            yield* Effect.promise(() =>
+                                verifyCleanup(
+                                    {
+                                        send: (input) => run(client.messages.send(channel.id, input)),
+                                        preview: (selection) =>
+                                            run(client.messages.previewCleanup(channel.id, selection)),
+                                        cleanup: (plan, options) => run(client.messages.cleanup(plan, options)),
+                                    },
+                                    channel.id,
+                                    user.id,
+                                ),
+                            )
+                        }
+                        if (optionalTools) {
+                            const scope = yield* Effect.scope
+                            const run = async (operation) => {
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
+                                if (result._tag === "Failure") throw result.failure
+                                return result.success
+                            }
+                            yield* Effect.promise(() =>
+                                verifyOptionalTools(
+                                    {
+                                        builders,
+                                        parseQuoted: commands.parseQuoted,
+                                        assertConnected: async () => assert.equal(client.state, "Connected"),
+                                        create: async (options) => commands.create(options),
+                                        register: async (router, command) => router.register(command),
+                                        attach: (router) => run(router.attach(client).pipe(Scope.provide(scope))),
+                                        send: (input) => run(client.messages.send(channel.id, input)),
+                                        reply: (message, input) => run(client.messages.reply(message, input)),
+                                        cooldowns: async (claims) => {
+                                            const store = commands.memoryCooldowns({ maxEntries: 4 })
+                                            const recordClaim = (claim) => Effect.sync(() => claims.push(claim))
+                                            return {
+                                                store: {
+                                                    claim: (input) => store.claim(input).pipe(Effect.tap(recordClaim)),
+                                                },
+                                                clear: () => run(store.clear()),
+                                            }
+                                        },
+                                        guard: (matches) => {
+                                            return ({ message }) => Effect.sync(() => matches(message))
+                                        },
+                                        execute: (runCommand) => {
+                                            return ({ message }) => Effect.promise(() => runCommand(message))
+                                        },
+                                        reject:
+                                            (onReject) =>
+                                            ({ message }, rejection) =>
+                                                Effect.promise(() => onReject(message, rejection)),
+                                        close: (subscription) =>
+                                            run(
+                                                Effect.gen(function* () {
+                                                    yield* subscription.close()
+                                                    yield* subscription.waitForClose()
+                                                }),
+                                            ),
+                                        observe: async (receive) => {
+                                            const observer = await run(
+                                                client
+                                                    .on("messageCreate", (message) =>
+                                                        Effect.sync(() => receive(message)),
+                                                    )
+                                                    .pipe(Scope.provide(scope)),
+                                            )
+                                            return {
+                                                close: () =>
+                                                    run(
+                                                        Effect.gen(function* () {
+                                                            yield* observer.close()
+                                                            yield* observer.waitForClose()
                                                         }),
                                                     ),
-                                                ),
-                                            stop: () => Effect.runPromise(opened.close()),
-                                            close: () => Effect.runPromise(Scope.close(collectorScope, Exit.void)),
-                                            ...(progressCancel
-                                                ? {
-                                                      cancel: () =>
-                                                          Effect.runPromise(Scope.close(collectorScope, Exit.void)),
-                                                      cancelKind: "scope",
-                                                  }
-                                                : {}),
-                                        }
+                                            }
+                                        },
                                     },
-                                    cacheSend,
+                                    channel.id,
+                                    user.id,
+                                ),
+                            )
+                        }
+                        if (guilds) {
+                            const scope = yield* Effect.scope
+                            const run = async (operation) => {
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
+                                if (result._tag === "Failure") throw result.failure
+                                return result.success
+                            }
+                            yield* Effect.promise(() =>
+                                verifyGuildMembers(
+                                    {
+                                        guild: () => run(client.guilds.fetch(guildId)),
+                                        getGuild: () => run(client.guilds.get(guildId)),
+                                        getMember: (target) => run(client.members.get(target)),
+                                        getRole: (id) => run(client.roles.get({ guildId, id })),
+                                        roles: () => run(client.roles.fetchAll(guildId)),
+                                        createRole: (input, options) =>
+                                            run(client.roles.create(guildId, input, options)),
+                                        editRole: (id, input, options) =>
+                                            run(client.roles.edit({ guildId, id }, input, options)),
+                                        deleteRole: (id, options) => run(client.roles.delete({ guildId, id }, options)),
+                                        reorderRoles: (positions, options) =>
+                                            run(client.roles.reorder(guildId, positions, options)),
+                                        setHoistPositions: (positions, options) =>
+                                            run(client.roles.setHoistPositions(guildId, positions, options)),
+                                        member: (target) => run(client.members.fetch(target)),
+                                        self: () => run(client.members.fetchSelf(guildId)),
+                                        page: () => run(client.members.fetchPage(guildId, { limit: 2 })),
+                                        add: (target, roleId, options) =>
+                                            run(client.members.addRole(target, roleId, options)),
+                                        remove: (target, roleId, options) =>
+                                            run(client.members.removeRole(target, roleId, options)),
+                                        send: () =>
+                                            run(
+                                                client.messages.send(channel.id, {
+                                                    content: "SDK reaction role verification",
+                                                }),
+                                            ),
+                                        react: (target) => run(client.messages.addReaction(target, "✅")),
+                                        collect: async (message, target, roleId, options) => {
+                                            const collector = await run(
+                                                client.messages
+                                                    .collectReactions(message, {
+                                                        emoji: "✅",
+                                                        timeoutMs: 10_000,
+                                                        filter: (reaction) => reaction.userId === user.id,
+                                                        onReaction: () =>
+                                                            Effect.gen(function* () {
+                                                                yield* client.members.addRole(target, roleId, options)
+                                                                yield* client.messages.edit(message, {
+                                                                    content: "SDK role assigned",
+                                                                })
+                                                            }),
+                                                    })
+                                                    .pipe(Scope.provide(scope)),
+                                            )
+                                            return {
+                                                wait: () => run(collector.result()),
+                                                stop: () => run(collector.close()),
+                                            }
+                                        },
+                                        on: async (event, handler) => {
+                                            const subscription = await run(
+                                                client
+                                                    .on(event, (value) => Effect.sync(() => handler(value)))
+                                                    .pipe(Scope.provide(scope)),
+                                            )
+                                            return async () => {
+                                                await run(subscription.close())
+                                                await run(subscription.waitForClose())
+                                            }
+                                        },
+                                    },
                                     channel.id,
                                     user.id,
                                     () => gatewayProbe.interruptAndWait(client, states),
                                 ),
                             )
-                        } else yield* Effect.promise(() => gatewayProbe.interruptAndWait(client, states))
-                        if (cache) {
-                            assert.equal(yield* Effect.promise(() => cacheGet(beforeRecovery)), undefined)
-                            assert.deepEqual(sdkRequests, [])
-                            const remote = yield* Effect.promise(() =>
-                                api("GET", `/channels/${channel.id}/messages/${beforeRecovery.id}`),
-                            )
-                            assert.equal(remote.status, 200)
-                            assert.equal(remote.data?.content, beforeRecovery.content)
-                            report("cache_recovery_gap_clears_without_autofetch", true)
                         }
-                    }
-                    seed = yield* client.messages.send(channel.id, { content: ping })
-                    reply = yield* Deferred.await(done).pipe(Effect.timeout(20_000))
-                    yield* subscription.close()
-                    yield* subscription.waitForClose()
-                    if (cache) {
-                        yield* Effect.promise(() => verifyCacheGatewayRebuild(cacheGet, channel.id))
-                        yield* Effect.promise(() =>
-                            verifyCacheProjectionConflict(
-                                cacheSend,
-                                (target) => Effect.runPromise(client.messages.fetch(target)),
-                                cacheGet,
-                                channel.id,
-                            ),
-                        )
-                    }
-                    if (changes || cache) {
-                        const probe = observeMessageChanges(channel.id)
-                        yield* Effect.scoped(
-                            Effect.gen(function* () {
-                                yield* client.on("messageUpdate", (message) =>
-                                    Effect.sync(() => probe.receive("messageUpdate", message)),
-                                )
-                                for (const event of ["messageDelete", "messageDeleteBulk"]) {
-                                    yield* Effect.forkScoped(
-                                        Stream.runForEach(client.subscribe(event), (message) =>
-                                            Effect.sync(() => probe.receive(event, message)),
-                                        ),
+                        if (channels) {
+                            const scope = yield* Effect.scope
+                            const run = async (operation) => {
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
+                                if (result._tag === "Failure") throw result.failure
+                                return result.success
+                            }
+                            yield* Effect.promise(() =>
+                                verifyChannels(
+                                    {
+                                        get: (id) => run(client.channels.get(id)),
+                                        fetch: (id) => run(client.channels.fetch(id)),
+                                        fetchAll: (id) => run(client.channels.fetchAll(id)),
+                                        create: (id, input, options) => run(client.channels.create(id, input, options)),
+                                        edit: (id, input, options) => run(client.channels.edit(id, input, options)),
+                                        delete: (id, options) => run(client.channels.delete(id, options)),
+                                        reorder: (id, positions, options) =>
+                                            run(client.channels.reorder(id, positions, options)),
+                                        setPermissionOverwrite: (id, overwrite, options) =>
+                                            run(client.channels.setPermissionOverwrite(id, overwrite, options)),
+                                        removePermissionOverwrite: (id, targetId, options) =>
+                                            run(client.channels.removePermissionOverwrite(id, targetId, options)),
+                                        on: async (event, handler) => {
+                                            const subscription = await run(
+                                                client
+                                                    .on(event, (value) => Effect.sync(() => handler(value)))
+                                                    .pipe(Scope.provide(scope)),
+                                            )
+                                            return async () => {
+                                                await run(subscription.close())
+                                                await run(subscription.waitForClose())
+                                            }
+                                        },
+                                    },
+                                    channel.id,
+                                    user.id,
+                                    () => gatewayProbe.interruptAndWait(client, states),
+                                ),
+                            )
+                        }
+                        if (pins) {
+                            const scope = yield* Effect.scope
+                            const run = async (operation) => {
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
+                                if (result._tag === "Failure") throw result.failure
+                                return result.success
+                            }
+                            yield* Effect.promise(() =>
+                                verifyPins(
+                                    {
+                                        send: (input) => run(client.messages.send(channel.id, input)),
+                                        pin: (target) => run(client.messages.pin(target)),
+                                        unpin: (target) => run(client.messages.unpin(target)),
+                                        pins: (query) => run(client.messages.fetchPins(channel.id, query)),
+                                        on: async (event, handler) => {
+                                            const subscription = await run(
+                                                client
+                                                    .on(event, (value) => Effect.sync(() => handler(value)))
+                                                    .pipe(Scope.provide(scope)),
+                                            )
+                                            return async () => {
+                                                await run(subscription.close())
+                                                await run(subscription.waitForClose())
+                                            }
+                                        },
+                                    },
+                                    channel.id,
+                                    () => gatewayProbe.interruptAndWait(client, states),
+                                ),
+                            )
+                        }
+                        if (reactions) {
+                            const scope = yield* Effect.scope
+                            const run = async (operation) => {
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
+                                if (result._tag === "Failure") reportFailure(result.failure)
+                                assert.equal(result._tag, "Success")
+                                return result.success
+                            }
+                            yield* Effect.promise(() =>
+                                verifyReactions(
+                                    {
+                                        send: (input) => run(client.messages.send(channel.id, input)),
+                                        add: (target, emoji) => run(client.messages.addReaction(target, emoji)),
+                                        remove: (target, emoji) => run(client.messages.removeReaction(target, emoji)),
+                                        removeUser: (target, emoji, userId) =>
+                                            run(client.messages.removeUserReaction(target, emoji, userId)),
+                                        clearEmoji: (target, emoji) =>
+                                            run(client.messages.clearReaction(target, emoji)),
+                                        clearAll: (target) => run(client.messages.clearReactions(target)),
+                                        fetchEmojis: () => run(client.emojis.fetchAll(guildId)),
+                                        fetchEmojiMetadata: (id) => run(client.emojis.fetchMetadata(id)),
+                                        parseCustomEmoji: async (value) => format.parseCustomEmoji(value),
+                                        reads: async (target) => ({
+                                            message: await run(client.messages.fetch(target)),
+                                            history: await run(
+                                                client.messages.fetchHistory(target.channelId, {
+                                                    around: target.id,
+                                                    limit: 1,
+                                                }),
+                                            ),
+                                            pins: await run(client.messages.fetchPins(target.channelId, { limit: 1 })),
+                                        }),
+                                        collect: async (target, options) => {
+                                            const {
+                                                progressEdit,
+                                                progressFailure,
+                                                progressWait,
+                                                onProgress,
+                                                ...settings
+                                            } = options
+                                            let count = 0
+                                            const collector = await run(
+                                                client.messages
+                                                    .collectReactions(target, {
+                                                        ...settings,
+                                                        ...(progressEdit || progressWait
+                                                            ? {
+                                                                  onReaction: () =>
+                                                                      Effect.gen(function* () {
+                                                                          onProgress?.("started")
+                                                                          if (progressWait) yield* Effect.never
+                                                                          else
+                                                                              yield* client.messages.edit(
+                                                                                  progressFailure
+                                                                                      ? { ...target, id: "1" }
+                                                                                      : target,
+                                                                                  {
+                                                                                      content: `${progressEdit} ${++count}`,
+                                                                                  },
+                                                                              )
+                                                                      }).pipe(
+                                                                          Effect.ensuring(
+                                                                              Effect.sync(() =>
+                                                                                  onProgress?.("cleaned"),
+                                                                              ),
+                                                                          ),
+                                                                      ),
+                                                              }
+                                                            : {}),
+                                                    })
+                                                    .pipe(Scope.provide(scope)),
+                                            )
+                                            return {
+                                                stop: () => run(collector.close()),
+                                                wait: async () => {
+                                                    const result = await Effect.runPromise(
+                                                        typedResult(Effect, collector.result()),
+                                                    )
+                                                    if (result._tag === "Failure") throw result.failure
+                                                    return result.success
+                                                },
+                                            }
+                                        },
+                                        users: async (target, emoji, query) => {
+                                            const result = await Effect.runPromise(
+                                                typedResult(
+                                                    Effect,
+                                                    client.messages.fetchReactionUsers(target, emoji, query),
+                                                ),
+                                            )
+                                            if (result._tag === "Failure") throw result.failure
+                                            return result.success
+                                        },
+                                        on: async (event, handler) => {
+                                            const subscription = await run(
+                                                client
+                                                    .on(event, (value) => Effect.sync(() => handler(value)))
+                                                    .pipe(Scope.provide(scope)),
+                                            )
+                                            return async () => {
+                                                await run(subscription.close())
+                                                await run(subscription.waitForClose())
+                                            }
+                                        },
+                                    },
+                                    channel.id,
+                                    user.id,
+                                    () => gatewayProbe.interruptAndWait(client, states),
+                                ),
+                            )
+                        }
+                        if (embeds || attachments || attachmentSources) {
+                            const scope = yield* Effect.scope
+                            const run = async (operation) => {
+                                const result = await Effect.runPromise(typedResult(Effect, operation))
+                                if (result._tag === "Failure") reportFailure(result.failure)
+                                assert.equal(result._tag, "Success")
+                                return result.success
+                            }
+                            const attachmentOps = {
+                                send: (input, options) => run(client.messages.send(channel.id, input, options)),
+                                sendFailure: async (input, options) => {
+                                    const result = await Effect.runPromise(
+                                        typedResult(Effect, client.messages.send(channel.id, input, options)),
                                     )
-                                }
-                                yield* Effect.promise(() => probe.exercise(user.id, cache ? cacheGet : undefined))
-                            }),
-                        )
-                    }
-                })
-                    .pipe(Scope.provide(effectScope))
-                    .pipe(
-                        recover
-                            ? Effect.provideService(Logger.CurrentLoggers, new Set([diagnosticLogger]))
-                            : (effect) => effect,
-                    ),
-            )
-        } finally {
-            const closed = await closeScenarioScope(effectScope, exit)
-            exit = closed.exit
-            if (!closed.closed) {
-                quiescent = false
-                process.exitCode = 1
-                report("scope_cleanup", false)
+                                    assert.equal(result._tag, "Failure")
+                                    return result.failure
+                                },
+                                reply: (target, input) => run(client.messages.reply(target, input)),
+                                edit: (target, input) => run(client.messages.edit(target, input)),
+                                editFailure: (target, input) =>
+                                    Effect.runPromise(client.messages.edit(target, input).pipe(Effect.flip)),
+                                fetch: (target) => Effect.runPromise(client.messages.fetch(target)),
+                                history: () => Effect.runPromise(client.messages.fetchHistory(channel.id)),
+                                get: (target) => Effect.runPromise(client.messages.get(target)),
+                                collect: async (options) => {
+                                    const collector = await run(
+                                        client.messages.collect(channel.id, options).pipe(Scope.provide(scope)),
+                                    )
+                                    return () => Effect.runPromise(collector.result())
+                                },
+                                refreshUrls: async (urls, options) => {
+                                    const result = await Effect.runPromise(
+                                        typedResult(Effect, client.attachments.refreshUrls(urls, options)),
+                                    )
+                                    if (result._tag === "Failure") throw result.failure
+                                    return result.success
+                                },
+                                download: (attachment, options) =>
+                                    run(client.attachments.download(attachment, options)),
+                                downloadFailure: (attachment, options) =>
+                                    Effect.runPromise(
+                                        client.attachments.download(attachment, options).pipe(Effect.flip),
+                                    ),
+                                stream: (attachment, options) =>
+                                    Stream.toAsyncIterable(client.attachments.stream(attachment, options)),
+                                cancelDownload: async (attachment, size, signal) => {
+                                    const cancelled = await Effect.runPromiseExit(
+                                        client.attachments.download(attachment, { maxBytes: size, timeoutMs: 60_000 }),
+                                        { signal },
+                                    )
+                                    assert.ok(Exit.isFailure(cancelled))
+                                    if (Exit.isFailure(cancelled))
+                                        assert.equal(Cause.hasInterruptsOnly(cancelled.cause), true)
+                                },
+                            }
+                            yield* Effect.promise(() =>
+                                attachmentSources
+                                    ? verifyAttachmentSources({
+                                          ops: attachmentOps,
+                                          channelId: channel.id,
+                                          rawFetch,
+                                          getFetch: () => globalThis.fetch,
+                                          setFetch: (value) => (globalThis.fetch = value),
+                                          setStage: (value) => (stage = value),
+                                          report,
+                                      })
+                                    : (attachments ? verifyAttachments : verifyEmbeds)(attachmentOps, channel.id),
+                            )
+                        }
+                        if (forceRecovery && !reactions && !pins && !guilds && !channels) {
+                            if (cache) sdkRequests.length = 0
+                            if (collectors) {
+                                yield* Effect.promise(() =>
+                                    verifyCollectors(
+                                        async (options) => {
+                                            const {
+                                                progressReply,
+                                                progressWait,
+                                                progressCancel,
+                                                progressGate,
+                                                progressCleanup,
+                                                onProgress,
+                                                ...settings
+                                            } = options
+                                            const collectorScope = Scope.makeUnsafe()
+                                            let opened
+                                            try {
+                                                opened = await Effect.runPromise(
+                                                    client.messages
+                                                        .collect(channel.id, {
+                                                            ...settings,
+                                                            ...(progressReply || progressWait
+                                                                ? {
+                                                                      onMessage: (message) =>
+                                                                          Effect.gen(function* () {
+                                                                              yield* Effect.sync(() =>
+                                                                                  onProgress?.("started", message),
+                                                                              )
+                                                                              if (progressGate)
+                                                                                  yield* Effect.promise(() =>
+                                                                                      progressGate(message),
+                                                                                  )
+                                                                              if (progressWait) yield* Effect.never
+                                                                              else {
+                                                                                  const reply =
+                                                                                      yield* client.messages.reply(
+                                                                                          message,
+                                                                                          {
+                                                                                              content: `${progressReply}-${message.id}`,
+                                                                                          },
+                                                                                      )
+                                                                                  yield* Effect.sync(() =>
+                                                                                      onProgress?.(
+                                                                                          "reply",
+                                                                                          message,
+                                                                                          reply,
+                                                                                      ),
+                                                                                  )
+                                                                              }
+                                                                          }).pipe(
+                                                                              Effect.ensuring(
+                                                                                  Effect.gen(function* () {
+                                                                                      if (progressCleanup) {
+                                                                                          yield* Effect.sync(() =>
+                                                                                              onProgress?.(
+                                                                                                  "cleanupStarted",
+                                                                                                  message,
+                                                                                              ),
+                                                                                          )
+                                                                                          yield* Effect.promise(() =>
+                                                                                              progressCleanup(message),
+                                                                                          )
+                                                                                      }
+                                                                                      yield* Effect.sync(() =>
+                                                                                          onProgress?.(
+                                                                                              "cleaned",
+                                                                                              message,
+                                                                                          ),
+                                                                                      )
+                                                                                  }),
+                                                                              ),
+                                                                          ),
+                                                                  }
+                                                                : {}),
+                                                        })
+                                                        .pipe(Scope.provide(collectorScope)),
+                                                )
+                                            } catch (error) {
+                                                await Effect.runPromise(Scope.close(collectorScope, Exit.void))
+                                                throw error
+                                            }
+                                            return {
+                                                wait: () =>
+                                                    Effect.runPromise(
+                                                        opened.result().pipe(
+                                                            Effect.match({
+                                                                onSuccess: (value) => ({ value }),
+                                                                onFailure: (error) => ({ error }),
+                                                            }),
+                                                        ),
+                                                    ),
+                                                stop: () => Effect.runPromise(opened.close()),
+                                                close: () => Effect.runPromise(Scope.close(collectorScope, Exit.void)),
+                                                ...(progressCancel
+                                                    ? {
+                                                          cancel: () =>
+                                                              Effect.runPromise(Scope.close(collectorScope, Exit.void)),
+                                                          cancelKind: "scope",
+                                                      }
+                                                    : {}),
+                                            }
+                                        },
+                                        cacheSend,
+                                        channel.id,
+                                        user.id,
+                                        () => gatewayProbe.interruptAndWait(client, states),
+                                    ),
+                                )
+                            } else yield* Effect.promise(() => gatewayProbe.interruptAndWait(client, states))
+                            if (cache) {
+                                assert.equal(yield* Effect.promise(() => cacheGet(beforeRecovery)), undefined)
+                                assert.deepEqual(sdkRequests, [])
+                                const remote = yield* Effect.promise(() =>
+                                    api("GET", `/channels/${channel.id}/messages/${beforeRecovery.id}`),
+                                )
+                                assert.equal(remote.status, 200)
+                                assert.equal(remote.data?.content, beforeRecovery.content)
+                                report("cache_recovery_gap_clears_without_autofetch", true)
+                            }
+                        }
+                        seed = yield* client.messages.send(channel.id, { content: ping })
+                        reply = yield* Deferred.await(done).pipe(Effect.timeout(20_000))
+                        yield* subscription.close()
+                        yield* subscription.waitForClose()
+                        if (cache) {
+                            yield* Effect.promise(() => verifyCacheGatewayRebuild(cacheGet, channel.id))
+                            yield* Effect.promise(() =>
+                                verifyCacheProjectionConflict(
+                                    cacheSend,
+                                    (target) => Effect.runPromise(client.messages.fetch(target)),
+                                    cacheGet,
+                                    channel.id,
+                                ),
+                            )
+                        }
+                        if (changes || cache) {
+                            const probe = observeMessageChanges(channel.id)
+                            yield* Effect.scoped(
+                                Effect.gen(function* () {
+                                    yield* client.on("messageUpdate", (message) =>
+                                        Effect.sync(() => probe.receive("messageUpdate", message)),
+                                    )
+                                    for (const event of ["messageDelete", "messageDeleteBulk"]) {
+                                        yield* Effect.forkScoped(
+                                            Stream.runForEach(client.subscribe(event), (message) =>
+                                                Effect.sync(() => probe.receive(event, message)),
+                                            ),
+                                        )
+                                    }
+                                    yield* Effect.promise(() => probe.exercise(user.id, cache ? cacheGet : undefined))
+                                }),
+                            )
+                        }
+                    })
+                        .pipe(Scope.provide(effectScope))
+                        .pipe(
+                            recover
+                                ? Effect.provideService(Logger.CurrentLoggers, new Set([diagnosticLogger]))
+                                : (effect) => effect,
+                        ),
+                )
+            } finally {
+                const closed = await closeScenarioScope(effectScope, exit)
+                exit = closed.exit
+                if (!closed.closed) {
+                    quiescent = false
+                    process.exitCode = 1
+                    report("scope_cleanup", false)
+                }
             }
+            if ((attachments || attachmentSources) && Exit.isFailure(exit))
+                for (const reason of exit.cause.reasons.slice(0, 8)) {
+                    if (reason._tag === "Fail") reportFailure(reason.error)
+                    else if (reason._tag === "Die") reportFailure(reason.defect)
+                    else console.log(JSON.stringify({ mode, check: stage, type: "interrupted" }))
+                }
+            assert.ok(Exit.isSuccess(exit))
         }
-        if ((attachments || attachmentSources) && Exit.isFailure(exit))
-            for (const reason of exit.cause.reasons.slice(0, 8)) {
-                if (reason._tag === "Fail") reportFailure(reason.error)
-                else if (reason._tag === "Die") reportFailure(reason.defect)
-                else console.log(JSON.stringify({ mode, check: stage, type: "interrupted" }))
-            }
-        assert.ok(Exit.isSuccess(exit))
-    }
-    assert.equal(client.state, "Closed")
-    if (recover) {
-        stage = "recovery_diagnostics"
-        assert.equal(diagnosticOverflow, false)
-        const records = diagnosticRecords
-        for (const code of [
-            "lifecycle.starting",
-            "lifecycle.ready",
-            "lifecycle.connectionLost",
-            "lifecycle.shutdown",
-            "lifecycle.shutdownComplete",
-        ])
+        assert.equal(client.state, "Closed")
+        if (recover) {
+            stage = "recovery_diagnostics"
+            assert.equal(diagnosticOverflow, false)
+            const records = diagnosticRecords
+            for (const code of [
+                "lifecycle.starting",
+                "lifecycle.ready",
+                "lifecycle.connectionLost",
+                "lifecycle.shutdown",
+                "lifecycle.shutdownComplete",
+            ])
+                assert.ok(
+                    records.some((entry) => entry.code === code),
+                    `Missing ${code} in ${JSON.stringify(records.map((entry) => entry.code))}`,
+                )
+            assert.ok(records.some((entry) => entry.code === "lifecycle.ready" && entry.mode === "resume"))
             assert.ok(
-                records.some((entry) => entry.code === code),
-                `Missing ${code} in ${JSON.stringify(records.map((entry) => entry.code))}`,
+                records.some((entry) => entry.code === "lifecycle.connectionLost" && Number.isFinite(entry.delayMs)),
             )
-        assert.ok(records.some((entry) => entry.code === "lifecycle.ready" && entry.mode === "resume"))
-        assert.ok(records.some((entry) => entry.code === "lifecycle.connectionLost" && Number.isFinite(entry.delayMs)))
-        assert.ok(!JSON.stringify(diagnosticRecords).includes(token))
-        report("recovery_diagnostics", true)
+            assert.ok(!JSON.stringify(diagnosticRecords).includes(token))
+            report("recovery_diagnostics", true)
+        }
+        gatewayProbe?.verifyClosed()
+        stage = "live_reply_readback"
+        const actual = (await api("GET", `/channels/${channel.id}/messages/${reply.id}`)).data
+        assert.equal(actual?.channel_id, channel.id)
+        assert.equal(actual?.content, pong)
+        assert.equal(actual?.message_reference?.message_id, seed.id)
+        assert.equal(actual?.mention_everyone, false)
+        assert.deepEqual(actual?.mentions, [])
+        stage = "received_message_metadata_readback"
+        const seedWire = (await api("GET", `/channels/${channel.id}/messages/${seed.id}`)).data
+        verifyReceivedMetadata(seed, seedWire)
+        verifyReceivedMetadata(reply, actual)
+        report(stage, true)
+        report("sdk_receive_and_reply", true)
+        if (forceRecovery) report("post_resume_receive_and_reply", true)
+        report("reply_reference_and_mentions_verified", true)
+        report("sdk_closed", true)
     }
-    gatewayProbe?.verifyClosed()
-    stage = "live_reply_readback"
-    const actual = (await api("GET", `/channels/${channel.id}/messages/${reply.id}`)).data
-    assert.equal(actual?.channel_id, channel.id)
-    assert.equal(actual?.content, pong)
-    assert.equal(actual?.message_reference?.message_id, seed.id)
-    assert.equal(actual?.mention_everyone, false)
-    assert.deepEqual(actual?.mentions, [])
-    stage = "received_message_metadata_readback"
-    const seedWire = (await api("GET", `/channels/${channel.id}/messages/${seed.id}`)).data
-    verifyReceivedMetadata(seed, seedWire)
-    verifyReceivedMetadata(reply, actual)
-    report(stage, true)
-    report("sdk_receive_and_reply", true)
-    if (forceRecovery) report("post_resume_receive_and_reply", true)
-    report("reply_reference_and_mentions_verified", true)
-    report("sdk_closed", true)
 } catch (error) {
     // Never print assertions, HTTP bodies, native causes, configured identities or credentials
     if (attachments || attachmentSources || reactions || pins || guilds || channels || moderation) reportFailure(error)

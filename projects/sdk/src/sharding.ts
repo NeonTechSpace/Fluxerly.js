@@ -134,8 +134,8 @@ export interface SessionSnapshot {
  * process that restarts within that window can Resume and receive the dispatches it missed, subject to Fluxer's replay
  * limits. Creation copies both functions, bound to their object.
  * Snapshots are saved only during shutdown, after each shard's socket has closed, never while a session is live and
- * not after a permanent connection failure, so a crash leaves no fresh snapshot. The closure uses the normal WebSocket
- * code, which Fluxer documents as leaving the session resumable
+ * not after a permanent connection failure, so a crash leaves no fresh snapshot. A saved session closes with private-use
+ * code 4000 to preserve Resume. Without persistence, intentional final closure uses 1000, which destroys the session
  *
  * @category Sharding and supervision
  */

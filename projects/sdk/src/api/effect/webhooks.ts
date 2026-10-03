@@ -20,7 +20,7 @@ import type * as Effect from "effect/Effect"
  */
 export interface Webhooks {
     /**
-     * Create a webhook in a channel using the bot's permissions.
+     * Create an incoming webhook in a text, voice or announcement channel using the bot's permissions.
      * The result separates metadata from redacted credentials, which expose the token only through revealToken.
      * Credentials passed to createWebhookClient must remain private.
      * An unknown outcome may have left the webhook created
@@ -31,12 +31,13 @@ export interface Webhooks {
         options?: WebhookOperationOptions,
     ): Effect.Effect<CreatedWebhook, WebhookOperationFailure>
     /**
-     * Fetch webhook metadata by decimal ID, discarding the returned token.
-     * A missing webhook fails with reason notFound
+     * Fetch incoming, follower or unknown-kind metadata by decimal ID, discarding any returned token.
+     * Follower sources are present only while they exist and the original creator can view them.
+     * Missing source metadata does not prove deletion. A missing webhook fails with reason notFound
      */
     fetch(id: string, options?: WebhookOperationOptions): Effect.Effect<Webhook, WebhookOperationFailure>
     /**
-     * List the channel's accessible webhook metadata without pagination.
+     * List the channel's accessible incoming, follower and unknown-kind webhook metadata without pagination.
      * No tokens are retained and no webhook cache is filled
      */
     fetchForChannel(
@@ -44,7 +45,7 @@ export interface Webhooks {
         options?: WebhookOperationOptions,
     ): Effect.Effect<readonly Webhook[], WebhookOperationFailure>
     /**
-     * List the community's accessible webhook metadata.
+     * List the community's accessible incoming, follower and unknown-kind webhook metadata.
      * Fluxer permissions determine visibility.
      * Concurrent changes mean this is not a stable snapshot
      */
@@ -53,9 +54,11 @@ export interface Webhooks {
         options?: WebhookOperationOptions,
     ): Effect.Effect<readonly Webhook[], WebhookOperationFailure>
     /**
-     * Change the supplied webhook settings, including its destination channel.
-     * Returned metadata excludes credentials.
-     * A failed response does not guarantee the changes were rolled back
+     * Change the supplied incoming or follower webhook settings, including its destination channel.
+     * Followers can be renamed or moved to a text channel in the same community, but an avatar change fails
+     * with field avatar and Fluxer code INVALID_FORMAT. Incoming webhooks allow text, voice or announcement destinations.
+     * Moving emits Webhooks Update for the old and new channel. The SDK does not synthesize those events.
+     * Returned metadata excludes credentials. A failed response does not guarantee the changes were rolled back
      */
     edit(
         id: string,
@@ -63,9 +66,9 @@ export interface Webhooks {
         options?: WebhookOperationOptions,
     ): Effect.Effect<Webhook, WebhookOperationFailure>
     /**
-     * Delete a webhook and revoke its credential.
-     * Existing webhook messages remain.
-     * A failure does not restore a credential that was already revoked
+     * Delete an incoming webhook and revoke its credential, or delete a follower webhook to unfollow its source.
+     * Existing webhook messages remain. Fluxer emits Webhooks Update for the destination channel.
+     * The SDK does not synthesize that event. A failure does not restore a deleted follow or revoked credential
      */
     delete(id: string, options?: WebhookOperationOptions): Effect.Effect<void, WebhookOperationFailure>
 }

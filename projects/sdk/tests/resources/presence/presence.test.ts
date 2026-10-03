@@ -330,34 +330,25 @@ test("member presence validates identifier, per-client capacity and the complete
         ),
     ).toBe("limit")
 
-    const id = (index: number) => "900000000000000" + String(index).padStart(5, "0")
+    const id = (index: number) => String(9_000_000_000_000_000_000n + BigInt(index))
+    const frameBytes = (members: readonly string[]) =>
+        Buffer.byteLength(JSON.stringify({ op: 14, d: { subscriptions: { "40": { members } } } }))
     let largest = 0
-    while (
-        Buffer.byteLength(
-            JSON.stringify({
-                op: 14,
-                d: {
-                    subscriptions: { "40": { members: Array.from({ length: largest + 1 }, (_, index) => id(index)) } },
-                },
-            }),
-        ) <= 4_096
-    )
-        largest += 1
+    while (frameBytes(Array.from({ length: largest + 1 }, (_, index) => id(index))) <= 4_096) largest += 1
     const fitting = Array.from({ length: largest }, (_, index) => id(index))
-    const frameBytes = (guildId: string) =>
-        Buffer.byteLength(JSON.stringify({ op: 14, d: { subscriptions: { [guildId]: { members: fitting } } } }))
-    const exactGuildId = "9".repeat(2 + 4_096 - frameBytes("40"))
-    const overLimitGuildId = exactGuildId + "9"
-    expect(frameBytes(exactGuildId)).toBe(4_096)
-    expect(frameBytes(overLimitGuildId)).toBe(4_097)
-    expect(owner.setMembers(exactGuildId, fitting)).toBeUndefined()
-    expect(owner.setMembers(overLimitGuildId, fitting)).toBe("limit")
+    // A shorter final ID fills the byte budget without exceeding the gateway snowflake bound
+    fitting.push("1".repeat(4_096 - frameBytes(fitting) - 3))
+    const exceeding = [...fitting.slice(0, -1), fitting.at(-1)! + "1"]
+    expect(frameBytes(fitting)).toBe(4_096)
+    expect(frameBytes(exceeding)).toBe(4_097)
+    expect(owner.setMembers("40", fitting)).toBeUndefined()
+    expect(owner.setMembers("40", exceeding)).toBe("limit")
     owner.attach(
         () => undefined,
         (frame) => void sent.push(frame),
     )
     clock.advance(0)
-    expect(sent).toEqual([{ subscriptions: { [exactGuildId]: { members: fitting } } }])
+    expect(sent).toEqual([{ subscriptions: { "40": { members: fitting } } }])
     owner.detach()
 
     for (let index = 1; index <= 99; index += 1) expect(owner.setMembers(String(index + 100), ["30"])).toBeUndefined()

@@ -353,7 +353,7 @@ try {
     assert.ok(
         files.every(
             (file) =>
-                ["package.json", "README.md", "consumer/AGENTS.md", "esm-only.cjs", "LICENSE", "CHANGELOG.md"].includes(
+                ["package.json", "README.md", "agents/AGENTS.md", "esm-only.cjs", "LICENSE", "CHANGELOG.md"].includes(
                     file,
                 ) ||
                 file.startsWith("dist/") ||
@@ -361,7 +361,7 @@ try {
                 file.startsWith("src/"),
         ),
     )
-    assert.ok(files.includes("consumer/AGENTS.md"))
+    assert.ok(files.includes("agents/AGENTS.md"))
     assert.ok(files.includes("README.md"))
     assert.ok(files.includes("LICENSE"))
     assert.ok(files.includes("esm-only.cjs"))
@@ -399,7 +399,7 @@ try {
                 `Packed bytes differ from staged ${path}`,
             )
         }
-        for (const path of ["README.md", "consumer/AGENTS.md"]) {
+        for (const path of ["README.md", "agents/AGENTS.md"]) {
             assert.equal(readFileSync(join(installed, path), "utf8"), readFileSync(join(sdk, path), "utf8"))
         }
         assert.deepEqual(readFileSync(join(installed, "LICENSE")), readFileSync(join(sdk, "../../LICENSE")))
@@ -446,12 +446,12 @@ try {
             )
         }
         const guideExample = [
-            ...readFileSync(join(installed, "consumer/AGENTS.md"), "utf8").matchAll(/```ts\r?\n([\s\S]*?)```/g),
+            ...readFileSync(join(installed, "agents/AGENTS.md"), "utf8").matchAll(/```ts\r?\n([\s\S]*?)```/g),
         ]
             .map((match) => match[1])
             .filter((example) => example.includes('from "effect"') === (kind === "effect"))
-        assert.equal(guideExample.length, 1, `Expected one ${kind} example in the shipped consumer guide`)
-        writeFileSync(join(consumer, "consumer-guide.ts"), guideExample[0])
+        assert.equal(guideExample.length, 1, `Expected one ${kind} example in the shipped agent guide`)
+        writeFileSync(join(consumer, "agent-guide.ts"), guideExample[0])
         run(
             process.execPath,
             [
@@ -668,8 +668,8 @@ try {
             }),
         )
         run(process.execPath, [compiler, "-p", "tsconfig.json"], consumer)
-        copyFileSync(join(fixtureDirectory, "consumer-guide.js"), join(consumer, "consumer-guide.js"))
-        process.stdout.write(withoutSdkOutput(run(process.execPath, ["consumer-guide.js"], consumer, 15_000)))
+        copyFileSync(join(fixtureDirectory, "agent-guide.js"), join(consumer, "agent-guide.js"))
+        process.stdout.write(withoutSdkOutput(run(process.execPath, ["agent-guide.js"], consumer, 15_000)))
         copyFileSync(join(fixtureDirectory, "workflow.js"), join(consumer, "workflow.js"))
         process.stdout.write(
             withoutSdkOutput(run(process.execPath, ["--enable-source-maps", "workflow.js", kind], consumer, 15_000)),
@@ -859,9 +859,9 @@ try {
                 incompatibleConsumer,
             ),
         (error) => /peer/i.test(String(error.stdout) + String(error.stderr)),
-        "A different Effect RC must fail strict peer installation rather than silently use separate runtimes",
+        "An Effect version outside the peer range must fail strict peer installation rather than silently use separate runtimes",
     )
-    console.log("Unsupported native Effect RC rejected by strict peer installation")
+    console.log("Native Effect outside the peer range rejected by strict peer installation")
 } finally {
     const target = realpathSync(temporary)
     assert.equal(dirname(target), temporaryRoot)

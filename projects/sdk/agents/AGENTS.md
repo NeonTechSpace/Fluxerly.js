@@ -147,8 +147,8 @@ Check the result requested by the user. Report anything that could not be tested
 
 ## Only for native Effect applications
 
-Use the exact Effect version listed under `peerDependencies.effect` in the installed SDK's `package.json`.
-A newer Effect release candidate is not a supported substitute
+Use an Effect version within the `peerDependencies.effect` range in the installed SDK's `package.json`.
+The lowest version in that range is the one the SDK is tested against. Later Effect 4 releases are accepted, but Effect 3 and Effect 4 prereleases are not
 
 Effect operations describe work but do not start it until executed.
 Compose them with `yield*` inside `Effect.gen`, keep the scope open while its resources are needed, and execute the program from the application's entry point.
@@ -191,5 +191,5 @@ Check each member's declaration rather than assuming every native member is an E
 
 ## Keep this guide in the project
 
-Run `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` in the application's folder to copy the rules above into its AGENTS.md, which coding agents read automatically.
+Run `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` in the application's folder to copy the rules above into its AGENTS.md, which many coding agent tools read automatically.
 Running it again after an SDK update refreshes only that section

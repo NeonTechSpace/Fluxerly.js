@@ -101,9 +101,9 @@ Learn the core concepts in the [Effect v4 introduction](https://effect.website/d
 <details>
 <summary>Installing Effect for a native application</summary>
 
-Applications that import Effect directly must declare it as a direct dependency, using the exact version in the installed SDK's `peerDependencies.effect`. Read `node_modules/@neontechspace/fluxerly/package.json`, or the [SDK manifest](/projects/sdk/package.json) for this checkout
+Applications that import Effect directly must declare it as a direct dependency, using a version within the installed SDK's `peerDependencies.effect` range. Read `node_modules/@neontechspace/fluxerly/package.json`, or the [SDK manifest](/projects/sdk/package.json) for this checkout
 
-Fluxerly currently uses the Effect 4 RC line. Do not install an arbitrary newer RC or stable Effect 3. The versioned documentation gives the matching install command
+The lowest version in that range is the one Fluxerly is tested against. Later Effect 4 releases are accepted. Do not install Effect 3 or an Effect 4 prerelease. The versioned documentation gives the matching install command
 
 </details>
 

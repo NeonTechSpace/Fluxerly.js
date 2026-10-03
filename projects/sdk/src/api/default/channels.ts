@@ -6,6 +6,9 @@ import type {
     ChannelCreate,
     ChannelEdit,
     ChannelPosition,
+    ChannelFollowInput,
+    FollowedChannel,
+    ChannelFollowerStats,
     ChannelOperationFailure,
     DefaultChannelOperationOptions,
     DefaultChannelAuditOperationOptions,
@@ -37,7 +40,7 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
  * Any dispatched channel change clears the enabled channel cache.
  * Local input failure before dispatch preserves it.
  * No write is followed by an automatic confirmation fetch.
- * The create, edit, delete, reorder and permission-overwrite mutations accept a raw audit reason through
+ * The follow, create, edit, delete, reorder and permission-overwrite mutations accept a raw audit reason through
  * DefaultChannelAuditOperationOptions. Read operations reject auditReason instead of sending a meaningless header.
  * Expected failures return ChannelOperationError or ClientClosedError.
  * Abort returns CancelledError after cleanup.
@@ -47,8 +50,40 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
  */
 export interface Channels {
     /**
+     * Follow an announcement channel into the supplied community text channel and return frozen source and webhook IDs.
+     * The source must be viewable, have type Announcement and belong to a community with announcements enabled.
+     * The target must have type Text, with ViewChannel and ManageWebhooks on that channel plus community-level ManageWebhooks.
+     * Fluxer enforces webhook capacity and rejects duplicate source-to-target follows
+     *
+     * An adult source requires an adult target. A content-warning source requires an adult or content-warning target.
+     * These settings include inherited category and community restrictions, checked by Fluxer without an SDK prefetch.
+     * Success creates a channel-follower webhook and emits Webhooks Update for the target.
+     * Fluxer also attempts a ChannelFollowAdd notice in the target, but a notice failure does not fail the follow.
+     * Neither gateway delivery nor notice creation is confirmed by this result.
+     * Use client.webhooks.delete with the returned webhookId to stop following
+     *
+     * The auditReason option is consumed by the created webhook's audit entry.
+     * A lost or malformed response can leave the follow created and is never resent automatically.
+     * Inspect the target's webhooks before retrying an unknown outcome
+     */
+    follow(
+        channelId: string,
+        input: ChannelFollowInput,
+        options?: DefaultChannelAuditOperationOptions,
+    ): ResultAsync<FollowedChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
+    /**
+     * Fetch frozen channel and distinct community follower counts for a viewable announcement channel.
+     * Fluxer can cache these counts for up to 60 seconds, so they need not include the latest follow changes.
+     * This does not populate channel caches or subscribe to changes. The auditReason option is not supported
+     */
+    fetchFollowerStats(
+        channelId: string,
+        options?: DefaultChannelOperationOptions,
+    ): ResultAsync<ChannelFollowerStats, ChannelOperationFailure | CancelledError | ConfigurationError>
+    /**
      * Request fresh member counts for 1–25 channels in one community over the connected gateway.
-     * Use distinct positive decimal IDs without leading zeros, no greater than "18446744073709551615".
+     * Use distinct positive decimal channel IDs without leading zeros, no greater than "9223372036854775807".
+     * The community ID must satisfy the same bound.
      * The IDs are copied when execution starts
      *
      * The community must have a ready shard assigned to this client, or the call fails with notConnected instead of listing omitted channels.
@@ -138,7 +173,11 @@ export interface Channels {
     /**
      * Change only the supplied channel settings and return the frozen server snapshot.
      * An empty input or unknown field fails locally.
-     * Use reorder to change a parent or position, and channel type cannot be edited here.
+     * Use reorder to change a parent or position. Supply type to convert between Text and Announcement, alone or with other settings.
+     * Fluxer requires ManageChannels and rejects converting a text channel that receives follows with CHANNEL_HAS_FOLLOWED_CHANNELS.
+     * Converting Announcement to Text queues asynchronous follower removal.
+     * Fluxer emits a complete Channel Update with the new type, which replaces the cached observation before handlers run.
+     * This call does not await gateway delivery or follower removal.
      * Omitted permissionOverwrites keeps the old list, and [] clears it.
      * Each replacement allow and deny mask must be from 0n through 9_223_372_036_854_775_807n.
      * Explicit replacement handles setting and clearing ViewChannelMembers through Fluxer's required feature opt-in

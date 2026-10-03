@@ -8,6 +8,8 @@ import { EmbedBuilder } from "#sdk/builders"
 import { MessageFlags } from "#sdk/messages"
 import type {
     Message,
+    CrosspostSource,
+    CrosspostSourceGuild,
     MessageInput,
     MessageReference,
     MessageDeletion,
@@ -36,6 +38,42 @@ const writableFlags = (value: unknown): value is number =>
     value >= 0 &&
     value <= 2_147_483_647 &&
     (value & ~writableMessageFlags) === 0
+
+/** Decode the public source snapshot separately from Guild so it cannot enter the guild cache */
+export function decodeCrosspostSource(value: unknown): CrosspostSource | undefined {
+    if (!record(value) || !record(value.guild)) return undefined
+    const guild = value.guild
+    if (
+        !identifier(guild.id) ||
+        typeof guild.name !== "string" ||
+        (guild.description !== null && typeof guild.description !== "string") ||
+        !Array.isArray(guild.features) ||
+        (guild.approximate_member_count !== null && !count(guild.approximate_member_count)) ||
+        (guild.approximate_presence_count !== null && !count(guild.approximate_presence_count)) ||
+        typeof guild.discoverable !== "boolean" ||
+        (guild.icon !== undefined && guild.icon !== null && typeof guild.icon !== "string") ||
+        (guild.banner !== undefined && guild.banner !== null && typeof guild.banner !== "string")
+    )
+        return undefined
+    const features: Array<CrosspostSourceGuild["features"][number]> = []
+    for (const feature of guild.features) {
+        if (typeof feature !== "string") return undefined
+        features.push(feature)
+    }
+    return Object.freeze({
+        guild: Object.freeze({
+            id: guild.id,
+            name: guild.name,
+            description: guild.description,
+            features: Object.freeze(features),
+            approximateMemberCount: guild.approximate_member_count,
+            approximatePresenceCount: guild.approximate_presence_count,
+            discoverable: guild.discoverable,
+            ...(guild.icon === undefined ? {} : { icon: guild.icon }),
+            ...(guild.banner === undefined ? {} : { banner: guild.banner }),
+        }),
+    })
+}
 
 export function decodeMessage(value: unknown): Message | undefined
 export function decodeMessage(
@@ -275,7 +313,7 @@ function decodeMessageReference(
     if (value === null) return construct ? { value: null } : unobserved
     if (
         !record(value) ||
-        !identifier(value.message_id) ||
+        (value.message_id !== undefined && value.message_id !== null && !identifier(value.message_id)) ||
         !identifier(value.channel_id) ||
         (value.guild_id !== undefined && value.guild_id !== null && !identifier(value.guild_id)) ||
         (value.type !== undefined && !int32(value.type))
@@ -284,7 +322,7 @@ function decodeMessageReference(
     if (!construct) return unobserved
     return {
         value: Object.freeze({
-            id: value.message_id,
+            ...(value.message_id == null ? {} : { id: value.message_id }),
             channelId: value.channel_id,
             ...(value.guild_id === undefined ? {} : { guildId: value.guild_id }),
             ...(value.type === undefined ? {} : { type: value.type }),
@@ -520,7 +558,7 @@ export function encodeMessage(
             inputValidationFailure(
                 "flags",
                 "allowedValue",
-                "Message flags may contain only SuppressEmbeds and SuppressNotifications",
+                "Writable message flags may contain only SuppressEmbeds and SuppressNotifications. Server-managed flags cannot be sent or edited",
             ),
         )
     const tts = field("tts")
@@ -751,7 +789,7 @@ export function encodeEdit(input: unknown): EncodedBody | InputValidationFailure
         return inputValidationFailure(
             "flags",
             "allowedValue",
-            "Message flags may contain only SuppressEmbeds and SuppressNotifications",
+            "Writable message flags may contain only SuppressEmbeds and SuppressNotifications. Server-managed flags cannot be sent or edited",
         )
     if (!body && (hasBodyInput || flags === undefined))
         return inputValidationFailure("input", "required", "A message edit must contain at least one editable field")

@@ -58,6 +58,7 @@ export interface Presence {
      * Loss of shared channel visibility can remove the provider subscription, so resend the selection after access returns.
      * Clear explicitly or shut down the client to release local intent.
      * Input or limit failures fail with PresenceError, and closing clients fail with ClientClosedError.
+     * The community and member IDs must be positive decimal strings without leading zeros, no greater than 9223372036854775807.
      * The member IDs are copied once, and that copy is validated and subscribed
      *
      * @remarks

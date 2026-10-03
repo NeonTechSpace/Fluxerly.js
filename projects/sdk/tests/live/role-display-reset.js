@@ -1,7 +1,7 @@
 // Role display-position reset on a sandbox server with initially cleared positions: a successful reset and a
 // lost-response reset each dispatch once, invalidate cached roles and leave every other role field unchanged.
 // Journal `.env.test.role-reset.local` records the sandbox and bot identity and two test roles. An existing
-// journal is cleaned up before a new run by verified test-role deletion
+// journal triggers recovery only, with verified test-role deletion
 import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { createGuildTestRole, cleanupGuildTestRole } from "./guild-fixture.mjs"
@@ -82,80 +82,82 @@ try {
     report(stage)
     if (journalFile.exists()) {
         journal = journalFile.read()
+        stage = "recovery_only"
         await cleanup()
-    }
+        report(stage)
+    } else {
+        stage = "original_display_preflight"
+        const original = (await api("GET", `/guilds/${guildId}/roles`)).data
+        assert.ok(Array.isArray(original) && original.length > 0)
+        // This bounded check preserves existing assignments by requiring an initially cleared guild
+        assert.ok(original.every((role) => role.hoist_position === null))
+        report(stage, { originalRoleCount: original.length })
+        journal = { kind: "role-display-reset", guildId, botId }
+        journalFile.create(journal)
+        const first = await createGuildTestRole(api, journal, save)
+        journal.secondRole = { guildId }
+        const second = await createGuildTestRole(api, journal.secondRole, save)
 
-    stage = "original_display_preflight"
-    const original = (await api("GET", `/guilds/${guildId}/roles`)).data
-    assert.ok(Array.isArray(original) && original.length > 0)
-    // This bounded check preserves existing assignments by requiring an initially cleared guild
-    assert.ok(original.every((role) => role.hoist_position === null))
-    report(stage, { originalRoleCount: original.length })
-    journal = { kind: "role-display-reset", guildId, botId }
-    journalFile.create(journal)
-    const first = await createGuildTestRole(api, journal, save)
-    journal.secondRole = { guildId }
-    const second = await createGuildTestRole(api, journal.secondRole, save)
+        const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
+        if (mode === "effect") {
+            ;({ Effect, Exit, Scope } = await import("effect"))
+            scope = Scope.makeUnsafe()
+            client = await value(sdk.createClient({ token, cache: { roles: true } }).pipe(Scope.provide(scope)))
+        } else client = sdk.createClient({ token, cache: { roles: true } })
 
-    const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
-    if (mode === "effect") {
-        ;({ Effect, Exit, Scope } = await import("effect"))
-        scope = Scope.makeUnsafe()
-        client = await value(sdk.createClient({ token, cache: { roles: true } }).pipe(Scope.provide(scope)))
-    } else client = sdk.createClient({ token, cache: { roles: true } })
+        const positions = [
+            { id: first, hoistPosition: 7 },
+            { id: second, hoistPosition: -3 },
+        ]
+        for (const loseResponse of [false, true]) {
+            stage = "seed_distinct_display_positions"
+            await value(client.roles.setHoistPositions(guildId, positions))
+            const before = (await api("GET", `/guilds/${guildId}/roles`)).data
+            for (const position of positions)
+                assert.equal(before.find((role) => role.id === position.id)?.hoist_position, position.hoistPosition)
+            assert.deepEqual(sorted(before.filter((role) => role.id !== first && role.id !== second)), sorted(original))
+            await value(client.roles.fetchAll(guildId))
+            assert.equal((await cached(client.roles.get({ guildId, id: first }))).hoistPosition, 7)
 
-    const positions = [
-        { id: first, hoistPosition: 7 },
-        { id: second, hoistPosition: -3 },
-    ]
-    for (const loseResponse of [false, true]) {
-        stage = "seed_distinct_display_positions"
-        await value(client.roles.setHoistPositions(guildId, positions))
-        const before = (await api("GET", `/guilds/${guildId}/roles`)).data
-        for (const position of positions)
-            assert.equal(before.find((role) => role.id === position.id)?.hoist_position, position.hoistPosition)
-        assert.deepEqual(sorted(before.filter((role) => role.id !== first && role.id !== second)), sorted(original))
-        await value(client.roles.fetchAll(guildId))
-        assert.equal((await cached(client.roles.get({ guildId, id: first }))).hoistPosition, 7)
-
-        stage = loseResponse ? "reset_lost_response" : "reset_success"
-        let dispatches = 0
-        globalThis.fetch = async (request, options) => {
-            const url = new URL(typeof request === "string" || request instanceof URL ? request : request.url)
-            if (options?.method !== "DELETE" || url.pathname !== `/v1/guilds/${guildId}/roles/hoist-positions`)
-                return rawFetch(request, options)
-            dispatches++
+            stage = loseResponse ? "reset_lost_response" : "reset_success"
+            let dispatches = 0
+            globalThis.fetch = async (request, options) => {
+                const url = new URL(typeof request === "string" || request instanceof URL ? request : request.url)
+                if (options?.method !== "DELETE" || url.pathname !== `/v1/guilds/${guildId}/roles/hoist-positions`)
+                    return rawFetch(request, options)
+                dispatches++
+                assert.equal(dispatches, 1)
+                assert.equal(options.body, undefined)
+                const response = await rawFetch(request, options)
+                assert.equal(response.status, 204)
+                if (!loseResponse) return response
+                await response.body?.cancel()
+                throw new TypeError("Intentionally lost reset response")
+            }
+            try {
+                if (loseResponse) {
+                    await assert.rejects(value(client.roles.resetHoistPositions(guildId)), (error) => {
+                        assert.equal(error._tag, "GuildOperationError")
+                        assert.equal(error.reason, "network")
+                        assert.equal(error.outcome, "unknown")
+                        return true
+                    })
+                } else assert.equal(await value(client.roles.resetHoistPositions(guildId)), undefined)
+            } finally {
+                globalThis.fetch = rawFetch
+            }
             assert.equal(dispatches, 1)
-            assert.equal(options.body, undefined)
-            const response = await rawFetch(request, options)
-            assert.equal(response.status, 204)
-            if (!loseResponse) return response
-            await response.body?.cancel()
-            throw new TypeError("Intentionally lost reset response")
+            assert.equal(await cached(client.roles.get({ guildId, id: first })), undefined)
+            const after = (await api("GET", `/guilds/${guildId}/roles`)).data
+            assert.deepEqual(withoutDisplay(after), withoutDisplay(before))
+            assert.ok(after.every((role) => role.hoist_position === null))
+            assert.ok((await value(client.roles.fetchAll(guildId))).every((role) => role.hoistPosition === null))
+            report(stage, { roleCount: after.length, singleDispatch: true, cacheInvalidated: true })
         }
-        try {
-            if (loseResponse) {
-                await assert.rejects(value(client.roles.resetHoistPositions(guildId)), (error) => {
-                    assert.equal(error._tag, "GuildOperationError")
-                    assert.equal(error.reason, "network")
-                    assert.equal(error.outcome, "unknown")
-                    return true
-                })
-            } else assert.equal(await value(client.roles.resetHoistPositions(guildId)), undefined)
-        } finally {
-            globalThis.fetch = rawFetch
-        }
-        assert.equal(dispatches, 1)
-        assert.equal(await cached(client.roles.get({ guildId, id: first })), undefined)
-        const after = (await api("GET", `/guilds/${guildId}/roles`)).data
-        assert.deepEqual(withoutDisplay(after), withoutDisplay(before))
-        assert.ok(after.every((role) => role.hoist_position === null))
-        assert.ok((await value(client.roles.fetchAll(guildId))).every((role) => role.hoistPosition === null))
-        report(stage, { roleCount: after.length, singleDispatch: true, cacheInvalidated: true })
+        await cleanup()
+        assert.deepEqual(sorted((await api("GET", `/guilds/${guildId}/roles`)).data), sorted(original))
+        report("original_roles_restored")
     }
-    await cleanup()
-    assert.deepEqual(sorted((await api("GET", `/guilds/${guildId}/roles`)).data), sorted(original))
-    report("original_roles_restored")
 } catch {
     console.error(JSON.stringify({ mode, check: stage, passed: false }))
     process.exitCode = 1

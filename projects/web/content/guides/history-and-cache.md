@@ -51,6 +51,8 @@ export async function searchChannel(client: Client, channelId: string, text: str
 
 The helper returns the matching messages, a failed Result, or `undefined` while Fluxer is still preparing its search index. It does not wait for the index or add results to the cache. To read the next page, increase `page` and keep `limit` unchanged
 
+Search pages also include channel snapshots. An unnamed group DM has `name: null`, while another private channel may omit the name. The `includeNsfw` filter requests age-restricted channel results. In an age-restricted community, guild search includes those results for eligible callers, including bots, even when the filter is omitted or false. Channel access checks still apply
+
 To search several pages, use [`iterateSearch`](/docs/{{version}}/api/interfaces/js-ts.Messages/#iteratesearch) with `maxItems` as the limit. Results can shift while the index changes during the scan
 
 ## Limit the message cache
@@ -88,7 +90,9 @@ See [`ClientOptions.cache`](/docs/{{version}}/api/interfaces/js-ts.ClientOptions
 
 ## Use the cache, then fetch if needed
 
-Use a cached message when a recent copy is good enough, and fetch it from Fluxer otherwise. Pass a message reference with its `channelId` and `id`
+Use a cached message when a recent copy is good enough, and fetch it from Fluxer otherwise. Pass a `MessageReference` with both `channelId` and `id`
+
+The received `message.messageReference` is a different type, `MessageContextReference`, whose `id` is optional. Check `id` before building the `MessageReference`. An [announcement-channel follow notice](/docs/{{version}}/announcement-channels/#find-where-a-copy-came-from) identifies only a source channel, not a message to fetch
 
 ```ts
 import { orThrow, type Client, type MessageReference } from "@neontechspace/fluxerly"

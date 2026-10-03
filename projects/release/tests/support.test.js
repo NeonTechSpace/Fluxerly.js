@@ -57,15 +57,20 @@ test("Release support succeeds locally and malformed release commands still stop
     }
 })
 
-test("Release support retains the exact required npm Effect peer", () => {
-    const sdk = { peerDependencies: { effect: "4.0.0-rc.115" }, devDependencies: { effect: "4.0.0-rc.115" } }
+test("Release support requires a stable Effect peer range tested at its lowest version", () => {
+    const sdk = { peerDependencies: { effect: "^4.0.0" }, devDependencies: { effect: "4.0.0" } }
     assert.doesNotThrow(() => validateReleaseSupport(sdk))
     for (const changed of [
         { ...sdk, peerDependencies: {} },
-        { ...sdk, peerDependencies: { effect: "^4.0.0" } },
-        { ...sdk, devDependencies: { effect: "4.0.0-rc.116" } },
+        // An exact peer rejects compatible applications, and a prerelease is not a supported Effect version
+        { ...sdk, peerDependencies: { effect: "4.0.0" } },
+        { peerDependencies: { effect: "^4.0.0-rc.117" }, devDependencies: { effect: "4.0.0-rc.117" } },
+        { ...sdk, peerDependencies: { effect: ">=4.0.0" } },
+        // The tested version must be the lowest accepted one, not a later release
+        { ...sdk, devDependencies: { effect: "4.1.0" } },
+        { ...sdk, devDependencies: { effect: "^4.0.0" } },
         { ...sdk, peerDependenciesMeta: { effect: { optional: true } } },
-    ]) assert.throws(() => validateReleaseSupport(changed), /exact Effect/)
+    ]) assert.throws(() => validateReleaseSupport(changed), /exact Effect development version/)
 })
 
 test("The support gate leaves local planning, fragment authoring and candidate inspection available", (t) => {
@@ -83,5 +88,5 @@ test("The support gate leaves local planning, fragment authoring and candidate i
     })
     for (const action of ["plan", "changeset", "inspect"]) assert.doesNotThrow(() => assertReleaseSupport(action), action)
     for (const action of ["check-support", "version", "prepare", "verify", "publish", "status"])
-        assert.throws(() => assertReleaseSupport(action), /exact Effect/, action)
+        assert.throws(() => assertReleaseSupport(action), /exact Effect development version/, action)
 })

@@ -8,7 +8,9 @@
  */
 import type { EventMap, EventName } from "#sdk/events"
 import type { MessageCore } from "#sdk/messages"
+import * as Cause from "effect/Cause"
 import * as Clock from "effect/Clock"
+import * as Exit from "effect/Exit"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import type * as Redacted from "effect/Redacted"
@@ -27,7 +29,7 @@ import type { MessageDecoder } from "../message-fields.js"
 import type { CountGatewayOwner } from "../counts.js"
 import type { MemberChunkOwner } from "../member-chunks.js"
 import type { PresenceGatewayOwner } from "../presence.js"
-import { classifyCloseCode, CloseCode, Opcode, opcodeName } from "../protocol/gateway.js"
+import { classifyCloseCode, CloseCode, Opcode, opcodeName, resumePreservingCloseCode } from "../protocol/gateway.js"
 import {
     defaultSocketFactory,
     SocketState,
@@ -150,9 +152,11 @@ export interface GatewaySessionOptions<M extends MessageCore> {
     readonly observer?: GatewayObserver | undefined
     /** Socket implementation, defaulting to the selected ws transport */
     readonly sockets?: SocketFactory | undefined
+    /** Whether an interrupted attempt will save its session for a later client */
+    readonly preserveSessionOnInterrupt?: (() => boolean) | undefined
 }
 
-function closeSocket(socket: GatewaySocket) {
+function closeSocket(socket: GatewaySocket, preserveSession: boolean) {
     return Effect.gen(function* () {
         if (socket.readyState === SocketState.closed) return
         const closed = Effect.callback<void>((resume) => {
@@ -163,7 +167,7 @@ function closeSocket(socket: GatewaySocket) {
         })
         yield* Effect.sync(() => {
             if (socket.readyState === SocketState.connecting) socket.terminate()
-            else socket.close(CloseCode.normal)
+            else socket.close(preserveSession ? resumePreservingCloseCode : CloseCode.normal)
         }).pipe(
             Effect.onExit((exit) =>
                 exit._tag === "Failure"
@@ -537,12 +541,29 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         },
                     }
                 }),
-                (transport) =>
+                (transport, exit) =>
                     Effect.gen(function* () {
                         stopping = true
                         transport.pacer.close()
                         onLatency(null)
-                        yield* closeSocket(transport.socket).pipe(Effect.ensuring(Effect.sync(transport.detach)))
+                        const retrying =
+                            Exit.isFailure(exit) &&
+                            exit.cause.reasons.some(
+                                (reason) =>
+                                    reason._tag === "Fail" &&
+                                    reason.error instanceof AttemptFailure &&
+                                    reason.error.retry &&
+                                    !reason.error.resetSession,
+                            )
+                        const saving =
+                            Exit.isFailure(exit) &&
+                            Cause.hasInterruptsOnly(exit.cause) &&
+                            options.preserveSessionOnInterrupt?.() === true
+                        const preserveSession =
+                            session.id !== undefined && session.sequence !== null && (retrying || saving)
+                        yield* closeSocket(transport.socket, preserveSession).pipe(
+                            Effect.ensuring(Effect.sync(transport.detach)),
+                        )
                     }),
             )
             yield* Effect.addFinalizer(() =>

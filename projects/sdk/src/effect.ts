@@ -49,7 +49,7 @@
  * This example sends through HTTP without connecting the gateway.
  * The returned Promise settles after the scoped client finishes cleanup
  *
- * Coding agents: read node_modules/@neontechspace/fluxerly/consumer/AGENTS.md before writing code with this package
+ * Coding agents: read node_modules/@neontechspace/fluxerly/agents/AGENTS.md before writing code with this package
  *
  * @packageDocumentation
  */
@@ -128,6 +128,7 @@ export { DiscoveryCategories } from "./discovery.js"
 export type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 export type {
     GuildCreate,
+    GuildHealthUpdate,
     GuildEmojisUpdate,
     GuildStickersUpdate,
     GuildLifecycleEvents,
@@ -203,9 +204,15 @@ export type {
     UserOperationFailure,
     UserOperationOptions,
 } from "./users.js"
-export { WebhookOperationError } from "./webhooks.js"
+export { WebhookOperationError, WebhookType } from "./webhooks.js"
 export type {
     Webhook,
+    WebhookBase,
+    IncomingWebhook,
+    ChannelFollowerWebhook,
+    UnknownWebhook,
+    WebhookSourceGuild,
+    WebhookSourceChannel,
     WebhookCredentials,
     CreatedWebhook,
     WebhookCreate,
@@ -402,19 +409,25 @@ export type {
     PermissionOverwrite,
     GuildChannel,
     GuildChannelBase,
+    GuildTextChannelBase,
     GuildTextChannel,
+    GuildAnnouncementChannel,
     GuildVoiceChannel,
     GuildCategoryChannel,
     GuildLinkChannel,
     GuildUnknownChannel,
     ChannelCreateBase,
     TextChannelCreate,
+    AnnouncementChannelCreate,
     VoiceChannelCreate,
     CategoryChannelCreate,
     LinkChannelCreate,
     ChannelCreate,
     ChannelEdit,
     ChannelPosition,
+    ChannelFollowInput,
+    FollowedChannel,
+    ChannelFollowerStats,
     GuildChannelUpdateBulk,
     ChannelOperation,
     ChannelOperationFailure,
@@ -503,6 +516,8 @@ export type {
     MessageReactionEmoji,
     MessageReactionSummary,
     MessageContextReference,
+    CrosspostSource,
+    CrosspostSourceGuild,
     MessageHistoryQuery,
     MessageDeletion,
     MessageBulkDeletion,
@@ -514,6 +529,7 @@ export type {
     SendOptions,
     EditMessageInput,
     MessageOperationOptions,
+    MessageAuditOperationOptions,
     OwnMessageDeletionOptions,
 } from "./messages.js"
 export type {

@@ -21,6 +21,10 @@ bitfield
 bitfields
 bsky
 cooldowns
+crosspost
+crossposted
+crossposting
+crossposts
 instatus
 joinability
 llms

@@ -397,7 +397,7 @@ function channel(value: unknown): MessageSearchChannel | undefined {
         !record(value) ||
         !identifier(value.id) ||
         (value.guild_id !== undefined && !identifier(value.guild_id)) ||
-        (value.name !== undefined && typeof value.name !== "string") ||
+        (value.name !== undefined && value.name !== null && typeof value.name !== "string") ||
         !integer(value.type, 0, 2_147_483_647)
     )
         return undefined

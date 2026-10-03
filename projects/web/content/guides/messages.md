@@ -44,6 +44,10 @@ Fluxer also delivers notices, such as a member joining or a pinned message, as m
 
 </details>
 
+Received messages can carry `message.messageReference`, which points at a replied-to or forwarded message, or at the source of an announcement copy or follow notice. Its `channelId` is always present, but `id` is optional. Check `id`, then build a `MessageReference` from both fields for a fetch or reply. A follow notice identifies only the source channel. See [announcement channels](/docs/{{version}}/announcement-channels/) for publishing messages and handling their copies
+
+Sends and edits accept only `MessageFlags.SuppressEmbeds` and `MessageFlags.SuppressNotifications`. The SDK rejects any other flag before sending the request. Fluxer sets `Crossposted`, `IsCrosspost` and `SourceMessageDeleted` itself
+
 ## Mention someone deliberately
 
 Create a mention with `format.userMention`, then allow a notification for that specific user. Role and channel mentions have matching `roleMention` and `channelMention` helpers
@@ -118,6 +122,8 @@ export async function postSchedule(client: Client, channelId: string) {
 ```
 
 The `inline` option places fields side by side. The `color` method accepts a hex string such as `"#8b7cf8"`, a number or an RGB tuple, and `timestamp` accepts a `Date`, epoch milliseconds or an ISO 8601 string with a time zone. The send checks the embed against Fluxer's limits. It reads the builder once, so later builder changes do not alter the sent message. Use `messages.edit` for that. The builder's `build()` method returns the same embed as a plain object, which could also be written by hand
+
+An embed's `image.url` or `thumbnail.url` can use `attachment://filename` to show a new image or video uploaded in the same request. The name must match exactly one upload, including case, and its extension must map to an image or video MIME type in Fluxer's filename lookup, such as AVIF or MP4. Referencing an existing attachment ID is not supported
 
 In a community channel, sending or editing a message with embeds needs the `EmbedLinks` permission. New communities grant it to everyone, but where it is removed, Fluxer rejects the whole message with a missing-permissions error instead of sending it without the embeds
 

@@ -3,10 +3,12 @@ import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient } from "../../src/index.js"
 import { createClient as createNative } from "../../src/effect.js"
+import { createTestClient as createDefaultTestClient } from "../../src/testing.js"
+import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { RateLimits, rateRoute } from "../../src/internal/rate-limits.js"
-import { modes } from "../support/both-apis.js"
-import { fakeHostTime, outcome } from "../support/client-clock.js"
+import { modes, type Mode } from "../support/both-apis.js"
+import { fakeHostTime, hostTurnsUntil, outcome } from "../support/client-clock.js"
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -166,6 +168,128 @@ for (const mode of modes) {
         expect(await operation).toEqual({ value: undefined })
         expect(calls).toBe(2)
     })
+}
+
+const announcementBuckets = [
+    { operation: "follow", hash: "178d355aa4cdba76", route: "POST /channels/:channel/followers" },
+    { operation: "fetchFollowerStats", hash: "ba708c5c56887621", route: "GET /channels/:channel/follower-stats" },
+    { operation: "publish", hash: "a6f540055efc5dd3", route: "POST /channels/:channel/messages/:message/crosspost" },
+    {
+        operation: "fetchCrosspostSource",
+        hash: "93dfc23c50db1e32",
+        route: "GET /channels/:channel/messages/:message/crosspost-source",
+    },
+] as const
+
+type AnnouncementOperation = (typeof announcementBuckets)[number]["operation"]
+
+async function setupAnnouncementBuckets(mode: Mode) {
+    fakeHostTime()
+    const scope = Scope.makeUnsafe()
+    const defaultTest = mode === "default" ? createDefaultTestClient() : undefined
+    const nativeTest =
+        mode === "native" ? await Effect.runPromise(createNativeTestClient().pipe(Scope.provide(scope))) : undefined
+    onTestFinished(async () => {
+        if (defaultTest) await defaultTest.shutdown()
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+    })
+    const api = (defaultTest ?? nativeTest)!
+    return {
+        rest: api.rest,
+        fixtures: api.fixtures,
+        queued: () => api.client.diagnostics().rest.queuedRequests,
+        call(operation: AnnouncementOperation, channelId: string, targetId: string, timeoutMs?: number) {
+            const options = timeoutMs === undefined ? undefined : { timeoutMs }
+            const target = { channelId, id: targetId }
+            switch (operation) {
+                case "follow":
+                    return outcome(api.client.channels.follow(channelId, { targetChannelId: targetId }, options))
+                case "fetchFollowerStats":
+                    return outcome(api.client.channels.fetchFollowerStats(channelId, options))
+                case "publish":
+                    return outcome(api.client.messages.publish(target, options))
+                case "fetchCrosspostSource":
+                    return outcome(api.client.messages.fetchCrosspostSource(target, options))
+            }
+        },
+    }
+}
+
+for (const mode of modes) {
+    for (const { operation, hash, route } of announcementBuckets) {
+        test(`${mode}: ${operation} learns its channel bucket without partitioning by message or follow target`, async () => {
+            const api = await setupAnnouncementBuckets(mode)
+            const counts = new Map<string, number>()
+            const responses = api.rest.respond(route, (request) => {
+                const parts = request.path.split("/")
+                const channelId = parts[2]!
+                const count = (counts.get(channelId) ?? 0) + 1
+                counts.set(channelId, count)
+                const body =
+                    operation === "follow"
+                        ? { channel_id: channelId, webhook_id: "40" }
+                        : operation === "fetchFollowerStats"
+                          ? { channel_count: 2, guild_count: 1 }
+                          : operation === "publish"
+                            ? api.fixtures.message({ id: parts[4]!, channel_id: channelId })
+                            : {
+                                  guild: {
+                                      id: "40",
+                                      name: "Fixture community",
+                                      description: null,
+                                      features: [],
+                                      approximate_member_count: null,
+                                      approximate_presence_count: null,
+                                      discoverable: false,
+                                  },
+                              }
+                return {
+                    body,
+                    headers: {
+                        "x-ratelimit-bucket": hash,
+                        "x-ratelimit-remaining": channelId === "20" && count >= 2 ? "0" : "10",
+                        "x-ratelimit-reset-after": "1",
+                    },
+                }
+            })
+
+            // Both channels must learn the same provider hash before one is depleted. An unknown
+            // hash shares conservatively, so removing the parameterized registry entry fails isolation.
+            expect(await api.call(operation, "20", "30")).toHaveProperty("value")
+            expect(await api.call(operation, "21", "31")).toHaveProperty("value")
+            expect(await api.call(operation, "20", "32")).toHaveProperty("value")
+
+            let sameChannelSettled = false
+            const sameChannel = api.call(operation, "20", "33", 100).then((result) => {
+                sameChannelSettled = true
+                return result
+            })
+            // Observe admission through public diagnostics without advancing the clock or polling elapsed time.
+            await hostTurnsUntil(() => sameChannelSettled || api.queued() === 1)
+            let otherChannelSettled = false
+            const otherChannel = api.call(operation, "21", "34", 100).then((result) => {
+                otherChannelSettled = true
+                return result
+            })
+            await hostTurnsUntil(() => otherChannelSettled || api.queued() === 2)
+            await vi.advanceTimersByTimeAsync(100)
+
+            expect(await sameChannel).toMatchObject({ error: { reason: "timeout", outcome: "notDispatched" } })
+            expect(await otherChannel).toHaveProperty("value")
+            expect(responses.requests().map((request) => request.path.split("/")[2])).toEqual(["20", "21", "20", "21"])
+            if (operation === "follow")
+                expect(responses.requests().map((request) => request.body)).toEqual([
+                    { webhook_channel_id: "30" },
+                    { webhook_channel_id: "31" },
+                    { webhook_channel_id: "32" },
+                    { webhook_channel_id: "34" },
+                ])
+
+            await vi.advanceTimersByTimeAsync(900)
+            expect(await api.call(operation, "20", "35")).toHaveProperty("value")
+            expect(responses.requests()).toHaveLength(5)
+        })
+    }
 }
 
 const channelRoute = (channel: string, method = "GET") => rateRoute(method, `/channels/${channel}/messages/10`, channel)
@@ -376,13 +500,24 @@ test("unknown templates are conservatively shared, and missing declared resource
     expect(state.wait(second.key, 1002)).toBe(2001)
 })
 
-test("successful emoji metadata with an unresolved producer user binding pauses conservatively", () => {
-    const state = new RateLimits()
-    const route = rateRoute("GET", "/emojis/123/metadata", "emojis")
-    const key = state.observe(state.begin(route), limited("guild:emoji:metadata::user_id", 10), 0)
-    expect(key).toBe("overflow")
-    expect(state.wait(channelRoute("20").key, 1)).toBe(1000)
-    expect(state.wait(channelRoute("20").key, 1001)).toBe(0)
+test("expression lookups share one caller-wide bucket without pausing unrelated routes", () => {
+    for (const [template, kind] of [
+        ["guild:emoji:metadata::user_id", "emojis"],
+        ["guild:emoji:source::user_id", "emojis"],
+        ["guild:sticker:metadata::user_id", "stickers"],
+        ["guild:sticker:source::user_id", "stickers"],
+    ] as const) {
+        const state = new RateLimits()
+        const first = rateRoute("GET", `/${kind}/123/source`, kind)
+        const second = rateRoute("GET", `/${kind}/456/source`, kind)
+        // A success with capacity left must not hold back an unrelated channel request
+        expect(state.observe(state.begin(first), limited(template, 10), 0)).not.toBe("overflow")
+        expect(state.wait(channelRoute("20").key, 1)).toBe(0)
+        // Fluxer keeps one bucket per caller, so exhausting it through one expression also delays the other
+        state.observe(state.begin(second), limited(template, 0), 2)
+        expect(state.wait(first.key, 3)).toBe(1002)
+        expect(state.wait(channelRoute("20").key, 3)).toBe(0)
+    }
 })
 
 test("provisional identities separate endpoint shapes and secrets stay out of retained keys", () => {

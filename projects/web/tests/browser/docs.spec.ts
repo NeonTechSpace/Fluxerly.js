@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test"
+import { test, expect, type Locator } from "@playwright/test"
 import { existsSync, readFileSync } from "node:fs"
 import AxeBuilder from "@axe-core/playwright"
 
@@ -205,6 +205,56 @@ test("API navigation stays compact on a deep symbol without losing reference acc
     await expect(classes.locator('a[href^="/docs/preview/api/classes/js-ts."]').first()).toBeVisible()
 })
 
+test("Reference navigation highlights the clicked link without moving it and lands category anchors", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto("/docs/preview/")
+    const docs = page.locator('astro-island[component-export="Docs"]')
+    await expect(docs).not.toHaveAttribute("ssr")
+    const sidebar = page.locator("#nd-sidebar")
+    const activeLinks = sidebar.locator('a[data-active="true"]')
+    const top = (link: Locator) => link.evaluate((element) => Math.round(element.getBoundingClientRect().top))
+    const clicked = [
+        { name: "JavaScript & TypeScript", heading: "JavaScript & TypeScript" },
+        { name: "Effect API", heading: "Effect API" },
+        { name: "API reference", heading: "API reference" },
+    ]
+    for (const { name, heading } of clicked) {
+        const link = sidebar.getByRole("link", { name, exact: true })
+        await link.scrollIntoViewIfNeeded()
+        const before = await top(link)
+        await link.click()
+        await expect(page.getByRole("heading", { level: 1, name: heading, exact: true })).toBeVisible()
+        await expect(docs).not.toHaveAttribute("ssr")
+        // Exactly the clicked link is current, and the new sidebar keeps it where it was clicked
+        await expect(activeLinks).toHaveCount(1)
+        await expect(activeLinks).toHaveAccessibleName(name)
+        await expect.poll(() => top(link)).toBe(before)
+    }
+    // Both entry points have a Messages category, and only the clicked one becomes current
+    await sidebar.getByRole("link", { name: "Effect API", exact: true }).click()
+    await expect(page.getByRole("heading", { level: 1, name: "Effect API", exact: true })).toBeVisible()
+    const category = sidebar.getByRole("link", { name: "Messages (JavaScript & TypeScript)", exact: true })
+    await category.scrollIntoViewIfNeeded()
+    const before = await top(category)
+    await category.click()
+    await expect(page).toHaveURL(/\/api\/modules\/js-ts\/?#category-messages$/)
+    await expect(activeLinks).toHaveCount(1)
+    await expect(activeLinks).toHaveAccessibleName("Messages (JavaScript & TypeScript)")
+    await expect.poll(() => top(category)).toBe(before)
+    // Offscreen reference blocks render after the router scrolls, and the heading must still end at the top
+    const target = page.locator("#category-messages")
+    await expect.poll(() => target.evaluate((element) => Math.abs(Math.round(element.getBoundingClientRect().top)))).toBeLessThanOrEqual(2)
+    // A category on the same page becomes current without a page load
+    const channels = sidebar.getByRole("link", { name: "Channels (JavaScript & TypeScript)", exact: true })
+    await channels.click()
+    await expect(activeLinks).toHaveAccessibleName("Channels (JavaScript & TypeScript)")
+    // Symbol pages keep their entry point current
+    await page.goto("/docs/preview/api/interfaces/js-ts.Client/")
+    await expect(docs).not.toHaveAttribute("ssr")
+    await expect(activeLinks).toHaveCount(1)
+    await expect(activeLinks).toHaveAccessibleName("JavaScript & TypeScript")
+})
+
 for (const width of [390, 1440]) {
     test(`Grouped sidebar uses short labels without truncation at ${width}px`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 })
@@ -327,9 +377,10 @@ test("Inline command choices synchronize, survive navigation and reload, and cop
         await expect(block.getByLabel("Package manager", { exact: true })).toHaveValue("npm")
     }
     await expect(effectBlocks.last().locator("[data-command-code]")).toHaveText("npm list effect")
-    await expect(effectBlocks.filter({ hasText: "npm install --save-exact effect@" })).toHaveCount(1)
+    // The preview's Effect peer is a stable range, so its install keeps the package manager's normal range
+    await expect(effectBlocks.filter({ hasText: "npm install effect@" })).toHaveCount(1)
     await effectBlocks.first().getByLabel("Package manager", { exact: true }).selectOption("bun")
-    await expect(effectBlocks.filter({ hasText: "bun add --exact effect@" })).toHaveCount(1)
+    await expect(effectBlocks.filter({ hasText: "bun add effect@" })).toHaveCount(1)
     await expect(effectBlocks.last().locator("[data-command-code]")).toHaveText("bun why effect")
     const accessibility = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze()
     expect(accessibility.violations).toEqual([])

@@ -1,7 +1,7 @@
 // Consumer operations: profile banner URLs, attachment deletion, member role replacement with the designated bot and
 // gateway guild and channel member counts, including lost responses, cancellation and connection loss.
 // Journal `.env.test.consumer-operations.local` records the designated bot's original roles and the test role and
-// channel markers with their returned IDs. An existing journal is recovered before a new run: only the recorded roles
+// channel markers with their returned IDs. An existing journal triggers recovery only: Only the recorded roles
 // plus the unchanged zero-permission test role are restored, then restoration and removal of the role and channel are
 // verified. An unexpected assignment or altered resource keeps the journal
 import assert from "node:assert/strict"
@@ -25,7 +25,8 @@ const mode = process.argv[2]
 const rawFetch = globalThis.fetch
 const journalFile = openJournal("consumer-operations")
 const idPattern = /^[1-9][0-9]*$/
-const knownAbsentId = "18446744073709551615"
+// The largest valid snowflake is never a real member
+const knownAbsentId = "9223372036854775807"
 const report = createOutcomeReporter({ mode })
 let stage = "configuration"
 let lock
@@ -604,45 +605,47 @@ try {
     stage = "recover_prior_test"
     if (journalFile.exists()) {
         journal = journalFile.read()
+        stage = "recovery_only"
         await cleanup()
+        report(stage)
+    } else {
+        journal = { kind: "consumer-operations", guildId, botId }
+        journalFile.create(journal)
+        journal.baselineRoleIds = memberRoleIds(await readBotMember())
+        save()
+        const roleId = await createGuildTestRole(api, journal, save)
+        assert.ok(!journalBaseline().includes(roleId))
+        const channel = await createGuildChannelFixture(journal, save, "explicitChild", { type: 0 }, (input) =>
+            api("POST", `/guilds/${guildId}/channels`, input).then((response) => {
+                assert.equal(response.status, 200)
+                return {
+                    id: response.data?.id,
+                    guildId: response.data?.guild_id,
+                    type: response.data?.type,
+                    name: response.data?.name,
+                }
+            }),
+        )
+        assert.equal(channel.guildId, guildId)
+        report("journaled_test_role_and_channel_created")
+
+        const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
+        if (mode === "default") client = sdk.createClient({ token })
+        else {
+            scope = Scope.makeUnsafe()
+            client = await value(sdk.createClient({ token }).pipe(Scope.provide(scope)))
+        }
+        gateway = observeGateway()
+        await verifyBanner(sdk)
+        await verifyAttachmentDeletion(channel.id)
+        await verifyRoleReplacement()
+        await verifyCounts(channel.id)
+
+        stage = "client_shutdown"
+        await value(client.shutdown())
+        assert.equal(client.state, "Closed")
+        report(stage)
     }
-
-    journal = { kind: "consumer-operations", guildId, botId }
-    journalFile.create(journal)
-    journal.baselineRoleIds = memberRoleIds(await readBotMember())
-    save()
-    const roleId = await createGuildTestRole(api, journal, save)
-    assert.ok(!journalBaseline().includes(roleId))
-    const channel = await createGuildChannelFixture(journal, save, "explicitChild", { type: 0 }, (input) =>
-        api("POST", `/guilds/${guildId}/channels`, input).then((response) => {
-            assert.equal(response.status, 200)
-            return {
-                id: response.data?.id,
-                guildId: response.data?.guild_id,
-                type: response.data?.type,
-                name: response.data?.name,
-            }
-        }),
-    )
-    assert.equal(channel.guildId, guildId)
-    report("journaled_test_role_and_channel_created")
-
-    const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
-    if (mode === "default") client = sdk.createClient({ token })
-    else {
-        scope = Scope.makeUnsafe()
-        client = await value(sdk.createClient({ token }).pipe(Scope.provide(scope)))
-    }
-    gateway = observeGateway()
-    await verifyBanner(sdk)
-    await verifyAttachmentDeletion(channel.id)
-    await verifyRoleReplacement()
-    await verifyCounts(channel.id)
-
-    stage = "client_shutdown"
-    await value(client.shutdown())
-    assert.equal(client.state, "Closed")
-    report(stage)
 } catch (error) {
     report(stage, false, safeFailure(error))
     process.exitCode = 1

@@ -1,13 +1,15 @@
 name: Upstream drift
 on:
   schedule:
-    - cron: '23 6 * * 1'
+    - cron: '23 6 * * *'
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: upstream-drift
-  cancel-in-progress: true
+  cancel-in-progress: false
+  queue: max
 jobs:
   drift:
     name: Fluxer API and gateway event drift
@@ -23,10 +25,63 @@ jobs:
         with:
           working-directory: projects
           install: false
-      # Read-only: The script fetches public upstream documents and writes only this job's summary
-      - name: Compare upstream documents with the pinned manifest
+      - name: Read the previous upstream observation
+        id: baseline
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          baseline_dir="$RUNNER_TEMP/upstream-previous"
+          mkdir -p "$baseline_dir" "$RUNNER_TEMP/upstream-current"
+          fallback() {
+            printf '\n### Previous-run baseline\n\n%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+          if ! artifact_runs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=upstream-baseline&per_page=100" \
+            --jq '.artifacts[] | select(.expired == false) | [.created_at, .id, .workflow_run.id] | @tsv' 2>/dev/null \
+            | sort -t $'\t' -k1,1r -k2,2nr); then
+            fallback "Artifact lookup failed. The repository pin will be used"
+            exit 0
+          fi
+          while IFS=$'\t' read -r created_at artifact_id run_id; do
+            [[ -n "$created_at" ]] || continue
+            if [[ ! "$artifact_id" =~ ^[0-9]+$ || ! "$run_id" =~ ^[0-9]+$ ]]; then
+              fallback "Artifact metadata has no valid artifact or run ID. The repository pin will be used"
+              exit 0
+            fi
+            [[ "$run_id" != "$GITHUB_RUN_ID" ]] || continue
+            if ! workflow_path=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.path' 2>/dev/null); then
+              fallback "Artifact workflow verification failed. The repository pin will be used"
+              exit 0
+            fi
+            if [[ -z "$workflow_path" || "$workflow_path" == "null" ]]; then
+              fallback "Artifact metadata has no workflow path. The repository pin will be used"
+              exit 0
+            fi
+            [[ "$workflow_path" == ".github/workflows/upstream-drift.yml" ]] || continue
+            if ! gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name upstream-baseline --dir "$baseline_dir" 2>/dev/null; then
+              rm -f "$baseline_dir/baseline.json"
+              fallback "Previous-run artifact download failed. The repository pin will be used"
+              exit 0
+            fi
+            if [[ ! -f "$baseline_dir/baseline.json" ]]; then
+              fallback "Previous-run artifact contains no baseline file. The repository pin will be used"
+            fi
+            exit 0
+          done <<< "$artifact_runs"
+          fallback "No previous-run artifact is available. The repository pin will be used"
+      - name: Compare and record upstream documents
         id: drift
         working-directory: projects
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node release/upstream.js
+        run: node release/upstream.js --baseline "$RUNNER_TEMP/upstream-previous/baseline.json" --record "$RUNNER_TEMP/upstream-current/baseline.json"
+      - name: Retain the current upstream observation
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-baseline
+          path: ${{ runner.temp }}/upstream-current/baseline.json
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true

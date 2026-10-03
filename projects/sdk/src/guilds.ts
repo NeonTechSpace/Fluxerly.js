@@ -17,7 +17,9 @@ export interface Guild {
     readonly name: string
     /** Decimal owner user ID, not a permission decision */
     readonly ownerId: string
-    /** Feature names supplied by Fluxer, including unknown future names */
+    /** Feature names supplied by Fluxer, including unknown future names.
+     * ANNOUNCEMENT_CHANNELS_DISABLED is observed here, not writable through GuildEdit.featureToggles
+     */
     readonly features: readonly string[]
     /** Icon asset hash, not an image URL. Null means no icon, omission means unavailable */
     readonly icon?: string | null
@@ -39,7 +41,11 @@ export interface Guild {
     readonly afkTimeoutSeconds?: number
     /** Default notification level for new members, omission means unavailable */
     readonly defaultMessageNotifications?: GuildDefaultMessageNotification
-    /** Required member-verification level, omission means unavailable */
+    /** Required member-verification level, omission means unavailable.
+     * The retired level 4 from older instances decodes as High (3), matching Fluxer's legacy normalization.
+     * Other values outside 0–3 make the response malformed
+     * @see https://github.com/fluxerapp/fluxer/blob/597116a0b4bf3a212789bdebe7f284babc33b445/fluxer_api/src/api/models/Guild.ts
+     */
     readonly verificationLevel?: GuildVerificationLevel
     /** Two-factor requirement for moderation permissions, omission means unavailable.
      * While it is GuildMfaLevels.Elevated, Fluxer rejects operations that need Administrator, BanMembers,
@@ -125,7 +131,7 @@ export type GuildDefaultMessageNotification =
  * Fluxer's verification check exempts the community owner, bots and members with assigned roles.
  * Discoverable communities enforce at least Low even when the stored setting is None.
  * These describe the verification check only, not all requirements for sending messages or joining voice
- * @see https://github.com/fluxerapp/fluxer/blob/a59b80ce111be8af6e7a65f927a3ebefcfdf99f3/fluxer_api/src/api/utils/GuildVerificationUtils.ts
+ * @see https://github.com/fluxerapp/fluxer/blob/597116a0b4bf3a212789bdebe7f284babc33b445/fluxer_api/src/api/utils/GuildVerificationUtils.ts
  *
  * @category Guilds and members
  */
@@ -138,14 +144,11 @@ export const GuildVerificationLevels: Readonly<{
     Medium: 2
     /** Require Medium and, when join time is available, at least ten minutes of community membership */
     High: 3
-    /** Require a verified phone number instead of the email and waiting-period checks of the lower levels */
-    VeryHigh: 4
 }> = Object.freeze({
     None: 0,
     Low: 1,
     Medium: 2,
     High: 3,
-    VeryHigh: 4,
 })
 
 /**
@@ -158,7 +161,7 @@ export type GuildVerificationLevel = (typeof GuildVerificationLevels)[keyof type
 /** Values of Guild.mfaLevel, the community's two-factor requirement for moderation permissions.
  * Only the community owner can change it in Fluxer, and GuildEdit does not change it.
  * The owner is exempt, and a bot follows the two-factor enrolment of the account that owns its application
- * @see https://github.com/fluxerapp/fluxer/blob/858a2d9e2b987330edd81711bb53e4f7edc0bbcc/fluxer_docs/src/content/docs/http-api/guilds.mdx#mfa-levels
+ * @see https://github.com/fluxerapp/fluxer/blob/597116a0b4bf3a212789bdebe7f284babc33b445/packages/constants/src/GuildConstants.ts
  *
  * @category Guilds and members
  */
@@ -364,7 +367,9 @@ export interface GuildEdit {
     readonly afkTimeoutSeconds?: number
     /** Default notification level for new members */
     readonly defaultMessageNotifications?: GuildDefaultMessageNotification
-    /** Verification required before members can participate */
+    /** Verification required before members can participate, from None (0) through High (3).
+     * The retired phone-verification level 4 fails locally instead of being mapped to High
+     */
     readonly verificationLevel?: GuildVerificationLevel
     /** Mark or unmark the community as adult content */
     readonly nsfw?: boolean

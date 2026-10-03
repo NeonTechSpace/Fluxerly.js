@@ -14,6 +14,7 @@ import type {
     MessageCore,
     MessageHistoryQuery,
     MessageInput,
+    MessageAuditOperationOptions,
     MessageOperationOptions,
     MessageReference,
     OwnMessageDeletionOptions,
@@ -74,6 +75,7 @@ import type {
     ChannelAuditOperationOptions,
     ChannelCreate,
     ChannelEdit,
+    ChannelFollowInput,
     ChannelOperationOptions,
     ChannelPosition,
     PermissionOverwrite,
@@ -99,6 +101,8 @@ import {
     channelDelete,
     channelEdit,
     channelFetch,
+    channelFollow,
+    channelFollowerStats,
     channelList,
     channelReorder,
     permissionRemove,
@@ -524,6 +528,14 @@ function defineOperations<M extends MessageCore>() {
             ),
         },
         channels: {
+            follow: op(
+                2,
+                (owner: Owner, channelId: string, input: ChannelFollowInput, options?: ChannelAuditOperationOptions) =>
+                    owner.channel("channels.follow", () => channelFollow(channelId, input), options),
+            ),
+            fetchFollowerStats: op(1, (owner: Owner, channelId: string, options?: ChannelOperationOptions) =>
+                owner.channel("channels.fetchFollowerStats", () => channelFollowerStats(channelId), options),
+            ),
             fetchMemberCounts: op(
                 2,
                 (owner: Owner, guildId: string, channelIds: readonly string[], options?: CountOperationOptions) =>
@@ -728,6 +740,18 @@ function defineOperations<M extends MessageCore>() {
             stream: custom("stream", defaultAttachmentStream<M>, nativeAttachmentStream<M>),
         },
         messages: {
+            publish: named(
+                "publish",
+                op(1, (owner: Owner, target: MessageReference, options?: MessageOperationOptions) =>
+                    owner.publish(target, options),
+                ),
+            ),
+            fetchCrosspostSource: named(
+                "fetchCrosspostSource",
+                op(1, (owner: Owner, target: MessageReference, options?: MessageOperationOptions) =>
+                    owner.fetchCrosspostSource(target, options),
+                ),
+            ),
             iterateHistory: named(
                 "iterateHistory",
                 page(
@@ -816,13 +840,13 @@ function defineOperations<M extends MessageCore>() {
             ),
             pin: named(
                 "pin",
-                op(1, (owner: Owner, message: MessageReference, options?: MessageOperationOptions) =>
+                op(1, (owner: Owner, message: MessageReference, options?: MessageAuditOperationOptions) =>
                     owner.pin("pin", message, options),
                 ),
             ),
             unpin: named(
                 "unpin",
-                op(1, (owner: Owner, message: MessageReference, options?: MessageOperationOptions) =>
+                op(1, (owner: Owner, message: MessageReference, options?: MessageAuditOperationOptions) =>
                     owner.pin("unpin", message, options),
                 ),
             ),
@@ -943,7 +967,7 @@ function defineOperations<M extends MessageCore>() {
             ),
             delete: named(
                 "delete",
-                op(1, (owner: Owner, message: MessageReference, options?: MessageOperationOptions) =>
+                op(1, (owner: Owner, message: MessageReference, options?: MessageAuditOperationOptions) =>
                     owner.delete(message, options),
                 ),
             ),
@@ -967,7 +991,7 @@ function defineOperations<M extends MessageCore>() {
                         owner: Owner,
                         channelId: string,
                         messageIds: readonly string[],
-                        options?: MessageOperationOptions,
+                        options?: MessageAuditOperationOptions,
                     ) => owner.deleteMany(channelId, messageIds, options),
                 ),
             ),

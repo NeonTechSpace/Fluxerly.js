@@ -67,7 +67,7 @@ try {
         if (kind === "incompatible") {
             assert.notEqual(result.status, 0)
             assert.match(result.stdout + result.stderr, /ERESOLVE/)
-            console.log("npm strict peer install rejected a different Effect RC")
+            console.log("npm strict peer install rejected an Effect version outside the peer range")
             continue
         }
         assert.equal(result.status, 0, result.stdout + result.stderr)

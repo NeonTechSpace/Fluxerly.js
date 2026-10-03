@@ -134,6 +134,12 @@ h1 {
     font-size: 1rem;
     line-height: 1.65;
 }
+/* Entry point pages hold thousands of elements. Skipping layout for offscreen blocks keeps navigation responsive,
+   while find in page, anchors and the table of contents still reach them */
+.docs-content[data-api-reference] > * {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 120px;
+}
 .docs-content[data-api-reference] p {
     margin-block: 1em;
 }

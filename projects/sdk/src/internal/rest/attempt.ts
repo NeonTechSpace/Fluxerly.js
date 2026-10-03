@@ -57,6 +57,8 @@ export type Request<A> = {
     bucket?: string
     /** A false value skips message-cache coordination for requests that never read or change cached messages */
     cache?: false
+    /** Explicit message mutation for methods such as POST that do not otherwise imply one to the cache guard */
+    messageMutation?: true
     /** Message ID the request reads or changes, used by the message-cache guard and deletion */
     target?: string
     /** Record a successful value in the message cache under the attempt's guard */
@@ -514,7 +516,10 @@ export function runAttempt<A, M extends MessageCore>(
                     : runtime.cache?.begin(
                           request.channel,
                           request.target,
-                          request.method === "PATCH" || request.method === "DELETE" || request.bucket === "pins",
+                          request.messageMutation === true ||
+                              request.method === "PATCH" ||
+                              request.method === "DELETE" ||
+                              request.bucket === "pins",
                           generation,
                       )
             return {

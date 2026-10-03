@@ -1,7 +1,7 @@
 // Text validation of role names at the 100-unit boundary: local rejection without dispatch, normalization of the
 // accepted wire value and reconciliation of a lost edit response, using one test-owned zero-permission role.
 // Journal `.env.test.text-validation.local` records sandbox and bot identity, a unique marker and the test role's two
-// candidate names and returned ID. An existing journal is recovered before a new run: the matching zero-permission
+// candidate names and returned ID. An existing journal triggers recovery only: The matching zero-permission
 // role is deleted and its absence verified
 import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
@@ -163,80 +163,89 @@ try {
     stage = "recover_prior_test"
     if (journalFile.exists()) {
         journal = journalFile.read()
+        stage = "recovery_only"
+        await cleanup()
+        report(stage)
+    } else {
+        const marker = `fluxerly-tv-${randomUUID().replaceAll("-", "")}`
+        const roleNames = [boundaryName(marker, "r", "x"), boundaryName(marker, "r", "y")]
+        assert.notEqual(roleNames[0], roleNames[1])
+        journal = {
+            kind: "text-validation",
+            guildId,
+            botId,
+            marker,
+            role: { kind: "role", createAttempted: true, names: roleNames },
+        }
+        journalFile.create(journal)
+
+        const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
+        if (mode === "effect") {
+            ;({ Effect, Exit, Scope } = await import("effect"))
+            scope = Scope.makeUnsafe()
+            client = await value(sdk.createClient({ token }).pipe(Scope.provide(scope)))
+        } else client = sdk.createClient({ token })
+
+        stage = "role_local_rejection_and_recovery"
+        let unexpectedDispatches = 0
+        globalThis.fetch = async () => {
+            unexpectedDispatches++
+            throw new Error("Invalid role input dispatched unexpectedly")
+        }
+        try {
+            assertLocalFailure(
+                await failure(client.roles.create(guildId, { name: " \f\u202e " })),
+                "GuildOperationError",
+            )
+            assertLocalFailure(
+                await failure(client.roles.create(guildId, { name: roleNames[0] + "🧪" })),
+                "GuildOperationError",
+            )
+        } finally {
+            globalThis.fetch = rawFetch
+        }
+        assert.equal(unexpectedDispatches, 0)
+        const paddedRoleName = `  ${roleNames[0]}  `
+        const createdRole = await observeWrite("POST", `/guilds/${guildId}/roles`, paddedRoleName, () =>
+            value(client.roles.create(guildId, { name: paddedRoleName })),
+        )
+        assert.equal(createdRole.name, roleNames[0])
+        assert.equal(createdRole.permissions, 0n)
+        journal.role.id = createdRole.id
+        save()
+        report(stage, true, {
+            invalidDispatches: 0,
+            normalizedUnits: createdRole.name.length,
+            originalWirePreserved: true,
+        })
+
+        stage = "role_unknown_response_recovery"
+        const controlledRoleName = `\f${roleNames[1]}\u202e`
+        const roleFailure = await observeWrite(
+            "PATCH",
+            `/guilds/${guildId}/roles/${journal.role.id}`,
+            controlledRoleName,
+            () => failure(client.roles.edit({ guildId, id: journal.role.id }, { name: controlledRoleName })),
+            true,
+        )
+        assertUnknownFailure(roleFailure, "GuildOperationError")
+        const recoveredRole = (await api("GET", `/guilds/${guildId}/roles`)).data.find(
+            (role) => role.id === journal.role.id,
+        )
+        assert.equal(recoveredRole?.name, roleNames[1])
+        assert.equal(String(recoveredRole?.permissions), "0")
+        report(stage, true, {
+            reconciled: true,
+            normalizedUnits: recoveredRole.name.length,
+            singleSuccessfulDispatch: true,
+        })
+
+        stage = "client_shutdown"
+        await value(client.shutdown())
+        assert.equal(client.state, "Closed")
+        report(stage)
         await cleanup()
     }
-
-    const marker = `fluxerly-tv-${randomUUID().replaceAll("-", "")}`
-    const roleNames = [boundaryName(marker, "r", "x"), boundaryName(marker, "r", "y")]
-    assert.notEqual(roleNames[0], roleNames[1])
-    journal = {
-        kind: "text-validation",
-        guildId,
-        botId,
-        marker,
-        role: { kind: "role", createAttempted: true, names: roleNames },
-    }
-    journalFile.create(journal)
-
-    const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
-    if (mode === "effect") {
-        ;({ Effect, Exit, Scope } = await import("effect"))
-        scope = Scope.makeUnsafe()
-        client = await value(sdk.createClient({ token }).pipe(Scope.provide(scope)))
-    } else client = sdk.createClient({ token })
-
-    stage = "role_local_rejection_and_recovery"
-    let unexpectedDispatches = 0
-    globalThis.fetch = async () => {
-        unexpectedDispatches++
-        throw new Error("Invalid role input dispatched unexpectedly")
-    }
-    try {
-        assertLocalFailure(await failure(client.roles.create(guildId, { name: " \f\u202e " })), "GuildOperationError")
-        assertLocalFailure(
-            await failure(client.roles.create(guildId, { name: roleNames[0] + "🧪" })),
-            "GuildOperationError",
-        )
-    } finally {
-        globalThis.fetch = rawFetch
-    }
-    assert.equal(unexpectedDispatches, 0)
-    const paddedRoleName = `  ${roleNames[0]}  `
-    const createdRole = await observeWrite("POST", `/guilds/${guildId}/roles`, paddedRoleName, () =>
-        value(client.roles.create(guildId, { name: paddedRoleName })),
-    )
-    assert.equal(createdRole.name, roleNames[0])
-    assert.equal(createdRole.permissions, 0n)
-    journal.role.id = createdRole.id
-    save()
-    report(stage, true, { invalidDispatches: 0, normalizedUnits: createdRole.name.length, originalWirePreserved: true })
-
-    stage = "role_unknown_response_recovery"
-    const controlledRoleName = `\f${roleNames[1]}\u202e`
-    const roleFailure = await observeWrite(
-        "PATCH",
-        `/guilds/${guildId}/roles/${journal.role.id}`,
-        controlledRoleName,
-        () => failure(client.roles.edit({ guildId, id: journal.role.id }, { name: controlledRoleName })),
-        true,
-    )
-    assertUnknownFailure(roleFailure, "GuildOperationError")
-    const recoveredRole = (await api("GET", `/guilds/${guildId}/roles`)).data.find(
-        (role) => role.id === journal.role.id,
-    )
-    assert.equal(recoveredRole?.name, roleNames[1])
-    assert.equal(String(recoveredRole?.permissions), "0")
-    report(stage, true, {
-        reconciled: true,
-        normalizedUnits: recoveredRole.name.length,
-        singleSuccessfulDispatch: true,
-    })
-
-    stage = "client_shutdown"
-    await value(client.shutdown())
-    assert.equal(client.state, "Closed")
-    report(stage)
-    await cleanup()
 } catch {
     report(stage, false, { journalRetained: journal !== undefined })
     process.exitCode = 1

@@ -35,8 +35,14 @@ function assertSerialized(concurrency, where) {
     assert.equal(concurrency.queue, "max", where)
 }
 
-const userGitBash = join(process.env.LOCALAPPDATA ?? "", "Programs/Git/bin/bash.exe")
-const bash = process.platform === "win32" && existsSync(userGitBash) ? userGitBash : "bash"
+// Windows shells often lack bash on PATH. Git for Windows ships it in bin/ under its install root, which sits three
+// levels above the directory reported by `git --exec-path`, wherever Git is installed
+function windowsGitBash() {
+    const execPath = spawnSync("git", ["--exec-path"], { encoding: "utf8", windowsHide: true }).stdout?.trim()
+    const candidate = execPath ? join(execPath, "../../../bin/bash.exe") : ""
+    return candidate && existsSync(candidate) ? candidate : "bash"
+}
+const bash = process.platform === "win32" ? windowsGitBash() : "bash"
 
 function* jobs() {
     for (const [file, workflow] of Object.entries(workflows))
@@ -177,6 +183,122 @@ test("The required CI gate needs every job and rejects failed, cancelled, skippe
             assert.ifError(result.error)
             assert.equal(result.status, expected, `case ${index}: ${result.stderr}`)
         }
+    } finally {
+        rmSync(directory, { recursive: true, force: true })
+    }
+})
+
+test("Upstream drift runs daily with serialized read-only observations and retains failed comparisons", () => {
+    const workflow = workflows["upstream-drift.yml"]
+    const [minute, hour, day, month, weekday] = workflow.on.schedule[0].cron.split(" ")
+    assert.deepEqual([day, month, weekday], ["*", "*", "*"])
+    assert.ok(Number(minute) > 0 && Number(minute) < 60 && Number(minute) !== 30)
+    assert.ok(Number(hour) >= 0 && Number(hour) < 24)
+    assert.ok(Object.hasOwn(workflow.on, "workflow_dispatch"))
+    assert.deepEqual(workflow.permissions, { contents: "read", actions: "read" })
+    assertSerialized(workflow.concurrency, "upstream-drift.yml")
+    const job = workflow.jobs.drift
+    const restore = job.steps.find((step) => step.id === "baseline")
+    const compare = job.steps.find((step) => step.id === "drift")
+    const upload = job.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
+    assert.equal(restore.shell, "bash")
+    assert.equal(restore.env.GH_TOKEN, "${{ github.token }}")
+    assert.equal(compare.shell, "bash")
+    assert.equal(compare["working-directory"], "projects")
+    assert.equal(compare.env.GITHUB_TOKEN, "${{ github.token }}")
+    assert.equal(upload.if, "always()", "A drift failure must not prevent the observation upload")
+    assert.equal(upload.with.name, "upstream-baseline")
+    assert.equal(upload.with["retention-days"], 90)
+    assert.equal(upload.with["if-no-files-found"], "error")
+    assert.equal(upload.with.overwrite, true, "A rerun renews its observation instead of leaving stale bytes")
+    const existingUpload = workflows["release-prepare.yml"].jobs.prepare.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
+    assert.equal(upload.uses, existingUpload.uses)
+    assert.ok(job.steps.indexOf(restore) < job.steps.indexOf(compare))
+    assert.ok(job.steps.indexOf(compare) < job.steps.indexOf(upload))
+})
+
+test("Upstream artifact restoration selects this workflow's newest earlier run and reports every retrieval fallback", () => {
+    const restore = workflows["upstream-drift.yml"].jobs.drift.steps.find((step) => step.id === "baseline")
+    const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-artifacts-"))
+    const fakeGh = `
+      gh() {
+        if [[ "$1" == "api" && "$2" == "--paginate" ]]; then
+          [[ "$3" == "repos/owner/repo/actions/artifacts?name=upstream-baseline&per_page=100" && "$4" == "--jq" ]] || return 1
+          case "$SCENARIO" in
+            lookup-failure) return 1 ;;
+            no-artifact) return 0 ;;
+            invalid-run) printf '2026-10-03T00:00:00Z\\t100\\tnull\\n' ;;
+            *) printf '2026-10-01T00:00:00Z\\t90\\t9\\n2026-10-03T00:00:00Z\\t300\\t30\\n2026-10-02T00:00:00Z\\t200\\t10\\n2026-10-03T00:00:00Z\\t250\\t20\\n' ;;
+          esac
+        elif [[ "$1" == "api" ]]; then
+          case "\${2##*/}" in
+            20) printf '.github/workflows/other.yml\\n' ;;
+            10)
+              case "$SCENARIO" in
+                verification-failure) return 1 ;;
+                missing-path) printf 'null\\n' ;;
+                *) printf '.github/workflows/upstream-drift.yml\\n' ;;
+              esac ;;
+            *) return 1 ;;
+          esac
+        elif [[ "$1" == "run" && "$2" == "download" ]]; then
+          [[ "$3" == "10" && "$4" == "--repo" && "$5" == "owner/repo" && "$6" == "--name" && "$7" == "upstream-baseline" && "$8" == "--dir" ]] || return 1
+          if [[ "$SCENARIO" != "missing-file" ]]; then printf '{}\\n' > "$9/baseline.json"; fi
+          [[ "$SCENARIO" != "download-failure" ]]
+        else return 1
+        fi
+      }
+    `
+    try {
+        for (const scenario of ["available", "lookup-failure", "no-artifact", "invalid-run", "verification-failure", "missing-path", "download-failure", "missing-file"]) {
+            const temporary = join(directory, scenario)
+            const summary = join(directory, `${scenario}.md`)
+            const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", fakeGh + restore.run], {
+                cwd: directory,
+                encoding: "utf8",
+                timeout: 10_000,
+                windowsHide: true,
+                env: {
+                    ...process.env,
+                    SCENARIO: scenario,
+                    RUNNER_TEMP: temporary,
+                    GITHUB_REPOSITORY: "owner/repo",
+                    GITHUB_RUN_ID: "30",
+                    GITHUB_STEP_SUMMARY: summary,
+                },
+            })
+            assert.ifError(result.error)
+            assert.equal(result.status, 0, `${scenario}: ${result.stderr}`)
+            assert.equal(existsSync(join(temporary, "upstream-previous/baseline.json")), scenario === "available", scenario)
+            assert.equal(existsSync(join(temporary, "upstream-current")), true, "The record directory exists before comparison")
+            if (scenario !== "available") {
+                assert.ok(readFileSync(summary, "utf8").trim().length > 0, `${scenario} has a visible fallback reason`)
+                assert.match(readFileSync(summary, "utf8"), /repository pin/i)
+            }
+        }
+    } finally {
+        rmSync(directory, { recursive: true, force: true })
+    }
+})
+
+test("Upstream comparison passes distinct baseline and record paths to the CLI without shell splitting", () => {
+    const compare = workflows["upstream-drift.yml"].jobs.drift.steps.find((step) => step.id === "drift")
+    const upload = workflows["upstream-drift.yml"].jobs.drift.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
+    const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-drift args-"))
+    const record = upload.with.path.replace("${{ runner.temp }}", directory)
+    try {
+        const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", 'node() { printf "%s\\n" "$@"; }\n' + compare.run], {
+            cwd: directory,
+            encoding: "utf8",
+            timeout: 10_000,
+            windowsHide: true,
+            env: { ...process.env, RUNNER_TEMP: directory },
+        })
+        assert.ifError(result.error)
+        assert.equal(result.status, 0, result.stderr)
+        assert.deepEqual(result.stdout.trim().split(/\r?\n/), [
+            "release/upstream.js", "--baseline", `${directory}/upstream-previous/baseline.json`, "--record", record,
+        ])
     } finally {
         rmSync(directory, { recursive: true, force: true })
     }

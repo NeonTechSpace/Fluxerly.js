@@ -22,7 +22,7 @@
         "AGENTS.md",
         "sdk/AGENTS.md",
         "sdk/README.md",
-        "sdk/consumer/AGENTS.md",
+        "sdk/agents/AGENTS.md",
         "sdk/tests/live/README.md"
     ],
     "ignorePaths": ["**/node_modules/**", "**/dist/**"]

@@ -8,7 +8,9 @@ operation|default|Channels.delete|(channelId: string, options?: DefaultChannelAu
 operation|default|Channels.edit|(channelId: string, input: ChannelEdit, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.fetch|(channelId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.fetchAll|(guildId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<readonly GuildChannel[], CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.fetchFollowerStats|(channelId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<ChannelFollowerStats, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.fetchMemberCounts|(guildId: string, channelIds: readonly string[], options?: DefaultCountOperationOptions | undefined) => ResultAsync<ChannelMemberCountsResult, CancelledError | ConfigurationError | CountOperationFailure>
+operation|default|Channels.follow|(channelId: string, input: ChannelFollowInput, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<FollowedChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.get|(channelId: string) => GuildChannel | undefined
 operation|default|Channels.removePermissionOverwrite|(channelId: string, targetId: string, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.reorder|(guildId: string, positions: readonly ChannelPosition[], options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
@@ -99,12 +101,13 @@ operation|default|Messages.clearReaction|(message: MessageReference, emoji: Reac
 operation|default|Messages.clearReactions|(message: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.collect|(channelId: string, options?: DefaultCollectorOptions<M> | undefined) => Collector<M>
 operation|default|Messages.collectReactions|(message: MessageReference, options?: DefaultReactionCollectorOptions | undefined) => ReactionCollector
-operation|default|Messages.delete|(message: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.delete|(message: MessageReference, options?: DefaultMessageAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.deleteAttachment|(message: MessageReference, attachmentId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.deleteMany|(channelId: string, messageIds: readonly string[], options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.deleteMany|(channelId: string, messageIds: readonly string[], options?: DefaultMessageAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.deleteOwnMessages|(channelId: string, options: DefaultOwnMessageDeletionOptions) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.edit|(message: MessageReference, input: string | EditMessageInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.fetch|(message: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.fetchCrosspostSource|(target: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<CrosspostSource, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.fetchHistory|(channelId: string, query?: MessageHistoryQuery | undefined, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<readonly M[], CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.fetchPins|(channelId: string, query?: MessagePinsQuery | undefined, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<MessagePinsPage<M>, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.fetchReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query?: ReactionUsersQuery | undefined, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<ReactionUsersPage, CancelledError | ConfigurationError | MessageOperationFailure>
@@ -115,15 +118,16 @@ operation|default|Messages.iteratePins|(channelId: string, query: PinIterationQu
 operation|default|Messages.iterateReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query: UserIterationQuery, options?: DefaultMessageOperationOptions | undefined) => AsyncIterable<Result<ReactionUser, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
 operation|default|Messages.iterateSearch|(context: MessageSearchContext, filters: Omit<MessageSearchQuery, "limit" | "page">, limits: MessageSearchIterationLimits, options?: DefaultMessageSearchOptions | undefined) => AsyncIterable<Result<M, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
 operation|default|Messages.keepTyping|<A>(channelId: string, task: (signal: AbortSignal) => PromiseLike<A>, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<A, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.pin|(message: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.pin|(message: MessageReference, options?: DefaultMessageAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.previewCleanup|(channelId: string, selection: MessageCleanupSelection<M>, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<MessageCleanupPlan<M>, CancelledError | ConfigurationError | MessageCleanupError>
+operation|default|Messages.publish|(target: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.removeReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.removeUserReaction|(message: MessageReference, emoji: ReactionEmojiInput, userId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.reply|(message: MessageReference, input: string | ReplyInput, options?: DefaultSendOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
 operation|default|Messages.search|(context: MessageSearchContext, query?: MessageSearchQuery | undefined, options?: DefaultMessageSearchOptions | undefined) => ResultAsync<MessageSearchPage<M>, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.send|(channelId: string, input: string | MessageInput, options?: DefaultSendOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
 operation|default|Messages.typing|(channelId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.unpin|(message: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.unpin|(message: MessageReference, options?: DefaultMessageAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|OAuthClient.authorizationUrl|(input: OAuthAuthorizationInput, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<string, CancelledError | ConfigurationError | OAuthOperationFailure>
 operation|default|OAuthClient.exchangeCode|(input: OAuthCodeExchangeInput, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<OAuthTokens, CancelledError | ConfigurationError | OAuthOperationFailure>
 operation|default|OAuthClient.fetchConnections|(accessToken: string, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<readonly OAuthConnection[], CancelledError | ConfigurationError | OAuthOperationFailure>
@@ -161,9 +165,9 @@ operation|default|Users.fetchSelf|(options?: DefaultUserOperationOptions | undef
 operation|default|Users.get|(id: string) => User | undefined
 operation|default|WebhookClient.delete|(options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.deleteMessage|(messageId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.edit|(input: WebhookTokenEdit, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<Webhook, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.edit|(input: WebhookTokenEdit, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<IncomingWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.editMessage|(messageId: string, input: string | WebhookMessageEdit, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.fetch|(options?: DefaultMessageOperationOptions | undefined) => ResultAsync<Webhook, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.fetch|(options?: DefaultMessageOperationOptions | undefined) => ResultAsync<IncomingWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.fetchMessage|(messageId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.send|(input: string | WebhookMessageInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.shutdown|() => ResultAsync<void, never>
@@ -183,7 +187,9 @@ operation|native|Channels.delete|(channelId: string, options?: ChannelAuditOpera
 operation|native|Channels.edit|(channelId: string, input: ChannelEdit, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
 operation|native|Channels.fetch|(channelId: string, options?: ChannelOperationOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
 operation|native|Channels.fetchAll|(guildId: string, options?: ChannelOperationOptions | undefined) => Effect<readonly GuildChannel[], ChannelOperationFailure, never>
+operation|native|Channels.fetchFollowerStats|(channelId: string, options?: ChannelOperationOptions | undefined) => Effect<ChannelFollowerStats, ChannelOperationFailure, never>
 operation|native|Channels.fetchMemberCounts|(guildId: string, channelIds: readonly string[], options?: CountOperationOptions | undefined) => Effect<ChannelMemberCountsResult, CountOperationFailure, never>
+operation|native|Channels.follow|(channelId: string, input: ChannelFollowInput, options?: ChannelAuditOperationOptions | undefined) => Effect<FollowedChannel, ChannelOperationFailure, never>
 operation|native|Channels.get|(channelId: string) => Effect<GuildChannel | undefined, never, never>
 operation|native|Channels.removePermissionOverwrite|(channelId: string, targetId: string, options?: ChannelAuditOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
 operation|native|Channels.reorder|(guildId: string, positions: readonly ChannelPosition[], options?: ChannelAuditOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
@@ -274,12 +280,13 @@ operation|native|Messages.clearReaction|(message: MessageReference, emoji: React
 operation|native|Messages.clearReactions|(message: MessageReference, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.collect|<E = never, R = never>(channelId: string, options?: CollectorOptions<E, R, M> | undefined) => Effect<Collector<M>, never, R | Scope>
 operation|native|Messages.collectReactions|<E = never, R = never>(message: MessageReference, options?: ReactionCollectorOptions<E, R> | undefined) => Effect<ReactionCollector, never, R | Scope>
-operation|native|Messages.delete|(message: MessageReference, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.delete|(message: MessageReference, options?: MessageAuditOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.deleteAttachment|(message: MessageReference, attachmentId: string, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.deleteMany|(channelId: string, messageIds: readonly string[], options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.deleteMany|(channelId: string, messageIds: readonly string[], options?: MessageAuditOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.deleteOwnMessages|(channelId: string, options: OwnMessageDeletionOptions) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.edit|(message: MessageReference, input: string | EditMessageInput, options?: MessageOperationOptions | undefined) => Effect<M, MessageOperationFailure, never>
 operation|native|Messages.fetch|(message: MessageReference, options?: MessageOperationOptions | undefined) => Effect<M, MessageOperationFailure, never>
+operation|native|Messages.fetchCrosspostSource|(target: MessageReference, options?: MessageOperationOptions | undefined) => Effect<CrosspostSource, MessageOperationFailure, never>
 operation|native|Messages.fetchHistory|(channelId: string, query?: MessageHistoryQuery | undefined, options?: MessageOperationOptions | undefined) => Effect<readonly M[], MessageOperationFailure, never>
 operation|native|Messages.fetchPins|(channelId: string, query?: MessagePinsQuery | undefined, options?: MessageOperationOptions | undefined) => Effect<MessagePinsPage<M>, MessageOperationFailure, never>
 operation|native|Messages.fetchReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query?: ReactionUsersQuery | undefined, options?: MessageOperationOptions | undefined) => Effect<ReactionUsersPage, MessageOperationFailure, never>
@@ -290,15 +297,16 @@ operation|native|Messages.iteratePins|(channelId: string, query: PinIterationQue
 operation|native|Messages.iterateReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query: UserIterationQuery, options?: MessageOperationOptions | undefined) => Stream<ReactionUser, PaginationError | MessageOperationFailure, never>
 operation|native|Messages.iterateSearch|(context: MessageSearchContext, filters: Omit<MessageSearchQuery, "limit" | "page">, limits: MessageSearchIterationLimits, options?: MessageOperationOptions | undefined) => Stream<M, PaginationError | MessageOperationFailure, never>
 operation|native|Messages.keepTyping|<A, E, R>(channelId: string, task: Effect<A, E, R>, options?: MessageOperationOptions | undefined) => Effect<A, E | MessageOperationFailure, R>
-operation|native|Messages.pin|(message: MessageReference, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.pin|(message: MessageReference, options?: MessageAuditOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.previewCleanup|(channelId: string, selection: MessageCleanupSelection<M>, options?: MessageOperationOptions | undefined) => Effect<MessageCleanupPlan<M>, MessageCleanupError, never>
+operation|native|Messages.publish|(target: MessageReference, options?: MessageOperationOptions | undefined) => Effect<M, MessageOperationFailure, never>
 operation|native|Messages.removeReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.removeUserReaction|(message: MessageReference, emoji: ReactionEmojiInput, userId: string, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.reply|(message: MessageReference, input: string | ReplyInput, options?: SendOptions | undefined) => Effect<M, SendError, never>
 operation|native|Messages.search|(context: MessageSearchContext, query?: MessageSearchQuery | undefined, options?: MessageOperationOptions | undefined) => Effect<MessageSearchPage<M>, MessageOperationFailure, never>
 operation|native|Messages.send|(channelId: string, input: string | MessageInput, options?: SendOptions | undefined) => Effect<M, SendError, never>
 operation|native|Messages.typing|(channelId: string, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.unpin|(message: MessageReference, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.unpin|(message: MessageReference, options?: MessageAuditOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|OAuthClient.authorizationUrl|(input: OAuthAuthorizationInput, options?: OAuthOperationOptions | undefined) => Effect<string, OAuthOperationFailure, never>
 operation|native|OAuthClient.exchangeCode|(input: OAuthCodeExchangeInput, options?: OAuthOperationOptions | undefined) => Effect<OAuthTokens, OAuthOperationFailure, never>
 operation|native|OAuthClient.fetchConnections|(accessToken: string, options?: OAuthOperationOptions | undefined) => Effect<readonly OAuthConnection[], OAuthOperationFailure, never>
@@ -336,9 +344,9 @@ operation|native|Users.fetchSelf|(options?: UserOperationOptions | undefined) =>
 operation|native|Users.get|(id: string) => Effect<User | undefined, never, never>
 operation|native|WebhookClient.delete|(options?: MessageOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
 operation|native|WebhookClient.deleteMessage|(messageId: string, options?: MessageOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
-operation|native|WebhookClient.edit|(input: WebhookTokenEdit, options?: MessageOperationOptions | undefined) => Effect<Webhook, WebhookOperationFailure, never>
+operation|native|WebhookClient.edit|(input: WebhookTokenEdit, options?: MessageOperationOptions | undefined) => Effect<IncomingWebhook, WebhookOperationFailure, never>
 operation|native|WebhookClient.editMessage|(messageId: string, input: string | WebhookMessageEdit, options?: MessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
-operation|native|WebhookClient.fetch|(options?: MessageOperationOptions | undefined) => Effect<Webhook, WebhookOperationFailure, never>
+operation|native|WebhookClient.fetch|(options?: MessageOperationOptions | undefined) => Effect<IncomingWebhook, WebhookOperationFailure, never>
 operation|native|WebhookClient.fetchMessage|(messageId: string, options?: MessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
 operation|native|WebhookClient.send|(input: string | WebhookMessageInput, options?: MessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
 operation|native|WebhookClient.shutdown|() => Effect<void, never, never>
@@ -408,7 +416,7 @@ union|default|AuditLogChangeValue|AuditLogPermissionsDiff || false || null || nu
 union|default|AuditLogIterationQuery|AuditLogIterationQueryBase & { readonly userId: string; readonly actionType?: AuditLogActionType; } || AuditLogIterationQueryBase & { readonly userId?: string; readonly actionType: AuditLogActionType; }
 union|default|AuditLogQuery|AuditLogQueryBase & { readonly userId: string; readonly actionType?: AuditLogActionType; } || AuditLogQueryBase & { readonly userId?: string; readonly actionType: AuditLogActionType; }
 union|default|BotApplicationOperationFailure|BotApplicationOperationError || ClientClosedError
-union|default|ChannelCreate|CategoryChannelCreate || LinkChannelCreate || TextChannelCreate || VoiceChannelCreate
+union|default|ChannelCreate|AnnouncementChannelCreate || CategoryChannelCreate || LinkChannelCreate || TextChannelCreate || VoiceChannelCreate
 union|default|ChannelLinkTarget|Pick<DirectMessageChannel, "id"> || Pick<GuildChannel, "guildId" | "id">
 union|default|ChannelOperationFailure|ChannelOperationError || ClientClosedError
 union|default|CollectorFailure|ClientClosedError || CollectorError
@@ -417,11 +425,11 @@ union|default|ConnectionFailure|AuthenticationError || ConnectionError || Connec
 union|default|CountOperationFailure|ClientClosedError || CountOperationError
 union|default|CustomStatusEmoji|{ readonly id: string; } || { readonly name: string; }
 union|default|EditMessageInput|EditMessageOptions & { readonly flags: number; readonly content?: never; readonly embeds?: never; readonly attachments?: never; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions
-union|default|EventInvocation|EventInvocationOf<"callCreate", M> || EventInvocationOf<"callDelete", M> || EventInvocationOf<"callUpdate", M> || EventInvocationOf<"channelPinsUpdate", M> || EventInvocationOf<"directMessageCreate", M> || EventInvocationOf<"directMessageDelete", M> || EventInvocationOf<"directMessageRecipientAdd", M> || EventInvocationOf<"directMessageRecipientRemove", M> || EventInvocationOf<"directMessageUpdate", M> || EventInvocationOf<"entranceSoundPlay", M> || EventInvocationOf<"guildAuditLogEntryCreate", M> || EventInvocationOf<"guildBanAdd", M> || EventInvocationOf<"guildBanRemove", M> || EventInvocationOf<"guildChannelCreate", M> || EventInvocationOf<"guildChannelDelete", M> || EventInvocationOf<"guildChannelUpdate", M> || EventInvocationOf<"guildChannelUpdateBulk", M> || EventInvocationOf<"guildCreate", M> || EventInvocationOf<"guildDelete", M> || EventInvocationOf<"guildEmojisUpdate", M> || EventInvocationOf<"guildMemberAdd", M> || EventInvocationOf<"guildMemberRemove", M> || EventInvocationOf<"guildMemberUpdate", M> || EventInvocationOf<"guildRoleCreate", M> || EventInvocationOf<"guildRoleDelete", M> || EventInvocationOf<"guildRoleUpdate", M> || EventInvocationOf<"guildRoleUpdateBulk", M> || EventInvocationOf<"guildStickersUpdate", M> || EventInvocationOf<"guildUpdate", M> || EventInvocationOf<"inviteCreate", M> || EventInvocationOf<"inviteDelete", M> || EventInvocationOf<"messageCreate", M> || EventInvocationOf<"messageDelete", M> || EventInvocationOf<"messageDeleteBulk", M> || EventInvocationOf<"messageReactionAdd", M> || EventInvocationOf<"messageReactionAddMany", M> || EventInvocationOf<"messageReactionRemove", M> || EventInvocationOf<"messageReactionRemoveAll", M> || EventInvocationOf<"messageReactionRemoveEmoji", M> || EventInvocationOf<"messageUpdate", M> || EventInvocationOf<"presenceUpdate", M> || EventInvocationOf<"presenceUpdateBulk", M> || EventInvocationOf<"raw", M> || EventInvocationOf<"typingStart", M> || EventInvocationOf<"userUpdate", M> || EventInvocationOf<"voiceStateSnapshot", M> || EventInvocationOf<"voiceStateUpdate", M> || EventInvocationOf<"webhooksUpdate", M>
+union|default|EventInvocation|EventInvocationOf<"callCreate", M> || EventInvocationOf<"callDelete", M> || EventInvocationOf<"callUpdate", M> || EventInvocationOf<"channelPinsUpdate", M> || EventInvocationOf<"directMessageCreate", M> || EventInvocationOf<"directMessageDelete", M> || EventInvocationOf<"directMessageRecipientAdd", M> || EventInvocationOf<"directMessageRecipientRemove", M> || EventInvocationOf<"directMessageUpdate", M> || EventInvocationOf<"entranceSoundPlay", M> || EventInvocationOf<"guildAuditLogEntryCreate", M> || EventInvocationOf<"guildBanAdd", M> || EventInvocationOf<"guildBanRemove", M> || EventInvocationOf<"guildChannelCreate", M> || EventInvocationOf<"guildChannelDelete", M> || EventInvocationOf<"guildChannelUpdate", M> || EventInvocationOf<"guildChannelUpdateBulk", M> || EventInvocationOf<"guildCreate", M> || EventInvocationOf<"guildDelete", M> || EventInvocationOf<"guildEmojisUpdate", M> || EventInvocationOf<"guildHealthUpdate", M> || EventInvocationOf<"guildMemberAdd", M> || EventInvocationOf<"guildMemberRemove", M> || EventInvocationOf<"guildMemberUpdate", M> || EventInvocationOf<"guildRoleCreate", M> || EventInvocationOf<"guildRoleDelete", M> || EventInvocationOf<"guildRoleUpdate", M> || EventInvocationOf<"guildRoleUpdateBulk", M> || EventInvocationOf<"guildStickersUpdate", M> || EventInvocationOf<"guildUpdate", M> || EventInvocationOf<"inviteCreate", M> || EventInvocationOf<"inviteDelete", M> || EventInvocationOf<"messageCreate", M> || EventInvocationOf<"messageDelete", M> || EventInvocationOf<"messageDeleteBulk", M> || EventInvocationOf<"messageReactionAdd", M> || EventInvocationOf<"messageReactionAddMany", M> || EventInvocationOf<"messageReactionRemove", M> || EventInvocationOf<"messageReactionRemoveAll", M> || EventInvocationOf<"messageReactionRemoveEmoji", M> || EventInvocationOf<"messageUpdate", M> || EventInvocationOf<"presenceUpdate", M> || EventInvocationOf<"presenceUpdateBulk", M> || EventInvocationOf<"raw", M> || EventInvocationOf<"typingStart", M> || EventInvocationOf<"userUpdate", M> || EventInvocationOf<"voiceStateSnapshot", M> || EventInvocationOf<"voiceStateUpdate", M> || EventInvocationOf<"webhooksUpdate", M>
 union|default|EventReadError|EventOverflowError || EventReadBusyError
 union|default|EventWaitFailure|ClientClosedError || ConfigurationError || EventOverflowError || EventWaitError
 union|default|GatewaySendFailure|ClientClosedError || GatewaySendError
-union|default|GuildChannel|GuildCategoryChannel || GuildLinkChannel || GuildTextChannel || GuildUnknownChannel || GuildVoiceChannel
+union|default|GuildChannel|GuildAnnouncementChannel || GuildCategoryChannel || GuildLinkChannel || GuildTextChannel || GuildUnknownChannel || GuildVoiceChannel
 union|default|GuildOperationFailure|ClientClosedError || GuildOperationError
 union|default|InstanceResolveError|ClientClosedError || ConfigurationError || ConnectionError || ConnectionTimeoutError || RateLimitError
 union|default|MemberChunkFailure|ClientClosedError || MemberChunkError
@@ -440,6 +448,7 @@ union|default|ReplyInput|{ readonly content: string; readonly embeds?: readonly 
 union|default|RestRequestFailure|ClientClosedError || RestRequestError
 union|default|SendError|ClientClosedError || MessageError
 union|default|UserOperationFailure|ClientClosedError || UserOperationError
+union|default|Webhook|ChannelFollowerWebhook || IncomingWebhook || UnknownWebhook
 union|default|WebhookMessageInput|WebhookMessageOptions & { readonly messageReference: WebhookForwardReference; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; }
 union|default|WebhookOperationFailure|ClientClosedError || WebhookOperationError
 union|native|AttachmentDownloadFailure|AttachmentDownloadError || ClientClosedError
@@ -450,7 +459,7 @@ union|native|AuditLogChangeValue|AuditLogPermissionsDiff || false || null || num
 union|native|AuditLogIterationQuery|AuditLogIterationQueryBase & { readonly userId: string; readonly actionType?: AuditLogActionType; } || AuditLogIterationQueryBase & { readonly userId?: string; readonly actionType: AuditLogActionType; }
 union|native|AuditLogQuery|AuditLogQueryBase & { readonly userId: string; readonly actionType?: AuditLogActionType; } || AuditLogQueryBase & { readonly userId?: string; readonly actionType: AuditLogActionType; }
 union|native|BotApplicationOperationFailure|BotApplicationOperationError || ClientClosedError
-union|native|ChannelCreate|CategoryChannelCreate || LinkChannelCreate || TextChannelCreate || VoiceChannelCreate
+union|native|ChannelCreate|AnnouncementChannelCreate || CategoryChannelCreate || LinkChannelCreate || TextChannelCreate || VoiceChannelCreate
 union|native|ChannelLinkTarget|Pick<DirectMessageChannel, "id"> || Pick<GuildChannel, "guildId" | "id">
 union|native|ChannelOperationFailure|ChannelOperationError || ClientClosedError
 union|native|CollectorFailure|ClientClosedError || CollectorError
@@ -459,10 +468,10 @@ union|native|ConnectionFailure|AuthenticationError || ConnectionError || Connect
 union|native|CountOperationFailure|ClientClosedError || CountOperationError
 union|native|CustomStatusEmoji|{ readonly id: string; } || { readonly name: string; }
 union|native|EditMessageInput|EditMessageOptions & { readonly flags: number; readonly content?: never; readonly embeds?: never; readonly attachments?: never; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions
-union|native|EventInvocation|EventInvocationOf<"callCreate", M> || EventInvocationOf<"callDelete", M> || EventInvocationOf<"callUpdate", M> || EventInvocationOf<"channelPinsUpdate", M> || EventInvocationOf<"directMessageCreate", M> || EventInvocationOf<"directMessageDelete", M> || EventInvocationOf<"directMessageRecipientAdd", M> || EventInvocationOf<"directMessageRecipientRemove", M> || EventInvocationOf<"directMessageUpdate", M> || EventInvocationOf<"entranceSoundPlay", M> || EventInvocationOf<"guildAuditLogEntryCreate", M> || EventInvocationOf<"guildBanAdd", M> || EventInvocationOf<"guildBanRemove", M> || EventInvocationOf<"guildChannelCreate", M> || EventInvocationOf<"guildChannelDelete", M> || EventInvocationOf<"guildChannelUpdate", M> || EventInvocationOf<"guildChannelUpdateBulk", M> || EventInvocationOf<"guildCreate", M> || EventInvocationOf<"guildDelete", M> || EventInvocationOf<"guildEmojisUpdate", M> || EventInvocationOf<"guildMemberAdd", M> || EventInvocationOf<"guildMemberRemove", M> || EventInvocationOf<"guildMemberUpdate", M> || EventInvocationOf<"guildRoleCreate", M> || EventInvocationOf<"guildRoleDelete", M> || EventInvocationOf<"guildRoleUpdate", M> || EventInvocationOf<"guildRoleUpdateBulk", M> || EventInvocationOf<"guildStickersUpdate", M> || EventInvocationOf<"guildUpdate", M> || EventInvocationOf<"inviteCreate", M> || EventInvocationOf<"inviteDelete", M> || EventInvocationOf<"messageCreate", M> || EventInvocationOf<"messageDelete", M> || EventInvocationOf<"messageDeleteBulk", M> || EventInvocationOf<"messageReactionAdd", M> || EventInvocationOf<"messageReactionAddMany", M> || EventInvocationOf<"messageReactionRemove", M> || EventInvocationOf<"messageReactionRemoveAll", M> || EventInvocationOf<"messageReactionRemoveEmoji", M> || EventInvocationOf<"messageUpdate", M> || EventInvocationOf<"presenceUpdate", M> || EventInvocationOf<"presenceUpdateBulk", M> || EventInvocationOf<"raw", M> || EventInvocationOf<"typingStart", M> || EventInvocationOf<"userUpdate", M> || EventInvocationOf<"voiceStateSnapshot", M> || EventInvocationOf<"voiceStateUpdate", M> || EventInvocationOf<"webhooksUpdate", M>
+union|native|EventInvocation|EventInvocationOf<"callCreate", M> || EventInvocationOf<"callDelete", M> || EventInvocationOf<"callUpdate", M> || EventInvocationOf<"channelPinsUpdate", M> || EventInvocationOf<"directMessageCreate", M> || EventInvocationOf<"directMessageDelete", M> || EventInvocationOf<"directMessageRecipientAdd", M> || EventInvocationOf<"directMessageRecipientRemove", M> || EventInvocationOf<"directMessageUpdate", M> || EventInvocationOf<"entranceSoundPlay", M> || EventInvocationOf<"guildAuditLogEntryCreate", M> || EventInvocationOf<"guildBanAdd", M> || EventInvocationOf<"guildBanRemove", M> || EventInvocationOf<"guildChannelCreate", M> || EventInvocationOf<"guildChannelDelete", M> || EventInvocationOf<"guildChannelUpdate", M> || EventInvocationOf<"guildChannelUpdateBulk", M> || EventInvocationOf<"guildCreate", M> || EventInvocationOf<"guildDelete", M> || EventInvocationOf<"guildEmojisUpdate", M> || EventInvocationOf<"guildHealthUpdate", M> || EventInvocationOf<"guildMemberAdd", M> || EventInvocationOf<"guildMemberRemove", M> || EventInvocationOf<"guildMemberUpdate", M> || EventInvocationOf<"guildRoleCreate", M> || EventInvocationOf<"guildRoleDelete", M> || EventInvocationOf<"guildRoleUpdate", M> || EventInvocationOf<"guildRoleUpdateBulk", M> || EventInvocationOf<"guildStickersUpdate", M> || EventInvocationOf<"guildUpdate", M> || EventInvocationOf<"inviteCreate", M> || EventInvocationOf<"inviteDelete", M> || EventInvocationOf<"messageCreate", M> || EventInvocationOf<"messageDelete", M> || EventInvocationOf<"messageDeleteBulk", M> || EventInvocationOf<"messageReactionAdd", M> || EventInvocationOf<"messageReactionAddMany", M> || EventInvocationOf<"messageReactionRemove", M> || EventInvocationOf<"messageReactionRemoveAll", M> || EventInvocationOf<"messageReactionRemoveEmoji", M> || EventInvocationOf<"messageUpdate", M> || EventInvocationOf<"presenceUpdate", M> || EventInvocationOf<"presenceUpdateBulk", M> || EventInvocationOf<"raw", M> || EventInvocationOf<"typingStart", M> || EventInvocationOf<"userUpdate", M> || EventInvocationOf<"voiceStateSnapshot", M> || EventInvocationOf<"voiceStateUpdate", M> || EventInvocationOf<"webhooksUpdate", M>
 union|native|EventWaitFailure|ClientClosedError || ConfigurationError || EventOverflowError || EventWaitError
 union|native|GatewaySendFailure|ClientClosedError || GatewaySendError
-union|native|GuildChannel|GuildCategoryChannel || GuildLinkChannel || GuildTextChannel || GuildUnknownChannel || GuildVoiceChannel
+union|native|GuildChannel|GuildAnnouncementChannel || GuildCategoryChannel || GuildLinkChannel || GuildTextChannel || GuildUnknownChannel || GuildVoiceChannel
 union|native|GuildOperationFailure|ClientClosedError || GuildOperationError
 union|native|InstanceResolveError|ClientClosedError || ConfigurationError || ConnectionError || ConnectionTimeoutError || RateLimitError
 union|native|MemberChunkFailure|ClientClosedError || MemberChunkError
@@ -481,12 +490,27 @@ union|native|ReplyInput|{ readonly content: string; readonly embeds?: readonly (
 union|native|RestRequestFailure|ClientClosedError || RestRequestError
 union|native|SendError|ClientClosedError || MessageError
 union|native|UserOperationFailure|ClientClosedError || UserOperationError
+union|native|Webhook|ChannelFollowerWebhook || IncomingWebhook || UnknownWebhook
 union|native|WebhookMessageInput|WebhookMessageOptions & { readonly messageReference: WebhookForwardReference; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; }
 union|native|WebhookOperationFailure|ClientClosedError || WebhookOperationError
 field|shared|AllowedMentions.everyone|boolean | undefined|optional=true|nullable=false
 field|shared|AllowedMentions.repliedUser|boolean | undefined|optional=true|nullable=false
 field|shared|AllowedMentions.roles|readonly string[] | undefined|optional=true|nullable=false
 field|shared|AllowedMentions.users|readonly string[] | undefined|optional=true|nullable=false
+field|shared|AnnouncementChannelCreate.bitrate|null | number | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|AnnouncementChannelCreate.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.name|string|optional=false|nullable=false
+field|shared|AnnouncementChannelCreate.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|AnnouncementChannelCreate.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.parentId|null | string | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|AnnouncementChannelCreate.rateLimitPerUser|null | number | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.topic|null | string | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.type|5|optional=false|nullable=false
+field|shared|AnnouncementChannelCreate.url|null | string | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
 field|shared|ApiErrorDetail.code|ApiErrorCode|optional=false|nullable=false
 field|shared|ApiErrorDetail.explanation|string|optional=false|nullable=false
 field|shared|ApiErrorDetail.providerCode|ApiProviderCode|optional=false|nullable=false
@@ -792,7 +816,7 @@ field|shared|ChannelCreate.parentId|null | string | undefined|optional=true|null
 field|shared|ChannelCreate.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
 field|shared|ChannelCreate.rateLimitPerUser|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelCreate.topic|null | string | undefined|optional=true|nullable=true
-field|shared|ChannelCreate.type|0 | 2 | 4 | 998|optional=false|nullable=false
+field|shared|ChannelCreate.type|0 | 2 | 4 | 5 | 998|optional=false|nullable=false
 field|shared|ChannelCreate.url|null | string | undefined|optional=true|nullable=true
 field|shared|ChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
@@ -806,9 +830,21 @@ field|shared|ChannelEdit.permissionOverwrites|readonly PermissionOverwrite[] | u
 field|shared|ChannelEdit.rateLimitPerUser|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelEdit.rtcRegion|null | string | undefined|optional=true|nullable=true
 field|shared|ChannelEdit.topic|null | string | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.type|0 | 5 | undefined|optional=true|nullable=false
 field|shared|ChannelEdit.url|null | string | undefined|optional=true|nullable=true
 field|shared|ChannelEdit.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelEdit.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelFollowInput.targetChannelId|string|optional=false|nullable=false
+field|shared|ChannelFollowerStats.channelCount|number|optional=false|nullable=false
+field|shared|ChannelFollowerStats.guildCount|number|optional=false|nullable=false
+field|shared|ChannelFollowerWebhook.avatar|null | string|optional=false|nullable=true
+field|shared|ChannelFollowerWebhook.channelId|string|optional=false|nullable=false
+field|shared|ChannelFollowerWebhook.guildId|string|optional=false|nullable=false
+field|shared|ChannelFollowerWebhook.id|string|optional=false|nullable=false
+field|shared|ChannelFollowerWebhook.name|string|optional=false|nullable=false
+field|shared|ChannelFollowerWebhook.sourceChannel|WebhookSourceChannel | undefined|optional=true|nullable=false
+field|shared|ChannelFollowerWebhook.sourceGuild|WebhookSourceGuild | undefined|optional=true|nullable=false
+field|shared|ChannelFollowerWebhook.type|2|optional=false|nullable=false
 field|shared|ChannelLinkTarget.guildId|string | undefined|optional=true|nullable=false
 field|shared|ChannelLinkTarget.id|string|optional=false|nullable=false
 field|shared|ChannelMemberCount.channelId|string|optional=false|nullable=false
@@ -980,7 +1016,17 @@ field|shared|CountOperationFailure.reason|"busy" | "connectionLost" | "input" | 
 field|shared|CountOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
 field|native|CountOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|CreatedWebhook.credentials|WebhookCredentials|optional=false|nullable=false
-field|shared|CreatedWebhook.webhook|Webhook|optional=false|nullable=false
+field|shared|CreatedWebhook.webhook|IncomingWebhook|optional=false|nullable=false
+field|shared|CrosspostSource.guild|CrosspostSourceGuild|optional=false|nullable=false
+field|shared|CrosspostSourceGuild.approximateMemberCount|null | number|optional=false|nullable=true
+field|shared|CrosspostSourceGuild.approximatePresenceCount|null | number|optional=false|nullable=true
+field|shared|CrosspostSourceGuild.banner|null | string | undefined|optional=true|nullable=true
+field|shared|CrosspostSourceGuild.description|null | string|optional=false|nullable=true
+field|shared|CrosspostSourceGuild.discoverable|boolean|optional=false|nullable=false
+field|shared|CrosspostSourceGuild.features|readonly string[]|optional=false|nullable=false
+field|shared|CrosspostSourceGuild.icon|null | string | undefined|optional=true|nullable=true
+field|shared|CrosspostSourceGuild.id|string|optional=false|nullable=false
+field|shared|CrosspostSourceGuild.name|string|optional=false|nullable=false
 field|shared|CustomStatusEmoji.id|string | undefined|optional=true|nullable=false
 field|shared|CustomStatusEmoji.name|string | undefined|optional=true|nullable=false
 field|shared|CustomStatusInput.emoji|CustomStatusEmoji | undefined|optional=true|nullable=false
@@ -1035,6 +1081,9 @@ field|default|DefaultInstanceResolveOptions.timeoutMs|number | undefined|optiona
 field|default|DefaultMemberChunkOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
 field|default|DefaultMemberChunkOptions.signal|OperationSignal | undefined|optional=true|nullable=false
 field|default|DefaultMemberChunkOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|default|DefaultMessageAuditOperationOptions.auditReason|string | undefined|optional=true|nullable=false
+field|default|DefaultMessageAuditOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|default|DefaultMessageAuditOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|default|DefaultMessageCleanupOptions.onProgress|((progress: MessageCleanupProgress) => unknown) | undefined|optional=true|nullable=false
 field|default|DefaultMessageCleanupOptions.signal|OperationSignal | undefined|optional=true|nullable=false
 field|default|DefaultMessageCleanupOptions.timeoutMs|number | undefined|optional=true|nullable=false
@@ -1263,8 +1312,8 @@ field|native|EventHandlerOptions.onError|((report: FailureReport) => Effect<unkn
 field|shared|EventHandlerOptions.overflow|"dropNewest" | "dropOldest" | "stop" | undefined|optional=true|nullable=false
 field|shared|EventHandlerOptions.partition|"channel" | "guild" | ((event: T) => string | undefined) | undefined|optional=true|nullable=false
 field|shared|EventInvocation.context|EventContext|optional=false|nullable=false
-field|shared|EventInvocation.event|"callCreate" | "callDelete" | "callUpdate" | "channelPinsUpdate" | "directMessageCreate" | "directMessageDelete" | "directMessageRecipientAdd" | "directMessageRecipientRemove" | "directMessageUpdate" | "entranceSoundPlay" | "guildAuditLogEntryCreate" | "guildBanAdd" | "guildBanRemove" | "guildChannelCreate" | "guildChannelDelete" | "guildChannelUpdate" | "guildChannelUpdateBulk" | "guildCreate" | "guildDelete" | "guildEmojisUpdate" | "guildMemberAdd" | "guildMemberRemove" | "guildMemberUpdate" | "guildRoleCreate" | "guildRoleDelete" | "guildRoleUpdate" | "guildRoleUpdateBulk" | "guildStickersUpdate" | "guildUpdate" | "inviteCreate" | "inviteDelete" | "messageCreate" | "messageDelete" | "messageDeleteBulk" | "messageReactionAdd" | "messageReactionAddMany" | "messageReactionRemove" | "messageReactionRemoveAll" | "messageReactionRemoveEmoji" | "messageUpdate" | "presenceUpdate" | "presenceUpdateBulk" | "raw" | "typingStart" | "userUpdate" | "voiceStateSnapshot" | "voiceStateUpdate" | "webhooksUpdate"|optional=false|nullable=false
-field|shared|EventInvocation.payload|CallCreate | CallDelete | CallUpdate | ChannelPinsUpdate | DirectMessageChannel | DirectMessageRecipientChange | EntranceSoundPlay | Guild | GuildAuditLogEntryCreate | GuildChannel | GuildChannelUpdateBulk | GuildCreate | GuildDeletion | GuildEmojisUpdate | GuildMember | GuildRole | GuildRoleUpdateBulk | GuildStickersUpdate | InviteDeleteEvent | InviteMetadata | M | MemberReference | MessageBulkDeletion | MessageDeletion | MessageReaction | MessageReactionBatch | MessageReactionEmojiRemoval | PresenceUpdate | PresenceUpdateBulk | RawDispatch | ReactionTarget | RoleReference | TypingStart | User | VoiceState | VoiceStateSnapshot | WebhooksUpdate | { readonly id: string; }|optional=false|nullable=false
+field|shared|EventInvocation.event|"callCreate" | "callDelete" | "callUpdate" | "channelPinsUpdate" | "directMessageCreate" | "directMessageDelete" | "directMessageRecipientAdd" | "directMessageRecipientRemove" | "directMessageUpdate" | "entranceSoundPlay" | "guildAuditLogEntryCreate" | "guildBanAdd" | "guildBanRemove" | "guildChannelCreate" | "guildChannelDelete" | "guildChannelUpdate" | "guildChannelUpdateBulk" | "guildCreate" | "guildDelete" | "guildEmojisUpdate" | "guildHealthUpdate" | "guildMemberAdd" | "guildMemberRemove" | "guildMemberUpdate" | "guildRoleCreate" | "guildRoleDelete" | "guildRoleUpdate" | "guildRoleUpdateBulk" | "guildStickersUpdate" | "guildUpdate" | "inviteCreate" | "inviteDelete" | "messageCreate" | "messageDelete" | "messageDeleteBulk" | "messageReactionAdd" | "messageReactionAddMany" | "messageReactionRemove" | "messageReactionRemoveAll" | "messageReactionRemoveEmoji" | "messageUpdate" | "presenceUpdate" | "presenceUpdateBulk" | "raw" | "typingStart" | "userUpdate" | "voiceStateSnapshot" | "voiceStateUpdate" | "webhooksUpdate"|optional=false|nullable=false
+field|shared|EventInvocation.payload|CallCreate | CallDelete | CallUpdate | ChannelPinsUpdate | DirectMessageChannel | DirectMessageRecipientChange | EntranceSoundPlay | Guild | GuildAuditLogEntryCreate | GuildChannel | GuildChannelUpdateBulk | GuildCreate | GuildDeletion | GuildEmojisUpdate | GuildHealthUpdate | GuildMember | GuildRole | GuildRoleUpdateBulk | GuildStickersUpdate | InviteDeleteEvent | InviteMetadata | M | MemberReference | MessageBulkDeletion | MessageDeletion | MessageReaction | MessageReactionBatch | MessageReactionEmojiRemoval | PresenceUpdate | PresenceUpdateBulk | RawDispatch | ReactionTarget | RoleReference | TypingStart | User | VoiceState | VoiceStateSnapshot | WebhooksUpdate | { readonly id: string; }|optional=false|nullable=false
 field|shared|EventInvocation.subscriptionId|string|optional=false|nullable=false
 field|shared|EventInvocationOf.context|EventContext|optional=false|nullable=false
 field|shared|EventInvocationOf.event|K|optional=false|nullable=false
@@ -1290,6 +1339,7 @@ field|shared|EventMap.guildChannelUpdateBulk|GuildChannelUpdateBulk|optional=fal
 field|shared|EventMap.guildCreate|GuildCreate|optional=false|nullable=false
 field|shared|EventMap.guildDelete|GuildDeletion|optional=false|nullable=false
 field|shared|EventMap.guildEmojisUpdate|GuildEmojisUpdate|optional=false|nullable=false
+field|shared|EventMap.guildHealthUpdate|GuildHealthUpdate|optional=false|nullable=false
 field|shared|EventMap.guildMemberAdd|GuildMember|optional=false|nullable=false
 field|shared|EventMap.guildMemberRemove|MemberReference|optional=false|nullable=false
 field|shared|EventMap.guildMemberUpdate|GuildMember|optional=false|nullable=false
@@ -1394,6 +1444,8 @@ field|shared|FluxerlyErrorJson.details|Readonly<Record<string, unknown>>|optiona
 field|shared|FluxerlyErrorJson.hint|string | undefined|optional=true|nullable=false
 field|shared|FluxerlyErrorJson.message|string|optional=false|nullable=false
 field|shared|FluxerlyErrorJson.name|string|optional=false|nullable=false
+field|shared|FollowedChannel.channelId|string|optional=false|nullable=false
+field|shared|FollowedChannel.webhookId|string|optional=false|nullable=false
 field|shared|ForwardMessageInput.attachmentIds|readonly string[] | undefined|optional=true|nullable=false
 field|shared|ForwardMessageInput.embedIndices|readonly number[] | undefined|optional=true|nullable=false
 field|shared|ForwardMessageInput.nonce|MessageNonce | undefined|optional=true|nullable=false
@@ -1437,6 +1489,21 @@ field|shared|Guild.splashCardAlignment|GuildSplashCardAlignment | undefined|opti
 field|shared|Guild.systemChannelFlags|number | undefined|optional=true|nullable=false
 field|shared|Guild.systemChannelId|null | string | undefined|optional=true|nullable=true
 field|shared|Guild.verificationLevel|GuildVerificationLevel | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementChannel.guildId|string|optional=false|nullable=false
+field|shared|GuildAnnouncementChannel.id|string|optional=false|nullable=false
+field|shared|GuildAnnouncementChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementChannel.lastPinTimestamp|null | string | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementChannel.name|string | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementChannel.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementChannel.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementChannel.parentId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementChannel.position|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementChannel.topic|null | string | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementChannel.type|5|optional=false|nullable=false
 field|shared|GuildAuditLogEntryCreate.actionType|AuditLogActionType|optional=false|nullable=false
 field|shared|GuildAuditLogEntryCreate.changes|readonly AuditLogChange[] | undefined|optional=true|nullable=false
 field|shared|GuildAuditLogEntryCreate.guildId|string|optional=false|nullable=false
@@ -1483,7 +1550,7 @@ field|shared|GuildChannel.rateLimitPerUser|number | undefined|optional=true|null
 field|shared|GuildChannel.rawType|number | undefined|optional=true|nullable=false
 field|shared|GuildChannel.rtcRegion|null | string | undefined|optional=true|nullable=true
 field|shared|GuildChannel.topic|null | string | undefined|optional=true|nullable=true
-field|shared|GuildChannel.type|"unknown" | 0 | 2 | 4 | 998|optional=false|nullable=false
+field|shared|GuildChannel.type|"unknown" | 0 | 2 | 4 | 5 | 998|optional=false|nullable=false
 field|shared|GuildChannel.url|null | string | undefined|optional=true|nullable=true
 field|shared|GuildChannel.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|GuildChannel.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
@@ -1543,6 +1610,8 @@ field|shared|GuildEmoji.id|string|optional=false|nullable=false
 field|shared|GuildEmoji.name|string|optional=false|nullable=false
 field|shared|GuildEmojisUpdate.guildId|string|optional=false|nullable=false
 field|shared|GuildEmojisUpdate.items|readonly GuildEmoji[]|optional=false|nullable=false
+field|shared|GuildHealthUpdate.degraded|boolean|optional=false|nullable=false
+field|shared|GuildHealthUpdate.guildId|string|optional=false|nullable=false
 field|shared|GuildIterationQuery.after|string | undefined|optional=true|nullable=false
 field|shared|GuildIterationQuery.maxItems|number|optional=false|nullable=false
 field|shared|GuildIterationQuery.maxPages|number | undefined|optional=true|nullable=false
@@ -1710,6 +1779,12 @@ field|shared|HistoryIterationQuery.before|string | undefined|optional=true|nulla
 field|shared|HistoryIterationQuery.maxItems|number|optional=false|nullable=false
 field|shared|HistoryIterationQuery.maxPages|number | undefined|optional=true|nullable=false
 field|shared|HistoryIterationQuery.pageSize|number | undefined|optional=true|nullable=false
+field|shared|IncomingWebhook.avatar|null | string|optional=false|nullable=true
+field|shared|IncomingWebhook.channelId|string|optional=false|nullable=false
+field|shared|IncomingWebhook.guildId|string|optional=false|nullable=false
+field|shared|IncomingWebhook.id|string|optional=false|nullable=false
+field|shared|IncomingWebhook.name|string|optional=false|nullable=false
+field|shared|IncomingWebhook.type|1|optional=false|nullable=false
 field|shared|InputValidationDetail.constraint|InputValidationConstraint|optional=false|nullable=false
 field|shared|InputValidationDetail.explanation|string|optional=false|nullable=false
 field|shared|InputValidationDetail.path|string|optional=false|nullable=false
@@ -1883,6 +1958,8 @@ field|shared|Message.stickers|readonly MessageSticker[]|optional=false|nullable=
 field|shared|Message.tts|boolean | undefined|optional=true|nullable=false
 field|shared|Message.type|number | undefined|optional=true|nullable=false
 field|shared|Message.webhookId|string | undefined|optional=true|nullable=false
+field|native|MessageAuditOperationOptions.auditReason|string | undefined|optional=true|nullable=false
+field|native|MessageAuditOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|MessageBulkDeletion.channelId|string|optional=false|nullable=false
 field|shared|MessageBulkDeletion.guildId|string | undefined|optional=true|nullable=false
 field|shared|MessageBulkDeletion.ids|readonly string[]|optional=false|nullable=false
@@ -1931,7 +2008,7 @@ field|shared|MessageCleanupSelection.maxScanned|number|optional=false|nullable=f
 field|shared|MessageCleanupSelection.maxSelected|number|optional=false|nullable=false
 field|shared|MessageContextReference.channelId|string|optional=false|nullable=false
 field|shared|MessageContextReference.guildId|null | string | undefined|optional=true|nullable=true
-field|shared|MessageContextReference.id|string|optional=false|nullable=false
+field|shared|MessageContextReference.id|string | undefined|optional=true|nullable=false
 field|shared|MessageContextReference.type|number | undefined|optional=true|nullable=false
 field|shared|MessageCore.author|MessageUser|optional=false|nullable=false
 field|shared|MessageCore.channelId|string|optional=false|nullable=false
@@ -1973,7 +2050,7 @@ field|shared|MessageOperationError.code|string|optional=false|nullable=false
 field|shared|MessageOperationError.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|MessageOperationError.hint|string | undefined|optional=true|nullable=false
 field|shared|MessageOperationError.inputValidation|InputValidationDetail | null|optional=false|nullable=true
-field|shared|MessageOperationError.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin"|optional=false|nullable=false
+field|shared|MessageOperationError.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchCrosspostSource" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "publish" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin"|optional=false|nullable=false
 field|shared|MessageOperationError.outcome|OperationOutcome|optional=false|nullable=false
 field|shared|MessageOperationError.reason|OperationReason|optional=false|nullable=false
 field|shared|MessageOperationError.retryAfterMs|null | number|optional=false|nullable=true
@@ -1985,7 +2062,7 @@ field|shared|MessageOperationFailure.code|string|optional=false|nullable=false
 field|shared|MessageOperationFailure.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|MessageOperationFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|MessageOperationFailure.inputValidation|InputValidationDetail | null | undefined|optional=true|nullable=true
-field|shared|MessageOperationFailure.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin" | undefined|optional=true|nullable=false
+field|shared|MessageOperationFailure.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchCrosspostSource" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "publish" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin" | undefined|optional=true|nullable=false
 field|shared|MessageOperationFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|MessageOperationFailure.reason|OperationReason | undefined|optional=true|nullable=false
 field|shared|MessageOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
@@ -2022,7 +2099,7 @@ field|shared|MessageReference.channelId|string|optional=false|nullable=false
 field|shared|MessageReference.id|string|optional=false|nullable=false
 field|shared|MessageSearchChannel.guildId|string | undefined|optional=true|nullable=false
 field|shared|MessageSearchChannel.id|string|optional=false|nullable=false
-field|shared|MessageSearchChannel.name|string | undefined|optional=true|nullable=false
+field|shared|MessageSearchChannel.name|null | string | undefined|optional=true|nullable=true
 field|shared|MessageSearchChannel.type|number|optional=false|nullable=false
 field|shared|MessageSearchContext.channelId|string | undefined|optional=true|nullable=false
 field|shared|MessageSearchContext.guildId|string | undefined|optional=true|nullable=false
@@ -2423,6 +2500,15 @@ field|shared|TypingStart.channelId|string|optional=false|nullable=false
 field|shared|TypingStart.guildId|string | undefined|optional=true|nullable=false
 field|shared|TypingStart.timestamp|number|optional=false|nullable=false
 field|shared|TypingStart.userId|string|optional=false|nullable=false
+field|shared|UnknownWebhook.avatar|null | string|optional=false|nullable=true
+field|shared|UnknownWebhook.channelId|string|optional=false|nullable=false
+field|shared|UnknownWebhook.guildId|string|optional=false|nullable=false
+field|shared|UnknownWebhook.id|string|optional=false|nullable=false
+field|shared|UnknownWebhook.name|string|optional=false|nullable=false
+field|shared|UnknownWebhook.rawType|number|optional=false|nullable=false
+field|shared|UnknownWebhook.sourceChannel|WebhookSourceChannel | undefined|optional=true|nullable=false
+field|shared|UnknownWebhook.sourceGuild|WebhookSourceGuild | undefined|optional=true|nullable=false
+field|shared|UnknownWebhook.type|"unknown"|optional=false|nullable=false
 field|shared|User.avatar|null | string|optional=false|nullable=true
 field|shared|User.avatarColor|null | number|optional=false|nullable=true
 field|shared|User.discriminator|string|optional=false|nullable=false
@@ -2508,6 +2594,10 @@ field|shared|Webhook.channelId|string|optional=false|nullable=false
 field|shared|Webhook.guildId|string|optional=false|nullable=false
 field|shared|Webhook.id|string|optional=false|nullable=false
 field|shared|Webhook.name|string|optional=false|nullable=false
+field|shared|Webhook.rawType|number | undefined|optional=true|nullable=false
+field|shared|Webhook.sourceChannel|WebhookSourceChannel | undefined|optional=true|nullable=false
+field|shared|Webhook.sourceGuild|WebhookSourceGuild | undefined|optional=true|nullable=false
+field|shared|Webhook.type|"unknown" | 1 | 2|optional=false|nullable=false
 field|shared|WebhookCreate.avatar|null | string | undefined|optional=true|nullable=true
 field|shared|WebhookCreate.name|string|optional=false|nullable=false
 field|shared|WebhookCredentials.id|string|optional=false|nullable=false
@@ -2528,11 +2618,13 @@ field|shared|WebhookMessageInput.content|string | undefined|optional=true|nullab
 field|shared|WebhookMessageInput.embeds|readonly (EmbedBuilder | EmbedInput)[] | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.flags|number | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.messageReference|WebhookForwardReference | WebhookReplyReference | undefined|optional=true|nullable=false
+field|shared|WebhookMessageInput.nonce|MessageNonce | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.stickerIds|readonly string[] | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.username|string | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.allowedMentions|AllowedMentions | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.avatarUrl|string | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.flags|number | undefined|optional=true|nullable=false
+field|shared|WebhookMessageOptions.nonce|MessageNonce | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.username|string | undefined|optional=true|nullable=false
 field|shared|WebhookOperationError._tag|"WebhookOperationError"|optional=false|nullable=false
 field|shared|WebhookOperationError.apiError|ApiErrorDetail | null|optional=false|nullable=true
@@ -2562,6 +2654,11 @@ field|native|WebhookOperationOptions.auditReason|string | undefined|optional=tru
 field|native|WebhookOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|WebhookReplyReference.target|MessageReference|optional=false|nullable=false
 field|shared|WebhookReplyReference.type|"reply"|optional=false|nullable=false
+field|shared|WebhookSourceChannel.id|string|optional=false|nullable=false
+field|shared|WebhookSourceChannel.name|string|optional=false|nullable=false
+field|shared|WebhookSourceGuild.icon|null | string | undefined|optional=true|nullable=true
+field|shared|WebhookSourceGuild.id|string|optional=false|nullable=false
+field|shared|WebhookSourceGuild.name|string|optional=false|nullable=false
 field|shared|WebhookTokenEdit.avatar|null | string | undefined|optional=true|nullable=true
 field|shared|WebhookTokenEdit.name|string | undefined|optional=true|nullable=false
 field|shared|WebhooksUpdate.channelId|string|optional=false|nullable=false

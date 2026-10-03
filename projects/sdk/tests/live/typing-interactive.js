@@ -1,7 +1,7 @@
 // Interactive typing check in both API modes: inbound typing from one currently authorized member, outbound
 // keep-typing refresh confirmed by a human or browser observation, and refresh stop.
 // Journal `.env.test.typing.local` records the sandbox and bot identity and the unique marker and returned ID of
-// one test channel. An existing journal is cleaned up before a new run by deleting only the journaled channel
+// one test channel. An existing journal triggers recovery only, deleting only the journaled channel
 import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { createInterface } from "node:readline"
@@ -206,33 +206,36 @@ try {
     report(stage)
     if (journalFile.exists()) {
         journal = journalFile.read()
+        stage = "recovery_only"
         await cleanup()
+        report(stage)
+    } else {
+        journal = { kind: "interactive-typing", guildId, botId }
+        journalFile.create(journal)
+        stage = "create_test_channel"
+        const channel = await createGuildChannelFixture(
+            journal,
+            () => journalFile.save(journal),
+            "explicitChild",
+            { type: 0 },
+            async (input) => {
+                const created = (await api("POST", `/guilds/${guildId}/channels`, input)).data
+                return { ...created, guildId: created.guild_id }
+            },
+        )
+        terminal = createInterface({ input: process.stdin })
+        terminal.on("line", (line) => {
+            if ((line === `visible ${mode}` || line === `browser ${mode}`) && stage === "await_human_typing_check") {
+                confirmedMode = mode
+                confirmationSource = line.startsWith("browser ") ? "browser-observation" : "human"
+            }
+            if (line === "stop") stopped = true
+        })
+        terminal.on("close", () => {
+            stopped = true
+        })
+        for (mode of ["default", "effect"]) await runMode(channel)
     }
-    journal = { kind: "interactive-typing", guildId, botId }
-    journalFile.create(journal)
-    stage = "create_test_channel"
-    const channel = await createGuildChannelFixture(
-        journal,
-        () => journalFile.save(journal),
-        "explicitChild",
-        { type: 0 },
-        async (input) => {
-            const created = (await api("POST", `/guilds/${guildId}/channels`, input)).data
-            return { ...created, guildId: created.guild_id }
-        },
-    )
-    terminal = createInterface({ input: process.stdin })
-    terminal.on("line", (line) => {
-        if ((line === `visible ${mode}` || line === `browser ${mode}`) && stage === "await_human_typing_check") {
-            confirmedMode = mode
-            confirmationSource = line.startsWith("browser ") ? "browser-observation" : "human"
-        }
-        if (line === "stop") stopped = true
-    })
-    terminal.on("close", () => {
-        stopped = true
-    })
-    for (mode of ["default", "effect"]) await runMode(channel)
 } catch {
     console.error(JSON.stringify({ mode, check: stage, passed: false }))
     process.exitCode = 1

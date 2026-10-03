@@ -7,7 +7,7 @@ import { createHash } from "node:crypto"
 
 // Matches the parameterized buckets in the Fluxer rate-limit configs at the commit pinned by
 // projects/release/upstream/manifest.json, except the oauth_dev buckets of session-only developer routes.
-// The weekly upstream drift check reports bucket changes.
+// The daily upstream drift check reports bucket changes.
 // Fluxer hashes the unresolved template for the response header, then resolves these parameters for storage,
 // so the hash alone does not distinguish independently limited resources
 const parameterizedTemplates = [
@@ -17,9 +17,13 @@ const parameterizedTemplates = [
     "channel:call:stop_ringing::channel_id",
     "channel:call:update::channel_id",
     "channel:delete::channel_id",
+    "channel:follow::channel_id",
+    "channel:follower_stats::channel_id",
     "channel:message:ack::channel_id",
     "channel:message:bulk_delete::channel_id",
     "channel:message:create::channel_id",
+    "channel:message:crosspost::channel_id",
+    "channel:message:crosspost_source::channel_id",
     "channel:message:delete::channel_id",
     "channel:message:purge::channel_id",
     "channel:message:read::channel_id",
@@ -102,8 +106,19 @@ const parameterizedTemplates = [
     "webhook:update::webhook_id",
 ] as const
 
+// Fluxer fills placeholders only from path parameters. These routes have no user_id parameter, so the placeholder
+// stays literal and one bucket covers every expression the caller looks up
+const callerWideTemplates: ReadonlySet<string> = new Set([
+    "guild:emoji:metadata::user_id",
+    "guild:emoji:source::user_id",
+    "guild:sticker:metadata::user_id",
+    "guild:sticker:source::user_id",
+])
+
 const parameterNames = (template: string): readonly string[] =>
-    Object.freeze([...template.matchAll(/::([a-z_]+)/g)].map((match) => match[1]!))
+    callerWideTemplates.has(template)
+        ? Object.freeze([])
+        : Object.freeze([...template.matchAll(/::([a-z_]+)/g)].map((match) => match[1]!))
 
 export const rateLimitParameters: ReadonlyMap<string, readonly string[]> = new Map(
     parameterizedTemplates.map((template) => [

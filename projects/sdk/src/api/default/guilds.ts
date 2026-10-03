@@ -43,7 +43,7 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
 export interface Guilds {
     /**
      * Request fresh, visibility-filtered counts for 1–100 communities over the connected gateway.
-     * Use distinct positive decimal IDs without leading zeros, no greater than "18446744073709551615".
+     * Use distinct positive decimal IDs without leading zeros, no greater than "9223372036854775807".
      * The IDs are copied when execution starts.
      * Every community must belong to a ready shard assigned to this client.
      * An unassigned or unready shard fails with notConnected, not an omitted result.

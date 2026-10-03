@@ -3,14 +3,25 @@
 // type "unknown", so it never survives a known-type comparison and a switch on type is exhaustive
 import {
     ChannelType,
+    type AnnouncementChannelCreate,
+    type ChannelCreate,
+    type ChannelEdit,
+    type GuildAnnouncementChannel,
     type GuildCategoryChannel,
+    type GuildTextChannelBase,
     type GuildChannel,
     type GuildLinkChannel,
     type GuildTextChannel,
     type GuildUnknownChannel,
     type GuildVoiceChannel,
 } from "../../src/index.js"
-import { ChannelType as NativeChannelType, type GuildChannel as NativeGuildChannel } from "../../src/effect.js"
+import {
+    ChannelType as NativeChannelType,
+    type AnnouncementChannelCreate as NativeAnnouncementChannelCreate,
+    type ChannelEdit as NativeChannelEdit,
+    type GuildAnnouncementChannel as NativeGuildAnnouncementChannel,
+    type GuildChannel as NativeGuildChannel,
+} from "../../src/effect.js"
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
 type Assert<T extends true> = T
@@ -49,6 +60,10 @@ export function describeChannel(channel: GuildChannel): string {
         case ChannelType.Text: {
             const text: GuildTextChannel = channel
             return `text ${text.topic ?? ""}`
+        }
+        case ChannelType.Announcement: {
+            const announcement: GuildAnnouncementChannel = channel
+            return `announcement ${announcement.topic ?? ""}`
         }
         case ChannelType.Voice: {
             const voice: GuildVoiceChannel = channel
@@ -118,3 +133,30 @@ export const numericFutureChannel: GuildChannel = { id: "1", guildId: "2", type:
 // The native entry exposes the same union and constants
 export const sameUnion: Assert<Equal<NativeGuildChannel, GuildChannel>> = true
 export const sameVoiceType: Assert<Equal<typeof NativeChannelType.Voice, 2>> = true
+export const sameAnnouncementType: Assert<Equal<typeof NativeChannelType.Announcement, 5>> = true
+export const sameAnnouncementShape: Assert<Equal<NativeGuildAnnouncementChannel, GuildAnnouncementChannel>> = true
+export const sameAnnouncementCreate: Assert<Equal<NativeAnnouncementChannelCreate, AnnouncementChannelCreate>> = true
+export const sameChannelEdit: Assert<Equal<NativeChannelEdit, ChannelEdit>> = true
+export const conversionTypes: Assert<Equal<ChannelEdit["type"], 0 | 5 | undefined>> = true
+
+export function announcementTopic(channel: GuildChannel): string | null | undefined {
+    if (channel.type !== ChannelType.Announcement) return undefined
+    const announcement: GuildAnnouncementChannel = channel
+    const textLike: GuildTextChannelBase = announcement
+    // @ts-expect-error An announcement channel has no voice bitrate
+    void announcement.bitrate
+    return textLike.topic
+}
+
+const announcementCreate: AnnouncementChannelCreate = {
+    type: ChannelType.Announcement,
+    name: "announcements",
+    topic: null,
+    rateLimitPerUser: 15,
+    permissionOverwrites: [],
+}
+export const announcementAsCreate: ChannelCreate = announcementCreate
+export const announcementConversion: ChannelEdit = { type: ChannelType.Announcement }
+export const textConversion: NativeChannelEdit = { type: NativeChannelType.Text }
+// @ts-expect-error Only Text and Announcement are channel conversion targets
+export const invalidConversion: ChannelEdit = { type: ChannelType.Voice }

@@ -1,7 +1,7 @@
 // Targeted member nickname change with a lost response, raw reconciliation, cache invalidation and SDK restoration
 // for a currently authorized non-bot member.
 // Journal `.env.test.members.local` records sandbox, bot and member identity, the marker nickname and the original
-// nickname. An existing journal is recovered before a new run: recovery requires the same currently supplied member
+// nickname. An existing journal triggers recovery only: Recovery requires the same currently supplied member
 // ID, restores the original nickname only from the exact marker and refuses an unexpected concurrent change
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
@@ -120,79 +120,87 @@ try {
 
     if (journalFile.exists()) {
         journal = journalFile.read()
+        stage = "recovery_only"
         await cleanup()
         target = await fetchTarget()
-    }
-
-    journal = {
-        guildId,
-        botId,
-        memberId,
-        originalNickname: nickname(target),
-        changedNickname: `fn_${randomUUID().replaceAll("-", "").slice(0, 28)}`,
-    }
-    journalFile.create(journal)
-
-    const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
-    if (mode === "default") client = sdk.createClient({ token, cache: { members: true } })
-    else {
-        scope = Scope.makeUnsafe()
-        client = await Effect.runPromise(
-            sdk.createClient({ token, cache: { members: true } }).pipe(Scope.provide(scope)),
-        )
-    }
-
-    stage = "target_nickname_preflight"
-    assert.equal(nickname(await fetchTarget()), journal.originalNickname, "Concurrent nickname change before mutation")
-    report(stage)
-
-    await value(client.members.fetch({ guildId, userId: memberId }))
-    assert.equal((await cachedMember({ guildId, userId: memberId }))?.nickname ?? null, journal.originalNickname)
-
-    stage = "target_nickname_set_lost_response"
-    let markerDispatches = 0
-    clientFetch = globalThis.fetch
-    globalThis.fetch = async (request, options) => {
-        const url = new URL(typeof request === "string" || request instanceof URL ? request : request.url)
-        const body = options?.body === undefined ? undefined : JSON.parse(String(options.body))
-        if (
-            options?.method === "PATCH" &&
-            url.pathname === `/v1/guilds/${guildId}/members/${memberId}` &&
-            body?.nick === journal.changedNickname
-        ) {
-            assert.equal(markerDispatches, 0, "The lost-response nickname write must not retry")
-            markerDispatches += 1
-            const response = await clientFetch(request, options)
-            await response.body?.cancel()
-            throw new TypeError("Intentionally lost nickname response")
+        report(stage)
+    } else {
+        journal = {
+            guildId,
+            botId,
+            memberId,
+            originalNickname: nickname(target),
+            changedNickname: `fn_${randomUUID().replaceAll("-", "").slice(0, 28)}`,
         }
-        return clientFetch(request, options)
-    }
-    try {
-        await value(client.members.setNickname({ guildId, userId: memberId }, journal.changedNickname))
-        assert.fail("The marker response must be lost")
-    } catch (error) {
-        assert.equal(error?._tag, "GuildOperationError")
-        assert.equal(error?.reason, "network")
-        assert.equal(error?.outcome, "unknown")
-        assert.equal(error?.status, null)
-    } finally {
-        globalThis.fetch = clientFetch
-        clientFetch = undefined
-    }
-    assert.equal(markerDispatches, 1)
-    assert.equal(await cachedMember({ guildId, userId: memberId }), undefined)
+        journalFile.create(journal)
 
-    stage = "target_nickname_raw_reconciliation"
-    assert.equal(nickname(await fetchTarget()), journal.changedNickname)
-    report(stage)
+        const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
+        if (mode === "default") client = sdk.createClient({ token, cache: { members: true } })
+        else {
+            scope = Scope.makeUnsafe()
+            client = await Effect.runPromise(
+                sdk.createClient({ token, cache: { members: true } }).pipe(Scope.provide(scope)),
+            )
+        }
 
-    stage = "sdk_nickname_restore_and_independent_readback"
-    const restored = await value(client.members.setNickname({ guildId, userId: memberId }, journal.originalNickname))
-    assert.equal(restored.userId, memberId)
-    assert.equal(restored.nickname ?? null, journal.originalNickname)
-    assert.equal((await fetchTarget()).nick ?? null, journal.originalNickname)
-    report(stage)
+        stage = "target_nickname_preflight"
+        assert.equal(
+            nickname(await fetchTarget()),
+            journal.originalNickname,
+            "Concurrent nickname change before mutation",
+        )
+        report(stage)
+
+        await value(client.members.fetch({ guildId, userId: memberId }))
+        assert.equal((await cachedMember({ guildId, userId: memberId }))?.nickname ?? null, journal.originalNickname)
+
+        stage = "target_nickname_set_lost_response"
+        let markerDispatches = 0
+        clientFetch = globalThis.fetch
+        globalThis.fetch = async (request, options) => {
+            const url = new URL(typeof request === "string" || request instanceof URL ? request : request.url)
+            const body = options?.body === undefined ? undefined : JSON.parse(String(options.body))
+            if (
+                options?.method === "PATCH" &&
+                url.pathname === `/v1/guilds/${guildId}/members/${memberId}` &&
+                body?.nick === journal.changedNickname
+            ) {
+                assert.equal(markerDispatches, 0, "The lost-response nickname write must not retry")
+                markerDispatches += 1
+                const response = await clientFetch(request, options)
+                await response.body?.cancel()
+                throw new TypeError("Intentionally lost nickname response")
+            }
+            return clientFetch(request, options)
+        }
+        try {
+            await value(client.members.setNickname({ guildId, userId: memberId }, journal.changedNickname))
+            assert.fail("The marker response must be lost")
+        } catch (error) {
+            assert.equal(error?._tag, "GuildOperationError")
+            assert.equal(error?.reason, "network")
+            assert.equal(error?.outcome, "unknown")
+            assert.equal(error?.status, null)
+        } finally {
+            globalThis.fetch = clientFetch
+            clientFetch = undefined
+        }
+        assert.equal(markerDispatches, 1)
+        assert.equal(await cachedMember({ guildId, userId: memberId }), undefined)
+
+        stage = "target_nickname_raw_reconciliation"
+        assert.equal(nickname(await fetchTarget()), journal.changedNickname)
+        report(stage)
+
+        stage = "sdk_nickname_restore_and_independent_readback"
+        const restored = await value(
+            client.members.setNickname({ guildId, userId: memberId }, journal.originalNickname),
+        )
+        assert.equal(restored.userId, memberId)
+        assert.equal(restored.nickname ?? null, journal.originalNickname)
+        assert.equal((await fetchTarget()).nick ?? null, journal.originalNickname)
+        report(stage)
+    }
 } catch (error) {
     console.error(
         JSON.stringify({

@@ -18,11 +18,11 @@ function temporary() {
     return directory
 }
 
-/** An installed package with the shipped consumer guide and the given version */
+/** An installed package with the shipped agent guide and the given version */
 function installedPackage(version: string) {
     const root = temporary()
-    mkdirSync(join(root, "consumer"))
-    copyFileSync(join(sdk, "consumer/AGENTS.md"), join(root, "consumer/AGENTS.md"))
+    mkdirSync(join(root, "agents"))
+    copyFileSync(join(sdk, "agents/AGENTS.md"), join(root, "agents/AGENTS.md"))
     writeFileSync(join(root, "package.json"), JSON.stringify({ version }))
     return root
 }
@@ -34,7 +34,7 @@ test("a project without AGENTS.md gets one with the rules, the installed version
     expect(writeAgentsSection(project, installedPackage("1000.0.0-rc.9")).status).toBe("created")
     const text = read(project)
     expect(text).toContain("@neontechspace/fluxerly 1000.0.0-rc.9")
-    expect(text).toContain("node_modules/@neontechspace/fluxerly/consumer/AGENTS.md")
+    expect(text).toContain("node_modules/@neontechspace/fluxerly/agents/AGENTS.md")
     expect(text).toContain("Check `result.isErr()` before reading `result.value`")
     expect(text).toContain("run `npx fluxerly agents` to refresh")
 })

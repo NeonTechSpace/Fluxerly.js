@@ -114,14 +114,9 @@ export function guildEdit(
         input.verificationLevel !== 0 &&
         input.verificationLevel !== 1 &&
         input.verificationLevel !== 2 &&
-        input.verificationLevel !== 3 &&
-        input.verificationLevel !== 4
+        input.verificationLevel !== 3
     )
-        return inputValidationFailure(
-            "verificationLevel",
-            "allowedValue",
-            "Verification level must be 0, 1, 2, 3, or 4",
-        )
+        return inputValidationFailure("verificationLevel", "allowedValue", "Verification level must be 0, 1, 2, or 3")
     if (input.nsfw !== undefined && typeof input.nsfw !== "boolean")
         return inputValidationFailure("nsfw", "type", "NSFW must be a boolean")
     if (input.contentWarningLevel !== undefined && input.contentWarningLevel !== 0 && input.contentWarningLevel !== 1)

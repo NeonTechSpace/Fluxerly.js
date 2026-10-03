@@ -1,5 +1,6 @@
-// Gateway recovery over an observation window of at least 165 seconds: three interruptions of this process's own
+// Gateway recovery over an observation window of at least 165 seconds, with three interruptions of this process's own
 // authenticated socket, one with a locally delayed Hello frame, each followed by fresh self and member-stream reads.
+// The --session-restart scenario instead checks saved-session shutdown and a new client's Resume.
 // Creates no journal and no remote resources, and changes no server content
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -11,6 +12,14 @@ import { fromExit, settleExit as value } from "./support/results.js"
 import { readSandbox } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
+const sessionRestart = process.argv[3] === "--session-restart"
+const savedSessions = new Map()
+const sessions = {
+    load: async (shardId) => savedSessions.get(shardId),
+    save: async (shardId, snapshot) => {
+        savedSessions.set(shardId, snapshot)
+    },
+}
 const cycleOffsetsMs = [0, 55_000, 110_000]
 const observationWindowMs = 165_000
 const recoveryTimeoutMs = 50_000
@@ -253,8 +262,14 @@ async function verifyPostRecovery(cycle) {
 }
 
 async function createDriver(sdk) {
+    const options = {
+        token,
+        observe,
+        connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 },
+        ...(sessionRestart ? { sharding: { totalShards: 1, sessions } } : {}),
+    }
     if (mode === "default") {
-        client = sdk.createClient({ token, observe, connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 } })
+        client = sdk.createClient(options)
         return {
             connect: () => value(client.connect()),
             close: () => value(client.shutdown()),
@@ -263,11 +278,7 @@ async function createDriver(sdk) {
 
     const scope = Scope.makeUnsafe()
     try {
-        client = await value(
-            sdk
-                .createClient({ token, observe, connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 } })
-                .pipe(Scope.provide(scope)),
-        )
+        client = await value(sdk.createClient(options).pipe(Scope.provide(scope)))
     } catch (error) {
         await Effect.runPromise(Scope.close(scope, Exit.void))
         throw error
@@ -284,22 +295,25 @@ async function createDriver(sdk) {
     }
 }
 
-const watchdog = setTimeout(() => {
-    console.log(
-        JSON.stringify({
-            mode,
-            check: stage,
-            passed: false,
-            category: "process_timeout",
-            lockRetained: lock !== undefined,
-        }),
-    )
-    process.exit(1)
-}, 240_000).unref()
+const watchdog = setTimeout(
+    () => {
+        console.log(
+            JSON.stringify({
+                mode,
+                check: stage,
+                passed: false,
+                category: "process_timeout",
+                lockRetained: lock !== undefined,
+            }),
+        )
+        process.exit(1)
+    },
+    sessionRestart ? 120_000 : 240_000,
+).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")
-    assert.equal(process.argv.length, 3)
+    assert.equal(process.argv.length, sessionRestart ? 4 : 3)
     stage = "sandbox_lock"
     lock = acquireLock()
 
@@ -331,55 +345,80 @@ try {
     let activeSocket = probe.initialSocket()
     report(stage, { authenticatedSocketCount: 1 })
 
-    const observationStarted = performance.now()
-    for (let index = 0; index < cycleOffsetsMs.length; index++) {
-        const cycle = index + 1
-        await waitUntil(cycleOffsetsMs[index], observationStarted)
-        stage = `cycle_${cycle}_owned_socket_loss`
-        assert.equal(activeSocket.readyState, WebSocket.OPEN)
-        const delayed = cycle === 2 ? probe.armHelloDelay(activeSocket) : undefined
-        const transitionsBefore = recoveryTransitions
-        activeSocket.terminate()
-        report(stage, { testOwnedSocketOnly: true })
+    if (sessionRestart) {
+        stage = "session_saved_shutdown"
+        await driver.close()
+        assert.equal(client.state, "Closed")
+        probe.verifyClosed()
+        assert.equal(savedSessions.size, 1)
+        const savedAt = savedSessions.get(0)?.savedAt
+        assert.ok(Number.isSafeInteger(savedAt))
+        report(stage, { savedSessionCount: 1, socketsClosed: true })
 
-        stage = `cycle_${cycle}_recovery`
-        const deadline = performance.now() + recoveryTimeoutMs
-        let recovered
-        while (performance.now() < deadline) {
-            assert.notEqual(client.state, "Closed")
-            recovered = probe.recoveryAfter(activeSocket, cycle + 1)
-            if (recovered?.ready && recovered.heartbeatObserved && client.state === "Connected") break
-            await sleep(5)
+        stage = "saved_session_restart"
+        driver = await createDriver(sdk)
+        assert.ok(Date.now() - savedAt < 60_000)
+        await driver.connect()
+        assert.equal(client.state, "Connected")
+        const restarted = probe.recoveryAfter(activeSocket, 2)
+        assert.ok(restarted?.ready)
+        assert.equal(restarted.record.resumes, 1)
+        assert.equal(restarted.record.resumed, 1)
+        assert.equal(restarted.record.identifies, 0)
+        assert.equal(restarted.record.ready, 0)
+        probe.verifyHealthy(2)
+        report(stage, { resumed: true, reidentified: false, serverMutations: false })
+    } else {
+        const observationStarted = performance.now()
+        for (let index = 0; index < cycleOffsetsMs.length; index++) {
+            const cycle = index + 1
+            await waitUntil(cycleOffsetsMs[index], observationStarted)
+            stage = `cycle_${cycle}_owned_socket_loss`
+            assert.equal(activeSocket.readyState, WebSocket.OPEN)
+            const delayed = cycle === 2 ? probe.armHelloDelay(activeSocket) : undefined
+            const transitionsBefore = recoveryTransitions
+            activeSocket.terminate()
+            report(stage, { testOwnedSocketOnly: true })
+
+            stage = `cycle_${cycle}_recovery`
+            const deadline = performance.now() + recoveryTimeoutMs
+            let recovered
+            while (performance.now() < deadline) {
+                assert.notEqual(client.state, "Closed")
+                recovered = probe.recoveryAfter(activeSocket, cycle + 1)
+                if (recovered?.ready && recovered.heartbeatObserved && client.state === "Connected") break
+                await sleep(5)
+            }
+            assert.ok(recovered?.ready && recovered.heartbeatObserved)
+            assert.ok(recoveryTransitions > transitionsBefore)
+            assert.notEqual(recovered.socket, activeSocket)
+            assert.equal(activeSocket.readyState, WebSocket.CLOSED)
+            assert.ok(Number.isFinite(client.gatewayLatencyMs) && client.gatewayLatencyMs >= 0)
+            if (delayed) {
+                assert.equal(await delayed, recovered.record)
+                await probe.settleDelays()
+                assert.equal(recovered.record.delayedHello, true)
+                assert.equal(recovered.record.delayedHelloDelivered, true)
+            }
+            activeSocket = recovered.socket
+            probe.verifyHealthy(cycle + 1)
+            report(stage, {
+                cycle,
+                helloDelayMs: cycle === 2 ? delayedHelloMs : 0,
+                heartbeatAckObserved: true,
+                latencyAvailable: true,
+                reidentified: recovered.record.identifies === 1,
+                resumed: recovered.record.resumes === 1,
+            })
+            await verifyPostRecovery(cycle)
         }
-        assert.ok(recovered?.ready && recovered.heartbeatObserved)
-        assert.ok(recoveryTransitions > transitionsBefore)
-        assert.notEqual(recovered.socket, activeSocket)
-        assert.equal(activeSocket.readyState, WebSocket.CLOSED)
-        assert.ok(Number.isFinite(client.gatewayLatencyMs) && client.gatewayLatencyMs >= 0)
-        if (delayed) {
-            assert.equal(await delayed, recovered.record)
-            await probe.settleDelays()
-            assert.equal(recovered.record.delayedHello, true)
-            assert.equal(recovered.record.delayedHelloDelivered, true)
-        }
-        activeSocket = recovered.socket
-        probe.verifyHealthy(cycle + 1)
-        report(stage, {
-            cycle,
-            helloDelayMs: cycle === 2 ? delayedHelloMs : 0,
-            heartbeatAckObserved: true,
-            latencyAvailable: true,
-            reidentified: recovered.record.identifies === 1,
-            resumed: recovered.record.resumes === 1,
-        })
-        await verifyPostRecovery(cycle)
+
+        stage = "minimum_observation_window"
+        await waitUntil(observationWindowMs, observationStarted)
+        assert.ok(performance.now() - observationStarted >= observationWindowMs)
+        probe.verifyHealthy(cycleOffsetsMs.length + 1)
+        report(stage, { cycles: cycleOffsetsMs.length, minimumElapsedMs: observationWindowMs })
     }
-
-    stage = "minimum_observation_window"
-    await waitUntil(observationWindowMs, observationStarted)
-    assert.ok(performance.now() - observationStarted >= observationWindowMs)
-    probe.verifyHealthy(cycleOffsetsMs.length + 1)
-    report(stage, { cycles: cycleOffsetsMs.length, minimumElapsedMs: observationWindowMs })
 } catch (error) {
     console.log(JSON.stringify({ mode, check: stage, passed: false, ...safeFailure(error) }))
     process.exitCode = 1

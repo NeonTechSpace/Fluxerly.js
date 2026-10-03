@@ -65,7 +65,7 @@ No. The default `@neontechspace/fluxerly` entry point works with plain JavaScrip
 <details>
 <summary>Is the SDK stable?</summary>
 
-Not yet. Fluxerly is a prerelease, and its API can still change between versions. The lockfile records the exact installed version and keeps installs reproducible. During the prerelease, install with `--save-exact` in npm and pnpm, or `--exact` in Bun, so a fresh install without a lockfile cannot pick up a newer prerelease that may break the API. Read the [changelog](/docs/{{version}}/changelog/) before upgrading. See [support and compatibility](/docs/{{version}}/support-and-compatibility/)
+Not yet. Fluxerly is a prerelease, and its API can still change between versions. Canary and RC releases can include breaking changes at any time, including after the first stable release. The lockfile records the exact installed version and keeps installs reproducible. For a Canary or RC, install with `--save-exact` in npm and pnpm, or `--exact` in Bun, so a fresh install without a lockfile cannot pick up a newer Canary or RC that may break the API. Read the [changelog](/docs/{{version}}/changelog/) before upgrading. See [version numbers and release channels](/docs/{{version}}/support-and-compatibility/#version-numbers-and-release-channels)
 
 </details>
 

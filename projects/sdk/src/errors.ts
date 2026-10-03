@@ -399,6 +399,8 @@ export type Operation =
     | "typing"
     | "keepTyping"
     | "fetch"
+    | "publish"
+    | "fetchCrosspostSource"
     | "messages.get"
     | "fetchHistory"
     | "previewCleanup"
@@ -425,7 +427,9 @@ export type Operation =
     | "reactionCollector.result"
 
 /** Fluxer rejected the bot token during connection startup or recovery.
- * Check the token before connecting again, since the SDK does not retry this rejection unchanged
+ * Check the token and the application owner's account standing before connecting again.
+ * A closed or disabled owner account can cause rejection of a valid token, and a new token does not fix that account standing.
+ * The rejection alone does not identify the cause. The SDK does not retry this rejection unchanged
  *
  * @category Errors
  */
@@ -435,7 +439,7 @@ export class AuthenticationError extends FluxerlyError {
     constructor() {
         super("Fluxer rejected the bot token", {
             code: "auth.rejected",
-            hint: "Check that the configured value is the whole bot token, or regenerate the token in the application settings and update it. The SDK does not retry a rejected token",
+            hint: "Check the whole bot token and the application owner's account standing. A valid token can be rejected if that account is closed or disabled, which a new token cannot fix. The rejection alone does not identify the cause. The SDK does not retry it",
         })
         this.name = this._tag
     }
@@ -476,7 +480,7 @@ export class ConnectionError extends FluxerlyError {
             hint:
                 options?.hint ??
                 (status === CloseCode.authenticationFailed
-                    ? "Check that the configured value is the whole bot token, or regenerate it. The SDK does not retry a rejected token"
+                    ? "Check the whole bot token and the application owner's account standing. A valid token can be rejected if that account is closed or disabled, which a new token cannot fix. The rejection alone does not identify the cause. The SDK does not retry it"
                     : status === CloseCode.shardingRequired
                       ? 'Set sharding to "auto", or configure sharding with a larger totalShards'
                       : status === CloseCode.invalidShard

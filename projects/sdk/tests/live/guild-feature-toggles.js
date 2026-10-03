@@ -1,7 +1,7 @@
 // Guild feature toggles: emoji and sticker clone opt-ins and owner-crown visibility through SDK edits, independent
 // feature readback and a lost edit response.
 // Journal `.env.test.guild-features.local` records sandbox and bot identity, a marker, the original feature set, the
-// expected set and any pending write. An existing journal is recovered before a new run: the original toggles are
+// expected set and any pending write. An existing journal triggers recovery only: The original toggles are
 // restored only when the current set matches the original, expected or pending set, refusing unexpected feature
 // changes. Disabling cloning cannot revoke copies made during the temporary opt-in
 import assert from "node:assert/strict"
@@ -153,31 +153,34 @@ try {
     report(stage)
     if (journalFile.exists()) {
         journal = journalFile.read()
+        stage = "recovery_only"
         await cleanup()
+        report(stage)
+    } else {
+        const options = { token, cache: { guilds: true } }
+        if (mode === "default") client = sdk.createClient(options)
+        else {
+            scope = Scope.makeUnsafe()
+            client = await Effect.runPromise(sdk.createClient(options).pipe(Scope.provide(scope)))
+        }
+        const original = await observedFeatures()
+        journal = {
+            version: 1,
+            guildId,
+            botId,
+            marker: `fg_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
+            original,
+            expected: original,
+        }
+        save()
+        const originalCrown = original.includes(crown) ? [crown] : []
+        const changedCrown = original.includes(crown) ? [] : [crown]
+        await edit([...originalCrown], "cloning_disabled_baseline")
+        await edit([emoji, sticker, ...originalCrown], "cloning_opt_ins_enabled")
+        await edit([emoji, sticker, ...changedCrown], "cloning_preserved_during_other_toggle_change")
+        await edit([sticker, ...changedCrown], "emoji_opt_in_disabled")
+        await edit([...changedCrown], "sticker_opt_in_disabled_lost_response", true)
     }
-    const options = { token, cache: { guilds: true } }
-    if (mode === "default") client = sdk.createClient(options)
-    else {
-        scope = Scope.makeUnsafe()
-        client = await Effect.runPromise(sdk.createClient(options).pipe(Scope.provide(scope)))
-    }
-    const original = await observedFeatures()
-    journal = {
-        version: 1,
-        guildId,
-        botId,
-        marker: `fg_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
-        original,
-        expected: original,
-    }
-    save()
-    const originalCrown = original.includes(crown) ? [crown] : []
-    const changedCrown = original.includes(crown) ? [] : [crown]
-    await edit([...originalCrown], "cloning_disabled_baseline")
-    await edit([emoji, sticker, ...originalCrown], "cloning_opt_ins_enabled")
-    await edit([emoji, sticker, ...changedCrown], "cloning_preserved_during_other_toggle_change")
-    await edit([sticker, ...changedCrown], "emoji_opt_in_disabled")
-    await edit([...changedCrown], "sticker_opt_in_disabled_lost_response", true)
 } catch (error) {
     console.error(
         JSON.stringify({

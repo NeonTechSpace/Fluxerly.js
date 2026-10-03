@@ -16,6 +16,14 @@ export const record = (value: unknown): value is Record<string, unknown> =>
 export const identifier = (value: unknown): value is string =>
     typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value)
 
+/** A canonical positive snowflake accepted by gateway commands, no greater than the signed int64 maximum */
+export const gatewayIdentifier = (value: unknown): value is string =>
+    typeof value === "string" &&
+    value.length <= 19 &&
+    identifier(value) &&
+    value !== "0" &&
+    (value.length < 19 || value <= "9223372036854775807")
+
 /** A safe integer from minimum through maximum inclusive */
 export const integerInRange = (value: unknown, minimum: number, maximum: number): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum

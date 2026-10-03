@@ -53,8 +53,8 @@ The canonical SDK manifest remains `private`. The `stageRelease` package script 
 [Package preparation](/projects/sdk/scripts/packages.js) copies compiled JavaScript, declarations, maps, sources, license and consumer guidance into a new directory.
 It creates the public npm package directory and verifies the matching `sdk.tgz` inventory
 
-The staged npm manifest receives the reviewed release version and retains Effect as an exact required peer.
-[The prerequisite check](/projects/release/support.js) requires that exact Effect version to match the SDK development dependency and rejects an optional peer.
+The staged npm manifest receives the reviewed release version and retains Effect as a required peer range.
+[The prerequisite check](/projects/release/support.js) requires the range's lowest version to match the exact SDK development dependency, which is the tested version, and rejects an exact, prerelease or optional peer.
 Release commands that read or change registries enforce it, and the release tooling tests run it in `pnpm check`
 
 Candidate schema 1 binds the package inventory, staged manifest and tarball checksums, source commit and checked documentation snapshot checksum into one reviewed candidate.

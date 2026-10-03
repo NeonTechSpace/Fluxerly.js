@@ -8,7 +8,9 @@ Fluxerly works with three kinds of credentials. A bot token runs the bot: It rea
 
 ## Send through a configured webhook
 
-Store the webhook ID and token in application configuration, like the bot token. Pass both to the helper, which creates a webhook client, sends one message and closes the client again
+A token-authenticated webhook is an incoming webhook, identified by `WebhookType.Incoming`
+
+Store the incoming webhook ID and token in application configuration, like the bot token. Pass both to the helper, which creates a webhook client, sends one message and closes the client again
 
 ```ts
 import { createWebhookClient, type WebhookClientOptions } from "@neontechspace/fluxerly"
@@ -25,9 +27,17 @@ export async function sendWebhookMessage(
 The `send` method takes a plain string for a text-only message, or an object with other fields such as `embeds`, and `editMessage` accepts the same forms to change a sent message. The send returns a [Result](/docs/{{version}}/glossary/#result) that holds the message Fluxer created on success. Mentions in webhook messages do not notify anyone unless `allowedMentions` allows them. The `await using` declaration shuts the client down when the helper returns or throws. For repeated sends, create one client per webhook, reuse it and shut it down when sending stops, as the [last section](/docs/{{version}}/webhooks-and-oauth/#wire-it-up) shows
 
 <details>
+<summary>Follower webhooks and unknown kinds</summary>
+
+A follower webhook has `WebhookType.ChannelFollower` and delivers [published announcements](/docs/{{version}}/announcement-channels/). It has no token, so `createWebhookClient` cannot use it. Bot clients can rename, move or delete it but cannot change its avatar. Handle `type: "unknown"` when reading a webhook kind this SDK version does not know
+
+</details>
+
+<details>
 <summary>Failures, retries and credentials</summary>
 
 Creating the client checks and copies the credentials locally without a request, and throws `ConfigurationError` if they are malformed. If a send fails with a `WebhookOperationError` whose `outcome` is `"unknown"`, Fluxer may already have posted the message, so check for it before sending again. The [reliability guide](/docs/{{version}}/reliability/) explains these uncertain writes.
+A send, reply or forward can supply `nonce` for best-effort duplicate suppression through the same webhook for five minutes. Use an application operation ID, not a new value for each attempt. Nonces do not guarantee exactly-once delivery, and omission sends no nonce. A forward can instead supply its nonce in `messageReference.source`, but supplying both locations fails before any request.
 Webhook messages do not accept `tts`, and a send with it fails with reason `input` before any request.
 A rejected webhook token also logs one `rest.rejected` Warn record, even when the application handles the Result. The client prints Info and above to the console, and its `logging` option takes the same settings as a bot client's [logging](/docs/{{version}}/logging/)
 

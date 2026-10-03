@@ -8,6 +8,9 @@ import {
     ChannelType,
     type ChannelCreate,
     type ChannelEdit,
+    type ChannelFollowInput,
+    type ChannelFollowerStats,
+    type FollowedChannel,
     type ChannelPosition,
     type GuildChannel,
     type GuildChannelUpdateBulk,
@@ -33,7 +36,7 @@ export interface ChannelRequest<A> {
     readonly features?: readonly string[]
     readonly decode: (value: unknown) => A | undefined
     /** Cache ownership hints consumed by the channel cache owner */
-    readonly cache: {
+    readonly cache?: {
         readonly channelId?: string
         readonly guildId?: string
         readonly mutation?: boolean
@@ -227,6 +230,7 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
               "rateLimitPerUser",
           ]
         : [
+              "type",
               "name",
               "topic",
               "url",
@@ -248,11 +252,22 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
         create ? "the channel create input" : "the channel edit input",
     )
     if (unsupported) return unsupported
-    if (create && input.type !== 0 && input.type !== 2 && input.type !== 4 && input.type !== 998)
+    if (create && input.type !== 0 && input.type !== 2 && input.type !== 4 && input.type !== 5 && input.type !== 998)
         return inputValidationFailure(
             "type",
             "allowedValue",
-            "Channel type must be 0 (Text), 2 (Voice), 4 (Category), or 998 (Link)",
+            "Channel type must be 0 (Text), 2 (Voice), 4 (Category), 5 (Announcement), or 998 (Link)",
+        )
+    if (
+        !create &&
+        input.type !== undefined &&
+        input.type !== ChannelType.Text &&
+        input.type !== ChannelType.Announcement
+    )
+        return inputValidationFailure(
+            "type",
+            "allowedValue",
+            "Channel conversion type must be 0 (Text) or 5 (Announcement)",
         )
     if (create && input.name === undefined)
         return inputValidationFailure("name", "required", "Channel name is required")
@@ -406,7 +421,7 @@ function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): strin
         input.permissionOverwrites === undefined ? undefined : encodeOverwrites(input.permissionOverwrites)
     if (permissionOverwrites instanceof InputValidationFailure) return permissionOverwrites
     const body = {
-        ...(create ? { type: input.type } : {}),
+        ...(input.type === undefined ? {} : { type: input.type }),
         ...(input.name === undefined ? {} : { name: input.name }),
         ...(input.topic === undefined ? {} : { topic: input.topic }),
         ...(input.url === undefined ? {} : { url: input.url }),
@@ -443,6 +458,47 @@ export function channelFetch(channelId: string): ChannelValidationResult<GuildCh
             const channel = decodeGuildChannel(value)
             return channel?.id === channelId ? channel : undefined
         },
+    }
+}
+
+export function channelFollow(channelId: string, input: ChannelFollowInput): ChannelValidationResult<FollowedChannel> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    if (!record(input)) return inputValidationFailure("input", "type", "Channel follow input must be an object")
+    const unsupported = unsupportedKeyFailure(input, ["targetChannelId"], "input", "the channel follow input")
+    if (unsupported) return unsupported
+    const targetChannelId = input.targetChannelId
+    if (!identifier(targetChannelId))
+        return inputValidationFailure("targetChannelId", "format", "Target channel IDs must be decimal strings")
+    return {
+        majorId: channelId,
+        bucket: "channel:follow",
+        audited: true,
+        path: `/channels/${channelId}/followers`,
+        method: "POST",
+        status: 200,
+        json: JSON.stringify({ webhook_channel_id: targetChannelId }),
+        cache: { channelId: targetChannelId, mutation: true },
+        decode: (value) =>
+            record(value) && value.channel_id === channelId && identifier(value.webhook_id)
+                ? Object.freeze({ channelId, webhookId: value.webhook_id })
+                : undefined,
+    }
+}
+
+export function channelFollowerStats(channelId: string): ChannelValidationResult<ChannelFollowerStats> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    return {
+        majorId: channelId,
+        bucket: "channel:follower_stats",
+        path: `/channels/${channelId}/follower-stats`,
+        method: "GET",
+        status: 200,
+        decode: (value) =>
+            record(value) && nonNegativeInt32(value.channel_count) && nonNegativeInt32(value.guild_count)
+                ? Object.freeze({ channelCount: value.channel_count, guildCount: value.guild_count })
+                : undefined,
     }
 }
 

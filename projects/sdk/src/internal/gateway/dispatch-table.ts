@@ -102,6 +102,11 @@ function decodeRecipientChange(value: unknown) {
     return Object.freeze({ channelId: value.channel_id, userId: value.user.id })
 }
 
+function decodeGuildHealthUpdate(value: unknown): EventMap["guildHealthUpdate"] | undefined {
+    if (!record(value) || !identifier(value.guild_id) || typeof value.degraded !== "boolean") return undefined
+    return Object.freeze({ guildId: value.guild_id, degraded: value.degraded })
+}
+
 function decodeWebhooksUpdate(value: unknown) {
     if (!record(value) || !identifier(value.guild_id) || !identifier(value.channel_id)) return undefined
     return Object.freeze({ guildId: value.guild_id, channelId: value.channel_id })
@@ -187,6 +192,10 @@ const entries: Record<string, DispatchEntry<unknown>> = {
             }),
         ]),
     ),
+    GUILD_HEALTH_UPDATE: entry({
+        decode: decodeGuildHealthUpdate,
+        project: (health, sinks) => sinks.emit("guildHealthUpdate", health),
+    }),
     VOICE_STATE_UPDATE: entry({
         // Private calls use the same dispatch name with an explicit null guild ID
         decode: (body) => (record(body) && body.guild_id === null ? ignored : decodeVoiceState(body)),

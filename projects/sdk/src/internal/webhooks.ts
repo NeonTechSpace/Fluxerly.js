@@ -11,21 +11,25 @@ import * as Scope from "effect/Scope"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import { MessageError } from "#sdk/message-errors"
 import type { Message, MessageOperationOptions, MessageReference } from "#sdk/messages"
-import type {
-    CreatedWebhook,
-    Webhook,
-    WebhookCreate,
-    WebhookEdit,
-    WebhookMessageInput,
-    WebhookMessageEdit,
-    WebhookTokenEdit,
-    WebhookOperation,
-    WebhookOperationOptions,
-    WebhookClientOptions,
-    WebhookCredentials,
+import {
+    WebhookType,
+    type CreatedWebhook,
+    type IncomingWebhook,
+    type Webhook,
+    type WebhookSourceGuild,
+    type WebhookSourceChannel,
+    type WebhookCreate,
+    type WebhookEdit,
+    type WebhookMessageInput,
+    type WebhookMessageEdit,
+    type WebhookTokenEdit,
+    type WebhookOperation,
+    type WebhookOperationOptions,
+    type WebhookClientOptions,
+    type WebhookCredentials,
 } from "#sdk/webhooks"
 import { decodeMessage, encodeForward, encodeMessage, encodeEdit, messageObject, snapshotReference } from "./message.js"
-import { fieldsOnce, identifier, record } from "./decode/primitives.js"
+import { count as nonNegativeInt32, fieldsOnce, identifier, record } from "./decode/primitives.js"
 import { suspendInput } from "./defects.js"
 import type { EncodedBody } from "./attachments.js"
 import { RestOwner } from "./rest.js"
@@ -51,23 +55,59 @@ const validToken = (value: unknown): value is string =>
     typeof value === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(value)
 const name = (value: unknown): value is string => normalizedText(value, 1, 80)
 
+function decodeSourceGuild(value: unknown): WebhookSourceGuild | undefined {
+    if (
+        !record(value) ||
+        !identifier(value.id) ||
+        typeof value.name !== "string" ||
+        (value.icon != null && typeof value.icon !== "string")
+    )
+        return undefined
+    return Object.freeze({
+        id: value.id,
+        name: value.name,
+        ...(value.icon === undefined ? {} : { icon: value.icon as string | null }),
+    })
+}
+
+function decodeSourceChannel(value: unknown): WebhookSourceChannel | undefined {
+    if (!record(value) || !identifier(value.id) || typeof value.name !== "string") return undefined
+    return Object.freeze({ id: value.id, name: value.name })
+}
+
 function decodeWebhook(value: unknown): Webhook | undefined {
     if (
         !record(value) ||
         !identifier(value.id) ||
         !identifier(value.guild_id) ||
         !identifier(value.channel_id) ||
+        !nonNegativeInt32(value.type) ||
         typeof value.name !== "string" ||
         (value.avatar != null && typeof value.avatar !== "string")
     )
         return undefined
-    return Object.freeze({
+    const sourceGuild = value.source_guild === undefined ? undefined : decodeSourceGuild(value.source_guild)
+    const sourceChannel = value.source_channel === undefined ? undefined : decodeSourceChannel(value.source_channel)
+    if (
+        (value.source_guild !== undefined && sourceGuild === undefined) ||
+        (value.source_channel !== undefined && sourceChannel === undefined)
+    )
+        return undefined
+    const base = {
         id: value.id,
         guildId: value.guild_id,
         channelId: value.channel_id,
         name: value.name,
         avatar: value.avatar ?? null,
-    })
+    }
+    if (value.type === WebhookType.Incoming) return Object.freeze({ ...base, type: WebhookType.Incoming })
+    const sources = {
+        ...(sourceGuild === undefined ? {} : { sourceGuild }),
+        ...(sourceChannel === undefined ? {} : { sourceChannel }),
+    }
+    return value.type === WebhookType.ChannelFollower
+        ? Object.freeze({ ...base, type: WebhookType.ChannelFollower, ...sources })
+        : Object.freeze({ ...base, type: "unknown", rawType: value.type, ...sources })
 }
 
 function credentials(id: string, token: string): WebhookCredentials {
@@ -144,7 +184,13 @@ export function webhookCreate(
         ...extra,
         decode: (value) => {
             const webhook = decodeWebhook(value)
-            if (!webhook || webhook.channelId !== channelId || !record(value) || !validToken(value.token))
+            if (
+                !webhook ||
+                webhook.type !== WebhookType.Incoming ||
+                webhook.channelId !== channelId ||
+                !record(value) ||
+                !validToken(value.token)
+            )
                 return undefined
             return Object.freeze({ webhook, credentials: credentials(webhook.id, value.token) })
         },
@@ -219,7 +265,7 @@ export function webhookDelete(id: string, options?: WebhookOperationOptions): We
     return { ...base, ...extra, method: "DELETE", status: 204, decode: () => undefined }
 }
 
-export function webhookTokenFetch(id: string): WebhookValidationResult<Webhook> {
+export function webhookTokenFetch(id: string): WebhookValidationResult<IncomingWebhook> {
     if (!identifier(id)) return inputValidationFailure("webhookId", "format", "Webhook IDs must be decimal strings")
     return {
         majorId: id,
@@ -229,12 +275,12 @@ export function webhookTokenFetch(id: string): WebhookValidationResult<Webhook> 
         status: 200,
         decode: (value) => {
             const webhook = decodeWebhook(value)
-            return webhook?.id === id ? webhook : undefined
+            return webhook?.id === id && webhook.type === WebhookType.Incoming ? webhook : undefined
         },
     }
 }
 
-export function webhookTokenEdit(id: string, input: WebhookTokenEdit): WebhookValidationResult<Webhook> {
+export function webhookTokenEdit(id: string, input: WebhookTokenEdit): WebhookValidationResult<IncomingWebhook> {
     const base = webhookTokenFetch(id),
         body = settings(input, false, false)
     if (base instanceof InputValidationFailure) return base
@@ -296,6 +342,7 @@ export function webhookSend(id: string, value: WebhookMessageInput | string): We
         input,
         [
             "content",
+            "nonce",
             "embeds",
             "attachments",
             "stickerIds",
@@ -358,18 +405,26 @@ export function webhookSend(id: string, value: WebhookMessageInput | string): We
         const forward = encodeForward("0", reference("source"), "")
         const options = encodeMessage(
             "0",
-            { content: "_", flags: message.flags, allowedMentions: message.allowedMentions },
+            { content: "_", nonce: message.nonce, flags: message.flags, allowedMentions: message.allowedMentions },
             "",
         )
         if (forward instanceof MessageError) return new InputValidationFailure(forward.inputValidation!)
         if (options instanceof MessageError) return new InputValidationFailure(options.inputValidation!)
         const payload = JSON.parse(options.json)
+        const forwardPayload = JSON.parse(forward.json)
+        if (message.nonce !== undefined && forwardPayload.nonce !== "")
+            return inputValidationFailure(
+                "nonce",
+                "relationship",
+                "Webhook forwards accept a nonce on the message or its forward source, not both",
+            )
         body = {
             files: [],
             json: JSON.stringify({
                 ...(message.flags === undefined ? {} : { flags: payload.flags }),
                 allowed_mentions: payload.allowed_mentions,
-                ...JSON.parse(forward.json),
+                ...forwardPayload,
+                nonce: message.nonce === undefined ? forwardPayload.nonce : payload.nonce,
             }),
         }
     } else
@@ -380,7 +435,7 @@ export function webhookSend(id: string, value: WebhookMessageInput | string): We
         )
     if (body instanceof MessageError) return new InputValidationFailure(body.inputValidation!)
     const payload = JSON.parse(body.json)
-    delete payload.nonce
+    if (payload.nonce === "") delete payload.nonce
     body.json = JSON.stringify({
         ...payload,
         ...(username === undefined ? {} : { username }),
@@ -425,7 +480,7 @@ class WebhookOwner {
     readonly rest: RestOwner
     /** Token-only clients still own an independent immutable instance result and discovery worker */
     readonly instance: InstanceResolver
-    readonly #scope: Scope.Scope
+    readonly #scope: Scope.Closeable
     readonly #logging: ClientLogger
     constructor(
         readonly id: string,
@@ -435,7 +490,7 @@ class WebhookOwner {
             readonly instance: InstanceConfiguration
             readonly logging: ClientLogger
         },
-        scope: Scope.Scope,
+        scope: Scope.Closeable,
         logical: LogicalScheduler,
     ) {
         this.#token = Redacted.make(token)

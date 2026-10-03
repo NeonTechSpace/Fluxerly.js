@@ -24,6 +24,7 @@ import type {
     RoleHoistPosition,
     RoleReference,
 } from "#sdk/guilds"
+import { GuildVerificationLevels } from "#sdk/guilds"
 import type { GuildCreate, VoiceState, VoiceStateSnapshot } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { count as nonNegativeInt32, identifier, int32, record } from "./decode/primitives.js"
@@ -70,7 +71,7 @@ const mentionPreference = (value: unknown): value is 0 | 1 | 2 => value === 0 ||
 const guildDefaultMessageNotification = (value: unknown): value is GuildDefaultMessageNotification =>
     value === 0 || value === 1
 const guildVerificationLevel = (value: unknown): value is GuildVerificationLevel =>
-    value === 0 || value === 1 || value === 2 || value === 3 || value === 4
+    value === 0 || value === 1 || value === 2 || value === 3
 const guildMfaLevel = (value: unknown): value is GuildMfaLevel => value === 0 || value === 1
 const guildExplicitContentFilter = (value: unknown): value is GuildExplicitContentFilter =>
     value === 0 || value === 1 || value === 2
@@ -229,7 +230,9 @@ export function decodeGuild(value: unknown): Guild | undefined {
         (value.afk_timeout !== undefined && !nonNegativeInt32(value.afk_timeout)) ||
         (value.default_message_notifications !== undefined &&
             !guildDefaultMessageNotification(value.default_message_notifications)) ||
-        (value.verification_level !== undefined && !guildVerificationLevel(value.verification_level)) ||
+        (value.verification_level !== undefined &&
+            value.verification_level !== 4 &&
+            !guildVerificationLevel(value.verification_level)) ||
         (value.mfa_level !== undefined && !guildMfaLevel(value.mfa_level)) ||
         (value.nsfw !== undefined && typeof value.nsfw !== "boolean") ||
         (value.content_warning_level !== undefined && !guildContentWarningLevel(value.content_warning_level)) ||
@@ -261,9 +264,16 @@ export function decodeGuild(value: unknown): Guild | undefined {
         ...(value.default_message_notifications === undefined
             ? {}
             : { defaultMessageNotifications: value.default_message_notifications as GuildDefaultMessageNotification }),
+        // Legacy level 4 follows Fluxer's stored-guild normalization to High
+        // https://github.com/fluxerapp/fluxer/blob/597116a0b4bf3a212789bdebe7f284babc33b445/fluxer_api/src/api/models/Guild.ts
         ...(value.verification_level === undefined
             ? {}
-            : { verificationLevel: value.verification_level as GuildVerificationLevel }),
+            : {
+                  verificationLevel:
+                      value.verification_level === 4
+                          ? GuildVerificationLevels.High
+                          : (value.verification_level as GuildVerificationLevel),
+              }),
         ...(value.mfa_level === undefined ? {} : { mfaLevel: value.mfa_level as GuildMfaLevel }),
         ...(value.nsfw === undefined ? {} : { nsfw: value.nsfw as boolean }),
         ...(value.content_warning_level === undefined

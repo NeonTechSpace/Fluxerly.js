@@ -27,6 +27,7 @@ import type {
     MessageInput,
     MessageHistoryQuery,
     MessageOperationOptions,
+    MessageAuditOperationOptions,
     MessageReference,
     SendOptions,
 } from "#sdk/messages"
@@ -55,7 +56,14 @@ import { identifier, record, snapshotArray } from "../decode/primitives.js"
 import { failingFieldPath } from "../decode/trace.js"
 import { inputDefect, suspendInput } from "../defects.js"
 import { mapFailureCause, withDeadline } from "../effect-failures.js"
-import { encodeEdit, encodeForward, encodeHistory, encodeMessage, snapshotReference } from "../message.js"
+import {
+    decodeCrosspostSource,
+    encodeEdit,
+    encodeForward,
+    encodeHistory,
+    encodeMessage,
+    snapshotReference,
+} from "../message.js"
 import type { MessageDecoder } from "../message-fields.js"
 import type { MessageCache, CacheRequest } from "../cache.js"
 import type { EncodedBody } from "../attachments.js"
@@ -502,6 +510,28 @@ export class RestOwner<M extends MessageCore = Message> {
         )
     }
 
+    publish(token: Redacted.Redacted<string>, target: MessageReference, options?: MessageOperationOptions) {
+        return this.#manage(
+            token,
+            "publish",
+            target,
+            undefined,
+            options,
+            (response, ref, signal) => readMessage(response, ref.channelId, ref.id, signal, this.#decodeMessage),
+            (message, guard) => this.#runtime.cache!.complete(guard, [message]),
+        )
+    }
+
+    fetchCrosspostSource(
+        token: Redacted.Redacted<string>,
+        target: MessageReference,
+        options?: MessageOperationOptions,
+    ) {
+        return this.#manage(token, "fetchCrosspostSource", target, undefined, options, (response, _ref, signal) =>
+            readDecoded(response, signal, decodeCrosspostSource),
+        )
+    }
+
     typing(
         token: Redacted.Redacted<string>,
         channel: string,
@@ -606,7 +636,7 @@ export class RestOwner<M extends MessageCore = Message> {
         )
     }
 
-    delete(token: Redacted.Redacted<string>, target: MessageReference, options?: MessageOperationOptions) {
+    delete(token: Redacted.Redacted<string>, target: MessageReference, options?: MessageAuditOperationOptions) {
         return this.#manage(token, "delete", target, undefined, options, async () => {})
     }
 
@@ -647,7 +677,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         channelId: string,
         ids: readonly string[],
-        options?: MessageOperationOptions,
+        options?: MessageAuditOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
@@ -665,14 +695,15 @@ export class RestOwner<M extends MessageCore = Message> {
                 return Effect.fail(localInputFailure("messageIds[]", "format", "Message IDs must be decimal strings"))
             if (new Set(snapshot).size !== snapshot.length)
                 return Effect.fail(localInputFailure("messageIds", "unique", "Message IDs must be unique"))
-            const invalid = timeoutOptionsFailure(options)
-            if (invalid) return Effect.fail(invalid)
+            const audit = auditSettings(options)
+            if (audit instanceof InputValidationFailure) return Effect.fail(inputFailure(audit.detail))
             return this.#execute(
                 token,
                 {
                     method: "POST",
                     channel: channelId,
                     bucket: "bulk-delete",
+                    ...(audit.auditReason === undefined ? {} : { auditReason: audit.auditReason }),
                     cache: false,
                     deleteIds: snapshot as readonly string[],
                     path: `/channels/${channelId}/messages/bulk-delete`,
@@ -681,6 +712,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     decode: async () => {},
                 },
                 options,
+                [...operationOptionKeys, "auditReason"],
             )
         }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "deleteMany")))
     }
@@ -791,7 +823,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         operation: "pin" | "unpin",
         target: MessageReference,
-        options?: MessageOperationOptions,
+        options?: MessageAuditOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
@@ -800,10 +832,13 @@ export class RestOwner<M extends MessageCore = Message> {
                 return Effect.fail(
                     localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
                 )
+            const audit = auditSettings(options)
+            if (audit instanceof InputValidationFailure) return Effect.fail(inputFailure(audit.detail))
             return this.#execute(
                 token,
                 {
                     method: operation === "pin" ? "PUT" : "DELETE",
+                    ...(audit.auditReason === undefined ? {} : { auditReason: audit.auditReason }),
                     channel: ref.channelId,
                     target: ref.id,
                     bucket: "pins",
@@ -813,6 +848,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     decode: async () => {},
                 },
                 options,
+                [...operationOptionKeys, "auditReason"],
             )
         }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, operation)))
     }
@@ -867,7 +903,7 @@ export class RestOwner<M extends MessageCore = Message> {
 
     #manage<A>(
         token: Redacted.Redacted<string>,
-        operation: "fetch" | "edit" | "delete",
+        operation: "fetch" | "edit" | "delete" | "publish" | "fetchCrosspostSource",
         target: MessageReference,
         input: EditMessageInput | string | undefined,
         options: MessageOperationOptions | undefined,
@@ -883,19 +919,41 @@ export class RestOwner<M extends MessageCore = Message> {
                 )
             const body = operation === "edit" ? encodeEdit(input) : undefined
             if (body instanceof InputValidationFailure) return Effect.fail(inputFailure(body.detail))
+            const audit = operation === "delete" ? auditSettings(options) : undefined
+            if (audit instanceof InputValidationFailure) return Effect.fail(inputFailure(audit.detail))
             return this.#execute(
                 token,
                 {
-                    method: operation === "fetch" ? "GET" : operation === "edit" ? "PATCH" : "DELETE",
+                    method:
+                        operation === "fetch" || operation === "fetchCrosspostSource"
+                            ? "GET"
+                            : operation === "publish"
+                              ? "POST"
+                              : operation === "edit"
+                                ? "PATCH"
+                                : "DELETE",
                     channel: ref.channelId,
                     target: ref.id,
-                    path: `/channels/${ref.channelId}/messages/${ref.id}`,
+                    ...(operation === "publish"
+                        ? { bucket: "channel:message:crosspost", messageMutation: true as const }
+                        : operation === "fetchCrosspostSource"
+                          ? { bucket: "channel:message:crosspost_source", cache: false as const }
+                          : {}),
+                    path: `/channels/${ref.channelId}/messages/${ref.id}${
+                        operation === "publish"
+                            ? "/crosspost"
+                            : operation === "fetchCrosspostSource"
+                              ? "/crosspost-source"
+                              : ""
+                    }`,
                     body,
                     status: operation === "delete" ? 204 : 200,
+                    ...(audit?.auditReason === undefined ? {} : { auditReason: audit.auditReason }),
                     decode: (response, _instance, signal) => decode(response, ref, signal),
                     ...(observe === undefined ? {} : { observe }),
                 },
                 options,
+                operation === "delete" ? [...operationOptionKeys, "auditReason"] : operationOptionKeys,
             )
         }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, operation)))
     }
@@ -1309,7 +1367,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     channel: input.majorId,
                     bucket: input.bucket,
                     cache: false,
-                    channelCache: input.cache,
+                    ...(input.cache === undefined ? {} : { channelCache: input.cache }),
                     ...(audit?.auditReason === undefined ? {} : { auditReason: audit.auditReason }),
                     ...(input.features === undefined ? {} : { features: input.features }),
                     path: input.path,

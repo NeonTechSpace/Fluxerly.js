@@ -428,6 +428,8 @@ export class ClientOwner<M extends MessageCore = Message> {
             identify: (shardId, send) => this.#identifyPermit(shardId, send),
             identifyFields: (shardId) => this.#identifyFields(configuration, shardId),
             sessions: configuration.sessions,
+            saveSessionOnClose: (shardId) =>
+                configuration.sessions !== undefined && this.#saveOnClose?.has(shardId) === true,
             ...(configuration.sharding === "auto"
                 ? { reshard: (shardId: number) => this.#acceptReshard(shardId) }
                 : {}),
@@ -1375,6 +1377,22 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.fetch(this.#configuration.token, target, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    publish(target: MessageReference, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.publish(this.#configuration.token, target, options)
+                : Effect.fail(new ClientClosedError()),
+        )
+    }
+
+    fetchCrosspostSource(target: MessageReference, options?: MessageOperationOptions) {
+        return Effect.suspend(() =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? this.rest.fetchCrosspostSource(this.#configuration.token, target, options)
                 : Effect.fail(new ClientClosedError()),
         )
     }

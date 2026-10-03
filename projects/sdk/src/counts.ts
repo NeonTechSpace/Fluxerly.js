@@ -19,7 +19,7 @@ export type CountOperation = "guilds.fetchCounts" | "channels.fetchMemberCounts"
  * @category Guilds and members
  */
 export interface GuildCount {
-    /** Requested guild ID as a positive decimal string with no leading zeroes, within the unsigned 64-bit range */
+    /** Requested guild ID as a positive decimal string with no leading zeroes, no greater than 9223372036854775807 */
     readonly guildId: string
     /** Member count Fluxer reported for this community, never negative */
     readonly memberCount: number
@@ -48,7 +48,7 @@ export interface GuildCountsResult {
  * @category Channels
  */
 export interface ChannelMemberCount extends GuildCount {
-    /** Requested channel ID as a positive decimal string with no leading zeroes, within the unsigned 64-bit range */
+    /** Requested channel ID as a positive decimal string with no leading zeroes, no greater than 9223372036854775807 */
     readonly channelId: string
     /** Nonnegative visible members Fluxer reported for this channel, not the community total */
     readonly memberCount: number

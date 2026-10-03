@@ -1,7 +1,12 @@
-import { expect, test } from "vitest"
+import { expect, onTestFinished, test, vi } from "vitest"
 import { apiErrorDetail } from "../../src/api-errors.js"
+import { errors } from "../../src/index.js"
+import * as native from "../../src/effect.js"
 import { MessageOperationError } from "../../src/message-errors.js"
 import { OAuthOperationError } from "../../src/oauth.js"
+import { modes, setup } from "../support/both-apis.js"
+import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
+import { expectErr } from "../support/settle.js"
 
 test("maps only reviewed provider codes and preserves the four established SDK codes", () => {
     for (const [providerCode, code] of [
@@ -17,6 +22,82 @@ test("maps only reviewed provider codes and preserves the four established SDK c
     ] as const) {
         expect(apiErrorDetail({ code: providerCode })).toMatchObject({ providerCode, code })
     }
+})
+
+// Fluxer 597116a: AnnouncementErrors, the channel/follow guards and CrosspostPropagation define these rejections
+const announcementRejections = [
+    { providerCode: "ANNOUNCEMENT_CHANNEL_REQUIRED", code: "announcementChannelRequired", status: 400 },
+    { providerCode: "CHANNEL_ALREADY_FOLLOWED", code: "channelAlreadyFollowed", status: 400 },
+    { providerCode: "CHANNEL_HAS_FOLLOWED_CHANNELS", code: "channelHasFollowedChannels", status: 400 },
+    { providerCode: "CHANNEL_TYPE_CONVERSION_NOT_SUPPORTED", code: "channelTypeConversionNotSupported", status: 400 },
+    { providerCode: "FOLLOW_TARGET_CONTENT_WARNING_REQUIRED", code: "followTargetContentWarningRequired", status: 400 },
+    { providerCode: "FOLLOW_TARGET_NOT_AGE_RESTRICTED", code: "followTargetNotAgeRestricted", status: 400 },
+    { providerCode: "INVALID_FOLLOW_TARGET_CHANNEL", code: "invalidFollowTargetChannel", status: 400 },
+    { providerCode: "MESSAGE_ALREADY_CROSSPOSTED", code: "messageAlreadyCrossposted", status: 400 },
+    { providerCode: "MESSAGE_NOT_CROSSPOSTABLE", code: "messageNotCrosspostable", status: 400 },
+    { providerCode: "MESSAGE_CROSSPOST_RATE_LIMITED", code: "messageCrosspostRateLimited", status: 429 },
+    { providerCode: "PUBLISHED_MESSAGE_EDIT_RATE_LIMITED", code: "publishedMessageEditRateLimited", status: 429 },
+] as const
+
+test.each(modes)(
+    "%s classifies announcement rejections through public error helpers without provider text",
+    async (mode) => {
+        onTestFinished(() => void vi.unstubAllGlobals())
+        let rejection: (typeof announcementRejections)[number] = announcementRejections[0]
+        const marker = "private announcement response text"
+        stubFetchWithHostedDiscovery(async () =>
+            Response.json(
+                { code: rejection.providerCode, message: marker, errors: [{ path: "private.path", message: marker }] },
+                { status: rejection.status },
+            ),
+        )
+        const client = await setup(mode)
+        for (const reviewed of announcementRejections) {
+            rejection = reviewed
+            const error = await expectErr(
+                client.rest.request({ method: "POST", path: "/channels/10/messages", body: {} }),
+            )
+            expect(error).toMatchObject({
+                _tag: "RestRequestError",
+                status: reviewed.status,
+                reason: reviewed.status === 429 ? "rateLimit" : "rejected",
+                outcome: "rejected",
+                apiError: {
+                    providerCode: reviewed.providerCode,
+                    code: reviewed.code,
+                    explanation: expect.stringMatching(/\S/),
+                },
+                details: { apiError: reviewed.providerCode },
+                hint: expect.stringMatching(/\S/),
+            })
+            expect(errors.apiCode(error)).toBe(reviewed.code)
+            expect(native.errors.apiCode(error)).toBe(reviewed.code)
+            expect(errors.isRetryable(error)).toBe(reviewed.status === 429)
+            expect(native.errors.isRetryable(error)).toBe(reviewed.status === 429)
+            if (error._tag !== "RestRequestError") expect.fail("Expected a REST rejection")
+            expect(Object.isFrozen(error.apiError)).toBe(true)
+            expect(error.apiError).not.toHaveProperty("validationErrors")
+            expect(error.details).not.toHaveProperty("providerCode")
+            for (const text of [error.message, JSON.stringify(error)]) {
+                expect(text).not.toContain(marker)
+                expect(text).not.toContain("private.path")
+            }
+        }
+    },
+)
+
+test.each(modes)("%s treats the retired phone-verification code as unrecognized", async (mode) => {
+    onTestFinished(() => void vi.unstubAllGlobals())
+    const providerCode = "GUILD_PHONE_VERIFICATION_REQUIRED"
+    stubFetchWithHostedDiscovery(async () => Response.json({ code: providerCode }, { status: 400 }))
+    const client = await setup(mode)
+    const error = await expectErr(client.rest.request({ method: "POST", path: "/channels/10/messages", body: {} }))
+    expect(error).toMatchObject({ apiError: null, details: { providerCode } })
+    expect(errors.apiCode(error)).toBeUndefined()
+    expect(native.errors.apiCode(error)).toBeUndefined()
+    expect(errors.isRetryable(error)).toBe(false)
+    for (const code of ["GUILD_VERIFICATION_REQUIRED", "GUILD_EMAIL_VERIFICATION_REQUIRED"])
+        expect(apiErrorDetail({ code })).toMatchObject({ providerCode: code, code: "guildVerificationRequired" })
 })
 
 test("excludes unknown and inherited provider values with every raw response field", () => {

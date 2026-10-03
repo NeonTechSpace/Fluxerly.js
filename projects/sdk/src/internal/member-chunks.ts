@@ -15,19 +15,12 @@ import { MemberChunkError, type MemberChunk, type MemberChunkFailure } from "#sd
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import type { InternalSubmission } from "./gateway/commands.js"
 import { decodeMember } from "./guilds.js"
-import { fieldsOnce, identifier, record, snapshotArray } from "./decode/primitives.js"
+import { fieldsOnce, gatewayIdentifier, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller, suspendMarked, thrownCause } from "./defects.js"
 import { decodePresenceUpdate } from "./presence.js"
 import { Opcode } from "./protocol/gateway.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
-const maximumUint64 = "18446744073709551615"
-const positiveId = (value: unknown): value is string =>
-    typeof value === "string" &&
-    value.length <= 20 &&
-    identifier(value) &&
-    value !== "0" &&
-    (value.length < 20 || value <= maximumUint64)
 const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
 
@@ -43,8 +36,12 @@ interface Settings {
 
 /** Validate one request, reading each caller query and option field once so the validated value is the one sent */
 function settings(guildId: unknown, query: unknown, options: unknown): Settings | InputValidationFailure {
-    if (!positiveId(guildId))
-        return inputValidationFailure("guildId", "format", "Must be a canonical positive uint64 decimal string")
+    if (!gatewayIdentifier(guildId))
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Must be a canonical positive decimal string no greater than 9223372036854775807",
+        )
     if (!record(query)) return inputValidationFailure("query", "type", "Must be a member-chunk query object")
     const unsupported = unsupportedKeyFailure(
         query,
@@ -114,11 +111,11 @@ function settings(guildId: unknown, query: unknown, options: unknown): Settings 
         const copied = snapshotArray(userIdsInput, 100)
         if (copied === undefined || copied.length < 1)
             return inputValidationFailure("query.userIds", "length", "Must contain from 1 through 100 user IDs")
-        if (!copied.every(positiveId))
+        if (!copied.every(gatewayIdentifier))
             return inputValidationFailure(
                 "query.userIds",
                 "format",
-                "Each ID must be a canonical positive uint64 decimal string",
+                "Each ID must be a canonical positive decimal string no greater than 9223372036854775807",
             )
         userIds = copied as readonly string[]
         if (new Set(userIds).size !== userIds.length)
@@ -321,7 +318,7 @@ export class MemberChunkSource {
             const member = decodeMember(raw, config.guildId)
             if (
                 !member ||
-                !positiveId(member.userId) ||
+                !gatewayIdentifier(member.userId) ||
                 this.#seen.has(member.userId) ||
                 batchIds.has(member.userId) ||
                 (config.userIds && !config.userIds.includes(member.userId))

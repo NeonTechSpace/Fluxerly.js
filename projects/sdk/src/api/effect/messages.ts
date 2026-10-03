@@ -25,8 +25,10 @@ import type {
     Message,
     MessageCore,
     MessageReference,
+    CrosspostSource,
     MessageInput,
     MessageOperationOptions,
+    MessageAuditOperationOptions,
     OwnMessageDeletionOptions,
     ReplyInput,
     SendOptions,
@@ -39,12 +41,14 @@ import type { ReactionCollectorOptions, CollectorOptions, Collector, ReactionCol
  *
  * Results use the messageFields chosen at client creation, or full Message objects by default. Nested results, callbacks and cached snapshots use the same selection
  *
+ * The delete, deleteMany, pin and unpin methods accept MessageAuditOperationOptions. Other message operations reject auditReason
+ *
  * A collector with guildId requires that community's local shard to be ready. A channel-only collector requires the client to be Connected. Closing or Closed clients reject new work
  *
  * By default up to four REST or upload requests run at once across this client, regardless of shard, and attachment downloads have four separate slots. The shared queue holds at most 256 requests or 4 MiB of JSON bodies by default. The rest client option changes these limits.
  * Each remote call has a total deadline of rest.defaultTimeoutMs by default (30,000 ms unless configured). Queue, retry and rate-limit waits count toward it. Cleanup is awaited afterward
  *
- * The fetch, fetchHistory, fetchReactionUsers and fetchPins methods retry transport failures and HTTP 500/502/503/504 at most twice.
+ * The fetch, fetchCrosspostSource, fetchHistory, fetchReactionUsers and fetchPins methods retry transport failures and HTTP 500/502/503/504 at most twice.
  * Retry delays are jittered 125–250 ms then 250–500 ms, or a valid longer Retry-After. Retries never reset the deadline. When a retry could not start before the deadline, the received failure is returned at once.
  * A retry reads the same target and query, but does not guarantee an unchanged snapshot. Other rejections and malformed successes never retry.
  * Confirmed HTTP 429 responses use the applicable route or client-wide rate-limit wait. They do not count against the two transient-read retries
@@ -61,6 +65,33 @@ import type { ReactionCollectorOptions, CollectorOptions, Collector, ReactionCol
  */
 
 export interface Messages<M extends MessageCore = Message> {
+    /**
+     * Publish an ordinary source message from an announcement channel and return its frozen updated snapshot.
+     * Fluxer requires announcements and message sending enabled, SendMessages, and ManageMessages for another author's message.
+     * Replies, system messages, already published messages, published copies and forwarded messages cannot be published.
+     * Fluxer enforces moderation and a shared per-channel publication budget of 10 messages per hour
+     *
+     * Success means publication was accepted and follower delivery was queued, not that every target received a copy.
+     * Fluxer sets Crossposted, visible in flags when this client's messageFields selection retains flags.
+     * A successful response updates the enabled source-message cache without inserting guessed follower copies.
+     * An unknown outcome evicts the cached source. A lost or malformed response is never resent automatically.
+     * Cancellation after dispatch cannot establish rollback. No gateway event is awaited and auditReason is not supported
+     */
+    publish(target: MessageReference, options?: MessageOperationOptions): Effect.Effect<M, MessageOperationFailure>
+    /**
+     * Fetch frozen public source-community metadata for a published copy or a ChannelFollowAdd notice.
+     * Fluxer applies ordinary message access checks and returns UNKNOWN_MESSAGE for other targets, including a published source.
+     * The profile reflects the community when fetched, not when the original message was published.
+     * It preserves public badge feature strings, including unknown values, and unavailable approximate counts as null, never zero.
+     * Counts can be cached upstream for up to 60 seconds
+     *
+     * This is not a complete Guild and never populates community or message caches.
+     * No original-message fetch, gateway connection or subscription is required. The auditReason option is not supported
+     */
+    fetchCrosspostSource(
+        target: MessageReference,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<CrosspostSource, MessageOperationFailure>
     /**
      * Read older messages newest first, without connecting the gateway.
      * The maxItems option is required, and pageSize and maxPages use the limits in PaginationQuery.
@@ -221,6 +252,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Success follows HTTP 204, not gateway notification.
      * No gateway connection is required
      *
+     * The auditReason option supplies an optional community audit-log explanation.
      * Fluxer checks channel access and PIN_MESSAGES for community pins.
      * A new pin creates a system message and notifications.
      * An already-pinned message stays unchanged.
@@ -247,18 +279,22 @@ export interface Messages<M extends MessageCore = Message> {
      * })
      * ```
      */
-    pin(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    pin(message: MessageReference, options?: MessageAuditOperationOptions): Effect.Effect<void, MessageOperationFailure>
     /**
      * Remove a pin without deleting the message or its pin-created system message.
      * Supply a decimal message id and channelId.
      * Fluxer checks the same permissions as pin.
      * Success follows HTTP 204, including when the message is already unpinned.
      * The last-pin timestamp is not reset.
+     * The auditReason option supplies an optional community audit-log explanation.
      * The pin method's request limits, deadline, rate-limit retries, cancellation and cache removal also apply.
      * Expected failures identify operation unpin, and client closure fails with ClientClosedError.
      * No gateway connection, confirmation fetch, event synthesis or automatic rollback is performed
      */
-    unpin(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    unpin(
+        message: MessageReference,
+        options?: MessageAuditOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Fetch one frozen page of pinned messages in descending pin-time order.
      * Use a decimal channel ID.
@@ -585,8 +621,9 @@ export interface Messages<M extends MessageCore = Message> {
      * A plain string sends only that text, as shorthand for `{ content }`, and embeds accept plain objects or EmbedBuilder instances.
      * Success follows the decoded HTTP response, not gateway notification or recipient acknowledgement, and no gateway connection is needed.
      * Mentions are disabled by default, and allowedMentions opts in.
-     * Embed image and thumbnail URLs can use attachment://filename for a matching new image upload.
-     * The flags input accepts only MessageFlags' non-voice bits.
+     * Embed image and thumbnail URLs can use attachment://filename for a matching new image or video upload.
+     * The flags input accepts only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
+     * Server-managed flags, including the crosspost flags, fail locally before dispatch.
      * Suppressing previews is different from omitting embeds
      *
      * Each attachment uses exactly one source: Bytes in data, a sized Blob or File source, or a finite stream with its exact byte count.
@@ -813,11 +850,12 @@ export interface Messages<M extends MessageCore = Message> {
      * [] clears files when nonempty text or embeds remain.
      * Retained file title or description can be replaced or cleared with null.
      * Unknown IDs may be ignored, and a stale list can remove concurrent additions.
-     * An attachment:// image or thumbnail URL must match a new image upload, not a retained attachment.
+     * An attachment:// image or thumbnail URL must match a new image or video upload, not a retained attachment.
      * New uploads use send's copying, attachment source, size, budget and cleanup rules, and inline multipart 429 responses do not replay file or stream sources.
      * Failed edits may leave temporary server data, without physical-erasure guarantees.
      * A flags-only edit is allowed.
-     * Omission preserves flags, supplied flags replace writable bits, and 0 clears both non-voice bits
+     * Omission preserves flags, supplied flags replace only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications, and 0 clears those two bits.
+     * Server-managed flags, including the crosspost flags, fail locally before dispatch
      *
      * Eligible responses can enter the cache.
      * A dispatched edit with an unknown outcome removes the old cached copy.
@@ -835,12 +873,16 @@ export interface Messages<M extends MessageCore = Message> {
      * Deleting another author's message requires ManageMessages, and Fluxer rejects that deletion with HTTP 400 and apiError.code twoFactorRequired in a community whose mfaLevel is GuildMfaLevels.Elevated, unless the bot owns the community or its application owner has two-factor authentication enabled.
      * No gateway notification is awaited.
      * A missing message fails with MessageOperationError reason notFound, including a repeated delete.
+     * The auditReason option supplies an optional community audit-log explanation.
      * Successful deletions and deletions with unknown outcomes remove the cached message.
      * A lost response, timeout, cancellation or closure can leave the deletion applied.
      * Request cleanup is awaited, but the deletion cannot be undone.
      * Deletes with unknown outcomes are never retried automatically
      */
-    delete(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    delete(
+        message: MessageReference,
+        options?: MessageAuditOperationOptions,
+    ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Delete one attachment by its decimal ID from a message authored by this bot.
      * The target is copied when execution starts, and the attachment list is neither fetched nor replaced.
@@ -873,7 +915,8 @@ export interface Messages<M extends MessageCore = Message> {
      * IDs are copied once when execution starts, and that copy is validated and sent, so an entry that changes between reads
      * cannot pass validation with one value and be sent with another.
      * Success follows HTTP 204, not a deletion count or proof that each ID existed, and missing messages are ignored.
-     * No gateway connection, automatic selection, chunking, age filter or audit reason is added.
+     * No gateway connection, automatic selection, chunking or age filter is added.
+     * The auditReason option supplies an optional community audit-log explanation.
      * Dispatched requests remove selected cache entries even on rejection, because partial deletion is possible.
      * Only confirmed rate-limit rejection retries.
      * A lost response, timeout, cancellation or closure can leave deletions applied.
@@ -889,7 +932,7 @@ export interface Messages<M extends MessageCore = Message> {
     deleteMany(
         channelId: string,
         messageIds: readonly string[],
-        options?: MessageOperationOptions,
+        options?: MessageAuditOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Irreversibly delete this bot's entire authored message history in one channel.

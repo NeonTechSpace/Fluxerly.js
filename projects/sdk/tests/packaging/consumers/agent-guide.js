@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { withHostedDiscovery } from "../hosted-discovery.mjs"
-import { sendOnce } from "./out/consumer-guide.js"
+import { sendOnce } from "./out/agent-guide.js"
 
 let requests = 0
 let fail = false
@@ -28,4 +28,4 @@ await assert.rejects(() => sendOnce("fixture-only", "20", "guide fixture"), {
     outcome: "rejected",
 })
 assert.equal(requests, 2, "Expected failures must not cause a second write")
-console.log("Packed consumer guide example passed success and expected failure")
+console.log("Packed agent guide example passed success and expected failure")

@@ -1,5 +1,5 @@
 import {
-    type Webhook,
+    type IncomingWebhook,
     type WebhookTokenEdit,
     type WebhookMessageInput,
     type WebhookMessageEdit,
@@ -21,7 +21,8 @@ import type { InstanceResolveOptions } from "#sdk/instance"
 import type { Message, MessageOperationOptions } from "#sdk/messages"
 import { type ResolvedInstance, effectInstance, type Instance } from "./instance.js"
 
-/** Send and manage one webhook's messages using its webhook token.
+/** Send and manage one incoming webhook's messages using its webhook token.
+ * Follower webhooks have no exposed token and Fluxer rejects their token-authenticated operations with UNKNOWN_WEBHOOK.
  * This client does not use a bot token, connect the gateway, cache resources or store tokens persistently
  *
  * Operations start when executed and preserve unexpected faults/interruption.
@@ -50,17 +51,20 @@ export interface WebhookClient {
      */
     readonly instance: Instance
     /**
-     * Fetch this webhook's current metadata using its token, not bot authentication.
+     * Fetch this incoming webhook's current metadata using its token, not bot authentication.
      * Creator and private fields are not retained
      */
-    fetch(options?: MessageOperationOptions): Effect.Effect<Webhook, WebhookOperationFailure>
+    fetch(options?: MessageOperationOptions): Effect.Effect<IncomingWebhook, WebhookOperationFailure>
     /**
      * Change this webhook's name or avatar using its token and return metadata without credentials.
      * To move it to another channel, use a bot client's webhooks.edit.
      * A failed or cancelled write can still have applied.
      * This method does not close the client
      */
-    edit(input: WebhookTokenEdit, options?: MessageOperationOptions): Effect.Effect<Webhook, WebhookOperationFailure>
+    edit(
+        input: WebhookTokenEdit,
+        options?: MessageOperationOptions,
+    ): Effect.Effect<IncomingWebhook, WebhookOperationFailure>
     /**
      * Delete this webhook remotely using its token, succeeding after HTTP 204.
      * This does not close the client or release its local credential reference.
@@ -72,6 +76,8 @@ export interface WebhookClient {
      * Send a webhook message and return the created message after Fluxer's HTTP response.
      * A plain string sends only that text, as shorthand for `{ content }`.
      * The SDK uses wait=true, and mentions are disabled by default.
+     * A supplied nonce requests best-effort duplicate suppression for five minutes, not exactly-once delivery.
+     * Omission sends no nonce. Forward source nonces are accepted, but supplying both locations fails before dispatch.
      * Reply references can include files.
      * Forward references preserve only the source snapshot and reject new content or uploads
      *
@@ -81,8 +87,10 @@ export interface WebhookClient {
      * Keep file data stable, and supply a fresh stream for each operation because a stream is consumed at most once and must deliver exactly its declared size.
      * Cleanup cancels unfinished readers and awaits lock release, without closing caller paths or FileHandles.
      * Multipart file uploads are streamed with a maximum of 50 MiB per file and share the configured upload-byte budget.
-     * An attachment:// image or thumbnail URL must match a new upload in this request.
-     * The flags input accepts only the two non-voice MessageFlags bits
+     * An attachment:// image or thumbnail URL must match one new upload whose filename maps to an image or video MIME type.
+     * The flags input accepts only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
+     * Crossposted, IsCrosspost and SourceMessageDeleted are server-managed.
+     * Those bits and VoiceMessage fail locally before dispatch
      *
      * A failure with an unknown outcome can leave the message posted and is never replayed automatically.
      * A confirmed inline HTTP 429 can replay copied data bytes, but file and stream inputs fail with rateLimit without being reopened or reread
@@ -101,7 +109,9 @@ export interface WebhookClient {
      * A plain string replaces only the text, as shorthand for `{ content }`.
      * Omitted fields stay unchanged.
      * Mentions default off and attachments cannot be replaced.
-     * A flags-only edit replaces the two writable non-voice flags, and 0 clears them.
+     * A flags-only edit replaces only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications, and 0 clears them.
+     * Crossposted, IsCrosspost and SourceMessageDeleted are server-managed.
+     * Those bits and VoiceMessage fail locally before dispatch.
      * Embed input cannot resolve existing file references
      */
     editMessage(

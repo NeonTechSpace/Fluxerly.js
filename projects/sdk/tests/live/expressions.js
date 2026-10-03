@@ -1,6 +1,6 @@
 // Emoji and sticker lifecycle, source-guild reads, gateway updates, partial batches and sticker messages.
 // Journal `.env.test.expressions.local` records sandbox and bot identity, a marker, the test-owned expressions,
-// channel and webhook. An existing journal is cleaned up before a new run: the webhook and channel are deleted
+// channel and webhook. An existing journal triggers recovery only: The webhook and channel are deleted
 // after creator and destination checks, then every marker-owned expression is deleted without media purging
 // and its absence verified
 import assert from "node:assert/strict"
@@ -156,229 +156,241 @@ try {
     report(stage)
     if (journalFile.exists()) {
         journal = journalFile.read()
+        stage = "recovery_only"
         await cleanup()
-    }
-    journal = {
-        guildId,
-        botId,
-        marker: `fx_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
-        emojis: [],
-        stickers: [],
-    }
-    save()
-    const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
-    const options = { token, cache: { emojis: true, stickers: true, messages: true } }
-    if (mode === "default") client = sdk.createClient(options)
-    else {
-        scope = Scope.makeUnsafe()
-        client = await Effect.runPromise(sdk.createClient(options).pipe(Scope.provide(scope)))
-    }
-    for (const [kind, event] of [
-        ["emojis", "guildEmojisUpdate"],
-        ["stickers", "guildStickersUpdate"],
-    ]) {
-        const observe = (snapshot) => {
-            if (snapshot.guildId !== guildId) return
-            assert.ok(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.items))
-            assert.ok(
-                snapshot.items.every(
-                    (item) => Object.isFrozen(item) && !Object.hasOwn(item, "user") && !Object.hasOwn(item, "image"),
-                ),
-            )
-            observations[kind].sequence++
-            observations[kind].value = snapshot
-        }
-        if (mode === "default") client.on(event, observe)
-        else
-            await Effect.runPromise(
-                client.on(event, (snapshot) => Effect.sync(() => observe(snapshot))).pipe(Scope.provide(scope)),
-            )
-    }
-    await value(client.connect())
-    let sticker, emoji
-    for (const kind of ["emojis", "stickers"]) {
-        stage = `${kind}_create_list_metadata_edit`
-        const entry = { name: `${journal.marker}_one`, ids: [] }
-        journal[kind].push(entry)
-        save()
-        const created = await value(
-            client[kind].create(guildId, {
-                name: entry.name,
-                image: image(),
-                ...(kind === "stickers" ? { description: "SDK live fixture", tags: ["test"] } : {}),
-            }),
-        )
-        entry.ids.push(created.id)
-        save()
-        await expressionEvent(kind, (items) => items.some((item) => item.id === created.id && item.name === entry.name))
-        if (kind === "emojis") emoji = created
-        const remote = (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === created.id)
-        assert.equal(remote.name, entry.name)
-        assert.equal(remote.user?.id, botId)
-        assert.equal((await value(client[kind].fetchMetadata(created.id))).guildId, guildId)
-        stage = `${kind}_source_guild`
-        // Read-only source-guild lookup for the test-owned expression, compared with the verified sandbox guild
-        const source = await value(client[kind].fetchSource(created.id))
-        assert.equal(source.id, guildId)
-        assert.equal(source.name, sandboxGuild.name)
-        assert.equal(source.icon, sandboxGuild.icon ?? null)
-        assert.ok(Array.isArray(source.features) && source.features.every((item) => typeof item === "string"))
         report(stage)
-        stage = `${kind}_create_list_metadata_edit`
-        assert.ok((await value(client[kind].fetchAll(guildId))).some((item) => item.id === created.id))
-        const edit =
-            kind === "stickers"
-                ? { ...created, name: `${entry.name}_edit`, description: "Edited", tags: [] }
-                : { name: `${entry.name}_edit` }
-        await value(client[kind].edit(created, edit))
-        const changed = (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === created.id)
-        assert.equal(changed.name, edit.name)
-        await expressionEvent(kind, (items) => items.some((item) => item.id === created.id && item.name === edit.name))
-        if (kind === "stickers") {
-            assert.equal(changed.description, "Edited")
-            assert.deepEqual(changed.tags, [])
-            sticker = created
+    } else {
+        journal = {
+            guildId,
+            botId,
+            marker: `fx_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
+            emojis: [],
+            stickers: [],
         }
-        report(stage)
-        stage = `${kind}_lost_edit_response_reconciliation`
-        let attempts = 0
-        globalThis.fetch = async (url, init) => {
-            const response = await rawFetch(url, init)
-            if (String(url).endsWith(`/guilds/${guildId}/${kind}/${created.id}`) && init?.method === "PATCH") {
-                attempts++
-                await response.arrayBuffer()
-                assert.equal(response.status, 200)
-                throw new Error("Discarded test-owned edit response")
-            }
-            return response
+        save()
+        const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")
+        const options = { token, cache: { emojis: true, stickers: true, messages: true } }
+        if (mode === "default") client = sdk.createClient(options)
+        else {
+            scope = Scope.makeUnsafe()
+            client = await Effect.runPromise(sdk.createClient(options).pipe(Scope.provide(scope)))
         }
-        try {
-            await assert.rejects(
-                value(
-                    client[kind].edit(
-                        created,
-                        kind === "stickers" ? { ...edit, name: entry.name } : { name: entry.name },
+        for (const [kind, event] of [
+            ["emojis", "guildEmojisUpdate"],
+            ["stickers", "guildStickersUpdate"],
+        ]) {
+            const observe = (snapshot) => {
+                if (snapshot.guildId !== guildId) return
+                assert.ok(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.items))
+                assert.ok(
+                    snapshot.items.every(
+                        (item) =>
+                            Object.isFrozen(item) && !Object.hasOwn(item, "user") && !Object.hasOwn(item, "image"),
                     ),
-                ),
-                (error) => error.reason === "network" && error.outcome === "unknown",
-            )
-        } finally {
-            globalThis.fetch = rawFetch
+                )
+                observations[kind].sequence++
+                observations[kind].value = snapshot
+            }
+            if (mode === "default") client.on(event, observe)
+            else
+                await Effect.runPromise(
+                    client.on(event, (snapshot) => Effect.sync(() => observe(snapshot))).pipe(Scope.provide(scope)),
+                )
         }
-        assert.equal(attempts, 1)
-        assert.equal(
-            (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === created.id)?.name,
-            entry.name,
-        )
-        report(stage)
-        stage = `${kind}_clone`
-        entry.clone = true
-        save()
-        try {
-            const cloned = await value(client[kind].clone(guildId, created.id))
-            entry.ids.push(cloned.id)
+        await value(client.connect())
+        let sticker, emoji
+        for (const kind of ["emojis", "stickers"]) {
+            stage = `${kind}_create_list_metadata_edit`
+            const entry = { name: `${journal.marker}_one`, ids: [] }
+            journal[kind].push(entry)
             save()
-            assert.notEqual(cloned.id, created.id)
+            const created = await value(
+                client[kind].create(guildId, {
+                    name: entry.name,
+                    image: image(),
+                    ...(kind === "stickers" ? { description: "SDK live fixture", tags: ["test"] } : {}),
+                }),
+            )
+            entry.ids.push(created.id)
+            save()
+            await expressionEvent(kind, (items) =>
+                items.some((item) => item.id === created.id && item.name === entry.name),
+            )
+            if (kind === "emojis") emoji = created
+            const remote = (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === created.id)
+            assert.equal(remote.name, entry.name)
+            assert.equal(remote.user?.id, botId)
+            assert.equal((await value(client[kind].fetchMetadata(created.id))).guildId, guildId)
+            stage = `${kind}_source_guild`
+            // Read-only source-guild lookup for the test-owned expression, compared with the verified sandbox guild
+            const source = await value(client[kind].fetchSource(created.id))
+            assert.equal(source.id, guildId)
+            assert.equal(source.name, sandboxGuild.name)
+            assert.equal(source.icon, sandboxGuild.icon ?? null)
+            assert.ok(Array.isArray(source.features) && source.features.every((item) => typeof item === "string"))
+            report(stage)
+            stage = `${kind}_create_list_metadata_edit`
+            assert.ok((await value(client[kind].fetchAll(guildId))).some((item) => item.id === created.id))
+            const edit =
+                kind === "stickers"
+                    ? { ...created, name: `${entry.name}_edit`, description: "Edited", tags: [] }
+                    : { name: `${entry.name}_edit` }
+            await value(client[kind].edit(created, edit))
+            const changed = (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === created.id)
+            assert.equal(changed.name, edit.name)
+            await expressionEvent(kind, (items) =>
+                items.some((item) => item.id === created.id && item.name === edit.name),
+            )
+            if (kind === "stickers") {
+                assert.equal(changed.description, "Edited")
+                assert.deepEqual(changed.tags, [])
+                sticker = created
+            }
+            report(stage)
+            stage = `${kind}_lost_edit_response_reconciliation`
+            let attempts = 0
+            globalThis.fetch = async (url, init) => {
+                const response = await rawFetch(url, init)
+                if (String(url).endsWith(`/guilds/${guildId}/${kind}/${created.id}`) && init?.method === "PATCH") {
+                    attempts++
+                    await response.arrayBuffer()
+                    assert.equal(response.status, 200)
+                    throw new Error("Discarded test-owned edit response")
+                }
+                return response
+            }
+            try {
+                await assert.rejects(
+                    value(
+                        client[kind].edit(
+                            created,
+                            kind === "stickers" ? { ...edit, name: entry.name } : { name: entry.name },
+                        ),
+                    ),
+                    (error) => error.reason === "network" && error.outcome === "unknown",
+                )
+            } finally {
+                globalThis.fetch = rawFetch
+            }
+            assert.equal(attempts, 1)
             assert.equal(
-                (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === cloned.id)?.user?.id,
-                botId,
+                (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === created.id)?.name,
+                entry.name,
             )
             report(stage)
-        } catch (error) {
-            if (
-                error?._tag !== "GuildOperationError" ||
-                error.operation !== `${kind}.clone` ||
-                error.reason !== "rejected" ||
-                error.outcome !== "rejected" ||
-                error.status !== 403
+            stage = `${kind}_clone`
+            entry.clone = true
+            save()
+            try {
+                const cloned = await value(client[kind].clone(guildId, created.id))
+                entry.ids.push(cloned.id)
+                save()
+                assert.notEqual(cloned.id, created.id)
+                assert.equal(
+                    (await api("GET", `/guilds/${guildId}/${kind}`)).data.find((item) => item.id === cloned.id)?.user
+                        ?.id,
+                    botId,
+                )
+                report(stage)
+            } catch (error) {
+                if (
+                    error?._tag !== "GuildOperationError" ||
+                    error.operation !== `${kind}.clone` ||
+                    error.reason !== "rejected" ||
+                    error.outcome !== "rejected" ||
+                    error.status !== 403
+                )
+                    throw error
+                const skippedAssertions = ["clone_returns_distinct_expression", "clone_persists_with_test_bot_owner"]
+                incompleteChecks.push({ check: stage, skippedAssertions })
+                console.error(
+                    JSON.stringify({
+                        mode,
+                        check: stage,
+                        passed: false,
+                        incomplete: true,
+                        reason: "cloning_unavailable",
+                        status: 403,
+                        skippedAssertions,
+                    }),
+                )
+                process.exitCode = 1
+            }
+            stage = `${kind}_partial_batch`
+            const good = { name: `${journal.marker}_ok`, ids: [] },
+                bad = { name: `${journal.marker}_bad`, ids: [] }
+            journal[kind].push(good, bad)
+            save()
+            const batch = await value(
+                client[kind].createMany(guildId, [
+                    { name: good.name, image: image() },
+                    { name: bad.name, image: "bm90IGFuIGltYWdl" },
+                ]),
             )
-                throw error
-            const skippedAssertions = ["clone_returns_distinct_expression", "clone_persists_with_test_bot_owner"]
-            incompleteChecks.push({ check: stage, skippedAssertions })
+            assert.equal(batch.success.length, 1)
+            assert.deepEqual(batch.failed, [{ name: bad.name }])
+            good.ids.push(batch.success[0].id)
+            bad.rejected = true
+            save()
+            const readback = (await api("GET", `/guilds/${guildId}/${kind}`)).data
+            assert.ok(readback.some((item) => item.id === good.ids[0]))
+            assert.ok(!readback.some((item) => item.name === bad.name))
+            await expressionEvent(kind, (items) => items.some((item) => item.id === good.ids[0]))
+            const beforeDeleteEvent = observations[kind].sequence
+            await value(client[kind].delete(batch.success[0]))
+            await expressionEvent(kind, (items) => !items.some((item) => item.id === good.ids[0]), beforeDeleteEvent)
+            assert.ok(!(await api("GET", `/guilds/${guildId}/${kind}`)).data.some((item) => item.id === good.ids[0]))
+            report(stage)
+        }
+        report("expression_create_edit_delete_events_received")
+        stage = "sticker_send_reply_and_remote_readback"
+        journal.channel = {}
+        save()
+        const channel = await value(client.channels.create(guildId, { type: 0, name: journal.marker }))
+        journal.channel.id = channel.id
+        save()
+        const sent = await value(client.messages.send(channel.id, { stickerIds: [sticker.id] }))
+        assert.equal(sent.stickers[0]?.id, sticker.id)
+        assert.equal((await api("GET", `/channels/${channel.id}/messages/${sent.id}`)).data.stickers[0]?.id, sticker.id)
+        const reply = await value(client.messages.reply(sent, { stickerIds: [sticker.id] }))
+        assert.equal((await value(client.messages.fetch(reply))).stickers[0]?.id, sticker.id)
+        report(stage)
+        stage = "created_emoji_used_directly_as_reaction"
+        await value(client.messages.addReaction(sent, emoji))
+        const reaction = (await api("GET", `/channels/${channel.id}/messages/${sent.id}`)).data.reactions.find(
+            (item) => item.emoji.id === emoji.id,
+        )
+        assert.equal(reaction.me, true)
+        assert.equal(reaction.count, 1)
+        report(stage)
+        stage = "webhook_sticker_send_and_readback"
+        journal.webhook = {}
+        save()
+        const hook = await value(client.webhooks.create(channel.id, { name: journal.marker }))
+        journal.webhook.id = hook.webhook.id
+        save()
+        if (mode === "default") webhookClient = sdk.createWebhookClient(hook.credentials)
+        else
+            webhookClient = await Effect.runPromise(
+                sdk.createWebhookClient(hook.credentials).pipe(Scope.provide(scope)),
+            )
+        const posted = await value(webhookClient.send({ stickerIds: [sticker.id] }))
+        assert.equal(posted.stickers[0]?.id, sticker.id)
+        const webhookRead = (await api("GET", `/channels/${channel.id}/messages/${posted.id}`)).data
+        assert.equal(webhookRead.webhook_id, hook.webhook.id)
+        assert.equal(webhookRead.stickers[0]?.id, sticker.id)
+        report(stage)
+        if (incompleteChecks.length)
             console.error(
                 JSON.stringify({
                     mode,
-                    check: stage,
+                    check: "expressions_live_suite",
                     passed: false,
                     incomplete: true,
-                    reason: "cloning_unavailable",
-                    status: 403,
-                    skippedAssertions,
+                    incompleteChecks,
                 }),
             )
-            process.exitCode = 1
-        }
-        stage = `${kind}_partial_batch`
-        const good = { name: `${journal.marker}_ok`, ids: [] },
-            bad = { name: `${journal.marker}_bad`, ids: [] }
-        journal[kind].push(good, bad)
-        save()
-        const batch = await value(
-            client[kind].createMany(guildId, [
-                { name: good.name, image: image() },
-                { name: bad.name, image: "bm90IGFuIGltYWdl" },
-            ]),
-        )
-        assert.equal(batch.success.length, 1)
-        assert.deepEqual(batch.failed, [{ name: bad.name }])
-        good.ids.push(batch.success[0].id)
-        bad.rejected = true
-        save()
-        const readback = (await api("GET", `/guilds/${guildId}/${kind}`)).data
-        assert.ok(readback.some((item) => item.id === good.ids[0]))
-        assert.ok(!readback.some((item) => item.name === bad.name))
-        await expressionEvent(kind, (items) => items.some((item) => item.id === good.ids[0]))
-        const beforeDeleteEvent = observations[kind].sequence
-        await value(client[kind].delete(batch.success[0]))
-        await expressionEvent(kind, (items) => !items.some((item) => item.id === good.ids[0]), beforeDeleteEvent)
-        assert.ok(!(await api("GET", `/guilds/${guildId}/${kind}`)).data.some((item) => item.id === good.ids[0]))
-        report(stage)
     }
-    report("expression_create_edit_delete_events_received")
-    stage = "sticker_send_reply_and_remote_readback"
-    journal.channel = {}
-    save()
-    const channel = await value(client.channels.create(guildId, { type: 0, name: journal.marker }))
-    journal.channel.id = channel.id
-    save()
-    const sent = await value(client.messages.send(channel.id, { stickerIds: [sticker.id] }))
-    assert.equal(sent.stickers[0]?.id, sticker.id)
-    assert.equal((await api("GET", `/channels/${channel.id}/messages/${sent.id}`)).data.stickers[0]?.id, sticker.id)
-    const reply = await value(client.messages.reply(sent, { stickerIds: [sticker.id] }))
-    assert.equal((await value(client.messages.fetch(reply))).stickers[0]?.id, sticker.id)
-    report(stage)
-    stage = "created_emoji_used_directly_as_reaction"
-    await value(client.messages.addReaction(sent, emoji))
-    const reaction = (await api("GET", `/channels/${channel.id}/messages/${sent.id}`)).data.reactions.find(
-        (item) => item.emoji.id === emoji.id,
-    )
-    assert.equal(reaction.me, true)
-    assert.equal(reaction.count, 1)
-    report(stage)
-    stage = "webhook_sticker_send_and_readback"
-    journal.webhook = {}
-    save()
-    const hook = await value(client.webhooks.create(channel.id, { name: journal.marker }))
-    journal.webhook.id = hook.webhook.id
-    save()
-    if (mode === "default") webhookClient = sdk.createWebhookClient(hook.credentials)
-    else webhookClient = await Effect.runPromise(sdk.createWebhookClient(hook.credentials).pipe(Scope.provide(scope)))
-    const posted = await value(webhookClient.send({ stickerIds: [sticker.id] }))
-    assert.equal(posted.stickers[0]?.id, sticker.id)
-    const webhookRead = (await api("GET", `/channels/${channel.id}/messages/${posted.id}`)).data
-    assert.equal(webhookRead.webhook_id, hook.webhook.id)
-    assert.equal(webhookRead.stickers[0]?.id, sticker.id)
-    report(stage)
-    if (incompleteChecks.length)
-        console.error(
-            JSON.stringify({
-                mode,
-                check: "expressions_live_suite",
-                passed: false,
-                incomplete: true,
-                incompleteChecks,
-            }),
-        )
 } catch (error) {
     console.error(
         JSON.stringify({

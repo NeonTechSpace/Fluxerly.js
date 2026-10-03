@@ -57,7 +57,7 @@
  * The [glossary](https://preview.fluxerly.neontechspace.com/docs/latest/glossary/) defines terms such as guild, gateway,
  * shard, frozen snapshot and uncertain write
  *
- * Coding agents: read node_modules/@neontechspace/fluxerly/consumer/AGENTS.md before writing code with this package
+ * Coding agents: read node_modules/@neontechspace/fluxerly/agents/AGENTS.md before writing code with this package
  *
  * @packageDocumentation
  */
@@ -146,6 +146,7 @@ export { DiscoveryCategories } from "./discovery.js"
 export type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
 export type {
     GuildCreate,
+    GuildHealthUpdate,
     GuildEmojisUpdate,
     GuildStickersUpdate,
     GuildLifecycleEvents,
@@ -223,9 +224,15 @@ export type {
     UserOperationOptions,
     DefaultUserOperationOptions,
 } from "./users.js"
-export { WebhookOperationError } from "./webhooks.js"
+export { WebhookOperationError, WebhookType } from "./webhooks.js"
 export type {
     Webhook,
+    WebhookBase,
+    IncomingWebhook,
+    ChannelFollowerWebhook,
+    UnknownWebhook,
+    WebhookSourceGuild,
+    WebhookSourceChannel,
     WebhookCredentials,
     CreatedWebhook,
     WebhookCreate,
@@ -432,19 +439,25 @@ export type {
     PermissionOverwrite,
     GuildChannel,
     GuildChannelBase,
+    GuildTextChannelBase,
     GuildTextChannel,
+    GuildAnnouncementChannel,
     GuildVoiceChannel,
     GuildCategoryChannel,
     GuildLinkChannel,
     GuildUnknownChannel,
     ChannelCreateBase,
     TextChannelCreate,
+    AnnouncementChannelCreate,
     VoiceChannelCreate,
     CategoryChannelCreate,
     LinkChannelCreate,
     ChannelCreate,
     ChannelEdit,
     ChannelPosition,
+    ChannelFollowInput,
+    FollowedChannel,
+    ChannelFollowerStats,
     GuildChannelUpdateBulk,
     ChannelOperation,
     ChannelOperationFailure,
@@ -540,6 +553,8 @@ export type {
     MessageReactionEmoji,
     MessageReactionSummary,
     MessageContextReference,
+    CrosspostSource,
+    CrosspostSourceGuild,
     MessageHistoryQuery,
     MessageDeletion,
     MessageBulkDeletion,
@@ -553,6 +568,8 @@ export type {
     EditMessageInput,
     MessageOperationOptions,
     DefaultMessageOperationOptions,
+    MessageAuditOperationOptions,
+    DefaultMessageAuditOperationOptions,
     OwnMessageDeletionOptions,
     DefaultOwnMessageDeletionOptions,
 } from "./messages.js"

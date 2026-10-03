@@ -69,7 +69,7 @@
         "src",
         "esm-only.cjs",
         "examples/starter",
-        "consumer/AGENTS.md",
+        "agents/AGENTS.md",
         "LICENSE",
         "CHANGELOG.md"
     ],
@@ -125,6 +125,7 @@
         "test:live:moderation:default": "pnpm run build && node tests/live/messages.js default --moderation",
         "test:live:moderation:effect": "pnpm run build && node tests/live/messages.js effect --moderation",
         "test:live:webhooks": "pnpm run build && node tests/live/webhooks.js default && node tests/live/webhooks.js effect",
+        "test:live:announcements": "pnpm run build && node tests/live/announcements.js default && node tests/live/announcements.js effect",
         "test:live:expressions": "pnpm run build && node tests/live/expressions.js default && node tests/live/expressions.js effect",
         "test:live:invites": "pnpm run build && node tests/live/invites.js default && node tests/live/invites.js effect",
         "test:live:administration": "pnpm run build && node tests/live/administration.js default && node tests/live/administration.js effect",
@@ -167,12 +168,12 @@
         "ws": "8.21.3"
     },
     "peerDependencies": {
-        "effect": "4.0.0-rc.117"
+        "effect": "^4.0.0"
     },
     "devDependencies": {
         "@types/node": "24.13.6",
         "@types/ws": "8.18.1",
-        "effect": "4.0.0-rc.117",
+        "effect": "4.0.0",
         "npm": "12.0.2",
         "prettier": "3.9.8",
         "typescript": "7.0.2",

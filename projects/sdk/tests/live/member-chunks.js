@@ -11,7 +11,7 @@ import { fromExit, settleExit as value } from "./support/results.js"
 import { createSandboxApi } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]
-const absentId = "18446744073709551615"
+const absentId = "9223372036854775807"
 const report = createOutcomeReporter({ mode })
 let stage = "configuration"
 let lock

@@ -41,7 +41,9 @@ import type { PaginationError, UserIterationQuery } from "#sdk/pagination"
 export interface Members {
     /**
      * Request one community's members over the gateway and deliver frozen batches without accumulating a roster.
-     * Choose explicit userIds, a query prefix, or `all: true`.
+     * Choose explicit userIds, a case-insensitive nickname, global-name or username prefix, or `all: true`.
+     * The community and explicit user IDs must be positive decimal strings without leading zeros, no greater than 9223372036854775807.
+     * This gateway prefix query is separate from REST member search.
      * Each consumption copies the input and sends one request.
      * The community must have a ready shard assigned to this client, otherwise the request fails with notConnected.
      * Full-list mode is capped by Fluxer at 100,000 members, and Fluxer's server-enforced 30-second limit per bot and community also applies.
@@ -127,6 +129,10 @@ export interface Members {
      * An indexing true result means the search is not complete, not that it found no members.
      * Even an empty indexing false result can mean Fluxer's search service is unavailable.
      * Counts do not guarantee completeness, and hits do not trigger full-member fetches
+     *
+     * Fluxer requires at least one of ManageGuild, ManageRoles, ManageNicknames, BanMembers, ModerateMembers or KickMembers.
+     * While Guild.mfaLevel is GuildMfaLevels.Elevated, holding any of these except ManageNicknames can make Fluxer reject
+     * every search, including one without filters, with HTTP 400 and apiError.code twoFactorRequired, as described on Guild.mfaLevel
      *
      * Join-source and invite filters first fetch the bot's community permissions and require ManageGuild.
      * The three independent precheck reads run concurrently under the same total deadline, and a failure cancels sibling reads.

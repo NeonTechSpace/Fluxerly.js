@@ -698,6 +698,7 @@ export class EventBus<M extends MessageCore = Message> {
         messageReactionRemove: new Set(),
         messageReactionRemoveAll: new Set(),
         messageReactionRemoveEmoji: new Set(),
+        guildHealthUpdate: new Set(),
         entranceSoundPlay: new Set(),
         callCreate: new Set(),
         callUpdate: new Set(),

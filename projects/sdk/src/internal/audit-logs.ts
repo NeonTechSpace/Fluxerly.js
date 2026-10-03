@@ -137,7 +137,7 @@ function entry(value: unknown): AuditLogEntry | undefined {
     })
 }
 
-/** Gateway metadata is a string map, unlike the REST response's numeric/boolean options */
+/** REST and gateway audit options share numeric and boolean types, with older string forms normalized here */
 export function decodeAuditLogEntry(value: unknown): AuditLogEntry | undefined {
     if (!record(value) || value.options === undefined) return entry(value)
     if (!record(value.options)) return undefined

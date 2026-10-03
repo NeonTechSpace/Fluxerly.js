@@ -28,6 +28,19 @@ import {
     type MessageSnapshot,
     type UserProfile,
     type GuildChannel,
+    type GuildAnnouncementChannel,
+    type ChannelFollowInput,
+    type FollowedChannel,
+    type ChannelFollowerStats,
+    type CrosspostSource,
+    type CrosspostSourceGuild,
+    type SelectedMessage,
+    WebhookType,
+    type Webhook,
+    type IncomingWebhook,
+    type ChannelFollowerWebhook,
+    type UnknownWebhook,
+    type MessageContextReference,
     type Client,
     type ShardRecoveryDiagnostic,
     type ShardState,
@@ -1063,4 +1076,140 @@ export function approvedRequestInputs(client: Client) {
 /** Typechecked local-validation facts through the packed Effect entry point */
 export function describeNativeInputValidation(error: MessageOperationFailure): InputValidationDetail | null {
     return error._tag === "MessageOperationError" ? error.inputValidation : null
+}
+
+/** Packed announcement operations retain native Effects, interruption options and selected message fields */
+export function announcementOperations(
+    client: Client<SelectedMessage<readonly ["attachments"]>>,
+    target: MessageReference,
+) {
+    const input: ChannelFollowInput = { targetChannelId: "30" }
+    const audit: import("@neontechspace/fluxerly/effect").ChannelAuditOperationOptions = {
+        auditReason: "Subscribe reviewed channel",
+        timeoutMs: 5_000,
+    }
+    const read: import("@neontechspace/fluxerly/effect").ChannelOperationOptions = { timeoutMs: 5_000 }
+    const message: import("@neontechspace/fluxerly/effect").MessageOperationOptions = { timeoutMs: 5_000 }
+    const followed: Effect.Effect<FollowedChannel, import("@neontechspace/fluxerly/effect").ChannelOperationFailure> =
+        client.channels.follow("20", input, audit)
+    const stats: Effect.Effect<ChannelFollowerStats, import("@neontechspace/fluxerly/effect").ChannelOperationFailure> =
+        client.channels.fetchFollowerStats("20", read)
+    const published = client.messages.publish(target, message) satisfies Effect.Effect<
+        SelectedMessage<readonly ["attachments"]>,
+        MessageOperationFailure
+    >
+    const source: Effect.Effect<CrosspostSource, MessageOperationFailure> = client.messages.fetchCrosspostSource(
+        target,
+        message,
+    )
+    client.channels.create("40", { type: ChannelType.Announcement, name: "announcements" }, audit)
+    client.channels.edit("20", { type: ChannelType.Announcement }, audit)
+    client.channels.follow("20", input)
+    client.channels.fetchFollowerStats("20")
+    client.messages.publish(target)
+    client.messages.fetchCrosspostSource(target)
+    // @ts-expect-error Following requires a receiving channel ID
+    client.channels.follow("20", {})
+    // @ts-expect-error Follower reads do not accept an audit reason
+    client.channels.fetchFollowerStats("20", { auditReason: "Read" })
+    // @ts-expect-error Publishing requires a message reference rather than one positional ID
+    client.messages.publish("10")
+    // @ts-expect-error Crosspost-source reads also require a message reference
+    client.messages.fetchCrosspostSource({ channelId: "20" })
+    // @ts-expect-error Native follow cancellation uses Effect interruption
+    client.channels.follow("20", input, { signal: new AbortController().signal })
+    // @ts-expect-error Native follower-stat cancellation uses Effect interruption
+    client.channels.fetchFollowerStats("20", { signal: new AbortController().signal })
+    // @ts-expect-error Native publish cancellation uses Effect interruption
+    client.messages.publish(target, { signal: new AbortController().signal })
+    // @ts-expect-error Native source-read cancellation uses Effect interruption
+    client.messages.fetchCrosspostSource(target, { signal: new AbortController().signal })
+    return Effect.gen(function* () {
+        const follow = yield* followed
+        const channelId: string = follow.channelId
+        const webhookId: string = follow.webhookId
+        const counts = yield* stats
+        const channelCount: number = counts.channelCount
+        const guildCount: number = counts.guildCount
+        // @ts-expect-error Follower counts are immutable observations
+        counts.guildCount = 0
+        const publishedMessage = yield* published
+        // @ts-expect-error Publishing preserves the configured message selection
+        void publishedMessage.embeds
+        const crosspostSource = yield* source
+        return {
+            channelId,
+            webhookId,
+            channelCount,
+            guildCount,
+            attachments: publishedMessage.attachments,
+            crosspostSource,
+        }
+    })
+}
+
+/** Announcement channels and all webhook kinds narrow through their exported constants */
+export function announcementResourceTypes(channel: GuildChannel, webhook: Webhook, context: MessageContextReference) {
+    if (channel.type === ChannelType.Announcement) {
+        const announcement: GuildAnnouncementChannel = channel
+        const topic: string | null | undefined = announcement.topic
+        void topic
+        // @ts-expect-error Announcement channels do not expose voice settings
+        void channel.bitrate
+    }
+    if (webhook.type === WebhookType.Incoming) {
+        const incoming: IncomingWebhook = webhook
+        void incoming
+        // @ts-expect-error Incoming webhook metadata contains no follower source
+        void webhook.sourceChannel
+    } else if (webhook.type === WebhookType.ChannelFollower) {
+        const follower: ChannelFollowerWebhook = webhook
+        const sourceId: string | undefined = follower.sourceChannel?.id
+        void sourceId
+        // @ts-expect-error Known follower webhooks have no unknown-kind marker
+        void webhook.rawType
+    } else {
+        const unknown: UnknownWebhook = webhook
+        const rawType: number = unknown.rawType
+        void rawType
+    }
+    // @ts-expect-error Metadata never exposes a webhook token
+    void webhook.token
+    const sourceContext: MessageContextReference = { channelId: "20", guildId: "30" }
+    const sourceId: string | undefined = context.id
+    // @ts-expect-error A channel-only context cannot be used as a message operation target
+    const incomplete: MessageReference = context
+    const target: MessageReference | undefined =
+        sourceId === undefined ? undefined : { channelId: context.channelId, id: sourceId }
+    void incomplete
+    return { sourceContext, target }
+}
+
+/** Crosspost source snapshots retain unavailable counts, optional artwork and provider feature strings */
+export function crosspostSourceTypes(source: CrosspostSource) {
+    const minimal: CrosspostSourceGuild = {
+        id: "40",
+        name: "Source community",
+        description: null,
+        features: ["VERIFIED", "PARTNERED", "DISCOVERABLE"],
+        approximateMemberCount: null,
+        approximatePresenceCount: null,
+        discoverable: true,
+    }
+    const withArtwork: CrosspostSource = { guild: { ...minimal, icon: null, banner: "banner-hash" } }
+    const guild: CrosspostSourceGuild = source.guild
+    const counts: readonly (number | null)[] = [guild.approximateMemberCount, guild.approximatePresenceCount]
+    const description: string | null = guild.description
+    const artwork: readonly (string | null | undefined)[] = [guild.icon, guild.banner]
+    const features: readonly string[] = guild.features
+    const discoverable: boolean = guild.discoverable
+    const futureFeature: CrosspostSourceGuild = { ...minimal, features: ["FUTURE_PUBLIC_BADGE"] }
+    // @ts-expect-error Crosspost source features must be strings
+    const invalidFeature: CrosspostSourceGuild = { ...minimal, features: [0] }
+    // @ts-expect-error Received source features are immutable
+    guild.features.push("VERIFIED")
+    // @ts-expect-error Received source fields are immutable
+    guild.approximateMemberCount = 0
+    void invalidFeature
+    return { withArtwork, futureFeature, counts, description, artwork, features, discoverable }
 }

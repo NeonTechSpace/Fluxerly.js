@@ -175,7 +175,13 @@ function fixture(journal?: object) {
 function run(
     root: string,
     mode: string,
-    options: { cleanupFailure?: boolean; failures?: string[]; recovery?: boolean; foreignCollision?: boolean } = {},
+    options: {
+        cleanupFailure?: boolean
+        failures?: string[]
+        recovery?: boolean
+        foreignCollision?: boolean
+        expectedStatus?: number
+    } = {},
 ) {
     const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/webhooks.mjs", mode], {
         cwd: root,
@@ -194,7 +200,7 @@ function run(
     })
     expect(child.error).toBeUndefined()
     expect(child.signal).toBeNull()
-    expect(child.status).toBe(1)
+    expect(child.status).toBe(options.expectedStatus ?? 1)
     const output = child.stdout + child.stderr
     expect(output).not.toContain(fixtureToken)
     expect(output).not.toContain(privateFailure)
@@ -251,10 +257,12 @@ test.each(["default", "effect"])(
         expect(JSON.parse(readFileSync(journalPath(root), "utf8")).channels).toHaveLength(2)
         expect(lockFiles(root)).toEqual([])
 
-        const recovered = run(root, mode)
+        const recovered = run(root, mode, { expectedStatus: 0 })
         expect(recovered).toContainEqual(
             expect.objectContaining({ check: "webhook_and_channels_cleanup_verified", passed: true }),
         )
+        expect(recovered).toContainEqual(expect.objectContaining({ check: "recovery_only", passed: true }))
+        expect(remoteRequests(recovered, "POST")).toEqual([])
         expect(existsSync(journalPath(root))).toBe(false)
         expect(lockFiles(root)).toEqual([])
     },
@@ -270,10 +278,13 @@ const pendingJournal = {
 
 test.each(["default", "effect"])("%s webhook live recovery removes only the owned token-edited webhook", (mode) => {
     const root = fixture(pendingJournal)
-    const lines = run(root, mode, { recovery: true })
+    const lines = run(root, mode, { recovery: true, expectedStatus: 0 })
     expect(lines).toContainEqual(
         expect.objectContaining({ check: "webhook_and_channels_cleanup_verified", passed: true }),
     )
+    expect(lines).toContainEqual(expect.objectContaining({ check: "recovery_only", passed: true }))
+    expect(remoteRequests(lines, "POST")).toEqual([])
+    expect(lines).not.toContainEqual({ fixture: "bot_client_shutdown" })
     const state = recoveryState(lines)
     // Recovery deleted the owned webhook and channel, and kept the same-marker webhook in an unowned channel
     expect(state.deletions).toEqual(expect.arrayContaining(["400", "300"]))

@@ -118,7 +118,7 @@ export interface MessageSearchQuery {
     readonly sortBy?: "timestamp" | "relevance"
     /** Ascending or descending result order, default desc */
     readonly sortOrder?: "asc" | "desc"
-    /** Permit results from channels Fluxer marks NSFW. Defaults to false and does not bypass channel access checks */
+    /** Request results from channels Fluxer marks NSFW, default false. In an age-restricted community, guild search includes NSFW results for eligible callers, including bots, even when omitted or false. Channel access checks still apply */
     readonly includeNsfw?: boolean
 }
 
@@ -132,8 +132,8 @@ export interface MessageSearchChannel {
     readonly id: string
     /** Owning community ID, when Fluxer supplied it */
     readonly guildId?: string
-    /** Observed channel name, when supplied. Private channels may omit it */
-    readonly name?: string
+    /** Observed channel name, when supplied. An unnamed group DM has null, and other private channels may omit it */
+    readonly name?: string | null
     /** Fluxer's numeric channel type, including unrecognized future values */
     readonly type: number
 }

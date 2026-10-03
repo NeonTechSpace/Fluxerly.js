@@ -20,11 +20,10 @@ import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure }
 import { withDeadline } from "./effect-failures.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import type { InternalSubmission } from "./gateway/commands.js"
-import { identifier, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
+import { gatewayIdentifier, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller, suspendMarked } from "./defects.js"
 
 const defaultTimeoutMs = 30_000
-const maximumUint64 = "18446744073709551615"
 
 interface GatewaySender {
     readonly guilds: (guildIds: readonly string[], nonce: string) => InternalSubmission
@@ -71,12 +70,6 @@ export interface CountGatewayOwner {
     receiveChannelMemberCounts(value: unknown): void
 }
 
-const positiveIdentifier = (value: unknown): value is string =>
-    typeof value === "string" &&
-    value.length <= maximumUint64.length &&
-    identifier(value) &&
-    value !== "0" &&
-    (value.length < maximumUint64.length || value <= maximumUint64)
 const shard = (value: unknown): value is number => nonNegativeInteger(value)
 
 function copyIdentifiers(
@@ -89,8 +82,12 @@ function copyIdentifiers(
     const ids = snapshotArray(value, maximum)
     if (ids === undefined || ids.length < 1)
         return inputValidationFailure(path, "length", `Must contain from 1 through ${maximum} IDs`)
-    if (!ids.every(positiveIdentifier))
-        return inputValidationFailure(path, "format", "Each ID must be a canonical positive uint64 decimal string")
+    if (!ids.every(gatewayIdentifier))
+        return inputValidationFailure(
+            path,
+            "format",
+            "Each ID must be a canonical positive decimal string no greater than 9223372036854775807",
+        )
     return new Set(ids).size === ids.length
         ? (ids as readonly string[])
         : inputValidationFailure(path, "unique", "Must not contain duplicate IDs")
@@ -132,7 +129,7 @@ function guildCounts(guildIds: readonly string[], value: unknown): readonly Guil
     for (const entry of response.counts) {
         if (
             !record(entry) ||
-            !positiveIdentifier(entry.guild_id) ||
+            !gatewayIdentifier(entry.guild_id) ||
             !nonNegativeInteger(entry.member_count) ||
             !nonNegativeInteger(entry.online_count) ||
             Object.hasOwn(entry, "channel_id") ||
@@ -164,7 +161,7 @@ function channelCounts(
         if (
             !record(entry) ||
             entry.guild_id !== guildId ||
-            !positiveIdentifier(entry.channel_id) ||
+            !gatewayIdentifier(entry.channel_id) ||
             !nonNegativeInteger(entry.member_count) ||
             !nonNegativeInteger(entry.online_count) ||
             !channelIds.includes(entry.channel_id) ||
@@ -290,7 +287,7 @@ export class CountOwner implements CountGatewayOwner {
                 return Effect.fail(
                     new CountOperationError({ operation, reason: "input", inputValidation: duration.detail }),
                 )
-            const channelGuildId = guildRequest ? undefined : positiveIdentifier(guildId) ? guildId : undefined
+            const channelGuildId = guildRequest ? undefined : gatewayIdentifier(guildId) ? guildId : undefined
             if (!guildRequest && channelGuildId === undefined)
                 return Effect.fail(
                     new CountOperationError({
@@ -299,7 +296,7 @@ export class CountOwner implements CountGatewayOwner {
                         inputValidation: inputValidationFailure(
                             "guildId",
                             "format",
-                            "Must be a canonical positive uint64 decimal string",
+                            "Must be a canonical positive decimal string no greater than 9223372036854775807",
                         ).detail,
                     }),
                 )

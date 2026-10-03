@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFile
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { createInterface } from "node:readline"
+import { parsers } from "prettier/plugins/babel"
 import { afterEach, expect, test } from "vitest"
 import { liveChecks } from "./run-all.js"
 import { checkClasses, declaredCheck } from "./support/check-classes.js"
@@ -29,6 +30,41 @@ test("every harness that takes the sandbox lock declares its lock class", () => 
     expect(harnesses.length).toBeGreaterThan(20)
     // A declaration without a harness would hide a renamed file
     expect(Object.keys(checkClasses).sort()).toEqual(harnesses.sort())
+})
+
+test("every journal recovery branch prevents a fresh scenario in the same invocation", async () => {
+    const harnesses = readdirSync(live).filter((file) => /^[a-z-]+\.m?js$/.test(file))
+    let recoveries = 0
+    for (const file of harnesses) {
+        const source = readFileSync(new URL(file, live), "utf8")
+        const ast = await parsers.babel.parse(source)
+        const branches = []
+        // Inspect control flow without depending on comments, whitespace or scenario contents
+        function visit(node, parent) {
+            if (!node || typeof node !== "object") return
+            if (
+                node.type === "IfStatement" &&
+                node.test.type === "CallExpression" &&
+                node.test.callee.type === "MemberExpression" &&
+                node.test.callee.object.name === "journalFile" &&
+                node.test.callee.property.name === "exists"
+            )
+                branches.push({ node, parent })
+            for (const child of Object.values(node))
+                if (Array.isArray(child)) child.forEach((value) => visit(value, node))
+                else visit(child, node)
+        }
+        visit(ast.program)
+        recoveries += branches.length
+        for (const { node, parent } of branches) {
+            const returnsAfterRecovery = node.consequent.body?.at(-1)?.type === "ReturnStatement"
+            const guardedScenario = node.alternate && parent.type === "BlockStatement" && parent.body.at(-1) === node
+            expect(Boolean(returnsAfterRecovery || guardedScenario), `${file} can fall through after recovery`).toBe(
+                true,
+            )
+        }
+    }
+    expect(recoveries).toBeGreaterThan(0)
 })
 
 test("every live package script and direct runner check resolves to declared scenarios", () => {

@@ -76,7 +76,7 @@ Before adding or expanding documentation, choose its owner:
 | Member signatures, defaults and caller-visible behavior | Public source comments, preserved in declarations for the website reference |
 | User guides, tutorials, examples and design explanations for SDK users | Documentation website |
 | Introduction, contributor setup, navigation, testing procedures and release policy | Repository Markdown |
-| Instructions for agents consuming the installed package | [Consumer agent guide](/projects/sdk/consumer/AGENTS.md), discovered through the package README |
+| Instructions for agents consuming the installed package | [Agent guide](/projects/sdk/agents/AGENTS.md), discovered through the package README |
 | Cross-component ownership, invariants and coordination that maintainers need beyond documented public members | Concise repository implementation contracts |
 
 Keep member behavior in source comments and handwritten guides in website source.

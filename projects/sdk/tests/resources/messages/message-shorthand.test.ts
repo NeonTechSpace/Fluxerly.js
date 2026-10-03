@@ -134,6 +134,7 @@ test("MessageType names the type numbers Fluxer reports, and both APIs export th
         ChannelIconChange: 5,
         ChannelPinnedMessage: 6,
         UserJoin: 7,
+        ChannelFollowAdd: 12,
         Reply: 19,
     })
     expect(NativeMessageType).toBe(MessageType)

@@ -261,7 +261,8 @@ export async function generateVersion(version, output, { plannedVersion } = {}) 
         // Guide links already use the snapshot link placeholder
         const content = guide.content
             .replaceAll("{{installation}}", installation)
-            .replaceAll("{{effect-version}}", manifest.peerDependencies.effect)
+            // The tested Effect version is the lowest one a range peer accepts. Older SDKs declared one exact version
+            .replaceAll("{{effect-version}}", manifest.peerDependencies.effect.replace(/^\^/, ""))
         if (content.replaceAll(linkPlaceholder, "").includes("{{"))
             throw new Error(`Guide ${guide.slug} contains an unknown placeholder`)
         await writeFile(join(output, `${guide.slug}.md`), content)

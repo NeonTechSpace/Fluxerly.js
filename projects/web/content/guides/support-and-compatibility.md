@@ -14,13 +14,26 @@ Fluxerly is prerelease software intended for testing. It does not yet promise st
 | Modules           | ESM only, with `"type": "module"` in `package.json` or `.mjs` files                              |
 | JavaScript        | No TypeScript compiler requirement                                                               |
 | TypeScript        | TypeScript 7, not TypeScript 6 or earlier, with `@types/node` for the Node.js types              |
-| Native Effect     | The exact Effect peer version declared by the installed SDK                                      |
+| Native Effect     | Tested against Effect {{effect-version}}. Later Effect 4 releases are accepted                   |
 | Web browsers      | Not supported. A bot runs as a Node.js program, not inside a web page                            |
 | Operating systems | Hosted CI uses Ubuntu. A passing Ubuntu run does not qualify every operating system or container |
 
-Check the installed package's manifest for its Node.js and Effect requirements. The default API needs Effect internally, and npm or pnpm normally installs that dependency automatically. Native Effect code must use the exact version listed there, not another release candidate
+Check the installed package's manifest for its Node.js and Effect requirements. The default API needs Effect internally, and npm or pnpm normally installs that dependency automatically. Native Effect code must use a version within the Effect range listed there, not Effect 3 or an Effect 4 prerelease
 
-The lockfile records the exact installed SDK version and keeps installs reproducible. During the prerelease, install with `--save-exact`, which npm and pnpm both accept, so a fresh install without a lockfile cannot pick up a newer prerelease that may break the API. Read the matching [changelog](/docs/{{version}}/changelog/) and rerun application tests before upgrading. Prerelease suffixes describe release readiness, not a guarantee that upgrades preserve every application assumption. Breaking changes target the next breaking package version under the project's versioning policy
+## Version numbers and release channels
+
+A Stable version such as `1000.2.3` has three numbers, and the first one holds two parts. Its thousands are the epoch and the rest is the major version, so `1000` means epoch 1, major 0, and `2003` would mean epoch 2, major 3. That gives four parts. Each Stable release increases one of them, depending on what it changes, and resets the parts after it to 0:
+
+| Part                                     | Increases when the release                                                                                                                                   | Example                 |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
+| Epoch, the thousands of the first number | Starts a new generation of the project. Like a major release, it can break existing code                                                                     | `1004.2.3` → `2000.0.0` |
+| Major, the rest of the first number      | Can break existing code, for example by removing or renaming an API or by raising the minimum Node.js or Effect version. Read the changelog before upgrading | `1000.2.3` → `1001.0.0` |
+| Minor, the second number                 | Adds features and keeps existing code working                                                                                                                | `1000.2.3` → `1000.3.0` |
+| Patch, the third number                  | Only fixes bugs and keeps existing code working                                                                                                              | `1000.2.3` → `1000.2.4` |
+
+A version ending in `-canary.N` or `-rc.N`, such as `1001.0.0-rc.2`, is a preview of that Stable version. A Canary is an early preview, and an RC is the last check before the Stable release. Any preview can break existing code, even after the first Stable release, so the table above applies only to Stable releases
+
+The lockfile records the exact installed SDK version and keeps installs reproducible. For a Canary or RC, install with `--save-exact`, which npm and pnpm both accept, so a fresh install without a lockfile cannot pick up a newer Canary or RC that may break the API. Read the matching [changelog](/docs/{{version}}/changelog/) and rerun application tests before upgrading
 
 No long-term maintenance window, response-time guarantee or deprecation notice period is promised for prerelease versions. A green SDK check covers its named tests, not every bot workload, provider deployment or recovery scenario
 

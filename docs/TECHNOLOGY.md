@@ -11,7 +11,7 @@ Use [the repository guide](/docs/REPOSITORY.md) for setup and file locations
 | Language | TypeScript 7 |
 | Module format | ECMAScript modules (ESM) |
 | Runtime | Tested against Node.js 24.15 or newer |
-| Internal implementation | Effect 4 release-candidate line |
+| Internal implementation | Effect 4 |
 | WebSocket transport | `ws`, kept behind internal SDK boundaries |
 | Public entry points | Default JavaScript/TypeScript and Effect, sharing one implementation |
 | Public error results | neverthrow `Result` for default synchronous operations and `ResultAsync` for default async operations, typed Effect failures for the native API |
@@ -32,7 +32,7 @@ Use current security updates within a supported Node.js release line. The develo
 
 - Raising the minimum Node.js version is a breaking change that increases MAJOR
 - A Node.js release line is dropped no sooner than six months after its end of life
-- The Effect peer version is exact. While Effect 4 remains in release-candidate status, changing it is a breaking change that increases MAJOR
+- The Effect peer accepts later releases of one Effect major, starting at the tested version. Raising that lowest version or changing the Effect major is a breaking change that increases MAJOR
 
 ### Versioning and release stages
 
@@ -49,8 +49,8 @@ The release suffix describes readiness, independently of compatibility changes
 
 | Suffix | Meaning |
 | --- | --- |
-| `-canary.N` | Preview of upcoming changes, available for testing |
-| `-rc.N` | Release candidate believed ready to ship, with no known release blockers, pending final validation |
+| `-canary.N` | Preview of upcoming changes, available for testing. It can include breaking changes |
+| `-rc.N` | Release candidate for the next Stable, with no known release blockers, under final validation. It can still include breaking changes |
 | No suffix | Stable release supported for public use |
 
 There is no literal `-none` suffix.
@@ -59,7 +59,8 @@ The initial release cycle targets `1000.0.0`, including breaking changes between
 Later cycles accumulate compatibility changes against their stable starting version, so repeated major notes do not repeatedly increase the target major.
 An increased compatibility impact can raise the target, but an already selected target never decreases. Preview-to-preview breaking changes still require migration notes
 
-Canary iterations allow experimentation. RC indicates an intended settled API under final validation.
+Canary and RC releases can always include breaking changes against any earlier Canary or RC, including after the first stable release. Only between Stable releases does the version tell what kind of change a release contains: MAJOR for breaking changes, MINOR for compatible features and PATCH for compatible fixes.
+Canary iterations allow experimentation, and an RC is the final validation of the Stable it precedes.
 A patch or minor release can go straight to Stable. A new major version or epoch is published as an RC first, and Stable then publishes that RC's package content unchanged.
 While an RC is waiting for Stable, no other Stable at or above its version can be published. Canary releases are exempt from these rules.
 [Release stages](/docs/RELEASING.md#release-stages) lists the exact rules
@@ -93,12 +94,12 @@ The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and
 
 ### Optional consumer Effect integration
 
-The SDK targets Effect 4's release-candidate line with an exact pin for reproducible implementation and validation.
-The package declares Effect as an exact required peer, with the same version in development dependencies.
-Native consumers must use that exact version. Effect 3 and other Effect 4 RCs are incompatible
+The SDK is tested against one exact Effect 4 version, its development dependency.
+The package declares Effect as a required peer range that starts at that tested version, such as `^4.0.0`, so applications can use later Effect 4 releases.
+Those later releases are accepted but not tested. Effect 3 and Effect 4 prereleases are unsupported
 
 Modern npm, pnpm and Bun install required peers automatically by default.
-Consumers that disable peer installation must install the declared exact Effect version themselves
+Consumers that disable peer installation must install an Effect version within the declared range themselves
 
 ### Build and package optimization
 
@@ -205,7 +206,7 @@ Review and commit the resulting manifest and lockfile changes together.
 Moving to pnpm 13 requires a separate decision
 
 Dependabot proposes weekly GitHub Actions and npm updates for the workspace, configured in [.github/dependabot.yml](/.github/dependabot.yml).
-It ignores `effect`, which changes only by decision as an exact public peer, and major `typescript` and `@types/node` updates.
+It ignores `effect`, whose tested version is also the lowest version of the public peer range and changes only by decision, and major `typescript` and `@types/node` updates.
 The SDK runtime dependencies `neverthrow` and `ws` are grouped into their own pull request, so their update can carry a Changeset
 
 Prettier is an SDK development dependency, with its version recorded in the manifest and lockfile.
@@ -224,7 +225,7 @@ The SDK build and test tools are installed and configured.
 The workspace's `allowBuilds` policy enables the `esbuild` and `workerd` install scripts and explicitly disables the optional transitive `msgpackr-extract` script.
 Unreviewed dependency builds still fail installation rather than being enabled globally
 
-Check, version PR, candidate preparation, publication, Preview and weekly upstream drift workflows are configured under [.github/workflows](/.github/workflows/).
+Check, version PR, candidate preparation, publication, Preview and daily upstream drift workflows are configured under [.github/workflows](/.github/workflows/).
 Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version. [Releasing](/docs/RELEASING.md) describes each trigger
 Preview releases are published to npm, and the Preview documentation website is live.
 Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for the published versions
