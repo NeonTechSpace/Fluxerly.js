@@ -9,6 +9,12 @@ async function searchIndexUrl(request: APIRequestContext, path: string) {
 }
 const islandTree = async (page: Page) =>
     JSON.stringify(JSON.parse((await page.locator('astro-island[component-export="Docs"]').getAttribute("props"))!).tree)
+// Astro drops the ssr marker before React hydrates, and the shortcut listener is installed by an effect after it.
+// The Ctrl hint renders only once those effects have run
+async function openSearch(page: Page) {
+    await expect(page.getByRole("button", { name: "Search Ctrl K", exact: true })).toBeVisible()
+    await page.keyboard.press("Control+k")
+}
 
 test("Release channels preserve Stable history and select rolling prerelease pages", async ({ page }) => {
     await page.goto("/")
@@ -91,7 +97,7 @@ test("Latest redirects to the newest stable release while navigation and search 
     await expect(page.getByRole("dialog").getByRole("link", { name: "Stable", exact: true }))
         .toHaveAttribute("href", "/docs/1000.0.1/api/signature")
     await page.keyboard.press("Escape")
-    await page.keyboard.press("Control+k")
+    await openSearch(page)
     const input = page.getByRole("textbox", { name: /Search .* documentation/ })
     await input.fill("Lateststablemarker")
     const result = page.getByRole("dialog").getByRole("button", { name: /Lateststablemarker/ }).first()
@@ -121,8 +127,7 @@ test("Version search never returns another release or unpublished index", async 
         if (request.url().includes("/api/search/")) indexes.push(new URL(request.url()).pathname)
     })
     await page.goto("/docs/rc/")
-    await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
-    await page.keyboard.press("Control+k")
+    await openSearch(page)
     const input = page.getByRole("textbox", { name: "Search RC documentation" })
     await input.fill("Rconlymarker")
     await expect(page.getByRole("dialog").getByRole("button", { name: /Rconlymarker/ }).first()).toBeVisible()
@@ -220,7 +225,7 @@ test("Canary navigation, search, serialized tree and assistant files stay within
     const twin = await (await request.get("/docs/canary/quick-start.md")).text()
     expect(twin).toContain("npm install --save-exact @neontechspace/fluxerly@1000.2.0-canary.1")
     expect(twin).toContain("(/docs/canary/api/signature/)")
-    await page.keyboard.press("Control+k")
+    await openSearch(page)
     const input = page.getByRole("textbox", { name: "Search Canary documentation" })
     await input.fill("Latestcanarymarker")
     await page.getByRole("dialog").getByRole("button", { name: /Latestcanarymarker/ }).first().click()
