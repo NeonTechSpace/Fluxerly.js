@@ -9,6 +9,7 @@ const sdkName = "@neontechspace/fluxerly"
 const runtimeDependencies = new Set(["neverthrow", "ws"])
 const manifestPath = "projects/sdk/package.json"
 const fragmentPath = /^projects\/\.changeset\/[^/]+\.md$/
+const noteCommitMessage = "Record SDK runtime dependency updates"
 
 function stableVersion(value) {
     if (typeof value !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value)) return
@@ -119,7 +120,7 @@ async function commitNote(api, pull, path, content) {
     })
     if (!/^[a-f0-9]{40}$/.test(tree?.sha ?? "")) throw new Error("Invalid Changeset tree acknowledgement")
     const commit = await api("git/commits", {
-        method: "POST", input: { message: "Record SDK runtime dependency updates", tree: tree.sha, parents: [pull.head.sha] },
+        method: "POST", input: { message: noteCommitMessage, tree: tree.sha, parents: [pull.head.sha] },
     })
     if (!/^[a-f0-9]{40}$/.test(commit?.sha ?? "")) throw new Error("Invalid Changeset commit acknowledgement")
     const latest = await api(`pulls/${pull.number}`)
@@ -130,6 +131,19 @@ async function commitNote(api, pull, path, content) {
     })
     if (updated?.object?.sha !== commit.sha) throw new Error("Changeset branch update is unconfirmed")
     return commit.sha
+}
+
+async function automaticNoteChild(api, pull, checkedHead) {
+    const current = await api(`git/commits/${pull.head.sha}`)
+    if (
+        !Array.isArray(current?.parents) || current.parents.length !== 1 || current.parents[0]?.sha !== checkedHead ||
+        typeof current.message !== "string" || current.message.trimEnd() !== noteCommitMessage
+    ) return false
+    const comparison = await api(`compare/${checkedHead}...${pull.head.sha}`)
+    if (!Array.isArray(comparison?.files) || comparison.files.length !== 1) return false
+    const file = comparison.files[0]
+    return file.filename === `projects/.changeset/runtime-dependencies-${pull.number}.md` &&
+        file.status === "added" && file.previous_filename === undefined
 }
 
 /**
@@ -176,7 +190,8 @@ export async function addDependencyChangeset({ repository, number, api, expected
 /**
  * Resolve the dependency PR from a completed same-repository Check, without reading
  * artifacts, outputs or executable PR files. Only a successful pull-request run for
- * the exact current dependency head may reach the writer
+ * the exact current dependency head may reach the writer. An exact note-only child
+ * may resume an interrupted Check dispatch, without repeating the Git mutation
  * @param {{ repository: string, runId: number, api: ReturnType<typeof createGithub>["api"], dryRun?: boolean }} options
  */
 export async function dependencyChangesetForCheck({ repository, runId, api, dryRun = false }) {
@@ -191,9 +206,12 @@ export async function dependencyChangesetForCheck({ repository, runId, api, dryR
     const pulls = await api(`commits/${run.head_sha}/pulls?per_page=100`)
     if (!Array.isArray(pulls) || pulls.length >= 100) throw new Error("Invalid or oversized dependency PR association")
     const eligible = pulls.filter((pull) => pull.state === "open" && runtimePull(pull, repository) &&
-        pull.head.sha === run.head_sha && pull.head.ref === run.head_branch)
+        /^[a-f0-9]{40}$/.test(pull.head.sha ?? "") && pull.head.ref === run.head_branch)
     if (eligible.length !== 1) return { skipped: true, reason: "No unique current dependency PR for this Check" }
-    return addDependencyChangeset({ repository, number: eligible[0].number, api, expectedHead: run.head_sha, dryRun })
+    const pull = eligible[0]
+    if (pull.head.sha !== run.head_sha && !(await automaticNoteChild(api, pull, run.head_sha)))
+        return { skipped: true, reason: "Dependency branch changed since the completed Check" }
+    return addDependencyChangeset({ repository, number: pull.number, api, expectedHead: pull.head.sha, dryRun })
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

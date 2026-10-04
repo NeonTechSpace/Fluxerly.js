@@ -53,6 +53,7 @@ Development-only updates, existing release notes, mixed source changes, added or
 
 Only reviewed default-branch code runs with write access. The completed Check is verified through the GitHub API, without consuming its artifacts or outputs. The dependency branch supplies manifest and file metadata through the API, with no checkout, dependency installation or execution.
 The workflow adds only the release note, refuses a concurrent branch update and dispatches Check for the resulting head. Reruns preserve edited or removed notes and do not repeat an existing Check dispatch, including failed runs
+A rerun can resume an interrupted Check dispatch only when the current head is the automatic note-only child of the checked commit and its note still matches the generated content
 
 The resulting PR still requires review, passing checks and any workflow approval GitHub requests for automation-created updates.
 For a routine runtime update, wait for the release-note workflow and verify its Changeset before approving or merging. A failed or missing release-note workflow leaves the note as a manual task.

@@ -254,3 +254,43 @@ test("Stale heads, closed or ambiguous PRs preserve branches without a note", as
         assert.deepEqual(writes(state), [], kind)
     }
 })
+
+test("A partial branch update resumes only Check dispatch for the exact automatic note child", async () => {
+    const { api, input, pulls, state } = checkedProvider({ existing: true })
+    input.pull.head.sha = commit
+    pulls[0].head.sha = commit
+    state.current = commit
+    const recovered = (path, options) => {
+        if (path === `git/commits/${commit}`)
+            return Promise.resolve({ message: "Record SDK runtime dependency updates", parents: [{ sha: head }] })
+        if (path === `compare/${head}...${commit}`)
+            return Promise.resolve({ files: [{ filename: "projects/.changeset/runtime-dependencies-9.md", status: "added" }] })
+        return api(path.replace(`?ref=${commit}`, `?ref=${head}`), options)
+    }
+    await dependencyChangesetForCheck({ repository, runId: 90, api: recovered })
+    assert.deepEqual(writes(state).map(({ path }) => path), ["actions/workflows/ci.yml/dispatches"])
+})
+
+test("Recovery rejects source edits and commits that are not the sole automatic note child", async () => {
+    for (const kind of ["source", "parent", "message", "rename", "edited-note"]) {
+        const { api, input, pulls, state } = checkedProvider({ existing: true, edited: kind === "edited-note" })
+        input.pull.head.sha = commit
+        pulls[0].head.sha = commit
+        state.current = commit
+        const recovered = (path, options) => {
+            if (path === `git/commits/${commit}`)
+                return Promise.resolve({
+                    message: kind === "message" ? "Unrelated commit" : "Record SDK runtime dependency updates\n",
+                    parents: [{ sha: kind === "parent" ? base : head }],
+                })
+            if (path === `compare/${head}...${commit}`)
+                return Promise.resolve({ files: [{
+                    filename: kind === "source" ? "projects/sdk/src/index.ts" : "projects/.changeset/runtime-dependencies-9.md",
+                    status: kind === "rename" ? "renamed" : "added",
+                }] })
+            return api(path.replace(`?ref=${commit}`, `?ref=${head}`), options)
+        }
+        assert.equal((await dependencyChangesetForCheck({ repository, runId: 90, api: recovered })).skipped, true, kind)
+        assert.deepEqual(writes(state), [], kind)
+    }
+})
