@@ -127,11 +127,11 @@ test("Search opens by keyboard, finds the current API and returns focus", async 
     // Wait for the client-rendered shortcut hint, not only Astro's hydration marker
     await expect(trigger).toBeVisible()
     await page.keyboard.press("Control+k")
-    const input = page.getByRole("textbox", { name: "Search source preview documentation" })
+    const input = page.getByRole("combobox", { name: "Search source preview documentation" })
     await expect(input).toBeVisible()
     await input.fill("createClient")
     await expect(
-        page.getByRole("dialog").getByRole("button", { name: "createClient", exact: true }).first(),
+        page.getByRole("dialog").getByRole("option", { name: "createClient", exact: true }).first(),
     ).toBeVisible()
     const excerpt = page.locator(".search-excerpt > .min-w-0").first()
     await expect(excerpt).toBeVisible()
