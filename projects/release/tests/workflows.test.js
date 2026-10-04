@@ -21,6 +21,7 @@ const actions = Object.fromEntries(
 
 // The only jobs allowed to hold write scopes, and exactly which scopes they hold
 const writers = {
+    "dependabot-changeset.yml/note": { contents: "write", actions: "write" },
     "ci.yml/release-trigger": { actions: "write" },
     "release-version.yml/pull_request": { contents: "write", "pull-requests": "write", actions: "write" },
     "release-publish.yml/publish": { "id-token": "write" },
@@ -112,14 +113,15 @@ test("Every external action and container is pinned to an immutable digest", () 
         if (job.uses) assert.match(job.uses, /^\$\//, `${file}/${id} calls only same-repository workflows`)
 })
 
-test("Checkouts drop credentials, scripts avoid expression interpolation and risky triggers are absent", () => {
+test("Checkouts drop credentials, scripts avoid expression interpolation and privileged triggers are confined", () => {
     for (const { where, step } of steps()) {
         if (String(step.uses).startsWith("actions/checkout@"))
             assert.equal(step.with?.["persist-credentials"], false, `${where} must not persist checkout credentials`)
         if (step.run) assert.doesNotMatch(step.run, /\$\{\{/, `${where} must pass values through env`)
     }
     for (const [file, workflow] of Object.entries(workflows)) {
-        for (const trigger of ["pull_request_target", "workflow_run"])
+        for (const trigger of ["pull_request_target", "workflow_run"].filter((trigger) =>
+            file !== "dependabot-changeset.yml" || trigger !== "workflow_run"))
             assert.equal(workflow.on[trigger], undefined, `${file} must not use ${trigger}`)
         for (const [id, job] of Object.entries(workflow.jobs))
             if (`${file}/${id}` !== "release-publish.yml/docs-preview")
@@ -127,6 +129,26 @@ test("Checkouts drop credentials, scripts avoid expression interpolation and ris
     }
     // A called workflow receives no website environment secret unless its caller inherits secrets
     assert.equal(workflows["release-publish.yml"].jobs["docs-preview"].secrets, "inherit")
+})
+
+test("Dependency notes execute only reviewed base code and treat the PR branch as metadata", () => {
+    const workflow = workflows["dependabot-changeset.yml"]
+    assert.equal(workflow["cache-mode"], "none")
+    assert.deepEqual(workflow.on.workflow_run.workflows, ["Check"])
+    assert.deepEqual(workflow.on.workflow_run.types, ["completed"])
+    const job = workflow.jobs.note
+    assert.match(job.if, /event == 'pull_request'/)
+    assert.match(job.if, /conclusion == 'success'/)
+    assert.match(job.if, /head_repository\.full_name == github\.repository/)
+    assert.match(job.if, /sdk-runtime-/)
+    const checkout = job.steps.find((step) => String(step.uses).startsWith("actions/checkout@"))
+    assert.equal(checkout.with.ref, "${{ github.sha }}")
+    const setup = job.steps.find((step) => String(step.uses).startsWith("pnpm/setup@"))
+    assert.equal(setup.with.install, false)
+    assert.equal(setup.with.cache, false)
+    assert.deepEqual(job.steps.filter((step) => step.run).map((step) => step.run), ["node release/dependency-changeset.js"])
+    assert.equal(job.steps.at(-1).env.DEPENDENCY_CHECK_RUN_ID, "${{ github.event.workflow_run.id }}")
+    assert.equal(workflow.concurrency["cancel-in-progress"], false)
 })
 
 test("Release and Preview work is serialized with read-only caches and never cancelled mid-run", () => {

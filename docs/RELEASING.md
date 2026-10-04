@@ -46,6 +46,18 @@ Unchanged publishable content on a Canary or RC is not a failure. Release versio
 
 ## Reference
 
+### Dependency update notes
+
+After Check passes for its current head, the [dependency release-note workflow](/.github/workflows/dependabot-changeset.yml) adds a patch Changeset to a same-repository Dependabot `sdk-runtime` pull request before merge, covering exact stable patch and minor upgrades of `ws` and `neverthrow`.
+Development-only updates, existing release notes, mixed source changes, added or removed dependencies, major upgrades, zero-major minor upgrades, ranges and prereleases remain manual
+
+Only reviewed default-branch code runs with write access. The completed Check is verified through the GitHub API, without consuming its artifacts or outputs. The dependency branch supplies manifest and file metadata through the API, with no checkout, dependency installation or execution.
+The workflow adds only the release note, refuses a concurrent branch update and dispatches Check for the resulting head. Reruns preserve edited or removed notes and do not repeat an existing Check dispatch, including failed runs
+
+The resulting PR still requires review, passing checks and any workflow approval GitHub requests for automation-created updates.
+For a routine runtime update, wait for the release-note workflow and verify its Changeset before approving or merging. A failed or missing release-note workflow leaves the note as a manual task.
+The workflow does not version or publish the SDK
+
 ### Registry publication contract
 
 The canonical SDK manifest remains `private`. The `stageRelease` package script creates a separate public npm package directory and `sdk.tgz` tarball. Never publish from the SDK checkout

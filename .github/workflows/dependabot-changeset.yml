@@ -1,0 +1,45 @@
+name: Dependency release note
+# Only trusted default-branch code runs. No PR code, caches, outputs or artifacts are loaded
+on: # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: [Check]
+    types: [completed]
+permissions:
+  contents: read
+  pull-requests: read
+cache-mode: none
+concurrency:
+  group: dependency-note-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  note:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/npm_and_yarn/projects/sdk-runtime-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+      actions: write
+    steps:
+      # Only the reviewed base is executable. The dependency branch is read through API metadata
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          working-directory: projects
+          require-lockfile: true
+          install: false
+          cache: false
+      - name: Add the runtime dependency release note and dispatch Check
+        working-directory: projects
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPENDENCY_CHECK_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: node release/dependency-changeset.js
