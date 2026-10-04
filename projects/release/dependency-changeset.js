@@ -112,25 +112,14 @@ async function ensureCheck(api, branch, head) {
     await api("actions/workflows/ci.yml/dispatches", { method: "POST", input: { ref: branch }, empty: true })
 }
 
-async function commitNote(api, pull, path, content) {
-    const parent = await api(`git/commits/${pull.head.sha}`)
-    if (!/^[a-f0-9]{40}$/.test(parent?.tree?.sha ?? "")) throw new Error("Invalid dependency commit tree")
-    const tree = await api("git/trees", {
-        method: "POST", input: { base_tree: parent.tree.sha, tree: [{ path, mode: "100644", type: "blob", content }] },
-    })
-    if (!/^[a-f0-9]{40}$/.test(tree?.sha ?? "")) throw new Error("Invalid Changeset tree acknowledgement")
-    const commit = await api("git/commits", {
-        method: "POST", input: { message: noteCommitMessage, tree: tree.sha, parents: [pull.head.sha] },
-    })
-    if (!/^[a-f0-9]{40}$/.test(commit?.sha ?? "")) throw new Error("Invalid Changeset commit acknowledgement")
+async function commitNote(api, pull, note, commitOnBranch) {
+    if (!commitOnBranch) throw new Error("Atomic Changeset writer is not configured")
     const latest = await api(`pulls/${pull.number}`)
     if (latest.state !== "open" || latest.head?.sha !== pull.head.sha)
         throw new Error("Dependency pull request changed during Changeset preparation")
-    const updated = await api(`git/refs/heads/${encodeURIComponent(pull.head.ref)}`, {
-        method: "PATCH", input: { sha: commit.sha, force: false },
-    })
-    if (updated?.object?.sha !== commit.sha) throw new Error("Changeset branch update is unconfirmed")
-    return commit.sha
+    const head = await commitOnBranch({ branch: pull.head.ref, head: pull.head.sha, message: noteCommitMessage, path: note.path, content: note.content })
+    if (!/^[a-f0-9]{40}$/.test(head ?? "")) throw new Error("Changeset branch update is unconfirmed")
+    return head
 }
 
 async function automaticNoteChild(api, pull, checkedHead) {
@@ -148,12 +137,12 @@ async function automaticNoteChild(api, pull, checkedHead) {
 
 /**
  * Add one note to the verified Dependabot branch without checking out or executing its code.
- * The new commit has the observed head as its sole parent, and a non-force ref update
- * refuses concurrent branch changes. An existing note is never overwritten. Reruns
+ * The atomic commit requires the observed head, refusing concurrent commits or rewinds.
+ * An existing note is never overwritten. Reruns
  * reconcile an already-added automatic note and a Check dispatch without retrying failed tests
- * @param {{ repository: string, number: number, api: ReturnType<typeof createGithub>["api"], expectedHead?: string, dryRun?: boolean }} options
+ * @param {{ repository: string, number: number, api: ReturnType<typeof createGithub>["api"], commitOnBranch?: ReturnType<typeof createGithub>["commitOnBranch"], expectedHead?: string, dryRun?: boolean }} options
  */
-export async function addDependencyChangeset({ repository, number, api, expectedHead, dryRun = false }) {
+export async function addDependencyChangeset({ repository, number, api, commitOnBranch, expectedHead, dryRun = false }) {
     if (!Number.isSafeInteger(number) || number <= 0) throw new Error("Invalid dependency pull request number")
     const pull = await api(`pulls/${number}`)
     if (pull?.state !== "open" || pull.merged) return { skipped: true, reason: "Dependency pull request is not open" }
@@ -182,7 +171,7 @@ export async function addDependencyChangeset({ repository, number, api, expected
     if (files.some((file) => file.filename === path))
         return { skipped: true, reason: "An automatic release note was removed, retain the manual decision" }
     if (dryRun) return { ...plan, dryRun: true }
-    const head = await commitNote(api, pull, path, plan.content)
+    const head = await commitNote(api, pull, plan, commitOnBranch)
     await ensureCheck(api, pull.head.ref, head)
     return { skipped: false, path, head, number }
 }
@@ -192,9 +181,9 @@ export async function addDependencyChangeset({ repository, number, api, expected
  * artifacts, outputs or executable PR files. Only a successful pull-request run for
  * the exact current dependency head may reach the writer. An exact note-only child
  * may resume an interrupted Check dispatch, without repeating the Git mutation
- * @param {{ repository: string, runId: number, api: ReturnType<typeof createGithub>["api"], dryRun?: boolean }} options
+ * @param {{ repository: string, runId: number, api: ReturnType<typeof createGithub>["api"], commitOnBranch?: ReturnType<typeof createGithub>["commitOnBranch"], dryRun?: boolean }} options
  */
-export async function dependencyChangesetForCheck({ repository, runId, api, dryRun = false }) {
+export async function dependencyChangesetForCheck({ repository, runId, api, commitOnBranch, dryRun = false }) {
     if (!Number.isSafeInteger(runId) || runId <= 0) throw new Error("Invalid dependency Check run ID")
     const run = await api(`actions/runs/${runId}`)
     if (
@@ -211,13 +200,14 @@ export async function dependencyChangesetForCheck({ repository, runId, api, dryR
     const pull = eligible[0]
     if (pull.head.sha !== run.head_sha && !(await automaticNoteChild(api, pull, run.head_sha)))
         return { skipped: true, reason: "Dependency branch changed since the completed Check" }
-    return addDependencyChangeset({ repository, number: pull.number, api, expectedHead: pull.head.sha, dryRun })
+    return addDependencyChangeset({ repository, number: pull.number, api, commitOnBranch, expectedHead: pull.head.sha, dryRun })
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     const repository = process.env.GITHUB_REPOSITORY
     const runId = Number(process.env.DEPENDENCY_CHECK_RUN_ID)
-    dependencyChangesetForCheck({ repository: repository ?? "", runId, api: createGithub(repository).api, dryRun: process.argv.includes("--dry-run") })
+    const github = createGithub(repository)
+    dependencyChangesetForCheck({ repository: repository ?? "", runId, api: github.api, commitOnBranch: github.commitOnBranch, dryRun: process.argv.includes("--dry-run") })
         .then((result) => console.log(JSON.stringify(result)))
         .catch(() => { console.error("Dependency Changeset automation failed, inspect the source and branch state before rerunning"); process.exitCode = 1 })
 }

@@ -377,8 +377,11 @@ function command(args, { input, binary = false, allowMissing = false } = {}) {
     })
 }
 
-/** @param {string | undefined} repository */
-export function createGithub(repository) {
+/**
+ * @param {string | undefined} repository
+ * @param {typeof command} [request]
+ */
+export function createGithub(repository, request = command) {
     if (!repository || !repositoryPattern.test(repository)) throw new Error("Invalid GitHub repository")
     const root = `repos/${repository}`
     /**
@@ -391,7 +394,7 @@ export function createGithub(repository) {
         if (method) args.push("--method", method)
         if (input) args.push("--input", "-")
         if (binary) args.push("-H", "Accept: application/octet-stream")
-        return command(args, { input, binary: binary || empty, allowMissing })
+        return request(args, { input, binary: binary || empty, allowMissing })
     }
     /**
      * @param {string} path
@@ -410,6 +413,28 @@ export function createGithub(repository) {
     }
     return {
         api,
+        /**
+         * Append one file with an atomic expected-head condition, including protection
+         * against concurrent branch rewinds. The provider owns commit and ref creation
+         * @this {void}
+         * @param {{ branch: string, head: string, message: string, path: string, content: string }} change
+         * @returns {Promise<string>}
+         */
+        async commitOnBranch(change) {
+            const query = "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } ref { target { oid } } } }"
+            const result = await request(["api", "graphql", "--input", "-"], { input: {
+                query, variables: { input: {
+                    branch: { repositoryNameWithOwner: repository, branchName: change.branch },
+                    expectedHeadOid: change.head,
+                    message: { headline: change.message },
+                    fileChanges: { additions: [{ path: change.path, contents: Buffer.from(change.content).toString("base64") }] },
+                } },
+            } })
+            const created = result?.data?.createCommitOnBranch
+            if (!commitPattern.test(created?.commit?.oid ?? "") || created.ref?.target?.oid !== created.commit.oid)
+                throw new Error("Atomic branch commit is unconfirmed, inspect the branch before rerunning")
+            return created.commit.oid
+        },
         /** @param {string} runId */
         artifacts: (runId) => pages(`actions/runs/${runId}/artifacts`, "artifacts"),
         /** @param {string} tag */

@@ -97,9 +97,8 @@ test("Development-only, lockfile-only, added and removed runtime dependencies cr
 
 const base = "a".repeat(40)
 const head = "b".repeat(40)
-const tree = "c".repeat(40)
 const commit = "d".repeat(40)
-function provider({ existing = false, edited = false, removed = false, raced = false, dispatched = false, rejectUpdate = false } = {}) {
+function provider({ existing = false, edited = false, removed = false, raced = false, dispatched = false, rejectUpdate = false, rewound = false } = {}) {
     const input = fixture()
     input.pull.state = "open"
     input.pull.merged = false
@@ -121,38 +120,35 @@ function provider({ existing = false, edited = false, removed = false, raced = f
         if (path === `contents/projects/sdk/package.json?ref=${base}`) return file(JSON.stringify(input.before))
         if (path === `contents/projects/sdk/package.json?ref=${head}`) return file(JSON.stringify(input.after))
         if (path === `contents/${note.path}?ref=${head}`) return existing ? file(edited ? "Reviewed replacement note" : note.content) : null
-        if (path === `git/commits/${head}`) return { tree: { sha: tree } }
-        if (path === "git/trees") return { sha: tree }
-        if (path === "git/commits") return { sha: commit }
-        if (path.startsWith("git/refs/heads/")) {
-            if (rejectUpdate) throw new Error("Concurrent branch update rejected")
-            state.current = options.input.sha
-            return { object: { sha: state.current } }
-        }
         if (path.startsWith("git/ref/heads/")) return { object: { sha: state.current } }
         if (path.startsWith("actions/workflows/ci.yml/runs?")) return { workflow_runs: state.runs }
         if (path === "actions/workflows/ci.yml/dispatches") return undefined
         throw new Error(`Unexpected request: ${path}`)
     }
-    return { input, state, api }
+    const commitOnBranch = async (change) => {
+        state.calls.push({ path: "atomic-commit", options: { method: "POST", input: change } })
+        if (rewound) state.current = base
+        if (rejectUpdate || state.current !== change.head) throw new Error("Expected branch head changed")
+        state.current = commit
+        return commit
+    }
+    return { input, state, api, commitOnBranch }
 }
 
 const writes = (state) => state.calls.filter(({ options }) => options.method)
 
 test("The writer adds only the planned note to the observed head and dispatches Check", async () => {
-    const { state, api } = provider()
-    const result = await addDependencyChangeset({ repository, number: 9, api })
+    const { state, api, commitOnBranch } = provider()
+    const result = await addDependencyChangeset({ repository, number: 9, api, commitOnBranch })
     assert.equal(result.head, commit)
     const calls = writes(state)
     assert.deepEqual(calls.map(({ path }) => path), [
-        "git/trees", "git/commits", "git/refs/heads/dependabot%2Fnpm_and_yarn%2Fprojects%2Fsdk-runtime-example", "actions/workflows/ci.yml/dispatches",
+        "atomic-commit", "actions/workflows/ci.yml/dispatches",
     ])
-    assert.equal(calls[0].options.input.base_tree, tree)
-    assert.equal(calls[0].options.input.tree.length, 1)
-    assert.equal(calls[0].options.input.tree[0].path, "projects/.changeset/runtime-dependencies-9.md")
-    assert.deepEqual(calls[1].options.input.parents, [head])
-    assert.deepEqual(calls[2].options.input, { sha: commit, force: false })
-    assert.equal(calls[3].options.input.ref, "dependabot/npm_and_yarn/projects/sdk-runtime-example")
+    assert.equal(calls[0].options.input.head, head)
+    assert.equal(calls[0].options.input.path, "projects/.changeset/runtime-dependencies-9.md")
+    assert.equal(calls[0].options.input.branch, "dependabot/npm_and_yarn/projects/sdk-runtime-example")
+    assert.equal(calls[1].options.input.ref, "dependabot/npm_and_yarn/projects/sdk-runtime-example")
 })
 
 test("Dry-run plans and existing edited or removed notes never write", async () => {
@@ -175,19 +171,22 @@ test("A rerun resumes Check dispatch after an existing automatic note, without a
 
 test("Concurrent PR or ref updates fail without overwriting a branch or dispatching checks", async () => {
     const raced = provider({ raced: true })
-    await assert.rejects(addDependencyChangeset({ repository, number: 9, api: raced.api }), /changed during/)
-    assert.equal(writes(raced.state).some(({ path }) => path.startsWith("git/refs/")), false)
-    const rejected = provider({ rejectUpdate: true })
-    await assert.rejects(addDependencyChangeset({ repository, number: 9, api: rejected.api }), /Concurrent branch/)
-    assert.equal(writes(rejected.state).some(({ path }) => path.includes("dispatches")), false)
-    assert.equal(rejected.state.current, head)
+    await assert.rejects(addDependencyChangeset({ repository, number: 9, api: raced.api, commitOnBranch: raced.commitOnBranch }), /changed during/)
+    assert.deepEqual(writes(raced.state), [])
+    for (const options of [{ rejectUpdate: true }, { rewound: true }]) {
+        const rejected = provider(options)
+        await assert.rejects(addDependencyChangeset({ repository, number: 9, api: rejected.api, commitOnBranch: rejected.commitOnBranch }), /Expected branch head/)
+        assert.equal(writes(rejected.state).some(({ path }) => path.includes("dispatches")), false)
+        assert.equal(rejected.state.current, options.rewound ? base : head)
+    }
 })
 
-test("An unconfirmed commit acknowledgement never reaches a branch update", async () => {
-    const { state, api } = provider()
-    const broken = (path, options) => path === "git/commits" ? Promise.resolve({}) : api(path, options)
-    await assert.rejects(addDependencyChangeset({ repository, number: 9, api: broken }), /commit acknowledgement/)
-    assert.equal(writes(state).some(({ path }) => path.startsWith("git/refs/")), false)
+test("An unconfirmed atomic commit acknowledgement never dispatches Check or retries the commit", async () => {
+    const { state, api, commitOnBranch } = provider()
+    const broken = async (change) => { await commitOnBranch(change); return "" }
+    await assert.rejects(addDependencyChangeset({ repository, number: 9, api, commitOnBranch: broken }), /unconfirmed/)
+    assert.deepEqual(writes(state).map(({ path }) => path), ["atomic-commit"])
+    assert.equal(state.current, commit, "A lost acknowledgement does not prove that the branch stayed unchanged")
 })
 
 test("Renaming another file into the automatic note path cannot hide a mixed change", async () => {
@@ -219,8 +218,8 @@ function checkedProvider(options) {
 }
 
 test("A completed Check for the exact current runtime PR reaches the constrained writer", async () => {
-    const { api, state } = checkedProvider()
-    const result = await dependencyChangesetForCheck({ repository, runId: 90, api })
+    const { api, state, commitOnBranch } = checkedProvider()
+    const result = await dependencyChangesetForCheck({ repository, runId: 90, api, commitOnBranch })
     assert.equal(result.head, commit)
     assert.equal(writes(state).at(-1).path, "actions/workflows/ci.yml/dispatches")
 })

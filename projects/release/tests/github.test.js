@@ -5,12 +5,37 @@ import { join } from "node:path"
 import { test } from "node:test"
 import {
     GitHubCommandError,
+    createGithub,
     assertReachableFromMain,
     commandFailure,
     reconcileRelease,
     releaseTrigger,
     validatePreparation,
 } from "../github.js"
+
+test("Atomic file commits bind the repository, exact head and one encoded addition", async () => {
+    const oid = "c".repeat(40)
+    const calls = []
+    const github = createGithub("NeonTechSpace/Fluxerly.js", async (args, options) => {
+        calls.push({ args, options })
+        return { data: { createCommitOnBranch: { commit: { oid }, ref: { target: { oid } } } } }
+    })
+    const result = await github.commitOnBranch({ branch: "dependency-branch", head: "b".repeat(40), message: "Record dependency", path: "projects/.changeset/note.md", content: "A note\n" })
+    assert.equal(result, oid)
+    assert.equal(calls.length, 1)
+    assert.deepEqual(calls[0].args, ["api", "graphql", "--input", "-"])
+    const input = calls[0].options.input.variables.input
+    assert.deepEqual(input.branch, { repositoryNameWithOwner: "NeonTechSpace/Fluxerly.js", branchName: "dependency-branch" })
+    assert.equal(input.expectedHeadOid, "b".repeat(40))
+    assert.deepEqual(input.fileChanges, { additions: [{ path: "projects/.changeset/note.md", contents: Buffer.from("A note\n").toString("base64") }] })
+})
+
+test("An ambiguous atomic commit acknowledgement is reported without another mutation", async () => {
+    let requests = 0
+    const github = createGithub("NeonTechSpace/Fluxerly.js", async () => { requests++; return { data: {} } })
+    await assert.rejects(github.commitOnBranch({ branch: "dependency-branch", head: "b".repeat(40), message: "Record dependency", path: "projects/.changeset/note.md", content: "A note\n" }), /unconfirmed/)
+    assert.equal(requests, 1)
+})
 
 const sourceCommit = "a".repeat(40)
 const workflowCommit = "b".repeat(40)
