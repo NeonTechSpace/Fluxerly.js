@@ -57,17 +57,21 @@ test("Release support succeeds locally and malformed release commands still stop
     }
 })
 
-test("Release support requires a stable Effect peer range tested at its lowest version", () => {
+test("Release support permits a newer stable Effect development version within the peer range", () => {
     const sdk = { peerDependencies: { effect: "^4.0.0" }, devDependencies: { effect: "4.0.0" } }
     assert.doesNotThrow(() => validateReleaseSupport(sdk))
+    for (const effect of ["4.0.1", "4.1.0"])
+        assert.doesNotThrow(() => validateReleaseSupport({ ...sdk, devDependencies: { effect } }))
     for (const changed of [
         { ...sdk, peerDependencies: {} },
         // An exact peer rejects compatible applications, and a prerelease is not a supported Effect version
         { ...sdk, peerDependencies: { effect: "4.0.0" } },
         { peerDependencies: { effect: "^4.0.0-rc.117" }, devDependencies: { effect: "4.0.0-rc.117" } },
         { ...sdk, peerDependencies: { effect: ">=4.0.0" } },
-        // The tested version must be the lowest accepted one, not a later release
-        { ...sdk, devDependencies: { effect: "4.1.0" } },
+        // Development must remain a stable release inside the supported range
+        { ...sdk, devDependencies: { effect: "5.0.0" } },
+        { ...sdk, devDependencies: { effect: "4.0.1-rc.0" } },
+        { ...sdk, peerDependencies: { effect: "^4.0.1" } },
         { ...sdk, devDependencies: { effect: "^4.0.0" } },
         { ...sdk, peerDependenciesMeta: { effect: { optional: true } } },
     ]) assert.throws(() => validateReleaseSupport(changed), /exact Effect development version/)

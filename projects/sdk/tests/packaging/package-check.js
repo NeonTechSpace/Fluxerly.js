@@ -378,7 +378,8 @@ try {
         const consumer = join(temporary, kind)
         mkdirSync(consumer)
         const dependencies = { [manifest.name]: `file:${tarball.replaceAll("\\", "/")}` }
-        if (kind === "effect") dependencies.effect = manifest.peerDependencies.effect
+        // Exercise the supported peer floor rather than silently selecting a newer compatible release
+        if (kind === "effect") dependencies.effect = manifest.peerDependencies.effect.replace(/^\^/, "")
         writeFileSync(
             join(consumer, "package.json"),
             JSON.stringify({

@@ -153,7 +153,7 @@ async function main() {
     const [action, ...args] = process.argv.slice(2)
     assertReleaseSupport(action)
     if (action === "check-support") {
-        console.log("Release prerequisite passed: The required Effect peer range starts at the tested SDK development version")
+        console.log("Release prerequisite passed: The exact Effect development version is within the required stable peer range")
     } else if (action === "changeset") {
         if (args[0] && !["add", "status", "--help", "-h", "--version", "-v"].includes(args[0]))
             throw new Error(

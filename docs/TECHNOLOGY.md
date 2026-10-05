@@ -32,7 +32,7 @@ Use current security updates within a supported Node.js release line. The develo
 
 - Raising the minimum Node.js version is a breaking change that increases MAJOR
 - A Node.js release line is dropped no sooner than six months after its end of life
-- The Effect peer accepts later releases of one Effect major, starting at the tested version. Raising that lowest version or changing the Effect major is a breaking change that increases MAJOR
+- The Effect peer accepts releases of one Effect major starting at the supported minimum, independently of the development dependency. Raising that minimum or changing the Effect major is a breaking change that increases MAJOR
 
 ### Versioning and release stages
 
@@ -94,9 +94,9 @@ The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and
 
 ### Optional consumer Effect integration
 
-The SDK is tested against one exact Effect 4 version, its development dependency.
-The package declares Effect as a required peer range that starts at that tested version, such as `^4.0.0`, so applications can use later Effect 4 releases.
-Those later releases are accepted but not tested. Effect 3 and Effect 4 prereleases are unsupported
+The SDK development dependency pins an exact stable Effect 4 version within the required peer range.
+Packed consumers separately test the range's minimum, such as `4.0.0` for `^4.0.0`.
+Updating the development dependency does not raise that minimum. Other releases within the range are accepted but are not individually tested. Effect 3 and Effect 4 prereleases are unsupported
 
 Modern npm, pnpm and Bun install required peers automatically by default.
 Consumers that disable peer installation must install an Effect version within the declared range themselves
@@ -206,7 +206,7 @@ Review and commit the resulting manifest and lockfile changes together.
 Moving to pnpm 13 requires a separate decision
 
 Dependabot proposes weekly GitHub Actions and npm updates for the workspace, configured in [.github/dependabot.yml](/.github/dependabot.yml).
-It ignores `effect`, whose tested version is also the lowest version of the public peer range and changes only by decision, and major `typescript` and `@types/node` updates.
+It ignores `effect`, whose development pin and public peer minimum are updated separately by decision, and major `typescript` and `@types/node` updates.
 The SDK runtime dependencies `neverthrow` and `ws` are grouped into their own pull request, so their update can carry a Changeset
 
 Prettier is an SDK development dependency, with its version recorded in the manifest and lockfile.

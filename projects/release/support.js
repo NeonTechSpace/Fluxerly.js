@@ -1,16 +1,24 @@
 // @ts-check
 
 import { readFileSync } from "node:fs"
+import { compareVersions, parseVersion } from "./planning.js"
 
 const releaseCommands = new Set(["check-support", "version", "prepare", "verify", "publish", "status"])
 
-// The Effect peer accepts later releases of one stable major. Its lowest version is the one the SDK is tested against,
-// so the development dependency must be exactly that version
+// Development can use a newer stable Effect release without raising the consumer minimum
 export function validateReleaseSupport(sdk) {
     const effect = sdk.peerDependencies?.effect
     const lowest = typeof effect === "string" ? /^\^(\d+\.\d+\.\d+)$/.exec(effect)?.[1] : undefined
-    if (!lowest || sdk.devDependencies?.effect !== lowest || sdk.peerDependenciesMeta?.effect?.optional === true)
-        throw new Error("Release requires a required Effect peer range whose lowest version is the exact Effect development version")
+    const tested = sdk.devDependencies?.effect
+    if (
+        !lowest ||
+        typeof tested !== "string" ||
+        !/^\d+\.\d+\.\d+$/.test(tested) ||
+        parseVersion(tested).major !== parseVersion(lowest).major ||
+        compareVersions(tested, lowest) < 0 ||
+        sdk.peerDependenciesMeta?.effect?.optional === true
+    )
+        throw new Error("Release requires a required stable Effect peer range and an exact Effect development version within it")
 }
 
 export function assertReleaseSupport(action) {
