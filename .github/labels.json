@@ -1,0 +1,23 @@
+[
+  { "name": "bug", "color": "d73a4a", "description": "Existing behavior fails or produces an incorrect result" },
+  { "name": "documentation", "color": "0075ca", "description": "Documentation, examples, or API reference work" },
+  { "name": "enhancement", "color": "a2eeef", "description": "A feature idea or implementation of an approved feature" },
+  { "name": "dependencies", "color": "0366d6", "description": "Dependency updates" },
+  { "name": "javascript", "color": "168700", "description": "JavaScript dependency updates identified by Dependabot" },
+  { "name": "regression", "color": "b60205", "description": "Behavior worked in an earlier version and now fails" },
+  { "name": "breaking-change", "color": "d93f0b", "description": "Breaks an existing caller workflow or public contract" },
+  { "name": "needs-triage", "color": "fbca04", "description": "The report needs initial assessment" },
+  { "name": "needs-info", "color": "fbca04", "description": "A specific missing detail prevents progress" },
+  { "name": "confirmed", "color": "1f883d", "description": "The reported problem has been established, without promising a fix" },
+  { "name": "blocked:upstream", "color": "e4e669", "description": "Progress requires a verified Fluxer platform change" },
+  { "name": "duplicate", "color": "cfd3d7", "description": "Another report already owns this problem" },
+  { "name": "out-of-scope", "color": "cfd3d7", "description": "The report falls outside the contribution policy" },
+  { "name": "not-planned", "color": "cfd3d7", "description": "The request was considered and declined" },
+  { "name": "scope:approved", "color": "1f883d", "description": "Maintainer approved the direction and scope, without granting contributor permission" },
+  { "name": "vouch:trusted", "color": "1f883d", "description": "PR author has general contribution permission" },
+  { "name": "vouch:unvouched", "color": "fbca04", "description": "PR author has no general vouch status and needs issue-specific permission" },
+  { "name": "pr:allowed", "color": "1f883d", "description": "The issue has an active permission grant for at least one named contributor" },
+  { "name": "permission:issue", "color": "1f883d", "description": "PR author has a verified permission grant for a linked issue" },
+  { "name": "help wanted", "color": "008672", "description": "Contribution is actively sought, with permission still required" },
+  { "name": "good first issue", "color": "7057ff", "description": "A bounded task with sufficient guidance for a newcomer, with permission still required" }
+]

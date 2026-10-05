@@ -3,7 +3,8 @@
     "scripts": {
         "build": "pnpm --filter @neontechspace/fluxerly build && pnpm --filter fluxerly-docs build",
         "lint": "pnpm --filter @neontechspace/fluxerly lint && pnpm --filter @fluxerly/release lint && pnpm --filter fluxerly-docs lint",
-        "check": "pnpm --filter @neontechspace/fluxerly check && pnpm --filter @fluxerly/release test && pnpm --filter fluxerly-docs check",
+        "check": "pnpm run check:contributions && pnpm --filter @neontechspace/fluxerly check && pnpm --filter @fluxerly/release test && pnpm --filter fluxerly-docs check",
+        "check:contributions": "node --test ../.github/tests/*.test.mjs",
         "changeset": "node release/cli.js changeset",
         "release:plan": "node release/cli.js plan",
         "release:check": "node release/cli.js check-support",

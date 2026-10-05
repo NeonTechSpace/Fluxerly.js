@@ -21,6 +21,7 @@ const actions = Object.fromEntries(
 
 // The only jobs allowed to hold write scopes, and exactly which scopes they hold
 const writers = {
+    "contributions.yml/permissions": { actions: "write", contents: "write", issues: "write", "pull-requests": "write" },
     "dependabot-changeset.yml/note": { contents: "write", actions: "write" },
     "ci.yml/release-trigger": { actions: "write" },
     "release-version.yml/pull_request": { contents: "write", "pull-requests": "write", actions: "write" },
@@ -120,15 +121,30 @@ test("Checkouts drop credentials, scripts avoid expression interpolation and pri
         if (step.run) assert.doesNotMatch(step.run, /\$\{\{/, `${where} must pass values through env`)
     }
     for (const [file, workflow] of Object.entries(workflows)) {
-        for (const trigger of ["pull_request_target", "workflow_run"].filter((trigger) =>
-            file !== "dependabot-changeset.yml" || trigger !== "workflow_run"))
-            assert.equal(workflow.on[trigger], undefined, `${file} must not use ${trigger}`)
+        for (const trigger of ["pull_request_target", "workflow_run"]) {
+            const reviewedCallback = (file === "dependabot-changeset.yml" && trigger === "workflow_run") ||
+                (file === "contributions.yml" && trigger === "pull_request_target")
+            if (!reviewedCallback) assert.equal(workflow.on[trigger], undefined, `${file} must not use ${trigger}`)
+        }
         for (const [id, job] of Object.entries(workflow.jobs))
             if (`${file}/${id}` !== "release-publish.yml/docs-preview")
                 assert.notEqual(job.secrets, "inherit", `${file}/${id} inherits secrets`)
     }
     // A called workflow receives no website environment secret unless its caller inherits secrets
     assert.equal(workflows["release-publish.yml"].jobs["docs-preview"].secrets, "inherit")
+})
+
+test("Contribution callbacks execute only trusted main code with no install or PR artifacts", () => {
+    const workflow = workflows["contributions.yml"]
+    assert.equal(workflow["cache-mode"], "none")
+    assertSerialized(workflow.concurrency, "contributions.yml")
+    assert.equal(workflow.on.workflow_dispatch.inputs.dry_run.default, true)
+    const job = workflow.jobs.permissions
+    const checkout = job.steps.find((step) => String(step.uses).startsWith("actions/checkout@"))
+    assert.equal(checkout.with.ref, "${{ github.event.repository.default_branch }}")
+    assert.deepEqual(job.steps.filter((step) => step.run).map((step) => step.run), ["node .github/scripts/contributions.mjs"])
+    assert.deepEqual(job.steps.filter((step) => step.uses).map((step) => step.uses), [checkout.uses])
+    assert.equal(job.steps.at(-1).env.GH_TOKEN, "${{ github.token }}")
 })
 
 test("Dependency notes execute only reviewed base code and treat the PR branch as metadata", () => {

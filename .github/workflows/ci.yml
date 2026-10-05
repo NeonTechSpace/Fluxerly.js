@@ -86,6 +86,10 @@ jobs:
         id: release
         run: pnpm --filter @fluxerly/release test
         working-directory: projects
+      - name: Check contribution permission behavior and forms
+        id: contributions
+        run: pnpm run check:contributions
+        working-directory: projects
       - name: Build the SDK declarations for the documentation reference
         id: build
         run: pnpm --filter @neontechspace/fluxerly build

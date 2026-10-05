@@ -1,0 +1,87 @@
+name: Documentation problem
+description: Report incorrect guidance, broken examples or links, missing explanations, or documentation website problems
+title: "[Docs]: "
+labels: [documentation, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues remain maintainer-only until the first Stable release. This form prepares future public reporting
+
+        Report problems with existing documentation here. Requests for new SDK capabilities belong in Ideas discussions once Discussions open
+
+        Security vulnerabilities must be reported privately through the [security policy](/SECURITY.md). Reporting a problem does not grant permission to submit a PR
+  - type: checkboxes
+    id: before-submitting
+    attributes:
+      label: Before submitting
+      options:
+        - label: This issue concerns a Stable release in the current major or the RC for the next release, not a previous major or any Canary
+          required: true
+        - label: Existing issues have been searched for the same problem
+          required: true
+        - label: Examples and attachments have been checked for credentials and private data
+          required: true
+  - type: dropdown
+    id: problem-type
+    attributes:
+      label: Problem type
+      options:
+        - Incorrect or outdated explanation
+        - Example does not work
+        - Missing or unclear guidance
+        - Broken link or missing page
+        - API reference problem
+        - Website navigation, search, accessibility, or display problem
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: affected-page
+    attributes:
+      label: Affected page and documentation version
+      description: Include the page URL or repository file, heading, and exact documentation version. The active RC qualifies for maintainer reports before the first Stable release
+      placeholder: |
+        Page URL or repository file:
+        Heading:
+        Documentation version:
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and expected correction
+      description: Identify the incorrect, missing, or unusable part and explain the expected information or behavior. A proposed rewrite is welcome but not required
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction or supporting example
+      description: For a failing example, include the code, exact installed SDK and runtime versions, and error. For a website problem, include steps, browser, device or viewport, and relevant accessibility settings
+    validations:
+      required: false
+  - type: upload
+    id: supporting-files
+    attributes:
+      label: Screenshots, recordings, or supporting files
+      description: Upload evidence that clarifies the documentation problem. Remove credentials and private data before uploading
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include related pages, conflicting guidance, or a known workaround
+    validations:
+      required: false
+  - type: textarea
+    id: prose-attribution
+    attributes:
+      label: Model-written prose note
+      description: Required when this report contains model-written prose that has not been edited by a human. Replace the placeholders with the model, reasoning setting, and username. Human-edited and human-written text are exempt even if a model posts them
+      placeholder: |
+        > [!NOTE]
+        > This was posted by (model + reasoning) on behalf of (username)
+    validations:
+      required: false

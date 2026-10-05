@@ -27,7 +27,7 @@
 > [!NOTE]
 > Fluxerly is a prerelease SDK. Start with the [temporary docs](https://preview.fluxerly.neontechspace.com/) and review the changelog before upgrading
 >
-> Issues and pull requests are maintainer-only until the first stable release. Contribution guides and templates arrive with that release
+> Issues and pull requests are maintainer-only until the first Stable release. The [contribution guide](/CONTRIBUTING.md) and submission templates are prepared for that release, without opening public access now
 
 ## What Fluxerly includes
 

@@ -1,0 +1,53 @@
+name: Contribution permissions
+# The privileged callback reads PR metadata only, without checking out or executing PR code
+on: # zizmor: ignore[dangerous-triggers]
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize, ready_for_review, converted_to_draft]
+  issue_comment:
+    types: [created]
+  issues:
+    types: [closed, reopened]
+  push:
+    branches: [main]
+    paths:
+      - .github/VOUCHED.json
+      - .github/contribution-policy.json
+      - .github/scripts/contributions.mjs
+      - .github/workflows/contributions.yml
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Inspect permissions without changing labels, comments, PRs, or trust files
+        type: boolean
+        default: true
+      pr_number:
+        description: Optional PR number, otherwise inspect all open PRs
+        type: string
+        required: false
+permissions:
+  contents: read
+cache-mode: none
+concurrency:
+  group: contribution-permissions
+  cancel-in-progress: false
+  queue: max
+jobs:
+  permissions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Resolve and apply contribution permissions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTRIBUTION_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          CONTRIBUTION_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+        run: node .github/scripts/contributions.mjs

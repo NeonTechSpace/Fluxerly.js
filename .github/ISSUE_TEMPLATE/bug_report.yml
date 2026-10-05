@@ -1,0 +1,168 @@
+name: SDK bug
+description: Report unexpected SDK behavior, installation failures, incorrect types, or reliability problems
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues remain maintainer-only until the first Stable release. This form prepares future public reporting
+
+        Report one concrete problem per issue. Feature ideas belong in Ideas discussions and usage questions belong in Q&A once Discussions open
+
+        Security vulnerabilities must be reported privately through the [security policy](/SECURITY.md). Reporting a bug does not grant permission to submit a PR
+  - type: checkboxes
+    id: before-submitting
+    attributes:
+      label: Before submitting
+      options:
+        - label: This issue concerns a Stable release in the current major or the RC for the next release, not a previous major or any Canary
+          required: true
+        - label: Existing issues have been searched for the same problem
+          required: true
+        - label: This report describes one problem
+          required: true
+        - label: Code, logs, and attachments have been checked for credentials and private data
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Select the closest area. A confirmed diagnosis is not required
+      options:
+        - Installation, imports, or TypeScript types
+        - Startup, connection, reconnection, or shutdown
+        - Messages, attachments, or uploads
+        - Communities, channels, members, roles, or permissions
+        - Events, commands, or collectors
+        - Caching, pagination, or search
+        - Sharding or process supervision
+        - Webhooks or OAuth
+        - Errors, logging, or diagnostics
+        - Testing clients, builders, or other helpers
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: api
+    attributes:
+      label: API entry point
+      description: Include the import in the reproduction, especially for helpers
+      options:
+        - "Default API: @neontechspace/fluxerly"
+        - "Effect API: @neontechspace/fluxerly/effect"
+        - "Testing API: @neontechspace/fluxerly/testing"
+        - "Effect testing API: @neontechspace/fluxerly/effect/testing"
+        - A helper export
+        - Installation fails before an API can be used
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: sdk-version
+    attributes:
+      label: Installed Fluxerly.js version
+      description: Copy the exact installed version from the lockfile or installed package, including the full RC suffix. Before the first Stable release, the active RC qualifies for maintainer reports
+      placeholder: Exact installed version
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include exact versions where available. TypeScript details are only needed for TypeScript projects. Package-manager details are especially useful for installation problems
+      placeholder: |
+        Node.js:
+        Effect:
+        Operating system:
+        JavaScript or TypeScript:
+        TypeScript version, if applicable:
+        Package manager and version:
+        Execution: Node.js directly, container, process manager, or other
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Where does the failure occur?
+      description: For another live instance, include its software version in the reproduction if known. Private hostnames need not be disclosed
+      options:
+        - The public fluxer.app instance
+        - Another live Fluxer instance
+        - The SDK's in-memory testing client
+        - A local mock or custom transport
+        - Before connecting to an instance
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe the failure and its practical effect. Name the affected method or event when known and separate observations from suspected causes
+      placeholder: After the connection resumes, the bot receives messageCreate events but no longer sends replies
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe the expected result. Link API documentation when it establishes that behavior
+      placeholder: Replies should continue after reconnection without restarting the bot
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest runnable example or numbered sequence, relevant client options, and the start command. Use synthetic identifiers and environment variables for credentials. For an intermittent failure, describe conditions, frequency, and isolation attempts
+      placeholder: |
+        Minimal code or example link:
+        Relevant client options:
+        Command and steps:
+        Frequency and conditions, if intermittent:
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant errors or diagnostic output
+      description: Include relevant errors, stacks, and nearby SDK records. When available, include describeError(error) output, HTTP status, API error code, gateway close code, or log record code. Exclude tokens, authorization headers, OAuth codes, webhook credentials, signed URLs, private message bodies, and unredacted request or response dumps
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: checks
+    attributes:
+      label: Regression, workaround, and additional checks
+      description: Include the last version known to work, any workaround, and checks attempted with their results. For recovery, describe retry, reconnect, or restart behavior. For shutdown, note any connections or processes left active
+    validations:
+      required: false
+  - type: upload
+    id: supporting-files
+    attributes:
+      label: Screenshots, recordings, or supporting files
+      description: Upload relevant evidence or a minimal reproduction. Remove credentials and private data, including from screenshots and recordings, before uploading
+    validations:
+      required: false
+  - type: dropdown
+    id: contribution-interest
+    attributes:
+      label: Contribution interest
+      description: Reporting a problem creates no obligation to investigate or implement a fix. Implementation requires permission
+      options:
+        - Reporting only
+        - Willing to help investigate
+        - Interested in implementing a fix after permission is granted
+    validations:
+      required: false
+  - type: textarea
+    id: prose-attribution
+    attributes:
+      label: Model-written prose note
+      description: Required when this report contains model-written prose that has not been edited by a human. Replace the placeholders with the model, reasoning setting, and username. Human-edited and human-written text are exempt even if a model posts them
+      placeholder: |
+        > [!NOTE]
+        > This was posted by (model + reasoning) on behalf of (username)
+    validations:
+      required: false

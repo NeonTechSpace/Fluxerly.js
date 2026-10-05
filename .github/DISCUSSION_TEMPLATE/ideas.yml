@@ -1,0 +1,106 @@
+title: "[Idea]: "
+labels: [enhancement, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Discussions remain disabled until the first Stable release. This form prepares future Ideas discussions
+
+        Propose one idea per discussion and describe the problem before proposing a solution. Opening a discussion does not approve implementation or grant permission to submit a PR
+
+        Bug reports belong in Issues and usage questions belong in Q&A. Security vulnerabilities must be reported privately through the [security policy](/SECURITY.md)
+  - type: checkboxes
+    id: before-posting
+    attributes:
+      label: Before posting
+      options:
+        - label: Existing discussions and issues have been searched for the same idea
+          required: true
+        - label: The current documentation has been checked for an existing way to address the need
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Starting, configuring, or deploying a bot
+        - Messages, attachments, or uploads
+        - Communities, channels, members, roles, or permissions
+        - Events, commands, or collectors
+        - Caching, pagination, or search
+        - Reliability, recovery, or shutdown
+        - Sharding or process supervision
+        - Webhooks or OAuth
+        - Errors, logging, or diagnostics
+        - Testing and local development
+        - Documentation and examples
+        - Other or not sure
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or missing workflow
+      description: Describe the task that is difficult or impossible today, who encounters it, and the practical consequence
+      placeholder: When building a bot that ..., the application currently has to ...
+    validations:
+      required: true
+  - type: textarea
+    id: current-approach
+    attributes:
+      label: Current approach
+      description: Describe the existing approach or workaround and its limitations. If no workable approach is known, state what was investigated
+    validations:
+      required: true
+  - type: textarea
+    id: desired-outcome
+    attributes:
+      label: Desired outcome
+      description: Explain what a bot developer should be able to accomplish. A proposed API or implementation is optional
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: Suggest an approach and explain how it fits the SDK. Identify new settings, dependencies, retained data, or changes to existing behavior
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and tradeoffs
+      description: Describe other approaches considered, including keeping the solution in application code. Explain what makes the proposed approach preferable
+    validations:
+      required: false
+  - type: textarea
+    id: example
+    attributes:
+      label: Example use case
+      description: Include a concrete bot workflow or a small code example showing the desired use. Use synthetic data and exclude credentials
+    validations:
+      required: false
+  - type: dropdown
+    id: contribution-interest
+    attributes:
+      label: Contribution interest
+      options:
+        - Suggesting the idea only
+        - Willing to clarify requirements or test an implementation
+        - Interested in implementing it after explicit approval
+    validations:
+      required: false
+  - type: textarea
+    id: prose-attribution
+    attributes:
+      label: Model-written prose note
+      description: Required when this discussion contains model-written prose that has not been edited by a human. Replace the placeholders with the model, reasoning setting, and username. Human-edited and human-written text are exempt even if a model posts them
+      placeholder: |
+        > [!NOTE]
+        > This was posted by (model + reasoning) on behalf of (username)
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        Maintainers may request clarification, defer the idea, or decline it. If accepted for implementation, the agreed scope and contributor permission are recorded in an issue before a PR is submitted

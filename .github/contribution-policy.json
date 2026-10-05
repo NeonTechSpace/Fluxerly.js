@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "enabled": false,
+  "repository": "NeonTechSpace/Fluxerly.js",
+  "repositoryId": 1370449818,
+  "maintainerIds": [118444485],
+  "automationIds": [41898282, 49699333],
+  "permissionWriterId": 41898282,
+  "commitIdentity": {
+    "name": "Neonsy",
+    "email": "118444485+Neonsy@users.noreply.github.com"
+  }
+}

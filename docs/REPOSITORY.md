@@ -3,12 +3,16 @@
 This guide covers contributor setup, the code map and checks.
 The SDK is a prerelease with no stable version yet
 
+Contribution policy is in [Contributing](/CONTRIBUTING.md). Maintainer access
+preparation and permission commands are in
+[contribution administration](/docs/CONTRIBUTIONS.md)
+
 ## Quick start
 
 1. Install the Node.js version recorded in [projects/.node-version](/projects/.node-version)
 2. Install pnpm through its [official installation guide](https://pnpm.io/installation). The workspace's `devEngines` setting then downloads and switches to the recorded pnpm 12 release automatically
 3. From [projects/](/projects/), run `pnpm install --frozen-lockfile`
-4. Run `pnpm check` from the same directory to validate the SDK, release tooling and website
+4. Run `pnpm check` from the same directory to validate contribution tooling, the SDK, release tooling and website
 5. Find code through the [project areas](/docs/REPOSITORY.md#project-areas), with public API documentation in SDK source comments and user guides in `projects/web/content/guides/`
 
 ## Project areas

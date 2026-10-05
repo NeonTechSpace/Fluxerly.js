@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Feature ideas
+    url: https://github.com/NeonTechSpace/Fluxerly.js/discussions/categories/ideas
+    about: Propose features in Ideas once Discussions open at the first Stable release
+  - name: Usage questions
+    url: https://github.com/NeonTechSpace/Fluxerly.js/discussions/categories/q-a
+    about: Ask usage questions in Q&A once Discussions open at the first Stable release
+  - name: Private security report
+    url: https://github.com/NeonTechSpace/Fluxerly.js/security/advisories/new
+    about: Report vulnerabilities privately rather than opening a public issue

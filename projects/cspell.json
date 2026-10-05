@@ -18,6 +18,7 @@
         "../docs/*.md",
         "../README.md",
         "../SECURITY.md",
+        "../CONTRIBUTING.md",
         "../AGENTS.md",
         "AGENTS.md",
         "sdk/AGENTS.md",
