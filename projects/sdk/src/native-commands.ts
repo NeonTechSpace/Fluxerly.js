@@ -1208,15 +1208,20 @@ function registerCallback<A>(register: () => A): A {
 /**
  * Create the native router a runBot commands option describes, registering its keyed commands or its register callback.
  * Rejections are answered with `onReject: "reply"` unless the option selects other feedback.
+ * Bot-authored messages are skipped as the runBot ignoreBots setting says, unless the option sets its own ignoreBots.
  * Misuse throws ConfigurationError. A register callback's own throw becomes ApplicationError naming `runBot commands`
  */
-export function nativeBotRouter<M extends MessageCore>(options: unknown): NativePrefixCommandRouter<unknown, M> {
+export function nativeBotRouter<M extends MessageCore>(
+    options: unknown,
+    ignoreBots: boolean,
+): NativePrefixCommandRouter<unknown, M> {
     if (typeof options !== "object" || options === null || Array.isArray(options))
         throw new ConfigurationError("commands", "The commands option must be an object")
     checkBotCommandKeys(options, ["onUnmatched", "onReject", "use"])
     const { commands: definitions, onError: _onError, ...settings } = options as Record<string, unknown>
     const router = nativeCommands.create<unknown, unknown, M>({
         ...settings,
+        ignoreBots: settings.ignoreBots ?? ignoreBots,
         onReject: settings.onReject ?? "reply",
     } as unknown as NativePrefixCommandsOptions<unknown, unknown, M>)
     if (typeof definitions === "function") {

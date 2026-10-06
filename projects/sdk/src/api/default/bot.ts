@@ -172,7 +172,8 @@ export type BotEvents<M extends MessageCore = Message> = {
  * Prefix commands for runBot: The router options of commands.create, the commands themselves and an optional failure hook.
  * The router is attached before the gateway starts and closed when the bot stops.
  * Unlike commands.create, runBot replies to a rejected command by default, such as one with a missing argument, as
- * `onReject: "reply"` does. Set `onReject: "silent"` to send no reply, or a function to give custom feedback
+ * `onReject: "reply"` does. Set `onReject: "silent"` to send no reply, or a function to give custom feedback.
+ * An unset ignoreBots follows the runBot ignoreBots setting
  *
  * @category Commands
  */
@@ -216,9 +217,9 @@ export interface BotOptions<
     readonly events?: BotEvents<SelectedMessage<F>>
     /**
      * Skip messageCreate and messageUpdate events whose author is a bot, including this bot's own messages, before they
-     * reach the events handlers. Defaults to true, so a reply cannot trigger its own handler.
+     * reach the events handlers or prefix commands. Defaults to true, so a reply cannot trigger its own handler.
      * Set false for a bridge or logging bot that handles every message, and check message.author.isBot where needed.
-     * Prefix commands keep their own commands.ignoreBots setting, which also defaults to true.
+     * Prefix commands follow the same setting unless commands.ignoreBots sets its own.
      * A value other than a boolean throws ConfigurationError
      */
     readonly ignoreBots?: boolean
@@ -248,8 +249,8 @@ export interface BotOptions<
  * The returned ResultAsync then runs the bot until it stops.
  * Handler contexts expose the full client. Message-create contexts also expose message and a cancellation-aware reply.
  * Handler and command failures are reported to onError, or logged in full, without restarting them or stopping the bot.
- * By default, SIGINT and SIGTERM request a normal stop and messages written by bots skip the events handlers. Set
- * processSignals or ignoreBots to false to opt out. Stopping waits for SDK cleanup, not unrelated application Promises.
+ * By default, SIGINT and SIGTERM request a normal stop and messages written by bots skip the events handlers and
+ * prefix commands. Set processSignals or ignoreBots to false to opt out. Stopping waits for SDK cleanup, not unrelated application Promises.
  * Expected runner failures return Err, including ApplicationError when the setup callback or a commands register
  * callback fails, and SDK defects reject with SdkDefect.
  * By default a failed run is also logged once, with code lifecycle.botFailed unless the client already logged that
@@ -454,7 +455,7 @@ function prepareBot<M extends MessageCore>(
     let router: DefaultPrefixCommandRouter<M> | undefined
     let commandsFailure: ApplicationError | undefined
     try {
-        router = commands === undefined ? undefined : readBotOptions(() => botRouter<M>(commands))
+        router = commands === undefined ? undefined : readBotOptions(() => botRouter<M>(commands, skipBots))
     } catch (error) {
         // A register callback's own failure is an application outcome, returned once the other options are checked
         if (!(error instanceof ApplicationError)) throw error

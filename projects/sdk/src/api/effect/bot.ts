@@ -109,7 +109,8 @@ export type BotCommandEntries<S> = Readonly<
  * failure hook. Router-level callbacks, such as onUnmatched and middleware, run without extra services, while each
  * command's services are added to the bot's requirements. The router is attached before the gateway starts and closed when the bot stops.
  * Unlike commands.create, runBot replies to a rejected command by default, such as one with a missing argument, as
- * `onReject: "reply"` does. Set `onReject: "silent"` to send no reply, or a function to give custom feedback
+ * `onReject: "reply"` does. Set `onReject: "silent"` to send no reply, or a function to give custom feedback.
+ * An unset ignoreBots follows the runBot ignoreBots setting
  *
  * @category Commands
  */
@@ -161,9 +162,9 @@ export type BotOptions<
         readonly events?: BotEvents<EventError, EventServices, SelectedMessage<F>>
         /**
          * Skip messageCreate and messageUpdate events whose author is a bot, including this bot's own messages, before they
-         * reach the events handlers. Defaults to true, so a reply cannot trigger its own handler.
+         * reach the events handlers or prefix commands. Defaults to true, so a reply cannot trigger its own handler.
          * Set false for a bridge or logging bot that handles every message, and check message.author.isBot where needed.
-         * Prefix commands keep their own commands.ignoreBots setting, which also defaults to true.
+         * Prefix commands follow the same setting unless commands.ignoreBots sets its own.
          * A value other than a boolean is misuse and dies with ConfigurationError
          */
         readonly ignoreBots?: boolean
@@ -234,7 +235,7 @@ function prepareNativeBot(events: unknown, ignoreBots: unknown, commands: unknow
     let router: NativePrefixCommandRouter<unknown, Message> | undefined
     let commandsFailure: ApplicationError | undefined
     try {
-        router = commands === undefined ? undefined : nativeBotRouter<Message>(commands as never)
+        router = commands === undefined ? undefined : nativeBotRouter<Message>(commands as never, skipBots)
     } catch (error) {
         // A register callback's own failure is an application outcome, failed once the other options are checked
         if (!(error instanceof ApplicationError)) throw error
@@ -382,7 +383,8 @@ export function installNativeTestBot(
  * invalid command or missing token is misuse and dies with ConfigurationError. Every option is checked before any client, signal listener or request
  * exists, even when the signal is already aborted, so misuse leaves nothing to clean up.
  * Handler and command failures are isolated and reported by client.on, not bot failures.
- * By default, messageCreate and messageUpdate events written by bots skip the events handlers. Set ignoreBots to false to opt out.
+ * By default, messageCreate and messageUpdate events written by bots skip the events handlers and prefix commands.
+ * Set ignoreBots to false to opt out.
  * A failed setup Effect or a throwing commands register callback fails the bot with ApplicationError before it connects.
  * A subscription that closes normally while the bot runs fails the bot with CriticalWorkerStoppedError, and a
  * handler set to overflow "stop" that overflows is reported while the bot keeps running without it. Cleanup is awaited.

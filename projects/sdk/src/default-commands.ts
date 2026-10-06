@@ -973,12 +973,14 @@ function snapshotDefaultCommandBatch<M extends MessageCore>(commands: unknown): 
 /**
  * Create the command tools a runBot commands option describes, registering its keyed commands or its register callback.
  * Rejections are answered with `onReject: "reply"` unless the option selects other feedback.
+ * Bot-authored messages are skipped as the runBot ignoreBots setting says, unless the option sets its own ignoreBots.
  * Misuse throws ConfigurationError. A register callback's own throw becomes ApplicationError naming `runBot commands`
  */
 export function botRouter<M extends MessageCore>(
     options: DefaultPrefixCommandsOptions<M> & {
         readonly commands: unknown
     },
+    ignoreBots: boolean,
 ): DefaultPrefixCommandRouter<M> {
     if (typeof options !== "object" || options === null || Array.isArray(options))
         throw new ConfigurationError("commands", "The commands option must be an object")
@@ -988,7 +990,11 @@ export function botRouter<M extends MessageCore>(
         onError: _onError,
         ...settings
     } = options as typeof options & { readonly onError?: unknown }
-    const router = defaultCommands.create<M>({ ...settings, onReject: settings.onReject ?? "reply" })
+    const router = defaultCommands.create<M>({
+        ...settings,
+        ignoreBots: settings.ignoreBots ?? ignoreBots,
+        onReject: settings.onReject ?? "reply",
+    })
     if (typeof definitions === "function") {
         const registered: unknown = registerCallback(() => definitions(router))
         if (

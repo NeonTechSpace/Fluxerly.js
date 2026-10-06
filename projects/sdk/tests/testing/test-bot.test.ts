@@ -278,6 +278,78 @@ test.each(modes)("%s runBot handlers skip bot-authored messages unless ignoreBot
     }
 })
 
+test.each(modes)(
+    "%s runBot commands follow the runBot ignoreBots setting unless the router sets its own",
+    async (mode) => {
+        const cases = [
+            { bot: undefined, router: undefined, expected: ["person"] },
+            { bot: false, router: undefined, expected: ["other-bot", "person"] },
+            { bot: false, router: true, expected: ["person"] },
+            { bot: undefined, router: false, expected: ["other-bot", "person"] },
+        ] as const
+        for (const { bot: botSetting, router, expected } of cases) {
+            const seen: string[] = []
+            const settings = botSetting === undefined ? {} : { ignoreBots: botSetting }
+            const routerSettings = router === undefined ? {} : { ignoreBots: router }
+            let driver: {
+                readonly fixtures: ReturnType<typeof createDefaultTestBot>["fixtures"]
+                emit(type: string, payload: unknown): Promise<void>
+                idle(): Promise<void>
+            }
+            if (mode === "default") {
+                const bot = createDefaultTestBot({
+                    ...settings,
+                    commands: {
+                        prefix: "!",
+                        ...routerSettings,
+                        commands: { who: { execute: ({ message }) => void seen.push(message.author.username) } },
+                    },
+                })
+                onTestFinished(() => bot.shutdown())
+                await bot.ready()
+                driver = {
+                    fixtures: bot.fixtures,
+                    emit: async (type, payload) => bot.emit(type, payload),
+                    idle: bot.idle,
+                }
+            } else {
+                const scope = Scope.makeUnsafe()
+                onTestFinished(() => unwrap(Scope.close(scope, Exit.void)))
+                const bot = await unwrap(
+                    createNativeTestBot({
+                        ...settings,
+                        commands: {
+                            prefix: "!",
+                            ...routerSettings,
+                            commands: {
+                                who: {
+                                    execute: ({ message }) => Effect.sync(() => seen.push(message.author.username)),
+                                },
+                            },
+                        },
+                    }).pipe(Scope.provide(scope)),
+                )
+                await unwrap(bot.ready())
+                driver = {
+                    fixtures: bot.fixtures,
+                    emit: (type, payload) => unwrap(bot.emit(type, payload)),
+                    idle: () => unwrap(bot.idle()),
+                }
+            }
+            const { fixtures } = driver
+            const otherBot = fixtures.user({ id: fixtures.nextId(), username: "other-bot", bot: true })
+            const person = fixtures.user({ id: fixtures.nextId(), username: "person" })
+            for (const author of [otherBot, person])
+                await driver.emit(
+                    "MESSAGE_CREATE",
+                    fixtures.message({ id: fixtures.nextId(), content: "!who", author }),
+                )
+            await driver.idle()
+            expect(seen.toSorted()).toEqual(expected)
+        }
+    },
+)
+
 test.each(modes)("%s createTestBot rejects an ignoreBots value other than a boolean as misuse", async (mode) => {
     const options = { ignoreBots: "no" } as never
     const misuse =
