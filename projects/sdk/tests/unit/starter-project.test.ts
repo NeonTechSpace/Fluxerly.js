@@ -48,11 +48,11 @@ const starters = [
 ] as const
 
 test.each(starters)(
-    "the $template starter is a runnable project with a token template, ignores, a test and agent rules",
+    "the $template starter is a runnable project with a token template and its .env copy, ignores, a test and agent rules",
     ({ template, bot, test: botTest, testing }) => {
         const project = temporary()
         const typeScript = template === "js" ? [] : ["tsconfig.json"]
-        const files = ["package.json", ...typeScript, bot, botTest, ".env.example", ".gitignore", "AGENTS.md"]
+        const files = ["package.json", ...typeScript, bot, botTest, ".env.example", ".env", ".gitignore", "AGENTS.md"]
         expect(writeStarterProject(project, sdk, template)).toEqual(files)
         expect(readdirSync(project).toSorted()).toEqual(files.toSorted())
 
@@ -63,6 +63,7 @@ test.each(starters)(
         expect(manifest.scripts.test).toBe("node --test")
         expect(manifest).not.toHaveProperty("dependencies")
         expect(read(project, ".env.example")).toBe("FLUXER_BOT_TOKEN=\n")
+        expect(read(project, ".env")).toBe(read(project, ".env.example"))
         expect(read(project, ".gitignore").split("\n")).toEqual(expect.arrayContaining(["node_modules", ".env"]))
         expect(read(project, botTest)).toContain(`from "@neontechspace/fluxerly/${testing}"`)
         expect(read(project, botTest)).toContain(`from "./${bot}"`)
@@ -119,6 +120,22 @@ test("existing files stop init before it writes anything and are listed as confl
     expect(readdirSync(project).toSorted()).toEqual([".gitignore", "bot.js"])
     expect(read(project, "bot.js")).toBe("own bot\n")
     expect(read(project, ".gitignore")).toBe("own ignores\n")
+})
+
+test("an existing .env is kept and is no conflict, so init writes every other file", () => {
+    const project = temporary()
+    writeFileSync(join(project, ".env"), "FLUXER_BOT_TOKEN=own-token\n")
+    expect(writeStarterProject(project, sdk)).not.toContain(".env")
+    expect(read(project, ".env")).toBe("FLUXER_BOT_TOKEN=own-token\n")
+    expect(readdirSync(project)).toContain("bot.js")
+})
+
+test("an existing .env is not listed when other files conflict", () => {
+    const project = temporary()
+    writeFileSync(join(project, ".env"), "FLUXER_BOT_TOKEN=own-token\n")
+    writeFileSync(join(project, "bot.js"), "own bot\n")
+    expect(() => writeStarterProject(project, sdk)).toThrow(expect.objectContaining({ conflicts: ["bot.js"] }))
+    expect(readdirSync(project).toSorted()).toEqual([".env", "bot.js"])
 })
 
 test("a write that fails after creating its file removes every file this run created, so init can run again", () => {

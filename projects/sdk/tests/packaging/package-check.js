@@ -49,9 +49,10 @@ function withoutSdkOutput(text) {
 }
 
 /** Run a command and return its standard output. A failure carries everything the command printed, SDK records included */
-function run(command, args, cwd, timeout = 120_000) {
+function run(command, args, cwd, timeout = 120_000, env = process.env) {
     const result = spawnSync(command, args, {
         cwd,
+        env,
         timeout,
         encoding: "utf8",
         windowsHide: true,
@@ -440,35 +441,88 @@ try {
                 "An unknown template prints the usage and fails",
             )
             assert.deepEqual(readdirSync(invalid), [], "An unknown template writes nothing")
+
+            // An install whose package manager cannot start keeps the starter and prints the install commands. An
+            // empty PATH removes every manager without needing the network
+            const noManager = join(temporary, "init-no-manager")
+            const emptyPath = join(temporary, "empty-path")
+            mkdirSync(noManager)
+            mkdirSync(emptyPath)
+            const withoutManagers = Object.fromEntries(
+                Object.entries(process.env).filter(([name]) => !/^path$/i.test(name)),
+            )
+            assert.throws(
+                () =>
+                    run(process.execPath, [cli, "init"], noManager, 120_000, {
+                        ...withoutManagers,
+                        PATH: emptyPath,
+                        npm_config_user_agent: "pnpm/10.0.0 npm/? node/v24.0.0",
+                    }),
+                (error) =>
+                    error.status === 1 &&
+                    /Installing with pnpm failed/.test(error.stderr) &&
+                    error.stdout.includes(`pnpm add`) &&
+                    error.stdout.includes(`${manifest.name}@${manifest.version}`),
+                "fluxerly init reports an install whose package manager cannot start",
+            )
+            assert.ok(
+                ["package.json", "bot.js", ".env"].every((name) => readdirSync(noManager).includes(name)),
+                "A failed install keeps the written starter",
+            )
+
             // The printed install pins the packed version, exactly while it is a prerelease
-            const exactFlag = manifest.version.includes("-") ? " --save-exact" : ""
             const effectVersion = manifest.peerDependencies.effect.replace(/^\^/, "")
+            // Each starter runs under another package manager, whose commands its next steps name
+            const initManagers = {
+                js: {
+                    userAgent: "npm/11.0.0 node/v24.0.0",
+                    add: "npm install",
+                    exact: "--save-exact",
+                    dev: "--save-dev",
+                },
+                ts: {
+                    userAgent: "pnpm/10.0.0 npm/? node/v24.0.0",
+                    add: "pnpm add",
+                    exact: "--save-exact",
+                    dev: "--save-dev",
+                },
+                effect: { userAgent: "bun/1.3.0 npm/? node/v24.0.0", add: "bun add", exact: "--exact", dev: "--dev" },
+            }
             for (const template of ["js", "ts", "effect"]) {
                 const starter = join(temporary, `init-${template}`)
                 mkdirSync(starter)
-                // Without a terminal, init writes the JavaScript starter unless --template names another one
-                const initArguments = ["init", ...(template === "js" ? [] : ["--template", template])]
-                const initOutput = run(process.execPath, [cli, ...initArguments], starter)
+                const initManager = initManagers[template]
+                const initEnvironment = { ...process.env, npm_config_user_agent: initManager.userAgent }
+                const exactFlag = manifest.version.includes("-") ? ` ${initManager.exact}` : ""
+                // Without a terminal, init writes the JavaScript starter unless --template names another one. The
+                // check installs the packed tarball itself, so init installs nothing
+                const initArguments = ["init", "--no-install", ...(template === "js" ? [] : ["--template", template])]
+                const initOutput = run(process.execPath, [cli, ...initArguments], starter, 120_000, initEnvironment)
                 assert.ok(
                     readdirSync(starter).includes(template === "js" ? "bot.js" : "bot.ts"),
                     `fluxerly ${initArguments.join(" ")} writes the ${template} starter`,
                 )
+                assert.equal(
+                    readFileSync(join(starter, ".env"), "utf8"),
+                    readFileSync(join(starter, ".env.example"), "utf8"),
+                    "fluxerly init copies .env.example to .env",
+                )
                 assert.ok(
-                    initOutput.includes(`npm install${exactFlag} ${manifest.name}@${manifest.version}`),
-                    "fluxerly init prints the next steps with the installed version",
+                    initOutput.includes(`${initManager.add}${exactFlag} ${manifest.name}@${manifest.version}`),
+                    "fluxerly init prints the install of the installed version with the detected package manager",
                 )
                 assert.equal(
-                    initOutput.includes(`npm install effect@${effectVersion}`),
+                    initOutput.includes(`${initManager.add} effect@${effectVersion}`),
                     template === "effect",
                     "Only the Effect starter's next steps install Effect",
                 )
                 assert.equal(
-                    initOutput.includes("npm install --save-dev @types/node"),
+                    initOutput.includes(`${initManager.add} ${initManager.dev} @types/node`),
                     template !== "js",
                     "Only the TypeScript starters' next steps install the Node.js types",
                 )
                 assert.throws(
-                    () => run(process.execPath, [cli, ...initArguments], starter),
+                    () => run(process.execPath, [cli, ...initArguments], starter, 120_000, initEnvironment),
                     (error) => error.status === 1 && /already exist.*wrote nothing/.test(error.stderr),
                     "A second fluxerly init refuses the existing files",
                 )

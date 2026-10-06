@@ -2,7 +2,8 @@
  * Writes a ready-to-run starter bot project for `fluxerly init`, in JavaScript, TypeScript or TypeScript with the
  * native Effect API.
  * Invariant: Existing files are never replaced. A conflict writes nothing, and a failed write removes only the files
- * this run created. Each bot's handlers match its shipped starter in examples/starter
+ * this run created. The .env copy of .env.example is the exception: An existing .env is kept and is no conflict.
+ * Each bot's handlers match its shipped starter in examples/starter
  */
 
 import { closeSync, existsSync, openSync, rmSync, writeFileSync } from "node:fs"
@@ -152,6 +153,7 @@ const tsconfig = `${JSON.stringify(
 function starterFiles(project: string, packageRoot: string, template: StarterTemplate): ReadonlyMap<string, string> {
     const shared = (): [string, string][] => [
         [".env.example", "FLUXER_BOT_TOKEN=\n"],
+        [".env", "FLUXER_BOT_TOKEN=\n"],
         [".gitignore", "node_modules\n.env\n"],
         ["AGENTS.md", newAgentsFile(project, packageRoot)],
     ]
@@ -178,14 +180,23 @@ export function writeStarterProject(
     template: StarterTemplate = "js",
 ): readonly string[] {
     const files = starterFiles(project, packageRoot, template)
-    const conflicts = [...files.keys()].filter((name) => existsSync(join(project, name)))
+    const conflicts = [...files.keys()].filter((name) => name !== ".env" && existsSync(join(project, name)))
     if (conflicts.length > 0) throw new StarterConflictError(conflicts)
     const written: string[] = []
+    let current = ""
     try {
         // The wx flag refuses a file that appeared after the check, so a concurrent writer's file is never replaced.
         // A file counts as created once opened, so a failed write removes its partial content
         for (const [name, text] of files) {
-            const descriptor = openSync(join(project, name), "wx")
+            current = name
+            let descriptor: number
+            try {
+                descriptor = openSync(join(project, name), "wx")
+            } catch (error) {
+                // An existing .env holds the bot's own token, so it is kept
+                if (name === ".env" && (error as NodeJS.ErrnoException).code === "EEXIST") continue
+                throw error
+            }
             written.push(name)
             try {
                 writeFileSync(descriptor, text)
@@ -195,8 +206,7 @@ export function writeStarterProject(
         }
     } catch (error) {
         for (const name of written) rmSync(join(project, name), { force: true })
-        if ((error as NodeJS.ErrnoException).code === "EEXIST")
-            throw new StarterConflictError([[...files.keys()][written.length]!])
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new StarterConflictError([current])
         throw error
     }
     return written
