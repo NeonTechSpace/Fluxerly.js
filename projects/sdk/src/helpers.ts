@@ -776,7 +776,9 @@ export type LinkHelpers = Readonly<{
      */
     message(message: MessageReference, channel: ChannelLinkTarget): string
     /**
-     * Build a URL for Fluxer's hosted bot-installation page from an application ID, with the fixed `bot` scope and optional unsigned 64-bit permissions.
+     * Build a URL for Fluxer's bot-installation flow from an application ID, with the fixed `bot` scope and optional unsigned 64-bit permissions.
+     * For the hosted `links` export, the URL starts at Fluxer's API authorization route, which redirects to the web app's installation page wherever Fluxer currently serves it.
+     * Instance links open the instance web app's installation page directly.
      * Throws HelperError for invalid IDs or options, and an alternate origin or scope is not accepted.
      * This does not open the page, install the bot, authorize permissions or check whether the application exists
      */
@@ -802,19 +804,25 @@ export const links: LinkHelpers = Object.freeze({
             : `https://fluxer.app/channels/${resolvedChannel.guildId}/${resolvedChannel.id}/${id.value}`
     },
     installation(applicationId: string, options?: InstallationLinkOptions): string {
-        const id = valueOrThrow(markupId(applicationId, "links.installation"))
-        const permissions = valueOrThrow(installationPermissions(options))
-        const query = new URLSearchParams({ client_id: id, scope: "bot" })
-        if (permissions !== undefined) query.set("permissions", permissions)
-        return `https://fluxer.app/oauth2/authorize?${query}`
+        return `https://api.fluxer.app/v1/oauth2/authorize?${installationQuery(applicationId, options)}`
     },
 })
+
+// The hosted marketing site has no installation page, so hosted links start at the API route that redirects to the web app
+function installationQuery(applicationId: string, options: InstallationLinkOptions | undefined): URLSearchParams {
+    const id = valueOrThrow(markupId(applicationId, "links.installation"))
+    const permissions = valueOrThrow(installationPermissions(options))
+    const query = new URLSearchParams({ client_id: id, scope: "bot" })
+    if (permissions !== undefined) query.set("permissions", permissions)
+    return query
+}
 
 /**
  * Make channel, message and installation URLs for a validated instance web-app base
  *
  * The hosted `links` export is unchanged.
- * This factory keeps its local input checks, including thrown HelperError, and replaces only the hosted application base in URLs.
+ * This factory keeps its local input checks, including thrown HelperError. Channel and message URLs replace only the
+ * hosted application base, and installation URLs open the instance web app's installation page directly.
  * No network request occurs
  */
 export function createInstanceLinks(webapp: string): LinkHelpers {
@@ -822,6 +830,7 @@ export function createInstanceLinks(webapp: string): LinkHelpers {
     return Object.freeze({
         channel: (...input: Parameters<typeof links.channel>) => project(links.channel(...input)),
         message: (...input: Parameters<typeof links.message>) => project(links.message(...input)),
-        installation: (...input: Parameters<typeof links.installation>) => project(links.installation(...input)),
+        installation: (...input: Parameters<typeof links.installation>) =>
+            `${webapp}/oauth2/authorize?${installationQuery(...input)}`,
     })
 }

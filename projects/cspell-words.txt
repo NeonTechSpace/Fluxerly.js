@@ -17,6 +17,7 @@ zizmor
 
 # Protocol and provider terms
 apng
+authorise
 bitfield
 bitfields
 bsky

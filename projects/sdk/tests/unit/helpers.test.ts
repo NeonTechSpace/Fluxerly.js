@@ -155,13 +155,13 @@ for (const [mode, api] of apis) {
             thrown(() => api.links.message({ ...message, channelId: directMessage.id }, guildChannel)),
         ).toMatchObject({ operation: "links.message", reason: "link" })
         expect(api.links.installation(guildChannel.id)).toBe(
-            `https://fluxer.app/oauth2/authorize?client_id=${guildChannel.id}&scope=bot`,
+            `https://api.fluxer.app/v1/oauth2/authorize?client_id=${guildChannel.id}&scope=bot`,
         )
         expect(api.links.installation(guildChannel.id, { permissions: 0n })).toBe(
-            `https://fluxer.app/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=0`,
+            `https://api.fluxer.app/v1/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=0`,
         )
         expect(api.links.installation(guildChannel.id, { permissions: 1n << 63n })).toBe(
-            `https://fluxer.app/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=9223372036854775808`,
+            `https://api.fluxer.app/v1/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=9223372036854775808`,
         )
     })
 

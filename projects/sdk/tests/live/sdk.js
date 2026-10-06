@@ -208,14 +208,23 @@ function verifyCurrentApplication(value, applicationId, response) {
     assert.equal(Object.hasOwn(value, "bot"), false)
 }
 
-function verifyInstallationLink(link, applicationId) {
+async function verifyInstallationLink(link, applicationId) {
     const url = new URL(link)
-    assert.equal(url.origin, "https://fluxer.app")
-    assert.equal(url.pathname, "/oauth2/authorize")
+    assert.equal(url.origin, "https://api.fluxer.app")
+    assert.equal(url.pathname, "/v1/oauth2/authorize")
     assert.equal(url.searchParams.get("client_id"), applicationId)
     assert.equal(url.searchParams.get("scope"), "bot")
     assert.equal(url.searchParams.get("permissions"), "0")
     assert.equal([...url.searchParams.keys()].sort().join(","), "client_id,permissions,scope")
+    // The link must reach the web app's installation page with its query intact, wherever Fluxer serves the web app.
+    // The redirect is read without following it, so no page is opened and nothing is authorized
+    const response = await fetch(link, { redirect: "manual", signal: AbortSignal.timeout(10_000) })
+    await response.body?.cancel()
+    assert.ok([301, 302, 303, 307, 308].includes(response.status))
+    const target = new URL(response.headers.get("location") ?? "", link)
+    assert.equal(target.protocol, "https:")
+    assert.equal(target.pathname, "/oauth2/authorize")
+    assert.equal(target.search, url.search)
 }
 
 // Cache reads return plain values in the default API and never-failing Effects in the native API
@@ -560,7 +569,7 @@ try {
                 const current = await client.application.fetch()
                 assert.ok(current.isOk())
                 verifyCurrentApplication(current.value, applicationId, application)
-                verifyInstallationLink(links.installation(current.value.id, { permissions: 0n }), applicationId)
+                await verifyInstallationLink(links.installation(current.value.id, { permissions: 0n }), applicationId)
                 report(stage, { passed: true, noCache: true, clientSecretUsed: false })
             } else {
                 stage = "connect"
@@ -648,7 +657,9 @@ try {
                         stage = "current_application"
                         const current = yield* client.application.fetch()
                         verifyCurrentApplication(current, applicationId, application)
-                        verifyInstallationLink(links.installation(current.id, { permissions: 0n }), applicationId)
+                        yield* Effect.promise(() =>
+                            verifyInstallationLink(links.installation(current.id, { permissions: 0n }), applicationId),
+                        )
                         report(stage, { passed: true, noCache: true, clientSecretUsed: false })
                     } else {
                         stage = "connect"

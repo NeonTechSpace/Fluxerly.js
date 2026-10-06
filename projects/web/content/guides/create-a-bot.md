@@ -63,10 +63,10 @@ An invite link opens Fluxer's page for adding the bot to a community. The quick 
 Together these make the permission value 68608. Replace `APPLICATION_ID` in this link with the application ID, then open it in a browser:
 
 ```text
-https://fluxer.app/oauth2/authorize?client_id=APPLICATION_ID&scope=bot&permissions=68608
+https://api.fluxer.app/v1/oauth2/authorize?client_id=APPLICATION_ID&scope=bot&permissions=68608
 ```
 
-Select the community and choose **Authorize**. Fluxer creates a role named after the application with exactly these permissions and gives it to the bot
+Fluxer asks which account to use, then which community to add the bot to, and shows the requested permissions. Choose **Authorise** on the last step. Fluxer creates a role named after the application with exactly these permissions and gives it to the bot
 
 The application's page also has an **OAuth2 URL builder** section that builds such a link from chosen scopes and **Bot permissions**
 
