@@ -10,12 +10,19 @@ export interface Expiring {
     readonly expires: number
 }
 
+/** What the heap keeps of one entry: Its deadline and a weak identity, so the heap never retains a snapshot */
+interface Ticket<E extends Expiring> {
+    readonly expires: number
+    readonly entry: WeakRef<E>
+}
+
 /** A lazy-deletion min-heap of cache entries ordered by expiry deadline.
- * Replaced or removed entries stay in the heap until they reach the top or a compaction rebuilds it,
- * so writes cost O(log n) instead of scanning every retained entry
+ * Replaced or removed entries leave their tickets in the heap until a ticket reaches the top or a compaction rebuilds
+ * it, so writes cost O(log n) instead of scanning every retained entry. A ticket holds its entry weakly, so a replaced
+ * or removed snapshot is released as soon as its cache drops it
  */
 export class ExpiryQueue<E extends Expiring> {
-    #heap: E[] = []
+    #heap: Ticket<E>[] = []
 
     constructor(private readonly live: (entry: E) => boolean) {}
 
@@ -24,19 +31,23 @@ export class ExpiryQueue<E extends Expiring> {
     }
 
     push(entry: E) {
+        this.#push({ expires: entry.expires, entry: new WeakRef(entry) })
+    }
+
+    #push(ticket: Ticket<E>) {
         const heap = this.#heap
-        heap.push(entry)
+        heap.push(ticket)
         let index = heap.length - 1
         while (index > 0) {
             const parent = (index - 1) >> 1
-            if (heap[parent]!.expires <= entry.expires) break
+            if (heap[parent]!.expires <= ticket.expires) break
             heap[index] = heap[parent]!
             index = parent
         }
-        heap[index] = entry
+        heap[index] = ticket
     }
 
-    #pop(): E {
+    #pop(): Ticket<E> {
         const heap = this.#heap
         const top = heap[0]!
         const last = heap.pop()!
@@ -57,28 +68,37 @@ export class ExpiryQueue<E extends Expiring> {
         return top
     }
 
+    /** The entry of a ticket while its cache still holds it, or undefined once it was replaced or removed */
+    #entry(ticket: Ticket<E>): E | undefined {
+        const entry = ticket.entry.deref()
+        return entry !== undefined && this.live(entry) ? entry : undefined
+    }
+
     /** Remove every live entry whose deadline has passed, in deadline order, stopping at the first unexpired entry */
     purge(now: number, remove: (entry: E) => void) {
         while (this.#heap.length) {
             const top = this.#heap[0]!
-            if (!this.live(top)) this.#pop()
-            else if (top.expires <= now) remove(this.#pop())
-            else break
+            const entry = this.#entry(top)
+            if (entry === undefined) this.#pop()
+            else if (top.expires <= now) {
+                this.#pop()
+                remove(entry)
+            } else break
         }
     }
 
     /** Earliest live deadline, or undefined when no live entry expires */
     next(): number | undefined {
-        while (this.#heap.length && !this.live(this.#heap[0]!)) this.#pop()
+        while (this.#heap.length && this.#entry(this.#heap[0]!) === undefined) this.#pop()
         return this.#heap[0]?.expires
     }
 
-    /** Rebuild from live entries when stale references dominate, bounding retained references to a multiple of live entries */
+    /** Rebuild from live entries when stale tickets dominate, bounding retained tickets to a multiple of live entries */
     compact(liveEntries: number) {
         if (this.#heap.length <= liveEntries * 2 + 64) return
-        const live = this.#heap.filter(this.live)
+        const live = this.#heap.filter((ticket) => this.#entry(ticket) !== undefined)
         this.#heap = []
-        for (const entry of live) this.push(entry)
+        for (const ticket of live) this.#push(ticket)
     }
 
     clear() {

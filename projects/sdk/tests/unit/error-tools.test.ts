@@ -1,4 +1,7 @@
+import { setImmediate as turn } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
+import { setFlagsFromString } from "node:v8"
+import { runInNewContext } from "node:vm"
 import { Cause, Effect, Exit, Scope } from "effect"
 import { expect, onTestFinished, test, vi } from "vitest"
 import {
@@ -220,6 +223,40 @@ test("the expiry queue removes live entries in deadline order and ignores replac
     queue.compact(live.size)
     expect(queue.size).toBeLessThanOrEqual(live.size * 2 + 64)
     expect(queue.next()).toBe(40)
+})
+
+test("the expiry queue releases replaced and removed snapshots before their stale entries reach the top", async () => {
+    // Obtains a full garbage collection, as leak detectors do, then restores the flag for the rest of the worker
+    let gc: () => void
+    setFlagsFromString("--expose-gc")
+    try {
+        gc = runInNewContext("gc") as () => void
+    } finally {
+        setFlagsFromString("--no-expose-gc")
+    }
+    type Entry = { readonly id: string; readonly expires: number; readonly snapshot: object }
+    const live = new Map<string, Entry>()
+    const queue = new ExpiryQueue<Entry>((entry) => live.get(entry.id) === entry)
+    const set = (id: string, expires: number) => {
+        const entry = { id, expires, snapshot: {} }
+        live.set(id, entry)
+        queue.push(entry)
+        return entry
+    }
+    // The earliest entry stays live at the top, so no stale entry is popped before the collection
+    set("earliest", 10)
+    const released = (() => {
+        const replaced = set("replaced", 50)
+        set("replaced", 60)
+        const removed = set("removed", 70)
+        live.delete("removed")
+        return [new WeakRef(replaced.snapshot), new WeakRef(removed.snapshot)]
+    })()
+    // A new WeakRef keeps its target alive until the current job ends
+    await turn()
+    gc()
+    expect(released.map((reference) => reference.deref())).toEqual([undefined, undefined])
+    expect(queue.next()).toBe(10)
 })
 
 test("error text, JSON and descriptions stay total and masked for unusual or credential-bearing values", () => {
