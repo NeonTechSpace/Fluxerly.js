@@ -34,6 +34,7 @@ import type {
     SendOptions,
 } from "#sdk/messages"
 import type { ReactionCollectorOptions, CollectorOptions, Collector, ReactionCollector } from "./collectors.js"
+import type { ChannelPaginateOptions, PageInput, PaginateFailure, PaginateResult } from "#sdk/reaction-pages"
 
 /**
  * Send, read, edit or delete messages, collect future replies and reactions, or inspect indexed search results.
@@ -605,6 +606,43 @@ export interface Messages<M extends MessageCore = Message> {
         message: MessageReference,
         options?: ReactionCollectorOptions<E, R>,
     ): Effect.Effect<ReactionCollector, never, Scope.Scope | R>
+    /**
+     * Show several pages in one message that people flip with ◀ and ▶ reactions, because Fluxer has no buttons.
+     * Sends the first page, adds both arrows as the bot, then shows the previous or next page on each click, wrapping
+     * around at the ends. A single page is only sent, with reason singlePage and without arrows or listening.
+     * Pages and options are copied when the operation starts, and invalid ones fail with ConfigurationError before anything is sent
+     *
+     * The users option is required here, because no message identifies an asker. Pass account IDs, or a check such as `() => true` to let anyone flip.
+     * A command context's paginate defaults to the command's author instead.
+     * Adding or removing an arrow both count as one click, so only Add Reactions and Read Message History are needed.
+     * With removeClicks, only additions count and the bot removes the clicker's arrow after each change, which needs Manage Messages.
+     * Clicks are handled one at a time through messages.collectReactions machinery, with its connection requirement, pending-event budget and gateway-loss behavior
+     *
+     * Listening stops after idleMs without a click, default 60,000, and at most timeoutMs after registration, default 300,000.
+     * Cancellation also stops it, as described in the remarks.
+     * However it stops, the bot then removes only its own arrows, and the current page stays shown.
+     * Each send, edit and reaction request uses the client's default deadline, rate limits and retry rules, and is never replayed after an unknown outcome
+     *
+     * A failed page change, arrow or click removal stops listening and returns that failure after the arrows are removed.
+     * A users check that throws or returns a non-boolean fails with CollectorError reason filter and is reported to the client-level onError.
+     * A failure to remove the arrows is returned after an otherwise normal end, while an earlier failure or cancellation wins over it
+     *
+     * @remarks
+     * Interrupting the Effect stops listening, and interruption completes once the arrows are removed.
+     * The Effect completes only after that cleanup. Defects keep their Cause
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export const pagesExample = (client: Client, channelId: string, userId: string) =>
+     *     client.messages.paginate(channelId, ["First page", "Second page"], { users: [userId], idleMs: 30_000 })
+     * ```
+     */
+    paginate(
+        channelId: string,
+        pages: readonly PageInput[],
+        options: ChannelPaginateOptions,
+    ): Effect.Effect<PaginateResult<M>, PaginateFailure>
     /**
      * Look up a message in this client's cache, without an HTTP request.
      * Pass decimal id and channelId, or an existing message with those fields.

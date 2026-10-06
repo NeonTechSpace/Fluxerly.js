@@ -210,6 +210,8 @@ export class ReactionCollector {
     constructor(
         settings: Settings,
         private readonly logical: LogicalScheduler,
+        /** Also accept single removals, which reach filter and onReaction like additions. Not a public option */
+        private readonly removals = false,
     ) {
         this.#settings = settings
         const now = this.#now()
@@ -229,7 +231,7 @@ export class ReactionCollector {
         const signal = settings.signal
         const abort = () => this.#finish(Exit.interrupt())
         const shardId = settings.guildId === undefined ? undefined : owner.shardIdForGuild(settings.guildId)
-        const intake = owner.events.listenReactions(target, this.#offer.bind(this), shardId)
+        const intake = owner.events.listenReactions(target, this.#offer.bind(this), shardId, this.removals)
         let state: (() => void) | undefined
         this.#release = () => {
             intake()
@@ -465,6 +467,7 @@ export function collectReactions<E = never, R = never, M extends MessageCore = M
     options?: ReactionCollectorOptions,
     defaultApi = false,
     handler?: (reaction: MessageReaction) => Effect.Effect<unknown, E, R>,
+    removals = false,
 ): Effect.Effect<ReactionCollector, CollectorRegistrationError, R> {
     return Effect.gen(function* () {
         const message = yield* readInput(() => snapshotReference(target))
@@ -484,7 +487,7 @@ export function collectReactions<E = never, R = never, M extends MessageCore = M
             owner.gatewayState(config.guildId) !== "Connected"
         )
             return yield* Effect.fail(new CollectorError("notConnected"))
-        const collector = new ReactionCollector(config, owner.logical)
+        const collector = new ReactionCollector(config, owner.logical, removals)
         if (handler) yield* collector.run(owner, handler)
         // The caller signal methods are marked reads, so their throws are application faults
         yield* suspendMarked(() => {

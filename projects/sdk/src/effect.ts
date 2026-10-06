@@ -472,6 +472,14 @@ export type { MessagePinsQuery, MessagePinsPage, MessagePin, ChannelPinsUpdate }
 export type { ReactionCollectorResult } from "./collectors.js"
 export { CollectorError } from "./collectors.js"
 export type { CollectorResult, CollectorFailure } from "./collectors.js"
+export type {
+    PageInput,
+    PageTurners,
+    PaginateOptions,
+    ChannelPaginateOptions,
+    PaginateResult,
+    PaginateFailure,
+} from "./reaction-pages.js"
 export type { FailureKind, FailureMessageReference } from "./failures.js"
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
 export { EventWaitError } from "./message-errors.js"

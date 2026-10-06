@@ -54,7 +54,9 @@ import {
 } from "#sdk/internal/rejection-scope"
 import type { ClientLogger } from "#sdk/internal/logging"
 import { recordCommandFailure } from "#sdk/internal/events"
-import type { ResultAsync } from "neverthrow"
+import { errAsync, type ResultAsync } from "neverthrow"
+import { askerPageOptions } from "#sdk/internal/reaction-pages"
+import type { DefaultPaginateOptions, PageInput, PaginateFailure, PaginateResult } from "#sdk/reaction-pages"
 import type { Client, EventHandlerOptions, FailureReport, Subscription } from "./index.js"
 
 /**
@@ -98,6 +100,25 @@ export interface DefaultPrefixCommandContext<M extends MessageCore = Message> {
      * page length to 2,000 UTF-16 code units. Nothing is sent. Invalid settings throw ConfigurationError as `router.help` does
      */
     readonly help: (options?: CommandContextHelpOptions) => readonly string[]
+    /**
+     * Show several pages in this message's channel that the command's author flips with ◀ and ▶ reactions, such as `({ paginate }) => paginate(["First", "Second"])`.
+     * Delegates to `client.messages.paginate` with users defaulting to this message's author and this handler's cancellation signal applied, combined with any supplied signal.
+     * Pass users to let other people flip, such as `() => true` for anyone. The other options, defaults, permissions, cleanup and failures are those of `client.messages.paginate`.
+     * The result settles when listening ends, so the handler stays active until then. Returning it from a command callback reports an Err like a thrown error
+     */
+    readonly paginate: (
+        pages: readonly PageInput[],
+        options?: DefaultPaginateOptions,
+    ) => ResultAsync<PaginateResult<M>, PaginateFailure | CancelledError>
+    /**
+     * Send this router's help in this message's channel, such as `({ sendHelp }) => sendHelp()`.
+     * Takes the same optional settings as `help`. One page is sent as a plain message, and several pages use `paginate`
+     * with its defaults, so only the command's author can flip them.
+     * Invalid settings, and help with no visible entries, return ConfigurationError without sending anything
+     */
+    readonly sendHelp: (
+        options?: CommandContextHelpOptions,
+    ) => ResultAsync<PaginateResult<M>, PaginateFailure | CancelledError>
 }
 
 /**
@@ -651,6 +672,17 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
                     signal,
                     reply: boundDefaultReply(client, message, signal),
                     help: (options?: CommandContextHelpOptions) => this.help(contextHelpOptions(options, match.prefix)),
+                    paginate: boundDefaultPaginate(client, message, signal),
+                    sendHelp: (options?: CommandContextHelpOptions) => {
+                        let pages: readonly string[]
+                        try {
+                            pages = this.help(contextHelpOptions(options, match.prefix))
+                        } catch (error) {
+                            if (error instanceof ConfigurationError) return errAsync(error)
+                            throw error
+                        }
+                        return boundDefaultPaginate(client, message, signal)(pages)
+                    },
                 }) as DefaultPrefixCommandContext<M>,
             ...(settings.use.length === 0
                 ? {}
@@ -977,6 +1009,15 @@ export function boundDefaultReply<M extends MessageCore>(
     signal: AbortSignal,
 ): DefaultPrefixCommandContext<M>["reply"] {
     return (input, options) => client.messages.reply(message, input, bindDefaultReplyOptions(options, signal))
+}
+
+function boundDefaultPaginate<M extends MessageCore>(
+    client: Client<M>,
+    message: M,
+    signal: AbortSignal,
+): DefaultPrefixCommandContext<M>["paginate"] {
+    return (pages, options) =>
+        client.messages.paginate(message.channelId, pages, askerPageOptions(options, message.author.id, signal))
 }
 
 function bindDefaultReplyOptions(options: SendOptions | undefined, signal: AbortSignal): DefaultSendOptions {

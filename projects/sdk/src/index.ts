@@ -509,6 +509,16 @@ export type {
 } from "./collectors.js"
 export { CollectorError } from "./collectors.js"
 export type { CollectorOptions, DefaultCollectorOptions, CollectorResult, CollectorFailure } from "./collectors.js"
+export type {
+    PageInput,
+    PageTurners,
+    PaginateOptions,
+    DefaultPaginateOptions,
+    ChannelPaginateOptions,
+    DefaultChannelPaginateOptions,
+    PaginateResult,
+    PaginateFailure,
+} from "./reaction-pages.js"
 export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
 export { EventWaitError } from "./message-errors.js"
 export type { EventWaitFailure } from "./message-errors.js"

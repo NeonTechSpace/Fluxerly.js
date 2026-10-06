@@ -280,6 +280,9 @@ export class ConfigurationError extends FluxerlyError {
             | "filter"
             | "onReaction"
             | "onMessage"
+            | "pages"
+            | "paginateOptions"
+            | "removeClicks"
             | "emoji"
             | "signal"
             | "maxMessages"
@@ -428,6 +431,7 @@ export type Operation =
     | "collector.result"
     | "collectReactions"
     | "reactionCollector.result"
+    | "paginate"
 
 /** Fluxer rejected the bot token during connection startup or recovery.
  * Check the token and the application owner's account standing before connecting again.

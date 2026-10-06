@@ -42,6 +42,8 @@ import {
 import { convertCommandArguments } from "#sdk/internal/command-arguments"
 import type { SendError } from "#sdk/message-errors"
 import type { Message, MessageCore, ReplyInput, SendOptions } from "#sdk/messages"
+import { askerPageOptions } from "#sdk/internal/reaction-pages"
+import type { PageInput, PaginateFailure, PaginateOptions, PaginateResult } from "#sdk/reaction-pages"
 import * as Cause from "effect/Cause"
 import * as Clock from "effect/Clock"
 import type * as Context from "effect/Context"
@@ -91,6 +93,23 @@ export interface NativePrefixCommandContext<M extends MessageCore = Message> {
      * page length to 2,000 UTF-16 code units. Nothing is sent. Invalid settings throw ConfigurationError as `router.help` does
      */
     readonly help: (options?: CommandContextHelpOptions) => readonly string[]
+    /**
+     * Show several pages in this message's channel that the command's author flips with ◀ and ▶ reactions, such as `({ paginate }) => paginate(["First", "Second"])`.
+     * Delegates to `client.messages.paginate` with users defaulting to this message's author.
+     * Pass users to let other people flip, such as `() => true` for anyone. The other options, defaults, permissions, cleanup and failures are those of `client.messages.paginate`.
+     * The Effect completes when listening ends, so the handler stays active until then
+     */
+    readonly paginate: (
+        pages: readonly PageInput[],
+        options?: PaginateOptions,
+    ) => Effect.Effect<PaginateResult<M>, PaginateFailure>
+    /**
+     * Send this router's help in this message's channel, such as `({ sendHelp }) => sendHelp()`.
+     * Takes the same optional settings as `help`. One page is sent as a plain message, and several pages use `paginate`
+     * with its defaults, so only the command's author can flip them.
+     * Invalid settings, and help with no visible entries, fail with ConfigurationError without sending anything
+     */
+    readonly sendHelp: (options?: CommandContextHelpOptions) => Effect.Effect<PaginateResult<M>, PaginateFailure>
 }
 
 /**
@@ -788,6 +807,18 @@ class NativePrefixCommandRouterOwner<R = never, M extends MessageCore = Message>
                     rawArgs: match.parse.rawArgs,
                     reply: boundNativeReply(client, message),
                     help: (options?: CommandContextHelpOptions) => this.help(contextHelpOptions(options, match.prefix)),
+                    paginate: boundNativePaginate(client, message),
+                    sendHelp: (options?: CommandContextHelpOptions) =>
+                        Effect.suspend(() => {
+                            let pages: readonly string[]
+                            try {
+                                pages = this.help(contextHelpOptions(options, match.prefix))
+                            } catch (error) {
+                                if (error instanceof ConfigurationError) return Effect.fail(error)
+                                throw error
+                            }
+                            return boundNativePaginate(client, message)(pages)
+                        }),
                 }) as NativePrefixCommandContext<M>,
             convert: (definition, context) =>
                 convertCommandArguments(definition.arguments, context.args, { guildId: context.message.guildId }),
@@ -1068,6 +1099,14 @@ function boundNativeReply<M extends MessageCore>(
     message: M,
 ): NativePrefixCommandContext<M>["reply"] {
     return (input, options) => client.messages.reply(message, input, options)
+}
+
+function boundNativePaginate<M extends MessageCore>(
+    client: Client<M>,
+    message: M,
+): NativePrefixCommandContext<M>["paginate"] {
+    return (pages, options) =>
+        client.messages.paginate(message.channelId, pages, askerPageOptions(options, message.author.id))
 }
 
 function nativeCooldown<M extends MessageCore>(

@@ -618,23 +618,41 @@ export class EventBus<M extends MessageCore = Message> {
 
     #reactionCollectors = new Map<
         string,
-        Set<(reaction: MessageReaction | MessageReactionBatch, bytes: number, shardId: number) => void>
+        Set<
+            (reaction: MessageReaction | MessageReactionBatch, bytes: number, shardId: number, removal: boolean) => void
+        >
     >()
+    /** Open reaction listeners that also receive single removals, so Identify keeps MESSAGE_REACTION_REMOVE */
+    #reactionRemovalListeners = 0
 
-    /** Exact message selection precedes queue admission, and user filters run outside gateway decoding */
+    /**
+     * Exact message selection precedes queue admission, and user filters run outside gateway decoding.
+     * With removals, single messageReactionRemove events reach the listener in the same order as additions
+     */
     listenReactions(
         target: MessageReference,
         listener: (reaction: MessageReaction | MessageReactionBatch, bytes: number) => void,
         shardId?: number,
+        removals = false,
     ) {
         const key = `${target.channelId}:${target.id}`
         let listeners = this.#reactionCollectors.get(key)
         if (!listeners) this.#reactionCollectors.set(key, (listeners = new Set()))
-        const offer = (message: MessageReaction | MessageReactionBatch, bytes: number, sourceShard: number) => {
-            if (shardId === undefined || shardId === sourceShard) listener(message, bytes)
+        const offer = (
+            message: MessageReaction | MessageReactionBatch,
+            bytes: number,
+            sourceShard: number,
+            removal: boolean,
+        ) => {
+            if ((removals || !removal) && (shardId === undefined || shardId === sourceShard)) listener(message, bytes)
         }
         listeners.add(offer)
+        if (removals) this.#reactionRemovalListeners += 1
+        let open = true
         return () => {
+            if (!open) return
+            open = false
+            if (removals) this.#reactionRemovalListeners -= 1
             listeners.delete(offer)
             if (!listeners.size) this.#reactionCollectors.delete(key)
         }
@@ -734,6 +752,7 @@ export class EventBus<M extends MessageCore = Message> {
             names.add("messageReactionAdd")
             names.add("messageReactionAddMany")
         }
+        if (this.#reactionRemovalListeners) names.add("messageReactionRemove")
         return names
     }
     #closed = false
@@ -855,10 +874,14 @@ export class EventBus<M extends MessageCore = Message> {
     }
     offer<K extends EventName>(event: K, message: EventMap<M>[K], bytes: number, shardId = 0) {
         if (this.#sealed) return
-        if (event === "messageReactionAdd" || event === "messageReactionAddMany") {
+        if (
+            event === "messageReactionAdd" ||
+            event === "messageReactionAddMany" ||
+            (event === "messageReactionRemove" && this.#reactionRemovalListeners)
+        ) {
             const reaction = message as MessageReaction | MessageReactionBatch
             for (const offer of this.#reactionCollectors.get(`${reaction.channelId}:${reaction.id}`) ?? [])
-                offer(reaction, bytes, shardId)
+                offer(reaction, bytes, shardId, event === "messageReactionRemove")
         }
         if (event === "messageCreate" && isMessageEvent<K, M>(event, message)) {
             const created = message

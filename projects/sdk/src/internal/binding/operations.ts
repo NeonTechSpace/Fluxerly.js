@@ -28,6 +28,8 @@ import type { MessageCleanupOptions, MessageCleanupPlan, MessageCleanupSelection
 import { cleanup, previewCleanup } from "#sdk/internal/message-cleanup"
 import { configureLogging } from "#sdk/internal/logging"
 import type { LogLevelSettings } from "#sdk/logging"
+import { paginate } from "#sdk/internal/reaction-pages"
+import type { ChannelPaginateOptions, PageInput } from "#sdk/reaction-pages"
 import { searchMessagePagination } from "#sdk/internal/message-search-workflow"
 import type {
     BanInput,
@@ -904,6 +906,12 @@ function defineOperations<M extends MessageCore>() {
             ),
             collect: custom("custom", defaultCollect<M>, nativeCollect<M>),
             collectReactions: custom("custom", defaultCollectReactions<M>, nativeCollectReactions<M>),
+            paginate: named(
+                "paginate",
+                op(2, (owner: Owner, channelId: string, pages: readonly PageInput[], options: ChannelPaginateOptions) =>
+                    paginate(owner, channelId, pages, options),
+                ),
+            ),
             get: get((owner: Owner, message: MessageReference) => owner.get(message)),
             send: named(
                 "send",
