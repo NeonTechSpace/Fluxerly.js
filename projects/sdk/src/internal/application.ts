@@ -1,6 +1,6 @@
 /**
  * Bot application request: Validates the current-application read and projects its response.
- * Invariant: The operation is a bot-token read, and the projection keeps only the listed public application fields.
+ * Invariant: The operation is a bot-token read, and the projection keeps only the listed public application fields and the owner user ID.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import type { BotApplication } from "#sdk/application"
@@ -24,7 +24,9 @@ function decodeApplication(value: unknown): BotApplication | undefined {
         !nullableText(value.icon) ||
         !nullableText(value.description) ||
         typeof value.bot_public !== "boolean" ||
-        typeof value.bot_require_code_grant !== "boolean"
+        typeof value.bot_require_code_grant !== "boolean" ||
+        !record(value.owner) ||
+        !identifier(value.owner.id)
     )
         return undefined
     return Object.freeze({
@@ -34,10 +36,11 @@ function decodeApplication(value: unknown): BotApplication | undefined {
         description: value.description,
         botPublic: value.bot_public,
         botRequireCodeGrant: value.bot_require_code_grant,
+        ownerId: value.owner.id,
     })
 }
 
-/** Fetch only the bot-token response's public application fields, without cache retention or owner/application management */
+/** Fetch only the bot-token response's public application fields and owner ID, without cache retention or application management */
 export function applicationCurrent(): BotApplicationRequest<BotApplication> {
     return {
         path: "/oauth2/applications/@me",

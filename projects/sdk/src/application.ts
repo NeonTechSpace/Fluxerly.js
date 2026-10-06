@@ -7,8 +7,8 @@ import type { MessageOperationOptions } from "./messages.js"
 
 /**
  * Application details returned by application.fetch for this client's bot token.
- * Use id to build an installation link. The bot flags show the current installation settings.
- * The SDK freezes this result but does not cache it. It contains no owner identity, redirect URIs, verification keys, client secrets or nested bot account
+ * Use id to build an installation link. The bot flags show the current installation settings, and ownerId identifies the account that owns the application.
+ * The SDK freezes this result but does not cache it. Of the owner it keeps only the user ID, and it contains no redirect URIs, verification keys, client secrets or nested bot account
  *
  * @category Client and lifecycle
  */
@@ -25,6 +25,8 @@ export interface BotApplication {
     readonly botPublic: boolean
     /** Whether Fluxer currently requires its OAuth2 code-grant flow for this bot */
     readonly botRequireCodeGrant: boolean
+    /** Decimal user ID of the account that owns the application, the ID that guards.ownerOnly() allows when called without IDs */
+    readonly ownerId: string
 }
 
 /**

@@ -204,13 +204,23 @@ async function observeHeartbeat(client) {
 }
 
 function verifyCurrentApplication(value, applicationId, response) {
-    assert.deepEqual(Object.keys(value), ["id", "name", "icon", "description", "botPublic", "botRequireCodeGrant"])
+    assert.deepEqual(Object.keys(value), [
+        "id",
+        "name",
+        "icon",
+        "description",
+        "botPublic",
+        "botRequireCodeGrant",
+        "ownerId",
+    ])
     assert.equal(value.id, applicationId)
     assert.equal(value.name, response.name)
     assert.equal(value.icon, response.icon)
     assert.equal(value.description, response.description)
     assert.equal(value.botPublic, response.bot_public)
     assert.equal(value.botRequireCodeGrant, response.bot_require_code_grant)
+    assert.match(value.ownerId, /^[1-9]\d*$/)
+    assert.equal(value.ownerId, response.owner.id)
     assert.ok(Object.isFrozen(value))
     assert.equal(Object.hasOwn(value, "owner"), false)
     assert.equal(Object.hasOwn(value, "redirectUris"), false)

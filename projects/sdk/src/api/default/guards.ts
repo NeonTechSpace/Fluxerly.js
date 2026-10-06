@@ -3,6 +3,7 @@ import type { PermissionName } from "#sdk/helpers"
 import type { Message, MessageCore } from "#sdk/messages"
 import type { GuildRole } from "#sdk/guilds"
 import {
+    applicationOwners,
     guardDenials,
     inGuild,
     missingPermissions,
@@ -59,7 +60,20 @@ export interface DefaultGuards {
      * rejection, leaves the channel unconfirmed and fails the command, which is reported with the command name
      */
     dmOnly<M extends MessageCore = Message>(): DefaultPrefixCommandGuard<M>
-    /** Allow the command only for the given decimal user IDs, such as the bot owner's */
+    /**
+     * Allow the command only for the owner of the bot's application, as Fluxer reports it.
+     * The first invocation reads the owner's user ID with application.fetch, and the guard keeps it for the rest of the
+     * client's lifetime, so later invocations decide without a request and an ownership transfer applies to a new client.
+     * Invocations that start before the first read completes each read it.
+     * A failed read, such as a network failure, timeout or rejection, keeps nothing and fails the command, which is
+     * reported with the command name, and the next invocation reads again
+     */
+    ownerOnly<M extends MessageCore = Message>(): DefaultPrefixCommandGuard<M>
+    /**
+     * Allow the command only for the given decimal user IDs, such as the bot owner's.
+     * An undefined argument, such as an unset environment variable, throws ConfigurationError rather than falling back
+     * to the application owner
+     */
     ownerOnly<M extends MessageCore = Message>(ownerIds: string | readonly string[]): DefaultPrefixCommandGuard<M>
     /**
      * Allow the command only when the invoking member has every named permission in the message's channel, and deny it in
@@ -97,9 +111,21 @@ export const guards: DefaultGuards = Object.freeze({
             if (notPrivateChannel(read.error)) return denied
             throw read.error
         },
-    ownerOnly: <M extends MessageCore>(ownerIds: string | readonly string[]): DefaultPrefixCommandGuard<M> => {
-        const owners = validOwnerIds(ownerIds)
-        return ({ message }) => owners.has(message.author.id) || { deny: guardDenials.ownerOnly }
+    ownerOnly: <M extends MessageCore>(
+        ...ownerIds: [] | [string | readonly string[]]
+    ): DefaultPrefixCommandGuard<M> => {
+        const denied = { deny: guardDenials.ownerOnly }
+        if (ownerIds.length === 0)
+            return async ({ client, message, signal }) => {
+                let owner = applicationOwners.get(client)
+                if (owner === undefined) {
+                    owner = orThrow(await client.application.fetch({ signal })).ownerId
+                    applicationOwners.set(client, owner)
+                }
+                return owner === message.author.id || denied
+            }
+        const owners = validOwnerIds(ownerIds[0])
+        return ({ message }) => owners.has(message.author.id) || denied
     },
     requirePermissions: <M extends MessageCore>(names: readonly PermissionName[]): DefaultPrefixCommandGuard<M> => {
         const required = permissionNames(names)

@@ -7,11 +7,11 @@ import type { ResultAsync } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
 
 /**
- * Read the authenticated bot's application identity and selected public settings.
+ * Read the authenticated bot's application identity, its owner's user ID and selected public settings.
  * No gateway connection, application management or authorization-page navigation is performed.
  * The GET uses shared request limits, the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured) and at most two transient read retries.
  * The frozen result is not cached.
- * Owner identity, redirect URIs, verification keys, client secrets and nested bot fields are excluded.
+ * Of the owner only the user ID is kept, and redirect URIs, verification keys, client secrets and nested bot fields are excluded.
  * Fluxer decides application visibility and installability.
  * Input, HTTP and malformed-response failures return BotApplicationOperationError.
  * Closure returns ClientClosedError.
@@ -32,7 +32,7 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
 export interface CurrentBotApplication {
     /**
      * Fetch this bot token's application data from /oauth2/applications/@me.
-     * Only the documented fields are returned, frozen, without cache storage, gateway events, owner lookup or follow-up requests
+     * Only the documented fields are returned, frozen, without cache storage, gateway events, owner profile lookup or follow-up requests
      */
     fetch(
         options?: DefaultBotApplicationOperationOptions,

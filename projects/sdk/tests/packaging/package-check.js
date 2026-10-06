@@ -428,6 +428,25 @@ try {
                 "AGENTS.md names the project's command",
             )
             assert.ok(agents.includes("1. Import only from"), "AGENTS.md contains the rules")
+
+            // The installed command writes a starter project into an empty folder, whose own test passes after installing the SDK
+            const cli = join(installed, "dist/cli.js")
+            const starter = join(temporary, "init")
+            mkdirSync(starter)
+            const initOutput = run(process.execPath, [cli, "init"], starter)
+            assert.ok(initOutput.includes(`npm install ${manifest.name}`), "fluxerly init prints the next steps")
+            assert.throws(
+                () => run(process.execPath, [cli, "init"], starter),
+                (error) => error.status === 1 && /already exist.*wrote nothing/.test(error.stderr),
+                "A second fluxerly init refuses the existing files",
+            )
+            writeFileSync(join(starter, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
+            packageManager(
+                ["add", `file:${tarball.replaceAll("\\", "/")}`, "--prefer-offline", "--ignore-scripts"],
+                starter,
+            )
+            packageManager(["test"], starter)
+            console.log("fluxerly init starter project passed its generated test")
         }
         const installedManifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"))
         assert.ok(!installedManifest.private && !installedManifest.scripts && !installedManifest.devDependencies)

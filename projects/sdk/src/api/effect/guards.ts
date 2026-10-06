@@ -6,7 +6,9 @@ import type { Message, MessageCore } from "#sdk/messages"
 import type { ChannelOperationFailure } from "#sdk/channels"
 import type { GuildOperationFailure, GuildRole } from "#sdk/guilds"
 import type { UserOperationFailure } from "#sdk/users"
+import type { BotApplicationOperationFailure } from "#sdk/application"
 import {
+    applicationOwners,
     guardDenials,
     inGuild,
     missingPermissions,
@@ -43,7 +45,20 @@ export interface NativeGuards {
      * reported with the command name
      */
     dmOnly<M extends MessageCore = Message>(): NativePrefixCommandGuard<UserOperationFailure, never, M>
-    /** Allow the command only for the given decimal user IDs, such as the bot owner's */
+    /**
+     * Allow the command only for the owner of the bot's application, as Fluxer reports it.
+     * The first invocation reads the owner's user ID with application.fetch, and the guard keeps it for the rest of the
+     * client's lifetime, so later invocations decide without a request and an ownership transfer applies to a new client.
+     * Invocations that start before the first read completes each read it.
+     * A failed read, such as a network failure, timeout or rejection, keeps nothing and fails the guard's Effect with
+     * that BotApplicationOperationFailure, which is reported with the command name, and the next invocation reads again
+     */
+    ownerOnly<M extends MessageCore = Message>(): NativePrefixCommandGuard<BotApplicationOperationFailure, never, M>
+    /**
+     * Allow the command only for the given decimal user IDs, such as the bot owner's.
+     * An undefined argument, such as an unset environment variable, throws ConfigurationError rather than falling back
+     * to the application owner
+     */
     ownerOnly<M extends MessageCore = Message>(
         ownerIds: string | readonly string[],
     ): NativePrefixCommandGuard<never, never, M>
@@ -105,12 +120,26 @@ export const guards: NativeGuards = Object.freeze({
                     Effect.catchIf(notPrivateChannel, () => Effect.succeed(denied)),
                 )
             }),
-    ownerOnly: <M extends MessageCore>(
-        ownerIds: string | readonly string[],
-    ): NativePrefixCommandGuard<never, never, M> => {
-        const owners = validOwnerIds(ownerIds)
-        return ({ message }) => Effect.succeed(owners.has(message.author.id) || { deny: guardDenials.ownerOnly })
-    },
+    // The explicit-ID overload cannot fail, which this single implementation signature does not express
+    ownerOnly: (<M extends MessageCore>(
+        ...ownerIds: [] | [string | readonly string[]]
+    ): NativePrefixCommandGuard<BotApplicationOperationFailure, never, M> => {
+        const decide = (allowed: boolean): PrefixCommandGuardResult => allowed || { deny: guardDenials.ownerOnly }
+        if (ownerIds.length === 0)
+            return ({ client, message }) =>
+                Effect.suspend(() => {
+                    const known = applicationOwners.get(client)
+                    if (known !== undefined) return Effect.succeed(decide(known === message.author.id))
+                    return client.application.fetch().pipe(
+                        Effect.map(({ ownerId }) => {
+                            applicationOwners.set(client, ownerId)
+                            return decide(ownerId === message.author.id)
+                        }),
+                    )
+                })
+        const owners = validOwnerIds(ownerIds[0])
+        return ({ message }) => Effect.succeed(decide(owners.has(message.author.id)))
+    }) as NativeGuards["ownerOnly"],
     requirePermissions: <M extends MessageCore>(
         names: readonly PermissionName[],
     ): NativePrefixCommandGuard<GuildOperationFailure | ChannelOperationFailure, never, M> => {

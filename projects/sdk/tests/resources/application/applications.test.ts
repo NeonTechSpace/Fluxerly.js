@@ -15,6 +15,7 @@ const wire = (extra: Record<string, unknown> = {}) => ({
     description: null,
     bot_public: true,
     bot_require_code_grant: false,
+    owner: { id: "1750000000000000001", username: "owner" },
     ...extra,
 })
 
@@ -51,7 +52,7 @@ test.each(modes)("%s projects a frozen current-bot application allowlist without
             wire({
                 icon: "bot-avatar",
                 description: "Public bot profile",
-                owner: { id: "owner", email: "owner-private@example.test" },
+                owner: { id: "1750000000000000002", username: "owner", email: "owner-private@example.test" },
                 redirect_uris: ["https://private.example.test/callback"],
                 verify_key: "compatibility-placeholder",
                 bot: { token: "bot-secret", mfa_enabled: true, authenticator_types: [0] },
@@ -68,9 +69,18 @@ test.each(modes)("%s projects a frozen current-bot application allowlist without
         description: "Public bot profile",
         botPublic: true,
         botRequireCodeGrant: false,
+        ownerId: "1750000000000000002",
     })
     expect(Object.isFrozen(application)).toBe(true)
-    expect(Object.keys(application)).toEqual(["id", "name", "icon", "description", "botPublic", "botRequireCodeGrant"])
+    expect(Object.keys(application)).toEqual([
+        "id",
+        "name",
+        "icon",
+        "description",
+        "botPublic",
+        "botRequireCodeGrant",
+        "ownerId",
+    ])
     expect(Object.hasOwn(api.client.application, "get")).toBe(false)
     expect(calls).toEqual([
         {
@@ -96,6 +106,10 @@ test.each(modes)("%s validates current-app fields and ignores excluded response 
         wire({ description: undefined }),
         wire({ bot_public: "yes" }),
         wire({ bot_require_code_grant: null }),
+        wire({ owner: undefined }),
+        wire({ owner: null }),
+        wire({ owner: { username: "owner" } }),
+        wire({ owner: { id: "owner" } }),
     ]) {
         response = malformed
         await expect(api.fetchApplication()).rejects.toMatchObject({
@@ -105,8 +119,16 @@ test.each(modes)("%s validates current-app fields and ignores excluded response 
             outcome: "unknown",
         })
     }
-    response = wire({ owner: null, redirect_uris: "not-an-array", verify_key: null, bot: { token: 4 } })
-    await expect(api.fetchApplication()).resolves.toMatchObject({ id: "1750000000000000000" })
+    response = wire({
+        owner: { id: "1750000000000000001", username: 4 },
+        redirect_uris: "not-an-array",
+        verify_key: null,
+        bot: { token: 4 },
+    })
+    await expect(api.fetchApplication()).resolves.toMatchObject({
+        id: "1750000000000000000",
+        ownerId: "1750000000000000001",
+    })
 })
 
 // Transient read retries are the shared policy covered in client/read-retries.test.ts

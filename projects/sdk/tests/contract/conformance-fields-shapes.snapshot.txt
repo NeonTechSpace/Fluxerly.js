@@ -718,6 +718,7 @@ field|shared|BotApplication.description|null | string|optional=false|nullable=tr
 field|shared|BotApplication.icon|null | string|optional=false|nullable=true
 field|shared|BotApplication.id|string|optional=false|nullable=false
 field|shared|BotApplication.name|string|optional=false|nullable=false
+field|shared|BotApplication.ownerId|string|optional=false|nullable=false
 field|shared|BotApplicationOperationError._tag|"BotApplicationOperationError"|optional=false|nullable=false
 field|shared|BotApplicationOperationError.apiError|ApiErrorDetail | null|optional=false|nullable=true
 field|shared|BotApplicationOperationError.code|string|optional=false|nullable=false

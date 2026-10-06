@@ -57,20 +57,30 @@ function agentsSection(guide: string, version: string, command: string) {
     ].join("\n")
 }
 
+/** The section for `project` built from the installed package at `packageRoot` */
+function packagedSection(project: string, packageRoot: string) {
+    const guide = readFileSync(join(packageRoot, "agents/AGENTS.md"), "utf8").replaceAll("\r\n", "\n")
+    const { version } = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { version: string }
+    return agentsSection(guide, version, refreshCommand(project))
+}
+
+/** The AGENTS.md text that writeAgentsSection creates when `project` has none */
+export function newAgentsFile(project: string, packageRoot: string): string {
+    return `# Agent instructions\n\n${packagedSection(project, packageRoot)}\n`
+}
+
 /**
  * Add or refresh the Fluxerly section in `project`/AGENTS.md, creating the file when it is missing.
  * Line endings follow the existing file. Nothing is written when the section is already current or a marker is broken
  */
 export function writeAgentsSection(project: string, packageRoot: string): AgentsSectionResult {
-    const guide = readFileSync(join(packageRoot, "agents/AGENTS.md"), "utf8").replaceAll("\r\n", "\n")
-    const { version } = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { version: string }
-    const section = agentsSection(guide, version, refreshCommand(project))
     const file = join(project, "AGENTS.md")
     const notes = [...linkNotes(project)]
     if (!existsSync(file)) {
-        writeFileSync(file, `# Agent instructions\n\n${section}\n`)
+        writeFileSync(file, newAgentsFile(project, packageRoot))
         return { status: "created", file, notes }
     }
+    const section = packagedSection(project, packageRoot)
     const current = readFileSync(file, "utf8")
     const newline = current.includes("\r\n") ? "\r\n" : "\n"
     const written = section.replaceAll("\n", newline)

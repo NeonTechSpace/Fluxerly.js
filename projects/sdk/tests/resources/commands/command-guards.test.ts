@@ -88,6 +88,17 @@ const directMessageWire = (id: string) => ({
     last_message_id: null,
 })
 
+/** A current-application response owned by the given user */
+const applicationWire = (ownerId: string) => ({
+    id: "1750000000000000000",
+    name: "Fixture bot",
+    icon: null,
+    description: null,
+    bot_public: true,
+    bot_require_code_grant: false,
+    owner: { id: ownerId, username: "owner" },
+})
+
 /** A guild text channel whose wire data carries no permission_overwrites field */
 const { permission_overwrites: _omitted, ...channelWithoutOverwrites } = channelWire
 
@@ -101,7 +112,8 @@ function channelKinds(call: RecordedCall): Response | undefined {
 }
 
 describe.each(modes)("%s built-in guards", (mode) => {
-    const guardSet = mode === "default" ? guards : nativeGuards
+    // One untyped view of both guard sets, because a union of their overloaded members is not callable
+    const guardSet: typeof guards = mode === "default" ? guards : (nativeGuards as unknown as typeof guards)
 
     test("guildOnly, dmOnly and ownerOnly deny with their reasons and allow matching messages", async () => {
         const remote = await commandFixture((call) =>
@@ -223,8 +235,76 @@ describe.each(modes)("%s built-in guards", (mode) => {
         expect(rejected).toEqual([])
     })
 
+    test("ownerOnly without IDs reads the application owner once per client and decides from it", async () => {
+        const remote = await commandFixture((call) =>
+            call.method === "GET" && call.path === "/v1/oauth2/applications/@me"
+                ? Response.json(applicationWire("30"))
+                : undefined,
+        )
+        const connected = await connect(mode)
+        const executed: string[] = []
+        const rejected: PrefixCommandRejection[] = []
+        const router = createRouter(mode, { prefix: "!" }).register({
+            name: "owner",
+            guard: guardSet.ownerOnly(),
+            onReject: (_context: unknown, rejection: PrefixCommandRejection) =>
+                act(mode, () => void rejected.push(rejection)),
+            execute: ({ message }: { message: { author: { id: string } } }) =>
+                act(mode, () => void executed.push(message.author.id)),
+        })
+        const reports = await attach(connected, router, { concurrency: 1 })
+
+        remote.deliver("!owner")
+        remote.deliver("!owner", { authorId: "31" })
+        remote.deliver("!owner")
+        await vi.waitFor(() => expect(executed.length + rejected.length).toBe(3))
+
+        expect(executed).toEqual(["30", "30"])
+        expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.ownerOnly }])
+        expect(remote.calls.filter((call) => call.path === "/v1/oauth2/applications/@me")).toHaveLength(1)
+        expect(reports).toEqual([])
+    })
+
+    test("ownerOnly without IDs fails the command when the owner read fails, and reads again next time", async () => {
+        let available = false
+        const remote = await commandFixture((call) =>
+            call.method === "GET" && call.path === "/v1/oauth2/applications/@me"
+                ? available
+                    ? Response.json(applicationWire("30"))
+                    : Response.json({ message: "Missing access", code: 0 }, { status: 403 })
+                : undefined,
+        )
+        const connected = await connect(mode)
+        const executed: string[] = []
+        const rejected: unknown[] = []
+        const router = createRouter(mode, { prefix: "!" }).register({
+            name: "owner",
+            guard: guardSet.ownerOnly(),
+            onReject: (_context: unknown, rejection: PrefixCommandRejection) =>
+                act(mode, () => void rejected.push(rejection)),
+            execute: () => act(mode, () => void executed.push("owner")),
+        })
+        const reports = await attach(connected, router, { concurrency: 1 })
+
+        remote.deliver("!owner")
+        await vi.waitFor(() => expect(reports).toHaveLength(1))
+        expect(reports[0]).toMatchObject({
+            kind: "handler",
+            command: "owner",
+            error: { _tag: "BotApplicationOperationError", operation: "application.fetch", status: 403 },
+        })
+        expect(executed).toEqual([])
+
+        available = true
+        remote.deliver("!owner")
+        await vi.waitFor(() => expect(executed).toEqual(["owner"]))
+        expect(remote.calls.filter((call) => call.path === "/v1/oauth2/applications/@me")).toHaveLength(2)
+        expect(rejected).toEqual([])
+        expect(reports).toHaveLength(1)
+    })
+
     test("guard settings are validated when the guard is created", () => {
-        for (const owners of [[], "", "abc", ["01"], [30]])
+        for (const owners of [undefined, [], "", "abc", ["01"], [30]])
             expect(configurationError(() => guardSet.ownerOnly(owners as never)).field).toBe("command")
         for (const names of [[], ["NotAPermission"], "BanMembers"])
             expect(configurationError(() => guardSet.requirePermissions(names as never)).field).toBe("command")

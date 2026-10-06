@@ -1,8 +1,10 @@
 /**
  * Built-in command guard rules shared by both API styles: Deny reasons, owner and permission-name validation, the
- * private-channel confirmation behind dmOnly and the cache-first permission reads behind requirePermissions.
+ * application owner behind ownerOnly without IDs, the private-channel confirmation behind dmOnly and the cache-first
+ * permission reads behind requirePermissions.
  * Invariant: Guards read at most the guild, member, roles and channel once per invocation, using enabled caches before
- * a request, never allow on an unconfirmed channel kind, and never retain a decision.
+ * a request, never allow on an unconfirmed channel kind, and never retain a decision. The only retained read is the
+ * application owner ID, kept per client after its first successful read
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import type { GuildChannel } from "#sdk/channels"
@@ -30,6 +32,12 @@ export function ownerIds(value: unknown): ReadonlySet<string> {
             throw new ConfigurationError("command", "The ownerOnly guard needs each owner user ID as a decimal string")
     return new Set(list as string[])
 }
+
+/**
+ * Application owner IDs that ownerOnly without IDs has read, keyed by the public client object passed to the guard.
+ * An ID stays for the client's lifetime, so an ownership transfer applies to a new client, and a failed read is never stored
+ */
+export const applicationOwners = new WeakMap<object, string>()
 
 /** Validate permission names when the guard is created */
 export function permissionNames(value: unknown): readonly PermissionName[] {
