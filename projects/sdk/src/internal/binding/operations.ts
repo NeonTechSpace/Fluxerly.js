@@ -172,6 +172,7 @@ import { webhookCreate, webhookDelete, webhookEdit, webhookFetch, webhookList } 
 import {
     defaultAttachmentStream,
     defaultCacheClear,
+    defaultCacheDelete,
     defaultCacheEntries,
     defaultCollect,
     defaultCollectReactions,
@@ -184,6 +185,7 @@ import type { DefaultContext } from "./execute.js"
 import {
     nativeAttachmentStream,
     nativeCacheClear,
+    nativeCacheDelete,
     nativeCacheEntries,
     nativeCollect,
     nativeCollectReactions,
@@ -302,6 +304,7 @@ function defineOperations<M extends MessageCore>() {
         cache: {
             entries: custom("custom", defaultCacheEntries<M>, nativeCacheEntries<M>),
             clear: custom("custom", defaultCacheClear<M>, nativeCacheClear<M>),
+            delete: custom("custom", defaultCacheDelete<M>, nativeCacheDelete<M>),
             onChange: custom("custom", defaultCacheOnChange<M>, nativeCacheOnChange<M>),
         },
         rest: {

@@ -164,22 +164,22 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
          * Targeted reads conflict only with later observations of the same account, so unrelated IDs can both populate.
          * Reads without a target ID, lost gateway connections, clear and shutdown can prevent older responses from restoring the whole category
          */
-        readonly users?: boolean | ResourceCacheSettings
+        readonly users?: boolean | ResourceCacheSettings<User>
         /** Cache private conversations from explicit reads and complete channel events, without automatically listing them.
          * A local lookup makes the item less likely to be removed for capacity, but does not extend its age limit.
          * Targeted reads, mutations and channel events conflict only for the same conversation.
          * Full-list reads, opening by user ID, account updates, connection gaps, clear and shutdown can prevent older responses from restoring the whole category
          */
-        readonly directMessages?: boolean | ResourceCacheSettings
+        readonly directMessages?: boolean | ResourceCacheSettings<DirectMessageChannel>
         /** Cache community details from explicit reads and guild create or update events, without preloading members.
          * Community removal or unavailability clears this community's cached resources, including channels
          */
-        readonly guilds?: boolean | ResourceCacheSettings
+        readonly guilds?: boolean | ResourceCacheSettings<Guild>
         /** Cache individual memberships from explicit reads, REST pages and member add or update events.
          * Member removal clears that membership.
          * Successful or uncertain role assignment clears the target
          */
-        readonly members?: boolean | ResourceCacheSettings
+        readonly members?: boolean | ResourceCacheSettings<GuildMember>
         /** Cache role definitions from explicit list, create or edit results and role events.
          * Successful or uncertain creation or reordering clears this community's cached roles.
          * Edits clear their target, or all this community's roles when changing hoistPosition.
@@ -189,15 +189,15 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
          * A guild create event replaces this community's cached roles with its complete role list.
          * The cache counts bigint permission fields as decimal strings when measuring bytes
          */
-        readonly roles?: boolean | ResourceCacheSettings
+        readonly roles?: boolean | ResourceCacheSettings<GuildRole>
         /** Cache emoji metadata from REST reads and writes, not image bytes or creator accounts.
          * A guild create event replaces this community's cached emojis with its complete list, and other community expression
          * events clear observations.
          * ResourceCacheSettings controls bounds and expiry, while gaps and shutdown release snapshots
          */
-        readonly emojis?: boolean | ResourceCacheSettings
+        readonly emojis?: boolean | ResourceCacheSettings<GuildEmoji>
         /** Cache sticker metadata, with the same bounds, expiry and invalidation rules as emojis */
-        readonly stickers?: boolean | ResourceCacheSettings
+        readonly stickers?: boolean | ResourceCacheSettings<GuildSticker>
         /** Cache community channels from explicit reads and channel create or update events, without automatically listing them.
          * A guild create event replaces this community's cached channels with the channels the bot can view.
          * Once a channel mutation is dispatched, the SDK clears this client's channel cache and prevents pending reads from restoring it.
@@ -207,7 +207,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
          * A full list removes missing channels only when no conflicting observation overlaps the read.
          * These snapshots are not a complete copy of the community's channels
          */
-        readonly channels?: boolean | ResourceCacheSettings
+        readonly channels?: boolean | ResourceCacheSettings<GuildChannel>
         /**
          * Cache messages encountered in eligible REST results and gateway events, without automatically requesting history.
          * Omission or false disables this category, while true or an options object enables it.

@@ -17,6 +17,7 @@ import { expressionItems } from "./expressions.js"
 import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
 import type { CacheChangeHub } from "./cache-changes.js"
+import { retentionAge } from "./retention-age.js"
 import { identifier, record } from "./decode/primitives.js"
 
 export type ResourceKind = "guilds" | "members" | "roles" | "emojis" | "stickers"
@@ -77,6 +78,7 @@ export class GuildCache {
         private readonly now: () => number,
         logical?: LogicalScheduler,
         readonly changes?: CacheChangeHub,
+        private readonly report: (error: unknown) => void = () => undefined,
     ) {
         this.#timer = new ExpiryTimer(
             "guild cache",
@@ -127,6 +129,25 @@ export class GuildCache {
     clear() {
         if (this.#closed) return
         this.gap()
+    }
+
+    /** Release one kind's observations and prevent earlier reads of that kind from restoring them */
+    clearKind(kind: ResourceKind) {
+        if (this.#closed) return
+        for (const request of this.#requests)
+            if (this.#selections(request).some((selection) => selection.kind === kind)) request.invalid = true
+        const held = this.#entries[kind].size > 0
+        this.#entries[kind].clear()
+        this.#bytes[kind] = 0
+        if (held && this.changes?.active) this.changes.record(kind, "clear", null)
+        this.#schedule()
+    }
+
+    /** Remove one observation and prevent overlapping earlier reads from restoring it */
+    delete(kind: ResourceKind, guildId: string, id: string) {
+        if (this.#closed) return
+        this.#evict({ kind, guildId, id })
+        this.#schedule()
     }
 
     #peek(selection: Selection) {
@@ -237,16 +258,24 @@ export class GuildCache {
         const settings = this.settings[kind]
         if (!settings) return
         const entries = this.#entries[kind]
+        const resolved = retentionAge(settings.maxAgeMs, value, `${kind} cache`, "snapshot")
+        if (this.#closed) return
         const previous = entries.get(key(selection))
+        if ("error" in resolved) {
+            if (previous) this.#remove(previous)
+            this.report(resolved.error)
+            return
+        }
+        const age = resolved.age
         // A replacement reports one set, while an older copy that the new one cannot replace reports a delete
         const replaced = previous !== undefined && this.#remove(previous, false)
         const bytes =
-            settings.maxAgeMs === 0
+            age === 0
                 ? 0
                 : Buffer.byteLength(
                       JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item)),
                   )
-        if (settings.maxAgeMs === 0 || bytes > settings.maxBytes) {
+        if (age === 0 || bytes > settings.maxBytes) {
             if (replaced) this.#changed("delete", selection)
             return
         }
@@ -257,7 +286,7 @@ export class GuildCache {
             selection,
             value,
             bytes,
-            expires: settings.maxAgeMs === null ? null : this.now() + settings.maxAgeMs,
+            expires: age === null ? null : this.now() + age,
         }
         entries.set(key(selection), entry)
         this.#bytes[kind] += bytes

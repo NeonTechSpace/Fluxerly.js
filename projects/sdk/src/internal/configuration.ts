@@ -151,12 +151,13 @@ function resourceConfiguration(value: unknown): ResourceSettings | Configuration
                 "maxBytes",
                 `The option "cache.${kind}.maxBytes" must be a positive safe integer`,
             )
-        if (!validAge(maxAgeMs))
+        if (typeof maxAgeMs !== "function" && !validAge(maxAgeMs))
             return new ConfigurationError(
                 "maxAgeMs",
-                `The option "cache.${kind}.maxAgeMs" must be null or a nonnegative safe integer of milliseconds`,
+                `The option "cache.${kind}.maxAgeMs" must be null, a nonnegative safe integer of milliseconds or a function`,
             )
-        result[kind] = { maxEntries, maxBytes, maxAgeMs }
+        // A callback is typed per category in ClientOptions, and each cache passes it only that category's snapshots
+        result[kind] = { maxEntries, maxBytes, maxAgeMs: maxAgeMs as Required<ResourceCacheSettings>["maxAgeMs"] }
     }
     return result
 }

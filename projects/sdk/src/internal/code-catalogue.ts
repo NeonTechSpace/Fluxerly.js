@@ -580,7 +580,7 @@ export const logCodes = {
     },
     "cache.policyFailed": {
         levels: ["debug", "error"],
-        meaning: "A message cache maxAgeMs function or a cache.onChange listener threw or returned an invalid value",
+        meaning: "A cache maxAgeMs function or a cache.onChange listener threw or returned an invalid value",
         action: "Fix that function or listener",
     },
     "cleanup.progressFailed": {

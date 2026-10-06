@@ -1489,7 +1489,6 @@ test.each(modes)("%s rejects invalid resource settings without running policies"
             { maxEntries: 0 },
             { maxBytes: NaN },
             { maxAgeMs: -1 },
-            { maxAgeMs: () => 100 },
             { onError: () => {} },
         ]) {
             const options = {

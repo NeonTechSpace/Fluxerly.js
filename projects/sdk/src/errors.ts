@@ -273,6 +273,7 @@ export class ConfigurationError extends FluxerlyError {
             | "maxAgeMs"
             | "kind"
             | "limit"
+            | "key"
             | "collectorOptions"
             | "channelId"
             | "guildId"

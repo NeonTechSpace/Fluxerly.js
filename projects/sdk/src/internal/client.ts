@@ -159,6 +159,20 @@ const cacheKinds = [
     "stickers",
 ] as const satisfies readonly CacheKind[]
 const emptyEntries = Object.freeze([])
+/** The documented two-part CacheChange key format of each kind that has one */
+const cachePairKeys = {
+    messages: "channelId:messageId",
+    members: "guildId:userId",
+    roles: "guildId:id",
+    emojis: "guildId:id",
+    stickers: "guildId:id",
+} as const
+/** The cache kind, or ConfigurationError for misuse */
+function validCacheKind(kind: unknown): CacheKind {
+    if (!(cacheKinds as readonly unknown[]).includes(kind))
+        throw new ConfigurationError("kind", `The cache kind must be one of ${cacheKinds.join(", ")}`)
+    return kind as CacheKind
+}
 const disabledCacheDiagnostic: CacheDiagnostic = Object.freeze({
     configured: false,
     retainedEntries: 0,
@@ -361,6 +375,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         this.memberChunks = new MemberChunkOwner(this.#gatewayRequests, logical, route)
         this.logging = configuration.logging
         this.failures = failures
+        const reportCache = (error: unknown) => this.failures.report({ kind: "cache", error })
         this.cache = configuration.cache
             ? new MessageCache(
                   configuration.cache,
@@ -371,12 +386,18 @@ export class ClientOwner<M extends MessageCore = Message> {
               )
             : undefined
         this.resources = Object.keys(configuration.resourceCache).length
-            ? new GuildCache(configuration.resourceCache, () => logical.now(), logical, this.cacheChanges)
+            ? new GuildCache(configuration.resourceCache, () => logical.now(), logical, this.cacheChanges, reportCache)
             : undefined
         this.channelCache = configuration.channelCache
-            ? new ChannelCache(configuration.channelCache, () => logical.now(), logical, this.cacheChanges)
+            ? new ChannelCache(configuration.channelCache, () => logical.now(), logical, this.cacheChanges, reportCache)
             : undefined
-        this.userCache = new UserCache(configuration.userCache, () => logical.now(), logical, this.cacheChanges)
+        this.userCache = new UserCache(
+            configuration.userCache,
+            () => logical.now(),
+            logical,
+            this.cacheChanges,
+            reportCache,
+        )
         this.instance = new InstanceResolver(configuration.instance, scope, {
             http: transport.http,
             onDiscovered: (resolved) => {
@@ -654,8 +675,53 @@ export class ClientOwner<M extends MessageCore = Message> {
             return Effect.sync(() => this.#cacheEntries(kind, limit))
         })
     }
-    clearCache() {
-        clearCaches(this)
+    /** The public cache.clear: Every cache, or one validated kind */
+    clearCache(kind?: CacheKind) {
+        if (kind === undefined) {
+            clearCaches(this)
+            return
+        }
+        const valid = validCacheKind(kind)
+        switch (valid) {
+            case "messages":
+                return this.cache?.clear()
+            case "guilds":
+            case "members":
+            case "roles":
+            case "emojis":
+            case "stickers":
+                return this.resources?.clearKind(valid)
+            case "channels":
+                return this.channelCache?.clear()
+            case "users":
+            case "directMessages":
+                return this.userCache.invalidate(valid)
+        }
+    }
+    /** The public cache.delete: One entry by its validated CacheChange key */
+    deleteCacheEntry(kind: CacheKind, key: string) {
+        const valid = validCacheKind(kind)
+        const format = cachePairKeys[valid as keyof typeof cachePairKeys] as string | undefined
+        const parts = typeof key === "string" ? key.split(":") : []
+        if (parts.length !== (format === undefined ? 1 : 2) || !parts.every(identifier))
+            throw new ConfigurationError("key", `A ${valid} cache key must be ${format ?? "a decimal ID"}`)
+        const [first, second] = parts as [string, string | undefined]
+        switch (valid) {
+            case "messages":
+                return this.cache?.deleteMany(first, [second!])
+            case "guilds":
+            case "members":
+            case "roles":
+            case "emojis":
+            case "stickers":
+                // A community's own key is its ID, which the guild cache stores as both community and resource ID
+                return this.resources?.delete(valid, first, second ?? first)
+            case "channels":
+                return this.channelCache?.delete(first)
+            case "users":
+            case "directMessages":
+                return this.userCache.invalidate(valid, first)
+        }
     }
     #cacheEntries<K extends CacheKind>(kind: K, limit: number): readonly CachedResources<M>[K][] {
         switch (kind) {

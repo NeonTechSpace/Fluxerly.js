@@ -14,6 +14,7 @@ import type { EventMap, EventName } from "#sdk/events"
 import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
 import type { CacheChangeHub } from "./cache-changes.js"
+import { retentionAge } from "./retention-age.js"
 import { decodeGuildChannels } from "./channels.js"
 import { identifier, record } from "./decode/primitives.js"
 
@@ -68,6 +69,7 @@ export class ChannelCache {
         private readonly now: () => number,
         logical?: LogicalScheduler,
         readonly changes?: CacheChangeHub,
+        private readonly report: (error: unknown) => void = () => undefined,
     ) {
         this.#timer = new ExpiryTimer(
             "channel cache",
@@ -115,6 +117,13 @@ export class ChannelCache {
     clear() {
         if (this.#closed) return
         this.gap()
+    }
+
+    /** Remove one channel and invalidate overlapping requests, including ID-only routes that could belong to it */
+    delete(channelId: string) {
+        if (this.#closed) return
+        this.#evict({ channelId })
+        this.#schedule()
     }
 
     begin(request: ChannelCacheRequest): ChannelCacheGuard {
@@ -279,16 +288,24 @@ export class ChannelCache {
     #observe(channel: GuildChannel, except?: ChannelCacheGuard) {
         if (this.#closed) return
         this.#invalidate({ channelId: channel.id, guildId: channel.guildId }, except)
+        const resolved = retentionAge(this.settings.maxAgeMs, channel, "channels cache", "snapshot")
+        if (this.#closed) return
         const previous = this.#entries.get(channel.id)
+        if ("error" in resolved) {
+            if (previous) this.#remove(previous)
+            this.report(resolved.error)
+            return
+        }
+        const age = resolved.age
         // A replacement reports one set, while an older copy that the new one cannot replace reports a delete
         const replaced = previous !== undefined && this.#remove(previous, false)
         const bytes =
-            this.settings.maxAgeMs === 0
+            age === 0
                 ? 0
                 : Buffer.byteLength(
                       JSON.stringify(channel, (_, value) => (typeof value === "bigint" ? value.toString() : value)),
                   )
-        if (this.settings.maxAgeMs === 0 || bytes > this.settings.maxBytes) {
+        if (age === 0 || bytes > this.settings.maxBytes) {
             if (replaced && this.changes?.active) this.changes.record("channels", "delete", channel.id)
             return
         }
@@ -298,7 +315,7 @@ export class ChannelCache {
         const entry: Entry = {
             value: channel,
             bytes,
-            expires: this.settings.maxAgeMs === null ? null : this.now() + this.settings.maxAgeMs,
+            expires: age === null ? null : this.now() + age,
         }
         this.#entries.set(channel.id, entry)
         this.#bytes += bytes

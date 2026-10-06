@@ -12,8 +12,8 @@
 import { isDeepStrictEqual } from "node:util"
 import type { CacheDiagnostic } from "#sdk/client"
 import type { Message, MessageCore, MessageReference } from "#sdk/messages"
-import { validAge, type CacheConfiguration } from "./configuration.js"
-import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
+import type { CacheConfiguration } from "./configuration.js"
+import { retentionAge } from "./retention-age.js"
 import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
 import type { CacheChangeHub } from "./cache-changes.js"
@@ -178,29 +178,15 @@ export class MessageCache<M extends MessageCore = Message> {
     observe(message: M, request?: CacheRequest) {
         if (this.#closed || !this.settings) return
         this.#invalidate(message, request)
-        let age: unknown = this.settings.maxAgeMs ?? null
-        try {
-            if (typeof age === "function") age = age(message)
-        } catch (error) {
+        const resolved = retentionAge(this.settings.maxAgeMs ?? null, message, "message cache", "message")
+        if ("error" in resolved) {
             this.#remove(message)
-            this.report(error, message)
+            this.report(resolved.error, message)
             this.#schedule()
             return
         }
         if (this.#closed || !this.settings) return
-        if (!validAge(age)) {
-            discardInvalidCallbackReturn(age)
-            this.#remove(message)
-            this.report(
-                new TypeError(
-                    // oxlint-disable-next-line typescript/no-base-to-string -- object and function values take the preceding branch
-                    `The message cache maxAgeMs callback returned ${age === undefined ? "undefined" : typeof age === "object" || typeof age === "function" ? "a non-number value" : String(age)}, but it must return null or a nonnegative safe integer, so the message was not cached`,
-                ),
-                message,
-            )
-            this.#schedule()
-            return
-        }
+        const age = resolved.age
         const bytes = age === 0 ? 0 : Buffer.byteLength(JSON.stringify(message))
         // A replacement reports one set, while an older copy that the new one cannot replace reports a delete
         const replaced = this.#remove(message, false)

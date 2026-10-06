@@ -8,7 +8,8 @@ import type { Message, MessageCore } from "./messages.js"
  *
  * The key identifies the entry within its kind, using decimal IDs:
  * Messages use `channelId:messageId`, members use `guildId:userId`, and roles, emojis and stickers use `guildId:id`.
- * Communities, channels, users and direct messages use the resource ID alone. A clear has a null key
+ * Communities, channels, users and direct messages use the resource ID alone. A clear has a null key.
+ * The cache.delete() method accepts the same keys
  *
  * @example
  * ```ts
@@ -33,8 +34,8 @@ export interface CacheChange {
     /**
      * What happened to the local copy.
      * The value set means an entry was stored or replaced, even with identical content.
-     * The value delete means one entry was removed, including removal by expiry, capacity eviction, an event, a write or a connection gap limited to known communities.
-     * The value clear means every entry of this kind was released at once, as by cache.clear(), shutdown, a connection gap of unknown scope
+     * The value delete means one entry was removed, including removal by cache.delete(), expiry, capacity eviction, an event, a write or a connection gap limited to known communities.
+     * The value clear means every entry of this kind was released at once, as by cache.clear() with or without this kind, shutdown, a connection gap of unknown scope
      * or an event or write whose effect cannot be narrowed to single entries.
      * No delete is reported for the entries a clear released
      */
@@ -44,6 +45,7 @@ export interface CacheChange {
 }
 
 /** Set memory-only cache bounds for a resource category such as users, communities (the guilds category) or channels.
+ * The type parameter is the category's snapshot type, which a maxAgeMs callback receives.
  * Use true or an options object in ClientOptions.cache to enable that category, which is otherwise disabled.
  * The SDK keeps frozen copies of resources encountered through supported reads and events, not every remote resource.
  * Fetches still contact Fluxer, writes still execute, and the SDK does no persistence or background refresh.
@@ -57,7 +59,7 @@ export interface CacheChange {
  *
  * @category Caching
  */
-export interface ResourceCacheSettings {
+export interface ResourceCacheSettings<T = unknown> {
     /** Maximum snapshots kept for this category across the client, as a positive safe integer.
      * Defaults to 1,000, not a limit per community
      */
@@ -68,13 +70,27 @@ export interface ResourceCacheSettings {
      * Cache keys, runtime overhead and caller-held copies are excluded, so this is not an exact heap or process-memory limit
      */
     readonly maxBytes?: number
-    /** How long to keep a snapshot after observation, in nonnegative safe-integer milliseconds.
-     * Null or omission disables time expiry, while zero retains nothing.
+    /**
+     * How long to keep each accepted snapshot, in milliseconds, or a synchronous function that chooses that duration.
+     * Use a nonnegative safe integer, zero to skip retention, or null to disable age expiry.
+     * Omitting this setting also disables age expiry
+     *
+     * The function receives the frozen snapshot and must return a duration or null, so it can cache selectively,
+     * for example by returning zero for snapshots of communities or channels the application does not need.
+     * A throw, undefined, Promise, thenable or invalid number removes the older copy and reports a cache failure with the thrown value or an explanation.
+     * That failure goes to the client-level onError option as a cache FailureReport, or is logged at Error with the thrown value when no hook is set.
+     * Event delivery and successful REST results still succeed when the policy fails.
+     * The SDK does not await or cancel invalid promises and thenables
+     *
+     * Each eligible replacement starts a new age, even when values are unchanged.
      * Local lookups do not renew age, and expiry removes SDK references without fetching a replacement.
      * Expiry runs without a lookup and can be delayed by an event-loop stall.
-     * Unlike message caching, this setting accepts no duration callback
+     * Capacity limits can remove a snapshot before its age limit
+     *
+     * Keep the function nonblocking and side-effect-free, since it runs while the SDK accepts an observation.
+     * Changing state captured by the function affects later observations only
      */
-    readonly maxAgeMs?: number | null
+    readonly maxAgeMs?: number | null | ((resource: T) => number | null)
 }
 
 /**

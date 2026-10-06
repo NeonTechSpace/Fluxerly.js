@@ -54,8 +54,13 @@ export const nativeCacheEntries =
 
 export const nativeCacheClear =
     <M extends MessageCore>(owner: ClientOwner<M>) =>
-    () =>
-        owner.clearCache()
+    (kind?: CacheKind) =>
+        owner.clearCache(kind)
+
+export const nativeCacheDelete =
+    <M extends MessageCore>(owner: ClientOwner<M>) =>
+    (kind: CacheKind, key: string) =>
+        owner.deleteCacheEntry(kind, key)
 
 export const nativeMemberChunks =
     <M extends MessageCore>(owner: ClientOwner<M>) =>

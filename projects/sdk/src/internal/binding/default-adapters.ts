@@ -391,8 +391,13 @@ export const defaultCacheEntries =
 
 export const defaultCacheClear =
     <M extends MessageCore>({ owner }: DefaultContext<M>) =>
-    () =>
-        owner.clearCache()
+    (kind?: CacheKind) =>
+        owner.clearCache(kind)
+
+export const defaultCacheDelete =
+    <M extends MessageCore>({ owner }: DefaultContext<M>) =>
+    (kind: CacheKind, key: string) =>
+        owner.deleteCacheEntry(kind, key)
 
 export const defaultCollect =
     <M extends MessageCore>({ owner }: DefaultContext<M>) =>

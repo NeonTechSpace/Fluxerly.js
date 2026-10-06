@@ -16,7 +16,7 @@ export interface CacheObserver {
 }
 
 /**
- * Inspect or clear data already held in this client's caches.
+ * Inspect, clear or remove data already held in this client's caches.
  * These methods do not fetch, refresh or change remote resources
  *
  * @category Caching
@@ -40,12 +40,35 @@ export interface ClientCache<M extends MessageCore = Message> {
     entries<K extends CacheKind>(kind: K, options?: CacheEntriesOptions): readonly CachedResources<M>[K][]
     /**
      * Release data held by this client's caches without changing which caches are enabled.
+     * Pass a kind to release only that category, or omit it to release every category.
      * Objects already returned to the caller, requests and remote resources stay unchanged.
-     * Older in-flight reads cannot refill the cleared entries, while later reads can cache normally.
+     * Older in-flight reads cannot refill the cleared entries and may skip caching their results, while later reads can cache normally.
      * Existing write-related invalidation remains in effect.
-     * This runs immediately, takes no signal and can be repeated, including after closure
+     * Each category that held entries reports one clear change to cache.onChange listeners, and a disabled category is left as is.
+     * This runs immediately, takes no signal and can be repeated, including after closure.
+     * An invalid kind is misuse: Both APIs throw ConfigurationError without exposing the rejected value
      */
-    clear(): void
+    clear(kind?: CacheKind): void
+    /**
+     * Remove one entry from a cache category by its key, without fetching, refreshing or changing the remote resource.
+     * The key uses the format described on CacheChange: `channelId:messageId` for messages, `guildId:userId` for members,
+     * `guildId:id` for roles, emojis and stickers, and the resource ID alone for communities, channels, users and direct messages.
+     * Objects already returned to the caller stay unchanged.
+     * Reads of this category already in flight cannot restore the removed entry and some may skip caching their other results,
+     * while later reads and events can cache it again.
+     * A removed entry reports one delete change to cache.onChange listeners, and a missing entry or disabled category is left as is.
+     * This runs immediately, takes no signal and can be repeated, including after closure.
+     * An invalid kind or key is misuse: Both APIs throw ConfigurationError without exposing the rejected value
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export function forgetMember(client: Client, guildId: string, userId: string) {
+     *     client.cache.delete("members", `${guildId}:${userId}`)
+     * }
+     * ```
+     */
+    delete(kind: CacheKind, key: string): void
     /**
      * Observe every later change to this client's local caches: Stored or replaced entries, removed entries and whole-category clears.
      * Changes are delivered in the order they were applied, from a microtask after the cache work that produced them, so a listener never runs inside a cache operation and can read or clear the cache itself.

@@ -10,6 +10,7 @@ import type { DirectMessageChannel, User } from "#sdk/users"
 import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
 import type { CacheChangeHub } from "./cache-changes.js"
+import { retentionAge } from "./retention-age.js"
 
 export type UserResources = { users: User; directMessages: DirectMessageChannel }
 type Kind = keyof UserResources
@@ -47,6 +48,7 @@ export class UserCache {
         private readonly now: () => number,
         logical?: LogicalScheduler,
         readonly changes?: CacheChangeHub,
+        private readonly report: (error: unknown) => void = () => undefined,
     ) {
         this.#timer = new ExpiryTimer(
             "user cache",
@@ -236,10 +238,18 @@ export class UserCache {
     }
 
     #observe(kind: Kind, value: User | DirectMessageChannel, settings: Required<ResourceCacheSettings>) {
+        const resolved = retentionAge(settings.maxAgeMs, value, `${kind} cache`, "snapshot")
+        if (this.#closed) return
+        if ("error" in resolved) {
+            this.#remove(kind, value.id)
+            this.report(resolved.error)
+            return
+        }
+        const age = resolved.age
         // A replacement reports one set, while an older copy that the new one cannot replace reports a delete
         const replaced = this.#remove(kind, value.id, false)
-        const bytes = Buffer.byteLength(JSON.stringify(value))
-        if (bytes > settings.maxBytes) {
+        const bytes = age === 0 ? 0 : Buffer.byteLength(JSON.stringify(value))
+        if (age === 0 || bytes > settings.maxBytes) {
             if (replaced && this.changes?.active) this.changes.record(kind, "delete", value.id)
             return
         }
@@ -250,7 +260,7 @@ export class UserCache {
             kind,
             value,
             bytes,
-            expires: settings.maxAgeMs === null ? null : this.now() + settings.maxAgeMs,
+            expires: age === null ? null : this.now() + age,
         }
         entries.set(value.id, entry)
         this.#bytes[kind] += bytes
