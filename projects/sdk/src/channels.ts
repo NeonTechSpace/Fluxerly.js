@@ -492,7 +492,9 @@ export type ChannelOperation =
 /** Expected failure when reading or changing community channels.
  * Check reason to identify the failure. Check outcome before retrying a change because an uncertain write may have happened.
  * The error contains no token, private input value or server response body. The default API returns it in an Err.
- * The Effect API fails with it in its typed error channel
+ * The Effect API fails with it in its typed error channel.
+ * A missing-permission rejection lists the permissions that the operation needs in details.requiredPermissions when
+ * the SDK knows them, as ApiErrorDetail describes
  *
  * @category Errors
  */

@@ -5,7 +5,7 @@ import { createWebhookClient as createNativeWebhook, oauth as nativeOAuth } from
 import { modes, setup, type Mode } from "../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { captureLogs } from "../support/log-capture.js"
-import { expectErr } from "../support/settle.js"
+import { expectErr, type Operation } from "../support/settle.js"
 
 // What a REST failure tells the reader: a suggested fix, unrecognized Fluxer codes, the failing response field, and
 // the Warn records that surface configuration problems even when the application handles the Result
@@ -76,6 +76,96 @@ describe.each(modes)("%s REST rejection guidance", (mode) => {
         const specific = await sendHint(status, body)
         expect(specific).toEqual(expect.any(String))
         expect(specific).not.toBe(await sendHint(status, {}))
+    })
+
+    type AnyClient = Awaited<ReturnType<typeof setup>>
+    const rejectMissingPermissions = () =>
+        stubFetchWithHostedDiscovery(async () => Response.json({ code: "MISSING_PERMISSIONS" }, { status: 403 }))
+
+    test.each<{
+        operation: string
+        call: (client: AnyClient) => Operation<unknown, unknown>
+        permissions: string[]
+        labels: string[]
+    }>([
+        {
+            operation: "channels.edit",
+            call: (client: AnyClient) => client.channels.edit("20", { name: "renamed" }),
+            permissions: ["ViewChannel", "ManageChannels"],
+            labels: ["View Channel", "Manage Channels"],
+        },
+        {
+            operation: "send",
+            call: (client: AnyClient) => client.messages.send("20", "x"),
+            permissions: ["ViewChannel", "SendMessages"],
+            labels: ["View Channel", "Send Messages"],
+        },
+        {
+            operation: "pin",
+            call: (client: AnyClient) => client.messages.pin({ id: "10", channelId: "20" }),
+            permissions: ["ViewChannel", "PinMessages"],
+            labels: ["View Channel", "Pin Messages"],
+        },
+        {
+            operation: "webhooks.create",
+            call: (client: AnyClient) => client.webhooks.create("20", { name: "Relay" }),
+            permissions: ["ViewChannel", "ManageWebhooks"],
+            labels: ["View Channel", "Manage Webhooks"],
+        },
+        {
+            operation: "invites.fetchForGuild",
+            call: (client: AnyClient) => client.invites.fetchForGuild("30"),
+            permissions: ["ManageGuild"],
+            labels: ["Manage Guild"],
+        },
+        {
+            operation: "roles.create",
+            call: (client: AnyClient) => client.roles.create("30", { name: "Helpers" }),
+            permissions: ["ManageRoles"],
+            labels: ["Manage Roles"],
+        },
+        {
+            operation: "members.ban",
+            call: (client: AnyClient) => client.members.ban({ guildId: "30", userId: "40" }),
+            permissions: ["BanMembers"],
+            // A moderation rejection can also come from role hierarchy, so the hint says so
+            labels: ["Ban Members", "highest role"],
+        },
+    ])(
+        "a missing-permission rejection of $operation names the permissions it needs",
+        async ({ operation, call, permissions, labels }) => {
+            rejectMissingPermissions()
+            const error = (await expectErr(call(await setup(mode)))) as FluxerlyError
+            expect(error.details).toMatchObject({
+                operation,
+                apiError: "MISSING_PERMISSIONS",
+                requiredPermissions: permissions,
+            })
+            expect(Object.isFrozen(error.details.requiredPermissions)).toBe(true)
+            for (const label of labels) expect(error.hint).toContain(label)
+        },
+    )
+
+    test("a missing-permission rejection of an operation without a known requirement keeps the general hint", async () => {
+        rejectMissingPermissions()
+        const client = await setup(mode)
+        // Fluxer checks a different permission for an emoji or sticker that the bot created itself
+        const emoji = (await expectErr(
+            client.emojis.edit({ guildId: "30", id: "50" }, { name: "renamed" }),
+        )) as FluxerlyError
+        const sticker = (await expectErr(client.stickers.delete({ guildId: "30", id: "50" }))) as FluxerlyError
+        const known = (await expectErr(client.roles.create("30", { name: "Helpers" }))) as FluxerlyError
+        for (const error of [emoji, sticker]) expect(error.details).not.toHaveProperty("requiredPermissions")
+        expect(emoji.hint).toEqual(expect.any(String))
+        expect(emoji.hint).toBe(sticker.hint)
+        expect(emoji.hint).not.toBe(known.hint)
+    })
+
+    test("other rejections of an operation with a known requirement list no permissions", async () => {
+        stubFetchWithHostedDiscovery(async () => Response.json({ code: "MISSING_ACCESS" }, { status: 403 }))
+        const error = (await expectErr((await setup(mode)).channels.edit("20", { name: "renamed" }))) as FluxerlyError
+        expect(error.details).not.toHaveProperty("requiredPermissions")
+        expect(error.hint).not.toContain("Manage Channels")
     })
 
     test("an unrecognized Fluxer code is kept in details and the message instead of being dropped", async () => {

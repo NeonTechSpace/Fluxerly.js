@@ -1041,7 +1041,9 @@ export type GuildOperation =
  * error in an Err, while Effect methods fail in the typed error channel. Local misuse is thrown instead: The
  * hierarchy helpers, permissions.calculate and cache lookups throw it with reason input for malformed input.
  * Cancellation and client closure use separate error types. An HTTP response does not establish that a corresponding
- * gateway event was delivered
+ * gateway event was delivered.
+ * A missing-permission rejection lists the permissions that the operation needs in details.requiredPermissions when
+ * the SDK knows them, as ApiErrorDetail describes
  *
  * @category Errors
  */

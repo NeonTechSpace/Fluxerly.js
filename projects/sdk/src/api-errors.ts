@@ -7,6 +7,11 @@ import {
 } from "./errors.js"
 import type { InputValidationDetail } from "./input-validation.js"
 import { record } from "#sdk/internal/decode/primitives"
+import {
+    permissionRequirement,
+    requiredPermissionsHint,
+    type PermissionRequirement,
+} from "#sdk/internal/permission-requirements"
 /**
  * @internal Reviewed Fluxer codes behind ApiErrorDetail. Not part of the supported API
  *
@@ -428,6 +433,13 @@ export interface ApiValidationErrorDetail {
  * These details never contain the response body, localized message, rejected value or private caller data.
  * Responses from presigned upload destinations do not receive this classification
  *
+ * For code missingPermissions, the operation error's details.requiredPermissions lists the permissions that Fluxer
+ * checks for the failed operation, as keys of Permissions such as ViewChannel, and the error's hint names them.
+ * Fluxer does not report which one is missing, so the bot may already have some of them. The list covers the
+ * operation's usual path, and the hint adds other checks behind the same rejection, such as role hierarchy or a
+ * permission that only some inputs need. Other rejections, rest.request and operations whose checks depend on data the
+ * SDK does not have, such as who created an emoji, carry no details.requiredPermissions and keep a general hint
+ *
  * @example
  * ```ts
  * import type { ApiErrorDetail } from "@neontechspace/fluxerly"
@@ -590,7 +602,10 @@ const credentialHints: Readonly<Record<Exclude<RequestCredential, "bot">, string
     oauthUser: "Refresh the user's access token, or ask the user to authorize the application again",
 }
 
-/** @internal What a rejected request tried to do, so a missing-permission hint names what that action needs */
+/**
+ * @internal What a rejected REST route does, so a logged missing-permission hint names what that route needs.
+ * Operation errors name the permissions of their operation instead
+ */
 export type RequestAction = "message" | "moderation" | "other"
 
 /** Missing-permission fixes for actions whose needs are known */
@@ -605,13 +620,6 @@ const missingPermissionHints: Readonly<Record<Exclude<RequestAction, "other">, s
 export function routeAction(template: string): RequestAction {
     if (/\/(members|bans|roles)(\/|$)/.test(template)) return "moderation"
     if (/\/messages(\/|$)/.test(template)) return "message"
-    return "other"
-}
-
-/** The action of a failed operation, from its error code prefix such as message.send and its operation name */
-function operationAction(prefix: string, operation: string): RequestAction {
-    if (prefix === "message" || prefix.startsWith("message.") || operation === "directMessages.send") return "message"
-    if (/^(members|roles)\./.test(operation)) return "moderation"
     return "other"
 }
 
@@ -733,7 +741,8 @@ export function operationErrorMessage(input: {
 
 /**
  * @internal The suggested next step for an operation failure: A possibly applied write first, then Fluxer's rejection
- * category or HTTP status, then the failure reason. An input failure names the rejected path when known
+ * category or HTTP status, then the failure reason. An input failure names the rejected path when known, and a
+ * missing permission names the permissions of a supplied requirement
  */
 export function operationFailureHint(input: {
     readonly reason: string
@@ -745,7 +754,8 @@ export function operationFailureHint(input: {
     readonly inputPath?: string | null | undefined
     readonly oauthError?: string | null
     readonly credential?: RequestCredential
-    readonly action?: RequestAction
+    /** What the failed operation requires, supplied only for a missing-permission rejection */
+    readonly requirement?: PermissionRequirement | undefined
 }): string | undefined {
     const { reason, outcome } = input
     const read = input.read === true
@@ -753,8 +763,9 @@ export function operationFailureHint(input: {
     if (reason === "rateLimit" || (outcome === "unknown" && !read)) return general
     if (reason === "rejected" || reason === "notFound")
         return (
+            (input.requirement === undefined ? undefined : requiredPermissionsHint(input.requirement)) ??
             oauthErrorHint(input.oauthError ?? null) ??
-            apiErrorHint(input.apiError ?? null, input.status ?? null, input.credential, input.action) ??
+            apiErrorHint(input.apiError ?? null, input.status ?? null, input.credential) ??
             (reason === "notFound" ? apiErrorHints.unknownResource : undefined)
         )
     if (reason === "input" && input.inputPath) return `Correct ${input.inputPath}. Nothing was sent to Fluxer`
@@ -841,20 +852,25 @@ export function operationErrorText(subject: string, fields: OperationErrorFields
     })
 }
 
-/** @internal Code, hint, cause and safe details for a resource operation error */
+/**
+ * @internal Code, hint, cause and safe details for a resource operation error. A missing-permission rejection of an
+ * operation with a known requirement names its permissions in the hint and in details.requiredPermissions
+ */
 export function operationErrorSettings(
     prefix: string,
     fields: OperationErrorFields<string, string, string>,
     cause: unknown,
     credential: RequestCredential = "bot",
 ): FluxerlyErrorOptions {
+    const requirement =
+        fields.apiError?.code === "missingPermissions" ? permissionRequirement(fields.operation) : undefined
     return {
         code: `${prefix}.${fields.reason}`,
         hint: operationFailureHint({
             ...fields,
             inputPath: fields.inputValidation?.path ?? null,
             credential,
-            action: operationAction(prefix, fields.operation),
+            requirement,
         }),
         cause,
         details: operationDetails({
@@ -868,6 +884,7 @@ export function operationErrorSettings(
             responseField: fields.responseField,
             inputPath: fields.inputValidation?.path,
             read: fields.read || undefined,
+            requiredPermissions: requirement?.permissions,
         }),
     }
 }

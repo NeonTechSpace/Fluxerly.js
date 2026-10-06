@@ -1,0 +1,6 @@
+---
+"@neontechspace/fluxerly": minor
+---
+
+A missing-permission rejection now names the permissions the failed operation needs, in both entry points. When Fluxer answers HTTP 403 with `MISSING_PERMISSIONS`, guild, channel, message, send and webhook operation errors list them in `details.requiredPermissions` as `Permissions` keys, such as `["ViewChannel", "ManageChannels"]`, and the hint names them, as in "The bot needs View Channel and Manage Channels for this operation". The hint also says where to grant them and adds other checks behind the same rejection, such as role hierarchy for moderation or Manage Roles when a channel edit changes permission overwrites. Fluxer does not report which permission is missing, so the bot may already have some of the listed ones.
+The change covers 72 operations, including channel, webhook, invite, role, member moderation, message, pin and reaction operations. Operations whose checks depend on data the SDK does not have, such as editing or deleting an emoji or sticker, and `rest.request` keep a general hint without `details.requiredPermissions`. Operations without an entry that previously received the generic message-sending or moderation hint now receive the general hint instead

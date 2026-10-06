@@ -406,7 +406,9 @@ const webhookCredential = (operation: WebhookOperation): RequestCredential =>
  * An expected failure while managing a webhook or one of its messages.
  * Use reason to distinguish invalid input, an unavailable service or a rejected request, and outcome before deciding whether to retry a write.
  * If the outcome is unknown, Fluxer may already have made the change. When possible, fetch the current state before trying again.
- * Error details exclude secret-bearing URLs, raw response bodies and the submitted values
+ * Error details exclude secret-bearing URLs, raw response bodies and the submitted values.
+ * A missing-permission rejection lists the permissions that the operation needs in details.requiredPermissions when
+ * the SDK knows them, as ApiErrorDetail describes
  *
  * @category Errors
  */

@@ -89,7 +89,9 @@ export class EventWaitError extends FluxerlyError {
 /** A send, reply or forward ended without confirming that Fluxer created the message.
  * Inspect outcome before retrying, since unknown means message creation may already have occurred.
  * Even notDispatched or rejected can follow preparatory file uploads and does not prove rollback.
- * Metadata contains no Fluxer response body or message content
+ * Metadata contains no Fluxer response body or message content.
+ * A missing-permission rejection lists the permissions that sending needs in details.requiredPermissions, as
+ * ApiErrorDetail describes
  *
  * @category Errors
  */
@@ -146,6 +148,8 @@ export class MessageError extends FluxerlyError {
  * A local get cache miss is successful undefined, not this error.
  * Reads do not change messages, but a mutation with outcome unknown may already have taken effect.
  * Error details contain no response body, credential or message content.
+ * A missing-permission rejection lists the permissions that the operation needs in details.requiredPermissions when
+ * the SDK knows them, as ApiErrorDetail describes.
  * Cancellation in the default API and client closure have separate error tags and can also occur after mutation dispatch
  *
  * @category Errors

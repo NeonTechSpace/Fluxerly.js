@@ -47,7 +47,8 @@ export const operationReasonMeanings = {
     input: "An input value is invalid, so nothing was sent to Fluxer. The error's inputValidation.path names it",
     busy: "Too many requests of this kind were already pending in the client, so nothing was sent",
     notFound: "Fluxer answered HTTP 404. The resource does not exist or is not visible to this bot",
-    rejected: "Fluxer refused the request. The error's apiError, or details.providerCode for a newer code, says why",
+    rejected:
+        "Fluxer refused the request. The error's apiError, or details.providerCode for a newer code, says why. For a missing permission, details.requiredPermissions lists the permissions the operation needs when the SDK knows them",
     network: "A network error interrupted the request",
     response:
         "Fluxer's answer did not have the expected format. The failing field or check is in details.responseField",
