@@ -6,6 +6,7 @@
  */
 
 import "./internal/node-version.js"
+import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { AgentsSectionError, writeAgentsSection } from "./internal/agents-section.js"
 import { StarterConflictError, writeStarterProject } from "./internal/starter-project.js"
@@ -23,18 +24,21 @@ const messages = {
     updated: "Updated the Fluxerly section in AGENTS.md",
     current: "The Fluxerly section in AGENTS.md is already current",
 }
+const packageRoot = fileURLToPath(new URL("../", import.meta.url))
+// Install the version that wrote the starter. A prerelease's API can change between versions, so it is pinned exactly
+const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
+const exact = version.includes("-")
 const nextSteps = [
     "",
     "Next steps:",
     "1. Install the SDK with npm, pnpm or Bun:",
-    "   npm install @neontechspace/fluxerly",
-    "   pnpm add @neontechspace/fluxerly",
-    "   bun add @neontechspace/fluxerly",
+    `   npm install${exact ? " --save-exact" : ""} @neontechspace/fluxerly@${version}`,
+    `   pnpm add${exact ? " --save-exact" : ""} @neontechspace/fluxerly@${version}`,
+    `   bun add${exact ? " --exact" : ""} @neontechspace/fluxerly@${version}`,
     "2. Copy .env.example to .env and set FLUXER_BOT_TOKEN to the bot's token",
     "3. Check the bot without a token: npm test, pnpm test or bun run test",
     "4. Start the bot: npm start, pnpm start or bun run start",
 ].join("\n")
-const packageRoot = fileURLToPath(new URL("../", import.meta.url))
 
 const [command, ...rest] = process.argv.slice(2)
 if (command === "init" && rest.length === 0) {
