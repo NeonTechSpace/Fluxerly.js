@@ -1627,7 +1627,17 @@ export class ClientOwner<M extends MessageCore = Message> {
                 ),
             )
             for (let first = true; ; first = false) {
-                const exit = yield* Effect.exit(owner.#runPlan(configuration, startup, plan, first))
+                // Capture and rethrow defects or interruption while masked, as REST attempts do. Otherwise an interruption that
+                // skips this handler discards the plan's typed failure, and one pending at the mask's end discards the whole cause
+                const exit = yield* Effect.uninterruptibleMask((restore) =>
+                    Effect.exit(restore(owner.#runPlan(configuration, startup, plan, first))).pipe(
+                        Effect.flatMap((exit) =>
+                            Exit.isFailure(exit) && (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause))
+                                ? Effect.failCause(exit.cause)
+                                : Effect.succeed(exit),
+                        ),
+                    ),
+                )
                 const shardId = owner.#reshardShard
                 if (Exit.isSuccess(exit)) return
                 if (shardId === undefined || Cause.hasDies(exit.cause)) return yield* Effect.failCause(exit.cause)
