@@ -52,7 +52,7 @@ test.each([
     ["1", "1", "js"],
     ["2", "2", "ts"],
     ["3", " 3 ", "effect"],
-])("in a terminal, answering %s selects that starter", async (_, answer, template) => {
+])("without raw mode, answering %s at the numbered prompt selects that starter", async (_, answer, template) => {
     const terminal = streams(true)
     const selected = selectStarterTemplate([], terminal)
     await asked(terminal.printed, 1, terminal.output)
@@ -61,7 +61,7 @@ test.each([
     expect(terminal.printed()).toContain("3. Effect (TypeScript with the native Effect API)")
 })
 
-test("an answer outside the menu asks again", async () => {
+test("an answer outside the numbered prompt asks again", async () => {
     const terminal = streams(true)
     const selected = selectStarterTemplate([], terminal)
     await asked(terminal.printed, 1, terminal.output)
@@ -71,7 +71,7 @@ test("an answer outside the menu asks again", async () => {
     await expect(selected).resolves.toBe("ts")
 })
 
-test("input that ends before an answer cancels init", async () => {
+test("input that ends before an answer at the numbered prompt cancels init", async () => {
     const terminal = streams(true)
     const selected = selectStarterTemplate([], terminal)
     await asked(terminal.printed, 1, terminal.output)
@@ -79,10 +79,97 @@ test("input that ends before an answer cancels init", async () => {
     await expect(selected).resolves.toBe("cancelled")
 })
 
-test("Ctrl+C at the prompt cancels init", async () => {
+test("Ctrl+C at the numbered prompt cancels init", async () => {
     const terminal = streams(true)
     const selected = selectStarterTemplate([], terminal)
     await asked(terminal.printed, 1, terminal.output)
     terminal.input.write("\x03")
     await expect(selected).resolves.toBe("cancelled")
+})
+
+const showCursor = "\x1b[?25h"
+
+/** A terminal whose input supports raw mode, recording each raw mode change, so init shows the arrow-key menu */
+function menuTerminal({ colors = false } = {}) {
+    const terminal = streams(true)
+    const rawModes: boolean[] = []
+    const input = Object.assign(terminal.input, {
+        isRaw: false,
+        setRawMode(mode: boolean) {
+            rawModes.push(mode)
+            input.isRaw = mode
+        },
+    })
+    if (colors) Object.assign(terminal.output, { hasColors: () => true })
+    return { ...terminal, input, rawModes }
+}
+
+test.each([
+    ["Enter", "\r", "js", "JavaScript"],
+    ["↓ and Enter", "\x1b[B\r", "ts", "TypeScript"],
+    ["↑ from the first option and Enter", "\x1b[A\r", "effect", "Effect (TypeScript with the native Effect API)"],
+    ["j, j, k and Enter", "jjk\r", "ts", "TypeScript"],
+])("in the menu, %s selects that starter and collapses the menu to the choice", async (_, keys, template, label) => {
+    const terminal = menuTerminal()
+    const selected = selectStarterTemplate([], terminal)
+    terminal.input.write(keys)
+    await expect(selected).resolves.toBe(template)
+    expect(terminal.printed()).toContain("> JavaScript\n")
+    // The collapse clears the menu and writes the question with the choice in its place
+    expect(terminal.printed()).toContain(`\x1b[0JWhich starter should fluxerly init write? ${label}\n`)
+    expect(terminal.rawModes).toEqual([true, false])
+    expect(terminal.printed().endsWith(showCursor)).toBe(true)
+})
+
+test.each([
+    ["Escape", "\x1b"],
+    ["Ctrl+C", "\x03"],
+])("%s in the menu cancels init and restores the terminal", async (_, key) => {
+    const terminal = menuTerminal()
+    const selected = selectStarterTemplate([], terminal)
+    terminal.input.write(`\x1b[B${key}`)
+    await expect(selected).resolves.toBe("cancelled")
+    expect(terminal.rawModes).toEqual([true, false])
+    expect(terminal.input.isPaused()).toBe(true)
+    expect(terminal.printed().endsWith(showCursor)).toBe(true)
+})
+
+test("input that ends in the menu cancels init and restores the terminal", async () => {
+    const terminal = menuTerminal()
+    const selected = selectStarterTemplate([], terminal)
+    terminal.input.end()
+    await expect(selected).resolves.toBe("cancelled")
+    expect(terminal.rawModes).toEqual([true, false])
+    expect(terminal.printed().endsWith(showCursor)).toBe(true)
+})
+
+test("a failure while redrawing the menu still restores the terminal", async () => {
+    const terminal = menuTerminal()
+    const write = terminal.output.write.bind(terminal.output)
+    let writes = 0
+    // The first write draws the menu, and the second, the redraw after ↓, fails
+    terminal.output.write = ((chunk: string) => {
+        if (++writes === 2) throw new Error("The terminal went away")
+        return write(chunk)
+    }) as typeof terminal.output.write
+    const selected = selectStarterTemplate([], terminal)
+    terminal.input.write("\x1b[B")
+    await expect(selected).rejects.toThrow("The terminal went away")
+    expect(terminal.rawModes).toEqual([true, false])
+    expect(terminal.printed().endsWith(showCursor)).toBe(true)
+})
+
+test("the menu highlights in color only when the terminal supports color", async () => {
+    const colored = menuTerminal({ colors: true })
+    const coloredPick = selectStarterTemplate([], colored)
+    colored.input.write("\r")
+    await coloredPick
+    expect(colored.printed()).toContain("\x1b[36m> JavaScript\x1b[39m")
+
+    const plain = menuTerminal()
+    const plainPick = selectStarterTemplate([], plain)
+    plain.input.write("\r")
+    await plainPick
+    expect(plain.printed()).toContain("> JavaScript")
+    expect(plain.printed()).not.toContain("\x1b[36m")
 })
