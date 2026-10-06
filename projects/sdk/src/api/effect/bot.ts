@@ -2,8 +2,10 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import type * as Scope from "effect/Scope"
 import {
+    readIgnoreBots,
     reportBotFailure,
     runBotCore,
+    skipsBotMessage,
     snapshotBotEvents,
     standaloneBotLogger,
     validateBotClientOptions,
@@ -153,9 +155,18 @@ export type BotOptions<
         /** Event handlers registered before the gateway starts and closed when the bot stops.
          * Pass a function, or an object with a handler and its own delivery settings.
          * By default messageCreate runs up to 8 callbacks at a time and other events 1, and a full queue drops the oldest
-         * waiting event with a Warn record instead of stopping the bot
+         * waiting event with a Warn record instead of stopping the bot.
+         * Bot-authored messageCreate and messageUpdate events skip these handlers unless ignoreBots is false
          */
         readonly events?: BotEvents<EventError, EventServices, SelectedMessage<F>>
+        /**
+         * Skip messageCreate and messageUpdate events whose author is a bot, including this bot's own messages, before they
+         * reach the events handlers. Defaults to true, so a reply cannot trigger its own handler.
+         * Set false for a bridge or logging bot that handles every message, and check message.author.isBot where needed.
+         * Prefix commands keep their own commands.ignoreBots setting, which also defaults to true.
+         * A value other than a boolean is misuse and dies with ConfigurationError
+         */
+        readonly ignoreBots?: boolean
         /** Prefix commands registered and attached before the gateway starts. See BotCommandsOptions */
         readonly commands?: BotCommandsOptions<SelectedMessage<F>>
         /**
@@ -164,7 +175,10 @@ export type BotOptions<
          * setup finishes. A failure stops the bot before connecting, and runBot fails with ApplicationError whose source is
          * "runBot setup" and whose cause is the original failure, such as the GuildOperationError of a failed read.
          * A defect or interruption stops the bot with that cause unchanged. Passed inline to runBot, the Effect's other
-         * services are added to the bot's requirements
+         * services are added to the bot's requirements.
+         * The Effect runs in the bot's Scope, so its finalizers run and fibers it forks into that Scope are interrupted when
+         * the bot stops, after its client has shut down. The default API instead passes setup an AbortSignal that
+         * aborts when the bot begins stopping
          */
         readonly setup?: (client: Client<SelectedMessage<F>>) => Effect.Effect<unknown, unknown, Scope.Scope>
     }
@@ -202,6 +216,8 @@ export type BotEventServices<Events> = {
 /** A native bot's checked event handlers, command router and callbacks, read once before any client exists */
 interface PreparedNativeBot {
     readonly entries: ReturnType<typeof snapshotBotEvents>
+    /** Whether bot-authored messageCreate and messageUpdate events skip the handlers */
+    readonly skipBots: boolean
     readonly router: NativePrefixCommandRouter<unknown, Message> | undefined
     readonly onError: ((report: FailureReport) => Effect.Effect<unknown, unknown, never>) | undefined
     readonly setup: ((client: Client) => Effect.Effect<unknown, unknown, unknown>) | undefined
@@ -210,10 +226,11 @@ interface PreparedNativeBot {
 }
 
 /** Read and check a native bot's events, commands and setup callback. Misuse throws ConfigurationError */
-function prepareNativeBot(events: unknown, commands: unknown, setup: unknown): PreparedNativeBot {
+function prepareNativeBot(events: unknown, ignoreBots: unknown, commands: unknown, setup: unknown): PreparedNativeBot {
     if (setup !== undefined && typeof setup !== "function")
         throw new ConfigurationError("configuration", 'The option "setup" must be a function')
     const entries = snapshotBotEvents(events)
+    const skipBots = readIgnoreBots(ignoreBots)
     let router: NativePrefixCommandRouter<unknown, Message> | undefined
     let commandsFailure: ApplicationError | undefined
     try {
@@ -228,6 +245,7 @@ function prepareNativeBot(events: unknown, commands: unknown, setup: unknown): P
         throw new ConfigurationError("onError", 'The option "commands.onError" must be a function')
     return {
         entries,
+        skipBots,
         router,
         onError: onError as PreparedNativeBot["onError"],
         setup: setup as PreparedNativeBot["setup"],
@@ -247,19 +265,25 @@ function registerNativeBot(
                 yield* client.on(
                     event,
                     (payload) =>
-                        (handler as (context: BotEventContext<EventName>) => Effect.Effect<unknown, unknown, unknown>)(
-                            Object.freeze(
-                                event === "messageCreate"
-                                    ? {
-                                          event: payload,
-                                          client,
-                                          message: payload,
-                                          reply: (input: ReplyInput | string, options?: SendOptions) =>
-                                              client.messages.reply(payload as Message, input, options),
-                                      }
-                                    : { event: payload, client },
-                            ) as BotEventContext<EventName>,
-                        ),
+                        skipsBotMessage(event, payload, prepared.skipBots)
+                            ? Effect.void
+                            : (
+                                  handler as (
+                                      context: BotEventContext<EventName>,
+                                  ) => Effect.Effect<unknown, unknown, unknown>
+                              )(
+                                  Object.freeze(
+                                      event === "messageCreate"
+                                          ? {
+                                                event: payload,
+                                                client,
+                                                message: payload,
+                                                reply: (input: ReplyInput | string, options?: SendOptions) =>
+                                                    client.messages.reply(payload as Message, input, options),
+                                            }
+                                          : { event: payload, client },
+                                  ) as BotEventContext<EventName>,
+                              ),
                     options as EventHandlerOptions<unknown, unknown>,
                 ),
             )
@@ -289,8 +313,9 @@ function nativeBotSetup(
 
 /** Split runBot options once into runner settings and client settings. A throwing getter throws its value */
 function readNativeBotOptions(options: BotOptions<unknown, unknown, unknown, unknown>) {
-    const { events, commands, setup, signal, processSignals, reportFailure, drainMs, ...clientOptions } = options
-    return { events, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions }
+    const { events, ignoreBots, commands, setup, signal, processSignals, reportFailure, drainMs, ...clientOptions } =
+        options
+    return { events, ignoreBots, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions }
 }
 
 /** Recover each reporting setting independently after an option getter throws, without replacing that original defect */
@@ -330,12 +355,17 @@ function misuse(error: unknown, clientOptions: Readonly<Record<string, unknown>>
  */
 export function installNativeTestBot(
     client: Client,
-    options: { readonly events?: unknown; readonly commands?: unknown; readonly setup?: unknown },
+    options: {
+        readonly events?: unknown
+        readonly ignoreBots?: unknown
+        readonly commands?: unknown
+        readonly setup?: unknown
+    },
 ): Effect.Effect<Effect.Effect<void, ApplicationError, Scope.Scope>, ApplicationError, Scope.Scope> {
     return Effect.suspend(() => {
         let prepared: PreparedNativeBot
         try {
-            prepared = prepareNativeBot(options.events, options.commands, options.setup)
+            prepared = prepareNativeBot(options.events, options.ignoreBots, options.commands, options.setup)
         } catch (error) {
             return Effect.die(error)
         }
@@ -352,11 +382,14 @@ export function installNativeTestBot(
  * invalid command or missing token is misuse and dies with ConfigurationError. Every option is checked before any client, signal listener or request
  * exists, even when the signal is already aborted, so misuse leaves nothing to clean up.
  * Handler and command failures are isolated and reported by client.on, not bot failures.
+ * By default, messageCreate and messageUpdate events written by bots skip the events handlers. Set ignoreBots to false to opt out.
  * A failed setup Effect or a throwing commands register callback fails the bot with ApplicationError before it connects.
  * A subscription that closes normally while the bot runs fails the bot with CriticalWorkerStoppedError, and a
  * handler set to overflow "stop" that overflows is reported while the bot keeps running without it. Cleanup is awaited.
  * Aborting signal or enabled SIGINT/SIGTERM stops successfully, after running handlers and their requests had up to
  * drainMs, default 5,000 ms, to finish. Fiber interruption remains interruption and does not drain.
+ * Process signals stay opt-in here, because a launcher such as NodeRuntime.runMain already interrupts the program on
+ * SIGINT and SIGTERM. Set processSignals to true only when nothing else handles them and a drained stop is wanted.
  * By default a failure or defect that stops the bot, including misuse, is also logged once, with code
  * lifecycle.botFailed unless the client already logged that error, and sets process.exitCode to 1, so running the
  * Effect needs no further handling.
@@ -434,11 +467,12 @@ export function runBot<
             const { clientOptions, reportFailure } = readNativeBotReportingOptions(botOptions)
             return misuse(error, clientOptions, reportFailure)
         }
-        const { events, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions } = read
+        const { events, ignoreBots, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions } =
+            read
         let prepared: PreparedNativeBot
         try {
             validateRunOptions({ signal, processSignals, reportFailure, drainMs })
-            prepared = prepareNativeBot(events, commands, setup)
+            prepared = prepareNativeBot(events, ignoreBots, commands, setup)
             // Checked before the runner adds signal listeners or creates the client, so misuse has no side effects
             validateBotClientOptions(clientOptions, true)
         } catch (error) {

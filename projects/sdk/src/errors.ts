@@ -361,6 +361,7 @@ export type Operation =
     | "presence.set"
     | "presence.setMembers"
     | "cache.entries"
+    | "users.getSelf"
     | "directMessages.send"
     | import("./application.js").BotApplicationOperation
     | "oauth.create"

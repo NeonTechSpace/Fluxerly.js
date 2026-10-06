@@ -133,6 +133,7 @@ function sharedMisuse(handler: (...args: never[]) => unknown): Record<string, un
         { token, events: { messageCreate: { handler, onError: "report" } } },
         { token, setup: "later" },
         { token, processSignals: "yes", events: {} },
+        { token, ignoreBots: "no", events: { messageCreate: handler } },
         { token, processSignals: true, logging: { format: "xml" } },
         { token, events: { messageCreate: handler }, cache: "everything" },
         { token: "", processSignals: true, events: { messageCreate: handler } },
@@ -1017,6 +1018,7 @@ describe("public runBot", () => {
         const running = runBot({
             token,
             signal: abort.signal,
+            processSignals: false,
             setup: (created) => {
                 client = created
             },
@@ -1048,15 +1050,162 @@ describe("public runBot", () => {
         expect(signalListeners()).toEqual(before)
     })
 
-    test("process signal handlers are opt-in and removed after shutdown", async () => {
+    test("default runBot handles process signals unless processSignals is false and removes them after shutdown", async () => {
         const fixture = await gateway(true)
         const before = signalListeners()
-        const running = runBot({ token, processSignals: true })
+        const running = runBot({ token })
         await fixture.identified
         expect(signalListeners()).toEqual(before.map((n) => n + 1))
         process.emit("SIGINT")
         expect((await running).isOk()).toBe(true)
         expect(signalListeners()).toEqual(before)
+
+        const abort = new AbortController()
+        const installed = deferred<void>()
+        const optedOut = runBot({
+            token,
+            signal: abort.signal,
+            processSignals: false,
+            setup: () => installed.resolve(),
+        })
+        await installed.promise
+        expect(signalListeners()).toEqual(before)
+        abort.abort()
+        expect((await optedOut).isOk()).toBe(true)
+    })
+
+    test("native runBot handles process signals only when processSignals is true", async () => {
+        await gateway(true)
+        const before = signalListeners()
+        const abort = new AbortController()
+        const installed = deferred<void>()
+        const unhandled = Effect.runPromiseExit(
+            runNativeBot({ token, signal: abort.signal, setup: () => Effect.sync(() => installed.resolve()) }),
+        )
+        await installed.promise
+        // A launcher such as NodeRuntime.runMain may already handle these signals
+        expect(signalListeners()).toEqual(before)
+        abort.abort()
+        expect(Exit.isSuccess(await unhandled)).toBe(true)
+
+        const optedIn = deferred<void>()
+        const handled = Effect.runPromiseExit(
+            runNativeBot({ token, processSignals: true, setup: () => Effect.sync(() => optedIn.resolve()) }),
+        )
+        await optedIn.promise
+        expect(signalListeners()).toEqual(before.map((n) => n + 1))
+        process.emit("SIGTERM")
+        expect(Exit.isSuccess(await handled)).toBe(true)
+        expect(signalListeners()).toEqual(before)
+    })
+
+    test("default setup receives a signal that aborts when the bot begins stopping", async () => {
+        const fixture = await gateway(true)
+        const abort = new AbortController()
+        let setupSignal: AbortSignal | undefined
+        const statesAtAbort: string[] = []
+        const running = runBot({
+            token,
+            signal: abort.signal,
+            processSignals: false,
+            setup: (client, { signal }) => {
+                setupSignal = signal
+                signal.addEventListener("abort", () => statesAtAbort.push(client.state))
+            },
+        })
+        await fixture.identified
+        expect(setupSignal?.aborted).toBe(false)
+        abort.abort()
+        expect((await running).isOk()).toBe(true)
+        expect(setupSignal?.aborted).toBe(true)
+        // The signal aborts before the client closes, so setup work can end with the bot
+        expect(statesAtAbort).toHaveLength(1)
+        expect(statesAtAbort[0]).not.toBe("Closed")
+    })
+
+    test("a stop while default setup is pending aborts the setup signal", async () => {
+        await gateway(true)
+        const abort = new AbortController()
+        const started = deferred<void>()
+        let setupAborted = false
+        const running = runBot({
+            token,
+            signal: abort.signal,
+            processSignals: false,
+            setup: (_client, context) => {
+                started.resolve()
+                context.signal.addEventListener("abort", () => {
+                    setupAborted = true
+                })
+                return new Promise(() => {})
+            },
+        })
+        await started.promise
+        abort.abort()
+        expect((await running).isOk()).toBe(true)
+        expect(setupAborted).toBe(true)
+    })
+
+    test("native setup finalizers run when the bot stops, after its client has shut down", async () => {
+        await gateway(true)
+        const abort = new AbortController()
+        const installed = deferred<void>()
+        const statesAtFinalizer: string[] = []
+        const exit = Effect.runPromiseExit(
+            runNativeBot({
+                token,
+                signal: abort.signal,
+                setup: (client) =>
+                    Effect.addFinalizer(() => Effect.sync(() => statesAtFinalizer.push(client.state))).pipe(
+                        Effect.andThen(Effect.sync(() => installed.resolve())),
+                    ),
+            }),
+        )
+        await installed.promise
+        expect(statesAtFinalizer).toEqual([])
+        abort.abort()
+        expect(Exit.isSuccess(await exit)).toBe(true)
+        expect(statesAtFinalizer).toEqual(["Closed"])
+    })
+
+    test("bot-authored messages reach runBot handlers in both entry points when ignoreBots is false", async () => {
+        const botMessage = { ...messageWire, author: { id: "31", username: "bridge", bot: true } }
+        const fixture = await gateway()
+        const abort = new AbortController()
+        onTestFinished(() => abort.abort())
+        const received = deferred<boolean>()
+        const running = runBot({
+            token,
+            signal: abort.signal,
+            processSignals: false,
+            ignoreBots: false,
+            events: { messageCreate: ({ message }) => received.resolve(message.author.isBot) },
+        })
+        await fixture.identified
+        fixture.dispatch("MESSAGE_CREATE", botMessage)
+        expect(await received.promise).toBe(true)
+        abort.abort()
+        expect((await running).isOk()).toBe(true)
+
+        const nativeFixture = await gateway()
+        const nativeAbort = new AbortController()
+        onTestFinished(() => nativeAbort.abort())
+        const nativeReceived = deferred<boolean>()
+        const native = Effect.runPromiseExit(
+            runNativeBot({
+                token,
+                signal: nativeAbort.signal,
+                ignoreBots: false,
+                events: {
+                    messageCreate: ({ message }) => Effect.sync(() => nativeReceived.resolve(message.author.isBot)),
+                },
+            }),
+        )
+        await nativeFixture.identified
+        nativeFixture.dispatch("MESSAGE_CREATE", botMessage)
+        expect(await nativeReceived.promise).toBe(true)
+        nativeAbort.abort()
+        expect(Exit.isSuccess(await native)).toBe(true)
     })
 
     test("a bot subscription that closes early fails the run with the index of that subscription", async () => {

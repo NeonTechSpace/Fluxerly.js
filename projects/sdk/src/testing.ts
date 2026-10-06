@@ -272,9 +272,10 @@ export type TestBotOptions<
     }
 
 /**
- * Create a test client that runs a bot written for runBot: Its events, commands and setup callback, with the same
- * handler contexts, delivery defaults and command router as runBot. Handlers and commands are registered at once,
+ * Create a test client that runs a bot written for runBot: Its events, ignoreBots setting, commands and setup callback,
+ * with the same handler contexts, delivery defaults and command router as runBot. Handlers and commands are registered at once,
  * and ready runs setup before connecting, as runBot does, so a test drives the bot exactly as Fluxer would.
+ * The setup signal aborts when shutdown starts.
  * It returns the same test client as createTestClient, and shutdown or `await using` cleans it up. Automatic gateway
  * filtering sees the bot's handlers, commands and setup registrations, and emit rejects dispatches that list suppresses
  *
@@ -309,6 +310,7 @@ export function createTestBot<
     checkTestOptionKeys(options, botOptionKeys)
     const {
         events,
+        ignoreBots,
         commands,
         setup,
         token,
@@ -322,9 +324,9 @@ export function createTestBot<
         ...clientOptions,
         ...(token === undefined ? {} : { token }),
     } as TestClientOptions<F>)
-    let runSetup: () => Promise<void>
+    let runSetup: (signal: AbortSignal) => Promise<void>
     try {
-        runSetup = installTestBot(test.client, { events, commands, setup } as never)
+        runSetup = installTestBot(test.client, { events, ignoreBots, commands, setup } as never)
     } catch (error) {
         // The client owns no socket yet, and its cleanup failure is logged by the client, as runBot does
         void test
@@ -332,11 +334,17 @@ export function createTestBot<
             .then(undefined, (defect: unknown) => clientServices(test.client)?.logging.outputFailure(defect))
         throw error
     }
+    // Shutdown aborts the setup signal before stopping the client, as runBot does when the bot begins stopping
+    const stopping = new AbortController()
     let setupDone: Promise<void> | undefined
     const ready = async (readyOptions?: OperationOptions) => {
-        setupDone ??= runSetup()
+        setupDone ??= runSetup(stopping.signal)
         await setupDone
         await test.ready(readyOptions)
     }
-    return Object.freeze({ ...test, ready })
+    const shutdown = () => {
+        stopping.abort()
+        return test.shutdown()
+    }
+    return Object.freeze({ ...test, ready, shutdown, [Symbol.asyncDispose]: shutdown })
 }

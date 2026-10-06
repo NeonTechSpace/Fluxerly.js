@@ -412,7 +412,7 @@ export interface TestBot<M extends MessageCore = Message> extends Omit<TestClien
 }
 
 /**
- * Create a test client that runs a bot written for the native runBot: Its events, commands and setup Effect, with the
+ * Create a test client that runs a bot written for the native runBot: Its events, ignoreBots setting, commands and setup Effect, with the
  * same handler contexts, delivery defaults and command router as runBot. Pass the bot's own options object: Its
  * signal, processSignals, reportFailure and drainMs settings are ignored, an undefined token uses the fixture token, and
  * transport and instance belong to the test client. Handlers and commands are registered when the Effect runs, and ready runs setup before connecting, as runBot
@@ -463,6 +463,8 @@ export function createTestBot<
     options: Omit<TestClientOptions<OptionsError, OptionsServices, F>, "token"> & {
         /** Event handlers, as in runBot */
         readonly events?: Events & Record<Exclude<keyof Events, EventName>, never>
+        /** Skip bot-authored messageCreate and messageUpdate events in the handlers, as in runBot. Defaults to true */
+        readonly ignoreBots?: boolean
         /** Prefix commands, as in runBot */
         readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices>
         /** Startup work that ready runs before connecting, as in runBot */
@@ -493,6 +495,7 @@ export function createTestBot<
         yield* Effect.sync(() => checkTestOptionKeys(options, botOptionKeys))
         const {
             events,
+            ignoreBots,
             commands,
             setup,
             token,
@@ -506,7 +509,12 @@ export function createTestBot<
             ...clientOptions,
             ...(token === undefined ? {} : { token }),
         } as TestClientOptions<OptionsError, OptionsServices, F>)
-        const runSetup = yield* installNativeTestBot(test.client as unknown as Client, { events, commands, setup })
+        const runSetup = yield* installNativeTestBot(test.client as unknown as Client, {
+            events,
+            ignoreBots,
+            commands,
+            setup,
+        })
         // Setup runs with the services and Scope of this Effect, as runBot runs it inside its own run
         const context = yield* Effect.context<Scope.Scope>()
         const setupOnce = yield* Effect.cached(runSetup.pipe(Effect.provideContext(context)))

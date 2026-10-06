@@ -58,7 +58,7 @@ import {
     type User,
     type DirectMessageChannel,
 } from "#sdk/users"
-import { directMessageFetch, userFetch, type UserRequest } from "./users.js"
+import { decodeUser, directMessageFetch, userFetch, type UserRequest } from "./users.js"
 import {
     ChannelOperationError,
     type ChannelOperation,
@@ -813,6 +813,8 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
 
     #selfUserId: string | undefined
+    /** The bot's own public account from the latest READY that carried a complete one, for users.getSelf */
+    #selfUser: User | undefined
     /** The one users.fetchSelf read in flight, which concurrent mentions share */
     #selfUserRead: Deferred.Deferred<string | undefined> | undefined
     /** Consecutive failed reads, and the logical time before which no new read starts */
@@ -829,12 +831,15 @@ export class ClientOwner<M extends MessageCore = Message> {
     #instanceLinks: LinkHelpers | undefined
 
     /**
-     * Keep the bot account ID from a READY body's user, so mention prefixes need no REST read, and the bot's username
-     * and the shard's community count for the connected record. For a bot, READY lists each community as unavailable
+     * Keep the bot account ID from a READY body's user, so mention prefixes need no REST read, its public account for
+     * users.getSelf, and the bot's username and the shard's community count for the connected record. For a bot, READY
+     * lists each community as unavailable
      */
     #readyUser(body: unknown, shardId: number) {
         const user = record(body) && record(body.user) ? body.user : undefined
         if (identifier(user?.id) && user.id !== "0") this.#selfUserId = user.id
+        const self = decodeUser(user)
+        if (self !== undefined && self.id !== "0") this.#selfUser = self
         if (typeof user?.username === "string" && user.username.length > 0) this.#readyName = user.username
         if (record(body) && Array.isArray(body.guilds)) this.#readyCommunities.set(shardId, body.guilds.length)
         else this.#readyCommunities.delete(shardId)
@@ -882,6 +887,11 @@ export class ClientOwner<M extends MessageCore = Message> {
             // allow-silent: An ID the link helper rejects still gets the general instruction
             return "Invite it with an installation link that uses the application ID"
         }
+    }
+
+    /** The bot's own public account from the latest READY, kept for the client lifetime. It never fails */
+    getSelf(): Effect.Effect<User | undefined> {
+        return Effect.sync(() => this.#selfUser)
     }
 
     /**

@@ -6,10 +6,10 @@
  * ```ts
  * import { runBot } from "@neontechspace/fluxerly"
  *
- * // A failed run is logged and sets process.exitCode, so the returned Result needs no further handling here
+ * // A failed run is logged and sets process.exitCode, and Ctrl+C stops the bot cleanly, so the returned Result needs
+ * // no further handling here
  * await runBot({
  *     token: process.env.FLUXER_BOT_TOKEN,
- *     processSignals: true,
  *     commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Pong!") } } },
  * })
  * ```

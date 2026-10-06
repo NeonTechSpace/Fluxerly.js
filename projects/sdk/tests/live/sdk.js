@@ -182,6 +182,15 @@ async function verifyRestRequest(client, userId, run) {
     report(stage, { passed: true, remoteMutations: false })
 }
 
+// The hosted READY user decodes into the local self lookup, matching the independently verified bot identity
+async function verifyReadySelf(client, userId) {
+    stage = "ready_self_lookup"
+    const self = await readLocal(client.users.getSelf())
+    assert.equal(self?.id, userId)
+    assert.equal(self.isBot, true)
+    report(stage, { passed: true, requests: 0 })
+}
+
 async function observeHeartbeat(client) {
     stage = "heartbeat"
     const deadline = performance.now() + 65_000
@@ -228,7 +237,7 @@ async function verifyInstallationLink(link, applicationId) {
     assert.equal(target.search, url.search)
 }
 
-// Cache reads return plain values in the default API and never-failing Effects in the native API
+// Local lookups return plain values in the default API and never-failing Effects in the native API
 async function readLocal(operation) {
     if (mode === "default") return operation
     const { Effect } = await import("effect")
@@ -648,6 +657,7 @@ try {
                 } else assert.ok((await client.connect()).isOk())
                 assert.equal(client.state, "Connected")
                 report("ready", { passed: true })
+                await verifyReadySelf(client, user.id)
                 await observeHeartbeat(client)
                 if (!cancelRecovery)
                     await verifyRestRequest(client, user.id, async (operation) => {
@@ -733,6 +743,7 @@ try {
                         else yield* client.connect()
                         assert.equal(client.state, "Connected")
                         report("ready", { passed: true })
+                        yield* Effect.promise(() => verifyReadySelf(client, user.id))
                         yield* Effect.promise(() => observeHeartbeat(client))
                         if (!cancelRecovery)
                             yield* Effect.promise(() => verifyRestRequest(client, user.id, Effect.runPromise))

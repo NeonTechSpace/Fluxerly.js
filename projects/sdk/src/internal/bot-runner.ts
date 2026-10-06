@@ -1,7 +1,8 @@
 /**
  * Bot runner core shared by both entry points: Event-handler snapshots, the client lifetime and optional signal handling.
- * Invariant: SIGINT and SIGTERM are handled only with explicit processSignals: true, the listeners are removed after awaited
- * cleanup, and the runner never terminates the consumer process. A requested stop drains running work for drainMs before
+ * Invariant: SIGINT and SIGTERM are handled only when the runner receives processSignals: true, which the default entry
+ * point passes unless the application sets false and the native entry point passes only when the application sets true.
+ * The listeners are removed after awaited cleanup, and the runner never terminates the consumer process. A requested stop drains running work for drainMs before
  * the usual shutdown, while every other end shuts down at once. A failed run only sets process.exitCode, unless reportFailure is false. Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
 import * as Cause from "effect/Cause"
@@ -14,6 +15,7 @@ import { CriticalWorkerStoppedError, type RunBotOptions } from "#sdk/bot-runner"
 import type { ShutdownOptions } from "#sdk/client"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import type { EventName } from "#sdk/events"
+import type { MessageCore } from "#sdk/messages"
 import { readCaller, readInput, suspendMarked } from "./defects.js"
 import { operationSignalError } from "./operation-signal.js"
 import { clientServices } from "./client-registry.js"
@@ -107,11 +109,28 @@ export function snapshotBotEvents(
     return entries
 }
 
+/** Read the runBot ignoreBots setting, true unless it is false. Any value other than a boolean is misuse */
+export function readIgnoreBots(ignoreBots: unknown): boolean {
+    if (ignoreBots !== undefined && typeof ignoreBots !== "boolean")
+        throw new ConfigurationError("configuration", 'The option "ignoreBots" must be true or false')
+    return ignoreBots !== false
+}
+
+/** Whether a runBot handler skips this event: A messageCreate or messageUpdate whose author is a bot, while ignoreBots is on */
+export function skipsBotMessage(event: EventName, payload: unknown, ignoreBots: boolean): boolean {
+    return (
+        ignoreBots &&
+        (event === "messageCreate" || event === "messageUpdate") &&
+        (payload as MessageCore).author.isBot === true
+    )
+}
+
 /** The runBot option keys that are not client options. Each entry point removes them before validating the client options,
  * and the unknown-key hint lists them with the client keys
  */
 export const botOptionKeys = [
     "events",
+    "ignoreBots",
     "commands",
     "setup",
     "signal",

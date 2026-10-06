@@ -163,6 +163,7 @@ operation|default|Users.fetch|(id: string, options?: DefaultUserOperationOptions
 operation|default|Users.fetchProfile|(id: string, query?: UserProfileQuery | undefined, options?: DefaultUserOperationOptions | undefined) => ResultAsync<UserProfile, CancelledError | ConfigurationError | UserOperationFailure>
 operation|default|Users.fetchSelf|(options?: DefaultUserOperationOptions | undefined) => ResultAsync<User, CancelledError | ConfigurationError | UserOperationFailure>
 operation|default|Users.get|(id: string) => User | undefined
+operation|default|Users.getSelf|() => User | undefined
 operation|default|WebhookClient.delete|(options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.deleteMessage|(messageId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.edit|(input: WebhookTokenEdit, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<IncomingWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
@@ -342,6 +343,7 @@ operation|native|Users.fetch|(id: string, options?: UserOperationOptions | undef
 operation|native|Users.fetchProfile|(id: string, query?: UserProfileQuery | undefined, options?: UserOperationOptions | undefined) => Effect<UserProfile, UserOperationFailure, never>
 operation|native|Users.fetchSelf|(options?: UserOperationOptions | undefined) => Effect<User, UserOperationFailure, never>
 operation|native|Users.get|(id: string) => Effect<User | undefined, never, never>
+operation|native|Users.getSelf|() => Effect<User | undefined, never, never>
 operation|native|WebhookClient.delete|(options?: MessageOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
 operation|native|WebhookClient.deleteMessage|(messageId: string, options?: MessageOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
 operation|native|WebhookClient.edit|(input: WebhookTokenEdit, options?: MessageOperationOptions | undefined) => Effect<IncomingWebhook, WebhookOperationFailure, never>

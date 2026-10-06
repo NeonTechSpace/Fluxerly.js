@@ -321,6 +321,7 @@ function defineOperations<M extends MessageCore>() {
         },
         users: {
             get: get((owner: Owner, id: string) => owner.getUserResource("users", id)),
+            getSelf: get((owner: Owner) => owner.getSelf()),
             fetch: op(1, (owner: Owner, id: string, options?: UserOperationOptions) =>
                 owner.user("users.fetch", () => userFetch(id), options),
             ),

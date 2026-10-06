@@ -51,7 +51,7 @@ type Exceptions = {
     Subscription: "close"
 }
 
-// Cache lookups and enumeration return the value directly in the default API and a never-failing Effect in the native API
+// Local lookups and cache enumeration return the value directly in the default API and a never-failing Effect in the native API
 type Lookups = {
     Channels: "get"
     ClientCache: "entries"
@@ -62,7 +62,7 @@ type Lookups = {
     Messages: "get"
     Roles: "get"
     Stickers: "get"
-    Users: "get"
+    Users: "get" | "getSelf"
 }
 
 // Default operations report cancellation and invalid signals as failures, while native programs use interruption

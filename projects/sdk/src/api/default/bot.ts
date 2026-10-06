@@ -4,8 +4,10 @@ import * as Exit from "effect/Exit"
 import { errAsync, okAsync, ResultAsync, type Result } from "neverthrow"
 import { CriticalWorkerStoppedError, type RunBotOptions } from "#sdk/bot-runner"
 import {
+    readIgnoreBots,
     reportBotFailure,
     runBotCore,
+    skipsBotMessage,
     snapshotBotEvents,
     standaloneBotLogger,
     validateBotClientOptions,
@@ -208,19 +210,32 @@ export interface BotOptions<
      * Own enumerable entries are read once when runBot is called. Undefined handlers are skipped.
      * Pass a function, or an object with a handler and its own delivery settings.
      * By default messageCreate runs up to 8 callbacks at a time and other events 1, and a full queue drops the oldest
-     * waiting event with a Warn record instead of stopping the bot
+     * waiting event with a Warn record instead of stopping the bot.
+     * Bot-authored messageCreate and messageUpdate events skip these handlers unless ignoreBots is false
      */
     readonly events?: BotEvents<SelectedMessage<F>>
+    /**
+     * Skip messageCreate and messageUpdate events whose author is a bot, including this bot's own messages, before they
+     * reach the events handlers. Defaults to true, so a reply cannot trigger its own handler.
+     * Set false for a bridge or logging bot that handles every message, and check message.author.isBot where needed.
+     * Prefix commands keep their own commands.ignoreBots setting, which also defaults to true.
+     * A value other than a boolean throws ConfigurationError
+     */
+    readonly ignoreBots?: boolean
     /** Prefix commands registered and attached before connecting. See BotCommandsOptions */
     readonly commands?: BotCommandsOptions<SelectedMessage<F>, S>
     /**
-     * Startup work after events and commands are registered and before the gateway connects, such as extra subscriptions
-     * or cache warm-up. The bot connects only after a returned promise settles, so no handler runs before setup finishes.
+     * Startup work after events and commands are registered and before the gateway connects, such as extra subscriptions,
+     * cache warm-up or timers. The bot connects only after a returned promise settles, so no handler runs before setup finishes.
+     * The signal aborts when the bot begins stopping for any reason, including a requested stop before its drain, a
+     * failure and a stop while setup is still running. Pass it to SDK operations, or listen for its abort event to clear
+     * timers and end background work started here, which the runner does not track or await.
      * A throw, rejection or returned or resolved Err result stops the bot before connecting, and runBot returns an Err
      * ApplicationError whose source is "runBot setup" and whose cause is the original value, such as the
-     * GuildOperationError of a failed read. A thrown SdkDefect remains a defect and rejects with SdkDefect
+     * GuildOperationError of a failed read. A thrown SdkDefect remains a defect and rejects with SdkDefect.
+     * The Effect API runs setup in the bot's Scope instead, so its finalizers and scoped fibers end with the bot
      */
-    readonly setup?: (client: Client<SelectedMessage<F>>) => unknown
+    readonly setup?: (client: Client<SelectedMessage<F>>, context: { readonly signal: AbortSignal }) => unknown
 }
 
 /**
@@ -233,7 +248,8 @@ export interface BotOptions<
  * The returned ResultAsync then runs the bot until it stops.
  * Handler contexts expose the full client. Message-create contexts also expose message and a cancellation-aware reply.
  * Handler and command failures are reported to onError, or logged in full, without restarting them or stopping the bot.
- * Process signals are opt-in, and stopping waits for SDK cleanup, not unrelated application Promises.
+ * By default, SIGINT and SIGTERM request a normal stop and messages written by bots skip the events handlers. Set
+ * processSignals or ignoreBots to false to opt out. Stopping waits for SDK cleanup, not unrelated application Promises.
  * Expected runner failures return Err, including ApplicationError when the setup callback or a commands register
  * callback fails, and SDK defects reject with SdkDefect.
  * By default a failed run is also logged once, with code lifecycle.botFailed unless the client already logged that
@@ -261,7 +277,6 @@ export interface BotOptions<
  * export function pingBot(token: string | undefined) {
  *     return runBot({
  *         token,
- *         processSignals: true,
  *         commands: {
  *             prefix: "!",
  *             commands: {
@@ -299,24 +314,44 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
     type M = SelectedMessage<F>
     if (typeof options !== "object" || options === null || Array.isArray(options))
         throw new ConfigurationError("configuration", "The runBot options must be an object")
-    const { events, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions } = readBotOptions(
-        () => {
-            const { events, commands, setup, signal, processSignals, reportFailure, drainMs, ...clientOptions } =
-                options
-            return { events, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions }
-        },
-    )
+    const { events, ignoreBots, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions } =
+        readBotOptions(() => {
+            const {
+                events,
+                ignoreBots,
+                commands,
+                setup,
+                signal,
+                processSignals,
+                reportFailure,
+                drainMs,
+                ...clientOptions
+            } = options
+            return {
+                events,
+                ignoreBots,
+                commands,
+                setup,
+                signal,
+                processSignals,
+                reportFailure,
+                drainMs,
+                clientOptions,
+            }
+        })
     readBotOptions(() => validateRunOptions({ signal, processSignals, reportFailure, drainMs }))
     const runOptions: RunBotOptions = {
         ...(signal === undefined ? {} : { signal }),
-        ...(processSignals === undefined ? {} : { processSignals }),
+        // The default API handles process signals unless the application opts out
+        processSignals: processSignals !== false,
         ...(reportFailure === undefined ? {} : { reportFailure }),
         ...(drainMs === undefined ? {} : { drainMs }),
     }
     // All configuration is checked before any client, listener or request exists, so misuse has no side effects.
     // An already aborted signal still reports misuse rather than hiding it
-    const { entries, router, commandHook, commandsFailure } = prepareBot<M>(
+    const { entries, skipBots, router, commandHook, commandsFailure } = prepareBot<M>(
         events,
+        ignoreBots,
         commands as BotCommandsOptions<M, never> | undefined,
         setup,
     )
@@ -332,7 +367,7 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
     const client = createClient<F>(clientOptions as ClientOptions<F>)
     let subscriptions: readonly Subscription[]
     try {
-        subscriptions = registerBot(client, entries, router, commandHook)
+        subscriptions = registerBot(client, { entries, skipBots, router, commandHook })
     } catch (error) {
         // Validated registration cannot be misuse here, so this is a defect. The unused client owns no socket yet,
         // and its cleanup failure is logged by the client
@@ -343,6 +378,8 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
     }
     const shutdownClient = (options?: ShutdownOptions) =>
         restoreTrustedSdkDefect(Effect.promise(() => client.shutdown(options))).pipe(Effect.asVoid)
+    // Every way the runner stops shuts its client down, so aborting there tells setup work that the bot is stopping
+    const stopping = new AbortController()
     // The client exists before the runner starts, so the runner owns its shutdown only once it takes the client
     let taken = false
     const program = runBotCore(
@@ -355,13 +392,17 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
                     return client.state
                 },
                 run: () => botOperation((signal) => client.run({ signal }), true),
-                shutdown: shutdownClient,
+                shutdown: (options?: ShutdownOptions) =>
+                    Effect.sync(() => stopping.abort()).pipe(Effect.andThen(shutdownClient(options))),
             }
         }),
         () =>
             (setup === undefined
                 ? Effect.void
-                : Effect.tryPromise({ try: () => runBotSetup(setup, client), catch: (error) => error }).pipe(
+                : Effect.tryPromise({
+                      try: () => runBotSetup(setup, client, stopping.signal),
+                      catch: (error) => error,
+                  }).pipe(
                       // Setup failures, such as a failed read, are application outcomes. An SDK defect stays a defect
                       Effect.catch((error) =>
                           error instanceof ApplicationError ? Effect.fail(error) : Effect.die(error),
@@ -402,12 +443,14 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
  */
 function prepareBot<M extends MessageCore>(
     events: unknown,
+    ignoreBots: unknown,
     commands: BotCommandsOptions<M> | undefined,
     setup: unknown,
 ) {
     if (setup !== undefined && typeof setup !== "function")
         throw new ConfigurationError("configuration", 'The option "setup" must be a function')
     const entries = readBotOptions(() => snapshotBotEvents(events))
+    const skipBots = readIgnoreBots(ignoreBots)
     let router: DefaultPrefixCommandRouter<M> | undefined
     let commandsFailure: ApplicationError | undefined
     try {
@@ -420,16 +463,21 @@ function prepareBot<M extends MessageCore>(
     const commandHook = readBotOptions(() => commands?.onError)
     if (commandHook !== undefined && typeof commandHook !== "function")
         throw new ConfigurationError("onError", 'The option "commands.onError" must be a function')
-    return { entries, router, commandHook, commandsFailure }
+    return { entries, skipBots, router, commandHook, commandsFailure }
 }
 
 /**
- * Run a bot's setup callback once. A throw, rejection or returned Err rejects with ApplicationError whose source is
- * "runBot setup" and whose cause is the original value. A thrown SdkDefect rejects unchanged
+ * Run a bot's setup callback once with the signal that aborts when the bot begins stopping. A throw, rejection or
+ * returned Err rejects with ApplicationError whose source is "runBot setup" and whose cause is the original value.
+ * A thrown SdkDefect rejects unchanged
  */
-async function runBotSetup<M extends MessageCore>(setup: (client: Client<M>) => unknown, client: Client<M>) {
+async function runBotSetup<M extends MessageCore>(
+    setup: (client: Client<M>, context: { readonly signal: AbortSignal }) => unknown,
+    client: Client<M>,
+    signal: AbortSignal,
+) {
     try {
-        throwIfErr(await setup(client))
+        throwIfErr(await setup(client, Object.freeze({ signal })))
     } catch (error) {
         throw error instanceof SdkDefect ? error : new ApplicationError("runBot setup", error)
     }
@@ -437,32 +485,42 @@ async function runBotSetup<M extends MessageCore>(setup: (client: Client<M>) => 
 
 /**
  * Register runBot events and commands on a test client with the same checks, contexts and registration as runBot,
- * returning the setup work that the test client runs before it connects. Used by the testing entry point.
+ * returning the setup work that the test client runs before it connects, given the signal that aborts when the test
+ * client stops. Used by the testing entry point.
  * Misuse throws ConfigurationError, and a commands register callback's own failure throws its ApplicationError
  */
 export function installTestBot<M extends MessageCore>(
     client: Client<M>,
-    options: Pick<BotOptions, "events" | "commands" | "setup">,
-): () => Promise<void> {
-    const { events, commands, setup } = readBotOptions(() => ({
+    options: Pick<BotOptions, "events" | "ignoreBots" | "commands" | "setup">,
+): (signal: AbortSignal) => Promise<void> {
+    const { events, ignoreBots, commands, setup } = readBotOptions(() => ({
         events: options.events,
+        ignoreBots: options.ignoreBots,
         commands: options.commands,
         setup: options.setup,
     }))
-    const prepared = prepareBot<M>(events, commands as BotCommandsOptions<M, never> | undefined, setup)
+    const prepared = prepareBot<M>(events, ignoreBots, commands as BotCommandsOptions<M, never> | undefined, setup)
     if (prepared.commandsFailure !== undefined) throw prepared.commandsFailure
-    registerBot(client, prepared.entries, prepared.router, prepared.commandHook)
+    registerBot(client, prepared)
     return setup === undefined
         ? async () => undefined
-        : () => runBotSetup(setup as unknown as (client: Client<M>) => unknown, client)
+        : (signal) =>
+              runBotSetup(
+                  setup as unknown as (client: Client<M>, context: { readonly signal: AbortSignal }) => unknown,
+                  client,
+                  signal,
+              )
 }
 
 /** Register the bot's event handlers and command router synchronously, returning the subscriptions to supervise */
 function registerBot<M extends MessageCore>(
     client: Client<M>,
-    entries: ReturnType<typeof snapshotBotEvents>,
-    router: DefaultPrefixCommandRouter<M> | undefined,
-    commandHook: ((report: FailureReport) => unknown) | undefined,
+    {
+        entries,
+        skipBots,
+        router,
+        commandHook,
+    }: Pick<ReturnType<typeof prepareBot<M>>, "entries" | "skipBots" | "router" | "commandHook">,
 ): readonly Subscription[] {
     const subscriptions: Subscription[] = []
     try {
@@ -473,16 +531,21 @@ function registerBot<M extends MessageCore>(
                 client.on(
                     event,
                     (payload, signal) =>
-                        callback(
-                            Object.freeze({
-                                event: payload,
-                                client,
-                                signal,
-                                ...(event === "messageCreate"
-                                    ? { message: payload as M, reply: boundDefaultReply(client, payload as M, signal) }
-                                    : {}),
-                            }) as BotEventContext<EventName, M>,
-                        ),
+                        skipsBotMessage(event, payload, skipBots)
+                            ? undefined
+                            : callback(
+                                  Object.freeze({
+                                      event: payload,
+                                      client,
+                                      signal,
+                                      ...(event === "messageCreate"
+                                          ? {
+                                                message: payload as M,
+                                                reply: boundDefaultReply(client, payload as M, signal),
+                                            }
+                                          : {}),
+                                  }) as BotEventContext<EventName, M>,
+                              ),
                     options as EventHandlerOptions,
                 ),
             )

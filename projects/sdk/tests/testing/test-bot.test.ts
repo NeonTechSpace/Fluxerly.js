@@ -161,3 +161,91 @@ test.each(modes)(
         expect((client as { hint: string }).hint).not.toContain("commands")
     },
 )
+
+test.each(modes)("%s runBot handlers skip bot-authored messages unless ignoreBots is false", async (mode) => {
+    for (const ignoreBots of [undefined, false] as const) {
+        const seen: string[] = []
+        const settings = ignoreBots === undefined ? {} : { ignoreBots }
+        let driver: {
+            readonly fixtures: ReturnType<typeof createDefaultTestBot>["fixtures"]
+            emit(type: string, payload: unknown): Promise<void>
+            idle(): Promise<void>
+        }
+        if (mode === "default") {
+            const bot = createDefaultTestBot({
+                ...settings,
+                events: {
+                    messageCreate: ({ message }) => void seen.push(`create ${message.content}`),
+                    messageUpdate: ({ event }) => void seen.push(`update ${event.content}`),
+                },
+            })
+            onTestFinished(() => bot.shutdown())
+            await bot.ready()
+            driver = { fixtures: bot.fixtures, emit: async (type, payload) => bot.emit(type, payload), idle: bot.idle }
+        } else {
+            const scope = Scope.makeUnsafe()
+            onTestFinished(() => unwrap(Scope.close(scope, Exit.void)))
+            const bot = await unwrap(
+                createNativeTestBot({
+                    ...settings,
+                    events: {
+                        messageCreate: ({ message }) => Effect.sync(() => seen.push(`create ${message.content}`)),
+                        messageUpdate: ({ event }) => Effect.sync(() => seen.push(`update ${event.content}`)),
+                    },
+                }).pipe(Scope.provide(scope)),
+            )
+            await unwrap(bot.ready())
+            driver = {
+                fixtures: bot.fixtures,
+                emit: (type, payload) => unwrap(bot.emit(type, payload)),
+                idle: () => unwrap(bot.idle()),
+            }
+        }
+        const { fixtures } = driver
+        const otherBot = fixtures.user({ id: fixtures.nextId(), username: "other-bot", bot: true })
+        for (const type of ["MESSAGE_CREATE", "MESSAGE_UPDATE"]) {
+            // The bot's own message, another bot's message and a person's message
+            await driver.emit(
+                type,
+                fixtures.message({ id: fixtures.nextId(), content: "own", author: fixtures.botUser() }),
+            )
+            await driver.emit(type, fixtures.message({ id: fixtures.nextId(), content: "other bot", author: otherBot }))
+            await driver.emit(type, fixtures.message({ id: fixtures.nextId(), content: "person" }))
+        }
+        await driver.idle()
+        const expected =
+            ignoreBots === false
+                ? ["create other bot", "create own", "create person", "update other bot", "update own", "update person"]
+                : ["create person", "update person"]
+        expect(seen.toSorted()).toEqual(expected)
+    }
+})
+
+test.each(modes)("%s createTestBot rejects an ignoreBots value other than a boolean as misuse", async (mode) => {
+    const options = { ignoreBots: "no" } as never
+    const misuse =
+        mode === "default"
+            ? await Promise.resolve()
+                  .then(() => createDefaultTestBot(options))
+                  .catch((error: unknown) => error)
+            : await unwrap(Effect.scoped(createNativeTestBot(options))).catch((error: unknown) => error)
+    expect(misuse).toMatchObject({ _tag: "ConfigurationError", message: expect.stringContaining("ignoreBots") })
+})
+
+test("default createTestBot setup receives a signal that aborts when the test bot starts shutting down", async () => {
+    let setupSignal: AbortSignal | undefined
+    const statesAtAbort: string[] = []
+    const bot = createDefaultTestBot({
+        setup: (client, { signal }) => {
+            setupSignal = signal
+            signal.addEventListener("abort", () => statesAtAbort.push(client.state))
+        },
+    })
+    onTestFinished(() => bot.shutdown())
+    await bot.ready()
+    expect(setupSignal?.aborted).toBe(false)
+    await bot.shutdown()
+    expect(setupSignal?.aborted).toBe(true)
+    // The signal aborts before the client stops, so setup work can end with the bot
+    expect(statesAtAbort).toEqual(["Connected"])
+})

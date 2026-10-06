@@ -2,7 +2,7 @@ import type { OperationSignal } from "./client.js"
 import { FluxerlyError } from "./errors.js"
 
 /**
- * Configure how runBot stops. Importing the SDK does not register process signal handlers
+ * Configure how runBot stops. Importing the SDK does not register process signal handlers, only a running bot does
  *
  * @category Options
  */
@@ -11,14 +11,17 @@ export interface RunBotOptions {
      * checked and misuse is still reported, but no client is created and the run succeeds at once
      */
     readonly signal?: OperationSignal
-    /** Handle SIGINT and SIGTERM for this run only. Disabled by default, with handlers removed on completion.
+    /** Handle SIGINT and SIGTERM for this run only, as a requested stop that drains for drainMs. The handlers are added
+     * when the run starts and removed once its cleanup finishes, and the runner never exits the process.
+     * The default API enables this unless the option is false. The Effect API enables it only when the option is true,
+     * because a launcher such as NodeRuntime.runMain already interrupts the program on these signals.
      * Each signal is handled once, so sending the same signal again, such as a second Ctrl+C, ends the process at once
      * with Node.js's default behavior instead of waiting for the drain
      */
     readonly processSignals?: boolean
     /**
      * Milliseconds that a requested stop lets running work finish before cancelling it, default 5,000.
-     * A stop is requested by the signal option or, with processSignals, by SIGINT or SIGTERM.
+     * A stop is requested by the signal option or, with processSignals enabled, by SIGINT or SIGTERM.
      * The bot then accepts no new events, while running handlers and commands, events already waiting for them and REST
      * requests continue until they finish or the time runs out. Then the bot shuts down as usual.
      * The default fits within the 10 seconds that common process managers, such as Docker, wait before force-stopping
