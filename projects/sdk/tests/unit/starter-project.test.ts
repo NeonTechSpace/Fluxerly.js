@@ -77,7 +77,7 @@ test("the generated bot keeps the shipped starter's handlers", () => {
     const starter = eventsBlock(readFileSync(join(sdk, "examples/starter/bot.js"), "utf8"))
     expect(starter).toBeDefined()
     expect(eventsBlock(read(project, "bot.js"))).toBe(starter)
-    expect(read(project, "bot.js")).toContain("token: process.env.FLUXER_BOT_TOKEN, processSignals: true")
+    expect(read(project, "bot.js")).toContain("token: process.env.FLUXER_BOT_TOKEN")
 })
 
 test("existing files stop init before it writes anything and are listed as conflicts", () => {

@@ -49,7 +49,9 @@ The installed package also contains the changelog as `CHANGELOG.md`
 
 This bot replies **Pong!** to **!ping**
 
-A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs. Then:
+A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs.
+
+To generate a starter project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in an empty folder and follow the steps it prints. To set up the bot by hand instead:
 
 1. Add `"type": "module"` to the bot project's `package.json`
 2. Install the SDK with `npm install @neontechspace/fluxerly`, `pnpm add @neontechspace/fluxerly` or `bun add @neontechspace/fluxerly`
@@ -64,10 +66,9 @@ import { runBot } from "@neontechspace/fluxerly"
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     events: {
         messageCreate: ({ message, reply }) => {
-            if (message.author.isBot || message.content !== "!ping") return
+            if (message.content !== "!ping") return
             // Returning the reply reports a failed send to the log
             return reply("Pong!")
         },
@@ -95,6 +96,7 @@ To typecheck TypeScript, add `@types/node` and TypeScript 7 as development depen
 }
 ```
 
+By default, messages from bots, including the bot's own replies, skip the handler.
 Press Ctrl+C to stop the bot and wait for SDK cleanup.
 A permanent connection failure stops the bot, prints what went wrong with a suggested fix and reports failure to the operating system.
 The bot must still stop or finish work it starts outside the SDK, such as database writes

@@ -103,4 +103,4 @@ A member sends `!ticket` to open a private channel that only they, the staff rol
 {{example:tickets/bot.ts}}
 ```
 
-The `!close` command deletes only channels in the ticket category whose names start with `ticket-`. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/tickets) and [commands](/docs/{{version}}/commands/) for more about guards and cooldowns
+The bot reads its own user ID with `client.users.getSelf()`, which returns the account Fluxer reported when the bot connected, without a request. The `!close` command deletes only channels in the ticket category whose names start with `ticket-`. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/tickets) and [commands](/docs/{{version}}/commands/) for more about guards and cooldowns

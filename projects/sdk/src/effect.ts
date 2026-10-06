@@ -12,8 +12,8 @@
  * `Effect.Effect<A, E, R>` describes a successful value A, expected errors E and required services R.
  * Expected errors, such as invalid operation input or an HTTP rejection, use Effect's error channel.
  * Defects are unexpected faults, such as a throwing property getter or failed cleanup.
- * Misuse is a defect too: Invalid client, router or registration options, including a missing token, die with
- * ConfigurationError, and a pure helper given invalid input throws its error, which becomes a defect inside an Effect.
+ * Misuse is a defect too: Invalid client, router or registration options, including a missing createClient token,
+ * die with ConfigurationError, and a pure helper given invalid input throws its error, which becomes a defect inside an Effect.
  * Interruption is Effect's cancellation mechanism.
  * Cause can represent errors, defects and interruption together.
  * Cancellation waits for SDK-owned cleanup, but cannot undo a request already sent to Fluxer

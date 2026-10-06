@@ -15,10 +15,9 @@ import { errors, runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     events: {
         messageCreate: async ({ message, reply }) => {
-            if (message.author.isBot || message.content !== "!ping") return undefined
+            if (message.content !== "!ping") return undefined
             const first = await reply("Pong!")
             if (first.isOk() || !errors.isRetryable(first.error)) return first
             return reply("Pong!")
@@ -63,6 +62,7 @@ Every SDK error extends `FluxerlyError` with a stable `code`, an optional fix `h
 - Readable text: The `describeError(error)` function prints the code, hint and cause chain
 - Safe retries: The `errors.isRetryable(error)` function says whether repeating the same call is safe
 - Fluxer's reason: The `errors.apiCode(error)` function returns Fluxer's error code name, such as `"missingPermissions"`, or `undefined`
+- Missing permissions: For `"missingPermissions"`, `error.details.requiredPermissions` lists the permissions Fluxer checks for the failed operation, such as `ViewChannel` and `SendMessages`, when the SDK knows them
 - Branching: The `errors.match(error, handlers)` function calls the handler named by the error's `_tag`
 
 An unexpected SDK or cleanup failure is not an Err. It rejects the Promise with `SdkDefect`, whose `reasons` list every failure and whose `cause` is the first defect, or the first failure when there is no defect. In the example above, `await runBot(...)` lets it end the process with Node.js's error output and a failing exit code. An application with its own top-level `try`/`catch` can alert, restart or print `describeError(error)` there instead

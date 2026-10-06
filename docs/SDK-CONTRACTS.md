@@ -19,6 +19,7 @@ Add a high-level helper only for a concrete use case, with clear cleanup respons
 
 Return a Result or a failing Effect only where the failure is a real runtime outcome: Network and other I/O operations, gateway commands, event waits and a collector's result.
 Misuse is not an outcome. Invalid creation options, registrations, event names and cache-lookup input throw `ConfigurationError` or the domain error in the default API and are defects in the native API.
+The exception is a missing or empty token passed to `runBot`, which usually comes from the environment rather than the code. In both APIs, `runBot` reports it like a failed run and returns a `ConfigurationError` failure once the other options are valid.
 Invalid input to an operation that already returns a Result or Effect stays in that failure channel, because such input often comes from runtime data.
 Pure helpers and cache lookups return plain values in both APIs, with `try` variants returning a Result or Effect for untrusted text.
 An Err result returned by any application callback is reported like a throw of its error

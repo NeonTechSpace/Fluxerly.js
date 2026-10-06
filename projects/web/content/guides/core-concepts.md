@@ -84,7 +84,7 @@ Choose the default API unless the application already uses Effect. The [Effect l
 
 Whoever starts the client also stops it:
 
-- With `runBot`, the runner owns the client. Setting `processSignals: true` stops the bot on Ctrl+C or a stop request from a process manager. The runner then cancels handlers, closes the connection, waits for cleanup and returns. When the bot stopped because of a failure, the runner logs it and sets the process exit code to 1
+- With `runBot`, the runner owns the client. In the default API, Ctrl+C or a stop request from a process manager stops the bot unless `processSignals` is `false`. The runner then cancels handlers, closes the connection, waits for cleanup and returns. When the bot stopped because of a failure, the runner logs it and sets the process exit code to 1
 - With `createClient`, the application owns the client and must call `shutdown()`, or declare it with `await using` so it shuts down at the end of the block
 
 Shutdown waits for the SDK's own work, not for other promises the application started. The [bot lifetime guide](/docs/{{version}}/starter-lifetime/) covers what the runner owns and what the application owns

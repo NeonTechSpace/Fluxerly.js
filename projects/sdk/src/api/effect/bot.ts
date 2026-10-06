@@ -379,9 +379,11 @@ export function installNativeTestBot(
  * Run a bot from one configuration object in the application's Effect context and scope.
  * When the Effect runs, it creates the client and registers every event handler and command before the gateway
  * starts, so no event is missed and no handler runs before registration and setup complete.
- * A malformed option, misspelled option key, non-function handler, unsupported event name, invalid delivery setting,
- * invalid command or missing token is misuse and dies with ConfigurationError. Every option is checked before any client, signal listener or request
- * exists, even when the signal is already aborted, so misuse leaves nothing to clean up.
+ * A malformed option, misspelled option key, non-function handler, unsupported event name, invalid delivery setting or
+ * invalid command is misuse and dies with ConfigurationError. Every option is checked before any client, signal
+ * listener or request exists, even when the signal is already aborted, so misuse leaves nothing to clean up.
+ * A missing or empty token, usually from an unset environment variable, is a failure instead: Once every other option
+ * is valid, the bot fails with ConfigurationError with field token before any client exists.
  * Handler and command failures are isolated and reported by client.on, not bot failures.
  * By default, messageCreate and messageUpdate events written by bots skip the events handlers and prefix commands.
  * Set ignoreBots to false to opt out.
@@ -392,13 +394,14 @@ export function installNativeTestBot(
  * drainMs, default 5,000 ms, to finish. Fiber interruption remains interruption and does not drain.
  * Process signals stay opt-in here, because a launcher such as NodeRuntime.runMain already interrupts the program on
  * SIGINT and SIGTERM. Set processSignals to true only when nothing else handles them and a drained stop is wanted.
- * By default a failure or defect that stops the bot, including misuse, is also logged once, with code
- * lifecycle.botFailed unless the client already logged that error, and sets process.exitCode to 1, so running the
+ * By default a failure or defect that stops the bot, including misuse and a missing token, is also logged once, with
+ * code lifecycle.botFailed unless the client already logged that error, and sets process.exitCode to 1, so running the
  * Effect needs no further handling.
  * Set reportFailure to false when the application handles the failure and exit status itself.
- * Reports before client creation use the configured logging settings and mask the token after removing surrounding
- * whitespace and one pair of matching quotes. An option getter that throws remains the original defect. For that report,
- * token, logging and reportFailure are read independently and may be read again if the option snapshot already read them.
+ * Reports before client creation use the configured logging settings, print no stack for a missing token and mask the
+ * token after removing surrounding whitespace and one pair of matching quotes. An option getter that throws remains
+ * the original defect. For that report, token, logging and reportFailure are read independently and may be read again
+ * if the option snapshot already read them.
  * A throwing reporting getter does not discard the other readable settings. Unusable logging uses the native default
  * output, and an unreadable reportFailure setting keeps reporting enabled.
  * No separate runtime is created and the process is not exited
@@ -448,7 +451,7 @@ export function runBot<
     },
 ): Effect.Effect<
     void,
-    ConnectError | CriticalWorkerStoppedError | ApplicationError,
+    ConnectError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError,
     Exclude<
         BotEventServices<Events> | NativeBatchRequirements<C> | RouterServices | OptionsServices | SetupServices,
         Scope.Scope
@@ -472,28 +475,27 @@ export function runBot<
         const { events, ignoreBots, commands, setup, signal, processSignals, reportFailure, drainMs, clientOptions } =
             read
         let prepared: PreparedNativeBot
+        let missingToken: ConfigurationError | undefined
         try {
             validateRunOptions({ signal, processSignals, reportFailure, drainMs })
             prepared = prepareNativeBot(events, ignoreBots, commands, setup)
             // Checked before the runner adds signal listeners or creates the client, so misuse has no side effects
-            validateBotClientOptions(clientOptions, true)
+            missingToken = validateBotClientOptions(clientOptions, true)
         } catch (error) {
             return misuse(error, clientOptions, reportFailure)
         }
-        // The callback already ran, so its failure is returned even when the signal is already aborted
         const runOptions: RunBotOptions = {
             ...(signal === undefined ? {} : { signal }),
             ...(processSignals === undefined ? {} : { processSignals }),
             ...(reportFailure === undefined ? {} : { reportFailure }),
             ...(drainMs === undefined ? {} : { drainMs }),
         }
-        const commandsFailure = prepared.commandsFailure
-        if (commandsFailure !== undefined)
-            return reportBotFailure(
-                Exit.fail(commandsFailure),
-                standaloneBotLogger(clientOptions, true),
-                runOptions,
-            ).pipe(Effect.andThen(Effect.fail(commandsFailure)))
+        // A missing token and the callback's failure are returned even when the signal is already aborted
+        const failure = missingToken ?? prepared.commandsFailure
+        if (failure !== undefined)
+            return reportBotFailure(Exit.fail(failure), standaloneBotLogger(clientOptions, true), runOptions).pipe(
+                Effect.andThen(Effect.fail(failure)),
+            )
         return runBotCore(
             Effect.suspend(() => createClient(clientOptions as ClientOptions)),
             (client) =>
@@ -516,7 +518,7 @@ export function runBot<
         )
     }) as Effect.Effect<
         void,
-        ConnectError | CriticalWorkerStoppedError | ApplicationError,
+        ConnectError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError,
         Exclude<
             BotEventServices<Events> | NativeBatchRequirements<C> | RouterServices | OptionsServices | SetupServices,
             Scope.Scope

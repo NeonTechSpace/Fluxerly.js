@@ -36,13 +36,13 @@ A failed handler is printed at Error with its message, stack and cause chain, be
       ... 9 SDK and Effect frames hidden
 ```
 
-An expected SDK error, such as a rejected request, prints its code, hint and details instead of stack frames. Here a handler returned a failed reply because the bot lacks permission in the channel
+An expected SDK error, such as a rejected request, prints its code, hint and details instead of stack frames. Here a handler returned a failed reply because the bot lacks permission in the channel. For a missing permission, the hint and `requiredPermissions` name the permissions Fluxer checks for the operation, because Fluxer does not report which one is missing
 
 ```text
 2026-09-26 21:27:52.804 ERROR events     [events.handlerFailed] The messageCreate handler failed: Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403) event=messageCreate subscriptionId=messageCreate#1 messageId=1456074443980800006 channelId=1456074443980800002 guildId=1456074443980800001
     MessageError [message.send.rejected]: Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403)
-      Hint: Grant the bot's role View Channel and Send Messages in this channel, plus Embed Links or Attach Files when the message has them, in the community settings or the channel's permission overrides
-      Details: operation=send reason=rejected outcome=rejected status=403 apiError=MISSING_PERMISSIONS
+      Hint: The bot needs View Channel and Send Messages for this operation. Grant them to the bot's role in the community settings or the channel's permission overrides. Embeds also need Embed Links, files need Attach Files, and a forward needs View Channel in its source channel
+      Details: operation=send reason=rejected outcome=rejected status=403 apiError=MISSING_PERMISSIONS requiredPermissions=["ViewChannel","SendMessages"]
 ```
 
 A 401 or 403 rejection waits up to one second for its handler to finish. If the handler fails with that same rejection, directly or in its cause chain, and no `onError` hook receives it, only the handler's failure record appears. A handler that fails more than one second later also logs its failure, because the `rest.rejected` Warn has already appeared. Different requests with the same status and code remain separate rejections
@@ -90,6 +90,16 @@ export function createQuietClient(token: string) {
 | `trace` | Heartbeats and every gateway opcode |
 
 The `silent` level turns a category or the whole client off, including application errors that have no `onError` hook and unsafe payload records
+
+To change levels while the bot runs, for example to investigate a problem without a restart, pass new `level` and `categories` settings to `client.logging.configure`. Omitted settings return to their defaults, and the other `logging` settings stay as the client was created
+
+```ts
+import type { Client } from "@neontechspace/fluxerly"
+
+export function traceRequests(client: Client) {
+    client.logging.configure({ level: "warn", categories: { rest: "debug" } })
+}
+```
 
 ## Turn on debug output without changing code
 
@@ -287,7 +297,7 @@ export function meterObserver(meter: Meter) {
 }
 
 export function runObservedBot(token: string | undefined, meter: Meter) {
-    return runBot({ token, processSignals: true, observe: meterObserver(meter), events: {} })
+    return runBot({ token, observe: meterObserver(meter), events: {} })
 }
 ```
 

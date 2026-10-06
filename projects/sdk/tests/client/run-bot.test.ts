@@ -136,7 +136,9 @@ function sharedMisuse(handler: (...args: never[]) => unknown): Record<string, un
         { token, ignoreBots: "no", events: { messageCreate: handler } },
         { token, processSignals: true, logging: { format: "xml" } },
         { token, events: { messageCreate: handler }, cache: "everything" },
-        { token: "", processSignals: true, events: { messageCreate: handler } },
+        // Other misuse still throws when the token is also missing
+        { token: "", processSignals: true, events: { messageCreate: handler }, cache: "everything" },
+        { events: {}, logging: { format: "xml" } },
     ]
 }
 
@@ -388,7 +390,6 @@ describe("public runBot", () => {
             { token, commands: { prefix: "!", commands: { "bad name": { execute } } } },
             { token, commands: { prefix: "!", commands: () => "not a router" } },
             { token, commands: { prefix: "!", commands: { ping: { execute } }, onError: "report" } },
-            { token: undefined, events: {} },
         ]
         for (const options of misuse) {
             for (const signal of [undefined, AbortSignal.abort()]) {
@@ -1573,12 +1574,12 @@ describe.each(["default", "native"] as const)("%s runBot failure reporting", (mo
         process.exitCode = undefined
         if (mode === "default") {
             // The default API throws misuse, so an awaited call shows it and Node fails the exit status
-            expect(() => runBot({ token: undefined, logging: logs.logging } as never)).toThrow(ConfigurationError)
+            expect(() => runBot({ token, evnts: {}, logging: logs.logging } as never)).toThrow(ConfigurationError)
             return
         }
         // Nothing else shows a native defect when the application only runs the Effect, so runBot reports it
-        const found = await defects(runNativeBot({ token: undefined, logging: logs.logging } as never))
-        expect(found).toEqual([expect.objectContaining({ _tag: "ConfigurationError", field: "token" })])
+        const found = await defects(runNativeBot({ token, evnts: {}, logging: logs.logging } as never))
+        expect(found).toEqual([expect.objectContaining({ _tag: "ConfigurationError", field: "configuration" })])
         expect(logs.withCode("lifecycle.botFailed")).toEqual([
             expect.objectContaining({
                 level: "error",
@@ -1618,7 +1619,55 @@ describe.each(["default", "native"] as const)("%s runBot failure reporting", (mo
 
         const quiet = captureLogs()
         process.exitCode = undefined
-        await defects(runNativeBot({ token: undefined, logging: quiet.logging, reportFailure: false } as never))
+        await defects(runNativeBot({ token, evnts: {}, logging: quiet.logging, reportFailure: false } as never))
+        expect(quiet.records).toEqual([])
+        expect(process.exitCode).toBeUndefined()
+    })
+
+    test("a missing or empty token is a reported run failure before any client exists, not misuse", async () => {
+        /** The expected failure of a run, or undefined. A default throw or a native defect fails the test */
+        async function expectedFailure(options: Record<string, unknown>): Promise<unknown> {
+            if (mode === "default") {
+                const result = await runBot(options as never)
+                return result.isErr() ? result.error : undefined
+            }
+            const exit = await Effect.runPromiseExit(runNativeBot(options as never))
+            if (Exit.isSuccess(exit)) return undefined
+            expect(Cause.hasDies(exit.cause)).toBe(false)
+            return Cause.squash(exit.cause)
+        }
+        for (const missing of [undefined, "", "  ", '""']) {
+            for (const signal of [undefined, AbortSignal.abort()]) {
+                const side = watchSideEffects()
+                const logs = captureLogs()
+                process.exitCode = undefined
+                const failure = await expectedFailure({
+                    token: missing,
+                    logging: logs.logging,
+                    events: {},
+                    ...(signal === undefined ? {} : { signal }),
+                })
+                expect(failure).toBeInstanceOf(ConfigurationError)
+                expect(failure).toMatchObject({ field: "token", hint: expect.stringContaining(".env.example") })
+                const records = logs.withCode("lifecycle.botFailed")
+                expect(records).toEqual([
+                    expect.objectContaining({
+                        level: "error",
+                        error: expect.objectContaining({ name: "ConfigurationError" }),
+                    }),
+                ])
+                // A beginner's missing token shows the error and its hint, without a stack trace
+                expect(records[0]?.error?.stack ?? "").not.toMatch(/\n\s+at /)
+                expect(process.exitCode).toBe(1)
+                side.expectNone()
+                vi.restoreAllMocks()
+            }
+        }
+
+        const quiet = captureLogs()
+        process.exitCode = undefined
+        const failure = await expectedFailure({ token: undefined, logging: quiet.logging, reportFailure: false })
+        expect(failure).toMatchObject({ _tag: "ConfigurationError", field: "token" })
         expect(quiet.records).toEqual([])
         expect(process.exitCode).toBeUndefined()
     })

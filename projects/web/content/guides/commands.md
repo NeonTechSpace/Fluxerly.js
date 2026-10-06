@@ -141,14 +141,16 @@ A guard returns `true` to allow the command, `false` to deny it without an autom
 
 - Messages sent in a community, with `guards.guildOnly()`
 - Direct and group conversations, with `guards.dmOnly()`
-- Listed user IDs, such as the bot owner's, with `guards.ownerOnly(ids)`
+- The owner of the bot's application, with `guards.ownerOnly()`
+- Listed user IDs, with `guards.ownerOnly(ids)`
 - Members who have every named permission in the channel, with `guards.requirePermissions(names)`
 
 <details>
 <summary>How the built-in guards read data</summary>
 
 The `requirePermissions` guard reads the community, member, roles and channel from enabled caches first and fetches only what is missing, at most once each per command. A failed read fails the command, which is reported with the command name. Its decision does not guarantee that Fluxer allows a later action.
-The `dmOnly` guard denies a message that has a `guildId` without a request. Otherwise it confirms a private conversation from the direct-message cache or the channel cache, or reads the channel once. A cached or fetched community channel denies the command. A read that fails for any other reason, such as a network failure or timeout, leaves the channel unconfirmed and fails the command, which is reported with the command name. Enable `cache.directMessages` to avoid a read for each command in the same conversation
+The `dmOnly` guard denies a message that has a `guildId` without a request. Otherwise it confirms a private conversation from the direct-message cache or the channel cache, or reads the channel once. A cached or fetched community channel denies the command. A read that fails for any other reason, such as a network failure or timeout, leaves the channel unconfirmed and fails the command, which is reported with the command name. Enable `cache.directMessages` to avoid a read for each command in the same conversation.
+The `ownerOnly()` guard reads the application's owner from Fluxer on the first command and keeps it for the client's lifetime. A failed read fails the command, and the next command reads again
 
 </details>
 
@@ -208,7 +210,7 @@ export function attachCommands(client: Client) {
 
 ## Add help from the registered commands
 
-Each command receives a `help` function that builds help pages from the registered descriptions and arguments. A `help` command can reply with the first page
+Each command receives a `help` function that builds help pages from the registered descriptions and arguments, and a `sendHelp` function that sends them
 
 ```ts
 import { runBot } from "@neontechspace/fluxerly"
@@ -220,7 +222,7 @@ await runBot({
         commands: {
             help: {
                 description: "List the commands",
-                execute: ({ help, reply }) => reply(help()[0] ?? "No commands"),
+                execute: ({ sendHelp }) => sendHelp(),
             },
             ping: {
                 description: "Check that the bot can reply",
@@ -231,7 +233,9 @@ await runBot({
 })
 ```
 
-Sending `!help` lists each command with its description. The `help` function only builds the pages: It does not send them or decide who may see them. Each page holds up to 2,000 characters, which fits one message, so a small bot needs only the first. For more commands, reply with each page in turn. A router created with `commands.create` has the same `help` method
+Sending `!help` lists each command with its description. Each page holds up to 2,000 characters, which fits one message. The `sendHelp` function sends a single page as a plain message, and several pages as reaction pages that the command's author flips with ◀ and ▶. The `help` function only builds the pages, for a bot that sends them its own way. A router created with `commands.create` has the same `help` method
+
+The `paginate` function shows any list of pages the same way, as in `({ paginate }) => paginate(["Rules 1 to 5", "Rules 6 to 10"])`. Adding or removing an arrow turns the page, so the bot needs only Add Reactions and Read Message History. The pages stop listening after 60 seconds without a click or 5 minutes in total, and the bot then removes its arrows. Pass `users` to let other people flip them. [Reaction pages](/docs/{{version}}/events-and-collectors/#show-pages-with-reactions) explains the options
 
 To keep a command out of help and out of unknown-command suggestions, for example an owner-only tool, register it with `hidden: true`. Hidden commands still run when someone types their name, so hiding does not restrict access. Protect each command that needs it with a guard
 
@@ -239,14 +243,13 @@ For a larger bot, split command definitions by feature and attach one combined r
 
 ## Wire it up
 
-A complete bot places the router beside the other `runBot` options. This one adds a help command, a per-user cooldown, a larger cooldown store, its own failure hook, a hidden owner-only command and a clean stop on Ctrl+C
+A complete bot places the router beside the other `runBot` options. This one adds a help command, a per-user cooldown, a larger cooldown store, its own failure hook and a hidden owner-only command
 
 ```ts
 import { guards, runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     commands: {
         prefix: "!",
         cooldowns: { maxEntries: 50_000 },
@@ -254,7 +257,7 @@ await runBot({
         commands: {
             help: {
                 description: "List the commands",
-                execute: ({ help, reply }) => reply(help()[0] ?? "No commands"),
+                execute: ({ sendHelp }) => sendHelp(),
             },
             ping: {
                 description: "Check that the bot can reply",
@@ -263,7 +266,7 @@ await runBot({
             },
             uptime: {
                 hidden: true,
-                guard: guards.ownerOnly(process.env.BOT_OWNER_ID ?? ""),
+                guard: guards.ownerOnly(),
                 execute: ({ reply }) => reply(`Running for ${Math.round(process.uptime())} s`),
             },
         },
@@ -271,4 +274,4 @@ await runBot({
 })
 ```
 
-Set `BOT_OWNER_ID` to the owner's decimal user ID. Without it, `guards.ownerOnly` throws `ConfigurationError` before the bot connects, which stops the program with that error. The commands `onError` hook receives command failures instead of the client-level `onError`, and without either hook the SDK logs each failure in full. If the bot itself stops with a failure, such as a rejected token, `runBot` logs it once and sets `process.exitCode` to 1
+The `ownerOnly()` guard allows only the owner of the bot's application, as Fluxer reports it, so the owner's ID needs no configuration. The commands `onError` hook receives command failures instead of the client-level `onError`, and without either hook the SDK logs each failure in full. If the bot itself stops with a failure, such as a rejected token, `runBot` logs it once and sets `process.exitCode` to 1

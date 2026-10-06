@@ -15,7 +15,6 @@ import { runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     logging: { format: "json" },
     cache: {
         guilds: true,
@@ -52,7 +51,8 @@ Invalid options throw `ConfigurationError` from `runBot` before anything connect
 | [`commands`](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#commands) | Prefix commands, guards and cooldowns, as described in [commands](/docs/{{version}}/commands/) |
 | [`setup`](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#setup) | Startup work that runs after handlers are registered and before the bot connects |
 | [`onError`](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#onerror) | Receives every handler, command and callback failure. Without it, each failure is logged in full at Error |
-| [`processSignals`](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#processsignals) | Set `true` to stop cleanly on Ctrl+C (SIGINT) and SIGTERM. Off by default |
+| [`ignoreBots`](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#ignorebots) | Skips messages written by bots, including the bot's own, before they reach handlers and commands. On by default |
+| [`processSignals`](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#processsignals) | Stops the bot cleanly on Ctrl+C (SIGINT) and SIGTERM. On by default, and set `false` to leave these signals to the application |
 | [`signal`](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#signal) | An `AbortSignal` that stops the bot from application code |
 | [`reportFailure`](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#reportfailure) | Whether a failed run is logged and sets `process.exitCode`. On by default |
 | [`logging`](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#logging) | Level, per-category levels, output format and custom sinks. See [logging](/docs/{{version}}/logging/) |
@@ -103,7 +103,7 @@ Pass `onError` to send handler and command failures to an error tracker. Each [`
 
 ## Cache
 
-The client keeps no [cache](/docs/{{version}}/glossary/#cache) unless asked. Enable a category with `true`, or pass `{ maxEntries, maxBytes, maxAgeMs }` to bound it. Caching communities, channels, roles and members lets permission checks such as `guards.requirePermissions` answer without extra requests. Enabled community, role, channel, emoji and sticker caches fill from the community data Fluxer sends when the bot connects. The [history and cache guide](/docs/{{version}}/history-and-cache/) explains what a cached value can and cannot prove
+The client keeps no [cache](/docs/{{version}}/glossary/#cache) unless asked. Enable a category with `true`, or pass `{ maxEntries, maxBytes, maxAgeMs }` to bound it. The `maxAgeMs` setting also accepts a function that receives each snapshot and returns its age limit, `null` for no limit or `0` to skip keeping it, so a category can keep only what the bot needs. Caching communities, channels, roles and members lets permission checks such as `guards.requirePermissions` answer without extra requests. Enabled community, role, channel, emoji and sticker caches fill from the community data Fluxer sends when the bot connects. The [history and cache guide](/docs/{{version}}/history-and-cache/) explains what a cached value can and cannot prove
 
 Each category keeps at most 1,000 entries and 4 MiB by default, and messages 1,000 entries and 8 MiB. The limits apply to the whole client, not per community. When a category is full, its least recently used entry is removed, so lookups start to miss. Size each category for the communities this process serves:
 

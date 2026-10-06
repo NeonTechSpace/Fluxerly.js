@@ -29,10 +29,9 @@ import { runBot } from "@neontechspace/fluxerly"
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     events: {
         messageCreate: ({ message, reply }) => {
-            if (message.author.isBot || message.content !== "!ping") return
+            if (message.content !== "!ping") return
             // Returning the reply reports a failed send to the log
             return reply("Pong!")
         },
@@ -49,7 +48,7 @@ Run it with `node --env-file=.env bot.js`, where `.env` holds `FLUXER_BOT_TOKEN=
 - No slash commands or interactions. Commands are prefix commands such as `!ping`, through the `commands` option of `runBot`
 - Messages are read-only data without methods, so `message.reply()`, `message.delete()` and `channel.send()` do not exist. Use the `reply` passed to a handler, or `client.messages.send(channelId, content)`
 - A `runBot` event handler receives a context object such as `({ message, reply })`, not the message itself
-- A bot author is detected with `message.author.isBot`. There is no `message.author.bot`
+- A bot author is detected with `message.author.isBot`. There is no `message.author.bot`, and `runBot` already skips bot-authored messages unless `ignoreBots` is false
 - Fluxer calls servers communities, and the SDK names them guilds, as in `guildId`
 
 ## Check a Result
@@ -94,10 +93,10 @@ Keep the application's existing module and TypeScript settings when they work wi
 
 ## Build the bot
 
-- `runBot` takes one options object with the client settings, `events` handlers, prefix `commands`, a `setup(client)` callback for other startup work, `onError` and `processSignals: true` to stop cleanly on SIGINT and SIGTERM.
+- `runBot` takes one options object with the client settings, `events` handlers, prefix `commands`, a `setup(client, { signal })` callback for other startup work and `onError`. By default it skips messages written by bots and stops cleanly on SIGINT and SIGTERM. Set `ignoreBots: false` or `processSignals: false` to turn either off.
   It checks every option before creating a client, then connects and resolves only after the bot stopped and SDK cleanup finished. A failure that stops the bot is logged once and sets `process.exitCode` to 1, so `await runBot({...})` needs no try/catch. Pass `reportFailure: false` only when the application handles the returned failure itself
 - For prefix commands, pass `commands: { prefix, commands: { name: { arguments, guard, cooldown, hidden, execute } } }` to `runBot`.
-  Guards come from `guards`: `guildOnly()`, `dmOnly()`, `ownerOnly(ids)` and `requirePermissions(names)`. A cooldown is `{ durationMs, per: "user" | "channel" | "guild" }`.
+  Guards come from `guards`: `guildOnly()`, `dmOnly()`, `ownerOnly()` for the application's owner, `ownerOnly(ids)` and `requirePermissions(names)`. A cooldown is `{ durationMs, per: "user" | "channel" | "guild" }`.
   A `hidden: true` command is left out of help and suggestions but still runs, so guard commands that need protection
 - With `createClient`, register handlers with `client.on` or `client.subscribe` before `connect` or `run`.
   The `run` method waits until the client stops, not just until it connects. The `shutdown` method closes the client permanently
@@ -122,7 +121,8 @@ A subscription registered after shutdown began is returned already closed with a
 
 Test a `runBot` bot by passing its own options object to `createTestBot` from `@neontechspace/fluxerly/testing`. It runs the bot's events, commands and `setup` against an in-memory Fluxer, with no token or network. Use `createTestClient` for code written against a client.
 Both return a real client with the controls `ready()`, `emit(type, payload)` for Fluxer events such as `MESSAGE_CREATE`, `rest.respond(matcher, response)`, `requests()`, `commands()`, `logs()`, `counters()` and `disconnect()`. The shared `fixtures` build event payloads.
-Wait for a request with `next()` on the route that `rest.respond` returns, and for a quiet bot with `idle()`, instead of sleeping.
+Send a user message with `say(content)` on a test bot, which resolves with the messages the bot sent. Message sends and edits without a `rest.respond` fixture receive an echoed message.
+Wait for a request with `next()` on the route that `rest.respond` returns, and for a quiet bot with `idle()`, instead of sleeping. Waits have no deadline unless `timeoutMs` is passed, so the test runner's timeout bounds a hung test.
 A handler or command failure without `onError` makes shutdown fail with `UnhandledTestFailuresError`, unless the test reads it from `failures()`.
 Release the default test client with `await using` or `shutdown()`
 
@@ -180,11 +180,11 @@ Check each member's declaration rather than assuming every native member is an E
 
 ## Advanced
 
-- Build a command router with `commands.create` and `attach` it to a client. Router options add `use` middleware, `onReject: "reply"` feedback, `mentionPrefix` and `cooldowns: { maxEntries }`, and `router.help` or the command context's `help()` builds help pages
+- Build a command router with `commands.create` and `attach` it to a client. Router options add `use` middleware, `onReject: "reply"` feedback, `mentionPrefix` and `cooldowns: { maxEntries }`, and `router.help` or the command context's `help()` builds help pages. The context's `sendHelp()` sends them, and its `paginate(pages)` shows pages that the command's author flips with reactions
 - Use `client.use(middleware)` for event middleware around every later `on` handler
 - For Fluxer API routes without an SDK method, use `client.rest.request({ method, path })`, which shares the client's queue, rate limits and logging. For gateway commands without an SDK method, use `client.gateway.send(shardId, op, d)`. Check the installed declarations for an SDK method first
 - The client logs startup, readiness, lost connections, long rate-limit waits, event drops, shutdown and every application failure by default. Records never contain the token or other credentials.
-  Adjust output with the `logging` option rather than filtering console output: `level`, per-category `categories`, `debug`, `format` (`"pretty"` or `"json"`), `sink` to forward records to another logger, and `dedupe`.
+  Adjust output with the `logging` option rather than filtering console output, and change levels while running with `client.logging.configure`: `level`, per-category `categories`, `debug`, `format` (`"pretty"` or `"json"`), `sink` to forward records to another logger, and `dedupe`.
   Set `FLUXERLY_DEBUG=1`, or a list of categories, for Debug records. Leave `unsafe` payload logging off unless explicitly authorized for local debugging.
   Each record has a stable `code`, such as `rest.rejected`. The documentation website lists every error and log code
 - Read `client.diagnostics().counters` for failure, drop, retry and reconnect totals

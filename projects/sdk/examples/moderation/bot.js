@@ -5,7 +5,6 @@ import { describeError, format, guards, orThrow, runBot } from "@neontechspace/f
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     onError: (report) => console.error(report.describe()),
     commands: {
         prefix: "!",

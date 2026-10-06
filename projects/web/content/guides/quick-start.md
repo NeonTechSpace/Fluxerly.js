@@ -6,6 +6,8 @@ description: Send !ping and receive Pong! from a bot
 
 Before starting, [create a Fluxer bot](/docs/{{version}}/create-a-bot/), store its token and add it to a community. Fluxerly is tested against Node.js 24.15 or newer
 
+To generate the project instead of following steps 1 and 2, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in a new, empty folder. It writes this bot with a test and prints the remaining steps, including where the token goes
+
 ## 1. Install the SDK
 
 Open a terminal in the bot's folder, where `.env` is saved.
@@ -51,9 +53,9 @@ Once the bot is online, the terminal shows a line such as `Connected to Fluxer a
 Type **!ping** in a channel the bot can read and reply to.
 It should answer **Pong!**
 
-The bot ignores messages from bots. It replies only when a person sends exactly `!ping`
+The SDK skips messages from bots by default. The bot replies only when a person sends exactly `!ping`
 
-Press Ctrl+C to stop the bot. The `processSignals` setting lets the SDK stop the message handler, close the connection and finish its cleanup before the program ends
+Press Ctrl+C to stop the bot. The SDK then stops the message handler, closes the connection and finishes its cleanup before the program ends
 
 ## Keep going
 

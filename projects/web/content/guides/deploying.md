@@ -4,7 +4,7 @@ navTitle: Deploying
 description: Keep a bot running with PM2, systemd or Docker, with the token in the environment and a clean shutdown
 ---
 
-A deployed bot is an ordinary Node.js process. A process manager starts it, passes the token through the environment, restarts it after a crash and stops it with a signal: SIGINT under PM2 and SIGTERM under systemd and Docker. With `processSignals: true`, the SDK handles both signals, closes the connection cleanly and lets the process exit
+A deployed bot is an ordinary Node.js process. A process manager starts it, passes the token through the environment, restarts it after a crash and stops it with a signal: SIGINT under PM2 and SIGTERM under systemd and Docker. A bot started with `runBot` handles both signals by default, closes the connection cleanly and lets the process exit
 
 ## Prepare the bot
 
@@ -12,7 +12,7 @@ Every setup below expects the same project:
 
 - Node.js 24.15 or newer on the server or in the image
 - The `"type": "module"` field in `package.json`, because the SDK is ESM-only
-- The `processSignals: true` option in `runBot`, so SIGINT and SIGTERM stop the bot cleanly
+- A bot started with `runBot`, which stops cleanly on SIGINT and SIGTERM unless `processSignals` is `false`
 - The token read from `process.env.FLUXER_BOT_TOKEN`, never written in a source file, committed to version control or copied into an image
 - No extra exit handling: When a failure stops the bot, `runBot` sets `process.exitCode` to 1, so the process manager can tell a crash from a normal stop
 
@@ -32,7 +32,7 @@ For TypeScript, run `bot.ts` instead of `bot.js`. Node.js 24 runs TypeScript fil
 
 ## What happens on shutdown
 
-With `processSignals: true`, the SDK listens for SIGINT and SIGTERM and for no other signals. When the process receives one of them, the SDK logs the signal and shuts the bot down:
+Unless `processSignals` is `false`, the SDK listens for SIGINT and SIGTERM and for no other signals. When the process receives one of them, the SDK logs the signal and shuts the bot down:
 
 - Stops accepting new events and gives running handlers and commands, the events already waiting for them and their requests up to 5 seconds to finish. The `drainMs` option of `runBot` changes that time, and `drainMs: 0` skips the wait
 - Signals the handlers still running to stop through their `signal`

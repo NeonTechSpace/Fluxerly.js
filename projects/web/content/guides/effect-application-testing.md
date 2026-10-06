@@ -233,25 +233,19 @@ export const pingTest = Effect.scoped(
             token: process.env.FLUXER_BOT_TOKEN,
             events: {
                 messageCreate: ({ message, reply }) =>
-                    message.author.isBot || message.content !== "!ping" ? Effect.void : reply("Pong!"),
+                    message.content !== "!ping" ? Effect.void : reply("Pong!"),
             },
-        })
-        const replies = bot.rest.respond("POST /channels/:id/messages", {
-            body: bot.fixtures.message({ content: "Pong!" }),
         })
         yield* bot.ready()
 
-        yield* bot.emit("MESSAGE_CREATE", bot.fixtures.message({ content: "!ping" }))
-        const reply = yield* replies.next()
-
-        yield* bot.emit("MESSAGE_CREATE", bot.fixtures.message({ content: "hello" }))
-        yield* bot.idle()
-        return { content: (reply.body as { content?: unknown }).content, replies: replies.requests().length }
+        const replies = yield* bot.say("!ping")
+        const ignored = yield* bot.say("hello")
+        return { replies: replies.map((message) => message.content), ignored: ignored.length }
     }),
 )
 ```
 
-Running `pingTest` with `Effect.runPromise` succeeds with the reply's content `"Pong!"` and one reply in total. The `rest.respond` call tells the fake Fluxer API how to answer a request, and `emit` delivers a gateway event as Fluxer would send it. Handlers run after `emit` on their own schedule, so the test waits: The route's `next()` waits for the next request it answers, and `idle()` waits until the bot has stopped working, which shows that `hello` got no reply. Both fail with `TestTimeoutError` after 2 seconds instead of hanging
+Running `pingTest` with `Effect.runPromise` succeeds with the replies `["Pong!"]` and no reply to `hello`. The `say` Effect delivers a message from a fake user as Fluxer would send it, waits until the bot has stopped working and returns the messages the bot sent meanwhile. The fake Fluxer API answers each message the bot sends with that message, so no response needs registering. For other events, `emit` delivers a gateway event, `idle()` waits until the bot has stopped working, and `rest.respond` controls how the fake Fluxer API answers a request. These waits have no deadline unless `timeoutMs` is passed, so the test runner's timeout ends a test that hangs
 
 The test gateway enforces the Identify session's `gateway.ignoredEvents`: The `emit` Effect dies with `ConfigurationError` when Fluxer would suppress that dispatch, without consuming a sequence number. With automatic filtering, register handlers before running `ready()` so Identify sees them. Resume keeps the list, while a new Identify recomputes it. Suppressed message mentions and generated reaction batches follow Fluxer's exceptions, described in [Match gateway event filtering](/docs/{{version}}/testing/#match-gateway-event-filtering)
 
@@ -264,7 +258,7 @@ A native client captures the provided Effect `Clock` when `createClient` runs. C
 
 `TestClock` does not control protocol timestamps such as an HTTP-date `Retry-After`, external I/O including WebSockets, or process shutdown watchdogs. Those cases still need controlled transport responses or tests using real time
 
-Fake timers from a test runner, such as Vitest's `vi.useFakeTimers()`, work differently from `TestClock`. The `next()` and `idle()` timeouts use real timers, so faking the global timers does not change them. The SDK runs its work on `setImmediate`, so fake timers must leave `setImmediate` real, as in `vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] })`. When `setImmediate` is faked, no handler can run, and `idle()` dies with `ConfigurationError` instead of settling
+Fake timers from a test runner, such as Vitest's `vi.useFakeTimers()`, work differently from `TestClock`. A `timeoutMs` on `next()`, `idle()` or `say` uses real timers, so faking the global timers does not change it. The SDK runs its work on `setImmediate`, so fake timers must leave `setImmediate` real, as in `vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] })`. When `setImmediate` is faked, no handler can run, and `idle()` dies with `ConfigurationError` instead of settling
 
 </details>
 

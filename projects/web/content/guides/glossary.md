@@ -78,7 +78,7 @@ A gateway gap is a period when the connection may have missed events, such as wh
 
 ### Guard
 
-A guard is a check that runs before a command and can deny it with a reason. The exported `guards` include `guildOnly()`, `dmOnly()`, `ownerOnly(ids)` and `requirePermissions(names)`. See [Commands](/docs/{{version}}/commands/#guard-limit-and-wrap-commands)
+A guard is a check that runs before a command and can deny it with a reason. The exported `guards` include `guildOnly()`, `dmOnly()`, `ownerOnly()` and `requirePermissions(names)`. See [Commands](/docs/{{version}}/commands/#guard-limit-and-wrap-commands)
 
 ### Guild
 

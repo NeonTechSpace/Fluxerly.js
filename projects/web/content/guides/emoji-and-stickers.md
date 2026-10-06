@@ -150,7 +150,6 @@ import { runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     commands: {
         prefix: "!",
         commands: {

@@ -124,6 +124,22 @@ The helper returns `true` when the person adds ✅ within 20 seconds. It watches
 
 For a community channel, pass its known `guildId` in the collector options so recovery is limited to that community's [shard](/docs/{{version}}/glossary/#shard). Do not assume a channel is private merely because an event omitted community context. See the [collector reference](/docs/{{version}}/api/interfaces/js-ts.Messages/#collectreactions) for buffer limits and subscription ownership
 
+## Show pages with reactions
+
+Fluxer has no buttons, so a long list can be shown as pages that people flip with ◀ and ▶ reactions. The `messages.paginate` method sends the first page, adds both arrows as the bot and shows the previous or next page on each click, wrapping around at the ends. Pass `users` to choose who may flip, such as `[userId]`, or `() => true` for anyone
+
+```ts
+import type { Client } from "@neontechspace/fluxerly"
+
+export function showRules(client: Client, channelId: string, userId: string) {
+    return client.messages.paginate(channelId, ["Rules 1 to 5", "Rules 6 to 10"], { users: [userId] })
+}
+```
+
+The returned Result settles when listening ends, after `idleMs` without a click, 60 seconds by default, or `timeoutMs` after the first page, 5 minutes by default. The bot then removes its own arrows, and the current page stays shown. A page is text or an object with `content` and `embeds`. Adding or removing an arrow both turn the page, so the bot needs only Add Reactions and Read Message History. With `removeClicks: true`, only additions count and the bot removes each click, which needs Manage Messages. Like a collector, pages need a connected gateway
+
+In a command, the context's `paginate(pages)` lets the command's author flip by default, and `sendHelp()` sends the help pages this way. See [help in Commands](/docs/{{version}}/commands/#add-help-from-the-registered-commands)
+
 ## Wire it up
 
 In a `runBot` bot, event handlers go in `events` and receive the event and the client. A collector can run inside a command, which provides the client and the incoming message. This bot logs new community joins and answers `!ask`
@@ -133,7 +149,6 @@ import { orThrow, runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     onError: (report) => console.error(report.describe()),
     events: {
         guildCreate: ({ event }) => {

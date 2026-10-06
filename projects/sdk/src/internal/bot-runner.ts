@@ -20,7 +20,7 @@ import { readCaller, readInput, suspendMarked } from "./defects.js"
 import { operationSignalError } from "./operation-signal.js"
 import { clientServices } from "./client-registry.js"
 import { ClientLogger, loggingConfiguration } from "./logging.js"
-import { normalizeToken, validateConfiguration } from "./configuration.js"
+import { missingTokenMessage, normalizeToken, validateConfiguration } from "./configuration.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import { EventBus } from "./events.js"
 import { shutdownDrainMs } from "./client/drain.js"
@@ -144,14 +144,31 @@ const defaultBotDrainMs = 5_000
 
 /** Check the client settings with createClient's rules before the runner adds signal listeners or creates a client.
  * Validation reads the settings without creating a logger, cache, socket or request. Misuse throws ConfigurationError,
- * including for an option key that neither runBot nor createClient supports
+ * including for an option key that neither runBot nor createClient supports.
+ * A missing or empty token is returned instead, without a stack, once every other setting is valid, so runBot can
+ * report it like a failed run
  */
-export function validateBotClientOptions(options: unknown, native: boolean): void {
+export function validateBotClientOptions(options: unknown, native: boolean): ConfigurationError | undefined {
+    const failure = clientOptionsFailure(options, native)
+    if (failure === undefined) return undefined
+    if (
+        !(failure instanceof ConfigurationError) ||
+        failure.field !== "token" ||
+        failure.message !== missingTokenMessage
+    )
+        throw failure
+    // Settings checked after the token, such as the cache, are checked again with a stand-in token
+    const other = clientOptionsFailure({ ...(options as object), token: "stand-in" }, native)
+    if (other !== undefined) throw other
+    failure.stack = `${failure.name}: ${failure.message}`
+    return failure
+}
+
+function clientOptionsFailure(options: unknown, native: boolean): unknown {
     const validated = Effect.runSyncExit(validateConfiguration(options, native, botOptionKeys))
-    if (Exit.isSuccess(validated)) return
+    if (Exit.isSuccess(validated)) return undefined
     const reason = validated.cause.reasons.find((reason) => reason._tag === "Fail")
-    if (reason?._tag === "Fail") throw reason.error
-    throw Cause.squash(validated.cause)
+    return reason?._tag === "Fail" ? reason.error : Cause.squash(validated.cause)
 }
 
 /** Validate the runner settings before any client exists. Invalid settings are misuse and throw ConfigurationError */

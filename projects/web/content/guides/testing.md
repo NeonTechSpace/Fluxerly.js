@@ -16,7 +16,6 @@ import type { BotOptions } from "@neontechspace/fluxerly"
 // The bot's runBot options, shared by bot.ts and the tests
 export const botOptions: BotOptions = {
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     commands: {
         prefix: "!",
         commands: {
@@ -44,7 +43,6 @@ import { createTestBot } from "@neontechspace/fluxerly/testing"
 // In a project, import botOptions from bot-options.ts. It is repeated here so the example runs on its own
 const botOptions: BotOptions = {
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     commands: {
         prefix: "!",
         commands: {
@@ -58,25 +56,20 @@ const botOptions: BotOptions = {
 
 test("!ping replies Pong!", async () => {
     await using bot = createTestBot(botOptions)
-    const replies = bot.rest.respond("POST /channels/:id/messages", {
-        body: bot.fixtures.message({ content: "Pong!" }),
-    })
-
     await bot.ready()
-    bot.emit("MESSAGE_CREATE", bot.fixtures.message({ content: "!ping" }))
 
-    const request = await replies.next()
-    assert.equal(request.path, `/channels/${bot.fixtures.ids.channel}/messages`)
-    assert.equal((request.body as { content?: unknown }).content, "Pong!")
+    const replies = await bot.say("!ping")
+    assert.deepEqual(
+        replies.map((message) => message.content),
+        ["Pong!"],
+    )
 })
 
 test("other messages get no reply", async () => {
     await using bot = createTestBot(botOptions)
     await bot.ready()
-    bot.emit("MESSAGE_CREATE", bot.fixtures.message({ content: "hello" }))
 
-    await bot.idle()
-    assert.equal(bot.requests().length, 0)
+    assert.deepEqual(await bot.say("hello"), [])
 })
 
 test("a command that throws is reported", async () => {
@@ -114,17 +107,16 @@ Node.js finds test files such as `bot.test.js` and `bot.test.ts` and runs TypeSc
 ## What the test does
 
 1. The `createTestBot` call creates a test client and registers the bot's events and commands on it, as `runBot` would. The unset token falls back to a test token, and `processSignals` is ignored. The `await using` declaration shuts the client down when the test ends, even after a failed assertion
-2. The `rest.respond` call tells the fake Fluxer API how to answer the reply request. It returns a route for that answer
-3. The `ready()` call runs the bot's `setup`, if it has one, connects to the fake gateway and waits for READY
-4. The `emit` call delivers a `MESSAGE_CREATE` event, built by `fixtures.message`, exactly as Fluxer would send it
-5. The route's `next()` call waits for the next request the route answers, and the test checks its path and content
+2. The `ready()` call runs the bot's `setup`, if it has one, connects to the fake gateway and waits for READY
+3. The `say` call delivers a message from a fake user, exactly as Fluxer would send it, waits until the bot has stopped working and returns the messages the bot sent meanwhile. The fake Fluxer API answers each message the bot sends with that message, so no response needs registering
+4. The test checks the content of what the bot sent, and an empty list shows that the second test's message was ignored
 
-Handlers run on their own schedule after `emit`, so a test waits before it checks anything. The `next()` call waits for a request, and `idle()` waits until the bot has stopped working, which shows that the second test's message was ignored. Both fail with `TestTimeoutError` after 2 seconds, so a missing reply fails the test instead of hanging it
+For other events, the `emit` call delivers a Fluxer event built by `fixtures`, and `idle()` waits until the bot has stopped working, as the third test shows. To control how the fake Fluxer API answers a request, `rest.respond` registers a response and returns a route whose `next()` waits for the next request it answers. These waits have no deadline unless `timeoutMs` is passed, as in `bot.idle({ timeoutMs: 2_000 })`, so set a timeout in the test runner, such as `node --test --test-timeout=10000`, to fail a bot that never settles instead of hanging
 
 <details>
 <summary>Use fake timers in a test</summary>
 
-The `next()` and `idle()` timeouts use real timers, so faking the global timers does not change them. The SDK runs its work on `setImmediate`, so fake timers must leave `setImmediate` real, as in Vitest's `vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] })`. When `setImmediate` is faked, no handler can run, and `idle()` rejects with `ConfigurationError` instead of settling
+A `timeoutMs` on `next()`, `idle()` or `say` uses real timers, so faking the global timers does not change it. The SDK runs its work on `setImmediate`, so fake timers must leave `setImmediate` real, as in Vitest's `vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] })`. When `setImmediate` is faked, no handler can run, and `idle()` rejects with `ConfigurationError` instead of settling
 
 </details>
 
@@ -133,7 +125,7 @@ The third test passes its own options with a command that throws. Without an `on
 <details>
 <summary>Requests without a registered response</summary>
 
-A request that matches no `rest.respond` route receives a 404 shaped like Fluxer's, and `logs()` gains a `testing.unmatchedRequest` Warn record. When a command returns a reply that fails this way, the failure is logged as `commands.failed` and counts like a thrown error. The `failures()` method returns it, and shutdown rejects unless the test read it
+A message send or edit that matches no `rest.respond` route receives the sent message back, as if Fluxer accepted it. Any other request without a route receives a 404 shaped like Fluxer's, and `logs()` gains a `testing.unmatchedRequest` Warn record. When a command returns a request that fails this way, the failure is logged as `commands.failed` and counts like a thrown error. The `failures()` method returns it, and shutdown rejects unless the test read it
 
 </details>
 

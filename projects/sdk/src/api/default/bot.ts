@@ -34,7 +34,7 @@ import { type Subscription, type EventHandlerOptions } from "./events.js"
 import { type Client, createClient } from "./client.js"
 import { type OperationFailure, fromExit } from "#sdk/internal/binding/execute"
 
-type BotFailure = ConnectError | CancelledError | CriticalWorkerStoppedError | ApplicationError
+type BotFailure = ConnectError | CancelledError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError
 /** Failures the runner observes from client operations. Its own signal is always valid, so a signal ConfigurationError
  * cannot occur. An overflowing subscription's EventOverflowError is caught before the Result, and a failed setup
  * callback adds ApplicationError
@@ -196,9 +196,9 @@ export interface BotCommandsOptions<
 
 /**
  * Configure a bot: Client settings, event handlers, prefix commands, optional startup work and stop signals.
- * A reported commands-registration failure before client creation uses the configured logging settings and masks the
- * normalized token, including a token enclosed in matching quotes. Misuse and option-getter failures instead throw
- * synchronously without a runner report or exit-status change
+ * A missing token or a commands-registration failure reported before client creation uses the configured logging
+ * settings and masks the normalized token, including a token enclosed in matching quotes. Other misuse and
+ * option-getter failures instead throw synchronously without a runner report or exit-status change
  *
  * @category Client and lifecycle
  */
@@ -243,24 +243,27 @@ export interface BotOptions<
  * Start a bot from event handlers and prefix commands, and watch its connection and subscriptions.
  * The client is created and every handler and command is registered synchronously, before this function returns and
  * before the gateway connects, so no event is missed and no handler runs before registration and setup complete.
- * Invalid options, such as a missing token from an unset environment variable, a misspelled option key, an unknown event
- * name, invalid delivery settings or an invalid command, throw ConfigurationError at once. Every option is checked before any client, signal
- * listener or request exists, even when the signal is already aborted, so misuse leaves nothing to clean up.
+ * Invalid options, such as a misspelled option key, an unknown event name, invalid delivery settings or an invalid
+ * command, throw ConfigurationError at once. Every option is checked before any client, signal listener or request
+ * exists, even when the signal is already aborted, so misuse leaves nothing to clean up.
+ * A missing or empty token, usually from an unset environment variable, is reported like a failed run instead: Once
+ * every other option is valid, runBot returns an Err ConfigurationError with field token before any client exists.
  * The returned ResultAsync then runs the bot until it stops.
  * Handler contexts expose the full client. Message-create contexts also expose message and a cancellation-aware reply.
  * Handler and command failures are reported to onError, or logged in full, without restarting them or stopping the bot.
  * By default, SIGINT and SIGTERM request a normal stop and messages written by bots skip the events handlers and
  * prefix commands. Set processSignals or ignoreBots to false to opt out. Stopping waits for SDK cleanup, not unrelated application Promises.
  * Expected runner failures return Err, including ApplicationError when the setup callback or a commands register
- * callback fails, and SDK defects reject with SdkDefect.
+ * callback fails and ConfigurationError for a missing token, and SDK defects reject with SdkDefect.
  * By default a failed run is also logged once, with code lifecycle.botFailed unless the client already logged that
  * error, and sets process.exitCode to 1, so `await runBot({...})` needs no further handling.
  * Set reportFailure to false when the application handles the returned failure and exit status itself.
- * A reported commands-registration failure before client creation uses the configured logging settings and masks the
- * token after removing surrounding whitespace and one pair of matching quotes. Unusable logging settings are misuse.
+ * A missing token or a commands-registration failure reported before client creation uses the configured logging
+ * settings, prints no stack for the missing token and masks the token after removing surrounding whitespace and one pair
+ * of matching quotes. Unusable logging settings are misuse.
  * An option getter that throws while the options are checked throws SdkDefect with code application.defect and the
- * thrown value as the cause, before any client exists. Misuse and option-getter failures throw synchronously without a
- * runner report or exit-status change, regardless of reportFailure
+ * thrown value as the cause, before any client exists. Other misuse and option-getter failures throw synchronously
+ * without a runner report or exit-status change, regardless of reportFailure
  *
  * @remarks
  * Aborting the optional signal requests a normal stop, not a cancellation Err. A requested stop first stops accepting
@@ -299,7 +302,10 @@ export function runBot<
     const S extends Readonly<Record<string, unknown>> = Readonly<Record<string, CommandArgumentSchema | undefined>>,
 >(
     options: BotOptions<F, S>,
-): ResultAsync<void, ConnectError | CancelledError | CriticalWorkerStoppedError | ApplicationError> {
+): ResultAsync<
+    void,
+    ConnectError | CancelledError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError
+> {
     try {
         return startBot<F, S>(options)
     } catch (error) {
@@ -356,13 +362,11 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
         commands as BotCommandsOptions<M, never> | undefined,
         setup,
     )
-    readBotOptions(() => validateBotClientOptions(clientOptions, false))
-    // The callback already ran, so its failure is returned even when the signal is already aborted
-    if (commandsFailure !== undefined) {
-        Effect.runSync(
-            reportBotFailure(Exit.fail(commandsFailure), standaloneBotLogger(clientOptions, false), runOptions),
-        )
-        return errAsync<void, BotFailure>(commandsFailure)
+    // A missing token and the callback's failure are returned even when the signal is already aborted
+    const failure = readBotOptions(() => validateBotClientOptions(clientOptions, false)) ?? commandsFailure
+    if (failure !== undefined) {
+        Effect.runSync(reportBotFailure(Exit.fail(failure), standaloneBotLogger(clientOptions, false), runOptions))
+        return errAsync<void, BotFailure>(failure)
     }
     if (readBotOptions(() => signal?.aborted)) return okAsync<void, BotFailure>(undefined)
     const client = createClient<F>(clientOptions as ClientOptions<F>)

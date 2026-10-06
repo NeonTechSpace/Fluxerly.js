@@ -21,7 +21,6 @@ async function setRole(client: Client, userId: string, granted: boolean) {
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     onError: (report) => console.error(report.describe()),
     // Check the configuration once before connecting, so a role the bot cannot assign stops it at startup
     setup: async (client) => {

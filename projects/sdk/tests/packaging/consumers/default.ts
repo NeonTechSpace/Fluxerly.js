@@ -106,6 +106,7 @@ export function packedRunBot(signal: import("@neontechspace/fluxerly").Operation
         | import("@neontechspace/fluxerly").EventOverflowError
         | import("@neontechspace/fluxerly").CriticalWorkerStoppedError
         | import("@neontechspace/fluxerly").ApplicationError
+        | import("@neontechspace/fluxerly").ConfigurationError
     > = runBot({
         token: process.env.FLUXER_BOT_TOKEN,
         signal,

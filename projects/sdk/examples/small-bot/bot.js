@@ -6,7 +6,6 @@ if (!welcomeChannelId) console.info("WELCOME_CHANNEL_ID is not set, so the bot s
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     // Handler and command failures arrive here instead of stopping the bot
     onError: (report) => {
         const source = report.command ? `Command ${report.command}` : `Handler ${report.event ?? report.kind}`

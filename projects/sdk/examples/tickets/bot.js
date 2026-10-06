@@ -9,16 +9,11 @@ function requiredEnv(name) {
 const categoryId = requiredEnv("TICKET_CATEGORY_ID")
 const staffRoleId = requiredEnv("TICKET_STAFF_ROLE_ID")
 const access = Permissions.ViewChannel | Permissions.SendMessages | Permissions.ReadMessageHistory
-let botUserId = ""
 
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     onError: (report) => console.error(report.describe()),
-    setup: async (client) => {
-        botUserId = orThrow(await client.users.fetchSelf()).id
-    },
     commands: {
         prefix: "!",
         commands: {
@@ -34,6 +29,9 @@ await runBot({
                     const channels = orThrow(await client.channels.fetchAll(guildId))
                     const open = channels.find((channel) => channel.parentId === categoryId && channel.name === name)
                     if (open) return reply(`A ticket is already open: ${format.channelMention(open.id)}`)
+                    // The bot's own account, as Fluxer reported it when the bot connected, read without a request
+                    const bot = client.users.getSelf()
+                    if (bot === undefined) return reply("The bot's own account is not known yet. Try again later")
 
                     const channel = orThrow(
                         await client.channels.create(guildId, {
@@ -45,7 +43,7 @@ await runBot({
                                 { id: guildId, type: "role", allow: 0n, deny: Permissions.ViewChannel },
                                 { id: staffRoleId, type: "role", allow: access, deny: 0n },
                                 { id: message.author.id, type: "member", allow: access, deny: 0n },
-                                { id: botUserId, type: "member", allow: access, deny: 0n },
+                                { id: bot.id, type: "member", allow: access, deny: 0n },
                             ],
                         }),
                     )

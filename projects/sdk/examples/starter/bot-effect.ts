@@ -6,7 +6,7 @@ const program = runBot({
     processSignals: true,
     events: {
         messageCreate: ({ message, reply }) => {
-            if (message.author.isBot || message.content !== "!ping") return Effect.void
+            if (message.content !== "!ping") return Effect.void
             // A failed reply is reported to the log without stopping the bot
             return reply("Pong!")
         },

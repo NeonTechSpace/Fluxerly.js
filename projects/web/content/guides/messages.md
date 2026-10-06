@@ -31,7 +31,7 @@ A plain string sends a text-only message. On success, `value` is the message Flu
 <summary>What does a failed send say?</summary>
 
 The error message names the operation and Fluxer's answer, then Fluxer's code and the HTTP status, for example `Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403)`.
-The error's `hint` suggests a next step. When Fluxer answers with a code this SDK version does not know yet, `details.providerCode` holds it. When Fluxer's answer does not have the expected shape, `details.responseField` names the field that failed
+The error's `hint` suggests a next step. For a missing permission, `details.requiredPermissions` lists the permissions Fluxer checks for the operation, such as `["ViewChannel", "SendMessages"]` for a send, and the hint names them. Fluxer does not report which one is missing, so the bot may already have some of them. When Fluxer answers with a code this SDK version does not know yet, `details.providerCode` holds it. When Fluxer's answer does not have the expected shape, `details.responseField` names the field that failed
 
 A rejection with HTTP 401 or 403 that the application handles also logs a Warn record with the code `rest.rejected`, because it usually points at a lasting token or permission problem. When a handler fails with the rejection instead, the handler's failure record is the only one. [Identical repeats collapse](/docs/{{version}}/logging/#collapse-repeated-errors) into one record per minute by default. The [error and log codes](/docs/{{version}}/error-and-log-codes/) page lists every code with its meaning
 
@@ -209,14 +209,13 @@ A send can still fail when the recipient's privacy settings block it. To reuse t
 
 ## Wire it up
 
-In a `runBot` bot, each command receives a `reply` helper already bound to the incoming message. This bot answers `!schedule` with an embed, and `processSignals: true` lets Ctrl+C stop it cleanly
+In a `runBot` bot, each command receives a `reply` helper already bound to the incoming message. This bot answers `!schedule` with an embed and stops cleanly on Ctrl+C
 
 ```ts
 import { builders, runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     commands: {
         prefix: "!",
         commands: {

@@ -22,7 +22,7 @@ const bot = `import { runBot } from "@neontechspace/fluxerly"
 export const bot = {
     events: {
         messageCreate: ({ message, reply }) => {
-            if (message.author.isBot || message.content !== "!ping") return
+            if (message.content !== "!ping") return
             // Returning the reply reports a failed send to the log
             return reply("Pong!")
         },
@@ -31,7 +31,7 @@ export const bot = {
 
 // Running this file starts the bot, while importing it from a test does not.
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, processSignals: true, ...bot })
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
 `
 
 const botTest = `import assert from "node:assert/strict"
@@ -42,18 +42,11 @@ import { bot } from "./bot.js"
 // createTestBot runs the bot against an in-memory Fluxer, so no token or network is needed
 test("the bot answers !ping with Pong! and ignores other messages", async () => {
     await using testBot = createTestBot(bot)
-    const replies = testBot.rest.respond("POST /channels/:id/messages", {
-        body: testBot.fixtures.message({ content: "Pong!" }),
-    })
     await testBot.ready()
 
-    testBot.emit("MESSAGE_CREATE", testBot.fixtures.message({ content: "!ping" }))
-    const request = await replies.next()
-    assert.equal(request.body.content, "Pong!")
-
-    testBot.emit("MESSAGE_CREATE", testBot.fixtures.message({ content: "hello" }))
-    await testBot.idle()
-    assert.equal(replies.requests().length, 1)
+    // The say method sends a message as a user and returns the messages the bot sent in response
+    assert.deepEqual((await testBot.say("!ping")).map((message) => message.content), ["Pong!"])
+    assert.deepEqual(await testBot.say("hello"), [])
 })
 `
 

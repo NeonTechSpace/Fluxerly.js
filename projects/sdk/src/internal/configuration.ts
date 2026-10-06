@@ -263,13 +263,16 @@ export function childClientOptionsError(clientOptions: unknown): ConfigurationEr
     )
 }
 
+/** The message of the error that normalizeToken returns for a missing or empty token */
+export const missingTokenMessage = "The bot token is missing or empty"
+
 /** Normalize a configured token: Trim whitespace and one layer of matching quotes, which .env files often add.
  * Returns a ConfigurationError that never includes the value when the token is missing or carries an auth scheme
  */
 export function normalizeToken(token: unknown): string | ConfigurationError {
     const missing = () =>
-        new ConfigurationError("token", "The bot token is missing or empty", {
-            hint: "Pass the bot token in the token option. When it comes from an environment variable, set that variable for the process that starts the bot. To load it from a .env file, start the bot with node --env-file=.env bot.js, and check that .env is in the current folder and is not saved as .env.txt",
+        new ConfigurationError("token", missingTokenMessage, {
+            hint: "Pass the bot token in the token option. In a project created by fluxerly init, copy .env.example to .env and set FLUXER_BOT_TOKEN. Otherwise set the token's environment variable for the process that starts the bot, or start it with node --env-file=.env bot.js. Check that .env is in the current folder and is not saved as .env.txt",
         })
     if (token === undefined) return missing()
     if (typeof token !== "string")

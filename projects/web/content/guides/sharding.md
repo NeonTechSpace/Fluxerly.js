@@ -15,11 +15,10 @@ import { runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     sharding: "auto",
     events: {
         messageCreate: ({ message, reply }) => {
-            if (message.author.isBot || message.content !== "!ping") return undefined
+            if (message.content !== "!ping") return undefined
             return reply("Pong!")
         },
     },
@@ -54,41 +53,21 @@ Waiting custom commands fail when the connection is lost and are not replayed. R
 A restarted bot normally starts new sessions and misses the events sent while it was down. Fluxer keeps a disconnected session for 60 seconds. A session store saves each shard's session at shutdown and offers it at the next startup, so a quick restart, such as a deploy, resumes and receives the missed events within Fluxer's replay limits
 
 ```ts
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import { runBot, type SessionSnapshot, type SessionStore } from "@neontechspace/fluxerly"
-
-const directory = new URL("./sessions/", import.meta.url)
-
-const sessions: SessionStore = {
-    async load(shardId) {
-        try {
-            const saved = await readFile(new URL(`shard-${shardId}.json`, directory), "utf8")
-            return JSON.parse(saved) as SessionSnapshot
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
-            throw error
-        }
-    },
-    async save(shardId, snapshot) {
-        await mkdir(directory, { recursive: true })
-        await writeFile(new URL(`shard-${shardId}.json`, directory), JSON.stringify(snapshot), { mode: 0o600 })
-    },
-}
+import { fileSessionStore, runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
-    sharding: { totalShards: "auto", sessions },
+    sharding: { totalShards: "auto", sessions: fileSessionStore("sessions") },
     events: {
         messageCreate: ({ message, reply }) => {
-            if (message.author.isBot || message.content !== "!ping") return undefined
+            if (message.content !== "!ping") return undefined
             return reply("Pong!")
         },
     },
 })
 ```
 
-A snapshot contains the session ID, which lets the token resume the session, so store it as carefully as the token. The store works with one shard as well: Pass `{ totalShards: 1, sessions }`
+The `fileSessionStore` function keeps each shard's snapshot in its own file in the given folder, relative to the current working directory, and replaces a file only once its new contents are fully written. A snapshot contains the session ID, which lets the token resume the session, so keep the folder out of version control and readable only by the bot's account. Separate processes need separate folders unless their shard IDs never overlap. The store works with one shard as well: Pass `{ totalShards: 1, sessions: fileSessionStore("sessions") }`. To keep snapshots elsewhere, such as in a database, pass an object with `load` and `save` methods instead, as the [`SessionStore`](/docs/{{version}}/api/interfaces/js-ts.SessionStore/) reference describes
 
 <details>
 <summary>When a saved session is not used</summary>
@@ -113,11 +92,10 @@ const shardIds = (process.env.SHARD_IDS ?? "0,1").split(",").map(Number)
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     sharding: { totalShards: 4, shardIds },
     events: {
         messageCreate: ({ message, reply }) => {
-            if (message.author.isBot || message.content !== "!ping") return undefined
+            if (message.content !== "!ping") return undefined
             return reply("Pong!")
         },
     },

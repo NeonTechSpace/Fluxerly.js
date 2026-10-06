@@ -193,7 +193,6 @@ const optInRoleId = process.env.OPT_IN_ROLE_ID
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     commands: {
         prefix: "!",
         commands: {

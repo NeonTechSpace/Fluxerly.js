@@ -14,7 +14,6 @@ let guildId = ""
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     onError: (report) => console.error(report.describe()),
     // Setup runs before the bot connects, so a wrong channel ID stops the bot at startup
     setup: async (client) => {

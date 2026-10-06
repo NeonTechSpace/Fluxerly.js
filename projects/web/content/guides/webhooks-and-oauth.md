@@ -149,7 +149,6 @@ await using webhook = createWebhookClient({ id, token })
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     commands: {
         prefix: "!",
         commands: {

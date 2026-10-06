@@ -78,6 +78,10 @@ export function createCachedClient(token: string) {
 
 This client keeps up to 500 messages from sends, reads, history pages and gateway events, within about two megabytes and for at most one minute each. Without these settings, an enabled message cache keeps up to 1,000 messages in 8 MiB with no age limit. The same `cache` option works in `runBot`
 
+A function as `maxAgeMs` chooses the age limit per message, such as `maxAgeMs: (message) => (message.author.isBot ? 0 : 60_000)` to keep only messages from people. Zero skips keeping a message, and `null` keeps it without an age limit. Every cache category accepts the same kind of function
+
+To release cached data while the bot runs, call `client.cache.clear("messages")`, or `client.cache.clear()` for every category. The `client.cache.delete(kind, key)` method removes one entry, with keys such as `channelId:messageId` for messages. Neither changes anything on Fluxer
+
 <details>
 <summary>Why can a message be missing from the cache?</summary>
 
@@ -118,7 +122,6 @@ import { runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
     cache: { messages: { maxEntries: 500, maxAgeMs: 600_000 } },
     commands: {
         prefix: "!",

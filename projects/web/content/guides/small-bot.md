@@ -94,7 +94,7 @@ The [logging guide](/docs/{{version}}/logging/) shows how to change what the SDK
 
 ### Clean shutdown
 
-With `processSignals: true`, Ctrl+C or a stop request from a process manager stops the bot. The SDK cancels running handlers, closes the connection and finishes its cleanup, and then `runBot` returns
+By default, Ctrl+C or a stop request from a process manager stops the bot. The SDK cancels running handlers, closes the connection and finishes its cleanup, and then `runBot` returns
 
 When the bot could not connect or stopped for another reason, `runBot` logs that failure once and sets the process exit code to 1, so a shell or process manager sees a failed run. Invalid settings, such as a missing token, throw an error at once, before the bot connects. The [reliability guide](/docs/{{version}}/reliability/) covers what happens between start and stop
 
