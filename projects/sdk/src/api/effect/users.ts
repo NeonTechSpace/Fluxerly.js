@@ -20,7 +20,8 @@ export interface Users {
     /**
      * Look up the bot's own public account as the gateway's READY reported it, without a request.
      * The result is undefined until this client's first READY, and also while no READY has carried a complete public account.
-     * Each later READY, such as for a new session, replaces it. Other user updates and fetchSelf results do not change it,
+     * A later READY with a complete public account, such as for a new session, replaces it, while an incomplete one keeps
+     * the previous account. Other user updates and fetchSelf results do not change it,
      * so its username or avatar can be stale. The value remains available after the client stops.
      * This lookup never fails. Use fetchSelf for a current remote snapshot
      */

@@ -307,7 +307,9 @@ export interface GatewayOptions {
      * The value "auto" computes the list at each new-session Identify from the events registered at that moment,
      * through on, subscribe, waitFor, collectors and command routers: Every dispatch type that delivers no registered
      * event is suppressed, except those enabled cache categories, presence member selection (GUILD_CREATE) and cache
-     * clearing (GUILD_DELETE) need, READY, RESUMED, request replies and types this SDK version does not decode. A raw
+     * clearing (GUILD_DELETE) need, READY, RESUMED, request replies and types this SDK version does not decode.
+     * MESSAGE_REACTION_ADD and MESSAGE_REACTION_REMOVE are always kept, because reaction pages started after Identify
+     * read clicks from them, so bots in busy guilds save less than the registrations alone suggest. A raw
      * subscriber disables suppression entirely. The tradeoff: A handler registered after a session started does not
      * receive suppressed types until that shard's next new session, which a Resume does not start, so register handlers
      * before connecting. A messageReactionAddMany registration keeps MESSAGE_REACTION_ADD for Fluxer's batch generator.

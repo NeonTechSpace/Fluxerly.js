@@ -4,7 +4,7 @@
  * this run created. The bot's handlers match the shipped starter in examples/starter/bot.js
  */
 
-import { existsSync, rmSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, openSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { newAgentsFile } from "./agents-section.js"
 
@@ -86,10 +86,16 @@ export function writeStarterProject(project: string, packageRoot: string): reado
     if (conflicts.length > 0) throw new StarterConflictError(conflicts)
     const written: string[] = []
     try {
-        // The wx flag refuses a file that appeared after the check, so a concurrent writer's file is never replaced
+        // The wx flag refuses a file that appeared after the check, so a concurrent writer's file is never replaced.
+        // A file counts as created once opened, so a failed write removes its partial content
         for (const [name, text] of files) {
-            writeFileSync(join(project, name), text, { flag: "wx" })
+            const descriptor = openSync(join(project, name), "wx")
             written.push(name)
+            try {
+                writeFileSync(descriptor, text)
+            } finally {
+                closeSync(descriptor)
+            }
         }
     } catch (error) {
         for (const name of written) rmSync(join(project, name), { force: true })

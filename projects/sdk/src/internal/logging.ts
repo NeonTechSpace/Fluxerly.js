@@ -553,8 +553,9 @@ export class ClientLogger {
             if (this.#dedupe.size > dedupeCapacity) {
                 const [evicted, oldest] = this.#dedupe.entries().next().value!
                 this.#dedupe.delete(evicted)
-                // Eviction ends that key's window early, so announce what it suppressed instead of losing the count
-                if (oldest.suppressed > 0 && oldest.last)
+                // Eviction ends that key's window early, so announce what it suppressed instead of losing the count,
+                // unless configure has since silenced that level
+                if (oldest.suppressed > 0 && oldest.last && this.enabled(oldest.last.level, oldest.last.category))
                     this.#emit(this.#repeated(oldest.last, oldest.suppressed), context)
             }
             if (suppressed > 0) input = this.#repeated(input, suppressed)
@@ -575,10 +576,11 @@ export class ClientLogger {
         })
     }
 
-    /** Report suppressed duplicates that no later record announced, normally during shutdown */
+    /** Report suppressed duplicates that no later record announced and the current thresholds allow, normally during shutdown */
     flush(context?: Context.Context<never>) {
         for (const [key, entry] of this.#dedupe) {
-            if (entry.suppressed > 0 && entry.last) this.#emit(this.#repeated(entry.last, entry.suppressed), context)
+            if (entry.suppressed > 0 && entry.last && this.enabled(entry.last.level, entry.last.category))
+                this.#emit(this.#repeated(entry.last, entry.suppressed), context)
             this.#dedupe.delete(key)
         }
     }

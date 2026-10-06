@@ -2,7 +2,7 @@
  * Event filtering for Identify: Which dispatch types deliver each public event, which types SDK-owned state needs, and
  * the ignored_events list the SDK sends for explicit and automatic filtering.
  * Invariant: Automatic filtering never suppresses a dispatch that a registered event, an enabled cache category,
- * presence member selection, READY or RESUMED needs, and suppresses nothing while a raw subscriber exists. Types
+ * presence member selection, reaction pages, READY or RESUMED needs, and suppresses nothing while a raw subscriber exists. Types
  * without an entry here, such as correlated request replies and types this SDK version does not know, are never
  * suppressed automatically.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
@@ -84,6 +84,12 @@ const filterableTypes: readonly string[] = Object.freeze([...new Set(Object.valu
 const alwaysNeeded: readonly string[] = ["GUILD_CREATE", "GUILD_DELETE"]
 
 /**
+ * Dispatch types reaction pages read for clicks. Pages can start after Identify from any handler, through
+ * ctx.paginate, a multi-page ctx.sendHelp or messages.paginate, so automatic filtering keeps them in every session
+ */
+const reactionPageNeeds: readonly string[] = ["MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE"]
+
+/**
  * Dispatch types SDK-internal owners always need. Suppressing them would stop session control, member requests or
  * count requests, so an explicit list naming them fails creation
  */
@@ -139,7 +145,7 @@ export function cacheNeeds(kinds: readonly FilterCacheKind[]): ReadonlySet<strin
 
 /** Dispatch types automatic filtering keeps whatever the application registers */
 export function automaticNeeds(kinds: readonly FilterCacheKind[]): ReadonlySet<string> {
-    return new Set([...alwaysNeeded, ...cacheNeeds(kinds)])
+    return new Set([...alwaysNeeded, ...reactionPageNeeds, ...cacheNeeds(kinds)])
 }
 
 /**

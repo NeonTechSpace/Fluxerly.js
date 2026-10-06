@@ -898,7 +898,7 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     /**
      * Keep the bot account ID from a READY body's user, so mention prefixes need no REST read, its public account for
-     * users.getSelf, and the bot's username and the shard's community count for the connected record. For a bot, READY
+     * users.getSelf when the user is complete, so an incomplete one keeps the previous account, and the bot's username and the shard's community count for the connected record. For a bot, READY
      * lists each community as unavailable
      */
     #readyUser(body: unknown, shardId: number) {

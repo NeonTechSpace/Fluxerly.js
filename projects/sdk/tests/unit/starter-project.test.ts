@@ -2,9 +2,26 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { afterEach, expect, test } from "vitest"
+import { afterEach, expect, test, vi } from "vitest"
 import { writeAgentsSection } from "../../src/internal/agents-section.js"
 import { StarterConflictError, writeStarterProject } from "../../src/internal/starter-project.js"
+
+/** When set, the next write of exactly this text fails after its file was created, as a full disk would */
+const injected = vi.hoisted(() => ({ text: undefined as string | undefined }))
+vi.mock("node:fs", async (original) => {
+    const fs = await original<typeof import("node:fs")>()
+    return {
+        ...fs,
+        writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
+            if (injected.text !== undefined && args[1] === injected.text) {
+                injected.text = undefined
+                fs.writeFileSync(args[0], "", args[2])
+                throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" })
+            }
+            return fs.writeFileSync(...args)
+        },
+    }
+})
 
 const sdk = fileURLToPath(new URL("../../", import.meta.url))
 const directories: string[] = []
@@ -79,4 +96,14 @@ test("existing files stop init before it writes anything and are listed as confl
     expect(readdirSync(project).toSorted()).toEqual([".gitignore", "bot.js"])
     expect(read(project, "bot.js")).toBe("own bot\n")
     expect(read(project, ".gitignore")).toBe("own ignores\n")
+})
+
+test("a write that fails after creating its file removes every file this run created, so init can run again", () => {
+    const project = temporary()
+    writeFileSync(join(project, "notes.txt"), "own notes\n")
+    injected.text = "FLUXER_BOT_TOKEN=\n"
+
+    expect(() => writeStarterProject(project, sdk)).toThrow("No space left on device")
+    expect(readdirSync(project)).toEqual(["notes.txt"])
+    expect(writeStarterProject(project, sdk)).toContain(".env.example")
 })

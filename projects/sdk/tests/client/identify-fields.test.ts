@@ -107,6 +107,8 @@ describeBothApis("Identify fields", (mode) => {
         expect(first).toEqual(expect.arrayContaining(["TYPING_START", "PRESENCE_UPDATE", "MESSAGE_UPDATE"]))
         for (const kept of ["MESSAGE_CREATE", "GUILD_CREATE", "GUILD_DELETE", "CHANNEL_UPDATE", "CHANNEL_UPDATE_BULK"])
             expect(first).not.toContain(kept)
+        // Reaction pages started by a command after connecting read clicks from these, with no registration at Identify
+        for (const click of ["MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE"]) expect(first).not.toContain(click)
         for (const never of ["READY", "RESUMED", "GUILD_MEMBERS_CHUNK", "GUILD_COUNTS_UPDATE"])
             expect(first).not.toContain(never)
         // A registration made after the session started applies from the next new session

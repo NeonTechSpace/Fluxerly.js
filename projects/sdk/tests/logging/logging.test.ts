@@ -442,6 +442,25 @@ test("dedupe eviction reports the evicted record's suppressed repeats instead of
     expect(first.map((record) => record.fields?.repeated)).toEqual([undefined, 2])
 })
 
+test("deferred repeat summaries follow thresholds that configure lowered after the repeats", () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"))
+    const { logger, records } = collect({ dedupe: { windowMs: 60_000 } })
+    const warn = (category: LogRecord["category"], message: string) =>
+        logger.log({ level: "warn", category, code: "sdk.test" as LogCode, message })
+    for (let index = 0; index < 3; index++) {
+        warn("events", "evicted")
+        warn("rest", "flushed")
+    }
+    expect(logger.configure({ categories: { events: "silent", rest: "error" } })).toBeUndefined()
+    records.length = 0
+    // One record past the dedupe capacity evicts the oldest key, events, and shutdown flushes the rest key
+    for (let index = 0; index < 511; index++) warn("sdk", `other ${index}`)
+    logger.flush()
+    expect(records.filter((record) => record.category !== "sdk")).toEqual([])
+    expect(records).toHaveLength(511)
+})
+
 test("console format and color are chosen per stream, and FLUXERLY_LOG_FORMAT sets the unconfigured format", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {})
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
