@@ -6,7 +6,7 @@ description: Send !ping and receive Pong! from a bot
 
 Before starting, [create a Fluxer bot](/docs/{{version}}/create-a-bot/), store its token and add it to a community. Fluxerly is tested against Node.js 24.15 or newer
 
-To generate the project instead of following steps 1 and 2, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in a new, empty folder. It writes this bot with a test and prints the remaining steps, including where the token goes
+To generate the project instead of following steps 1 and 2, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in a new, empty folder and choose JavaScript, TypeScript or Effect. Adding `--template js`, `--template ts` or `--template effect` skips the question. It writes this bot with a test and prints the remaining steps, including where the token goes
 
 ## 1. Install the SDK
 

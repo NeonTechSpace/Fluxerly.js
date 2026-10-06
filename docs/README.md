@@ -71,7 +71,7 @@ bun add @neontechspace/fluxerly
 
 A bot needs a Fluxer application, its bot token and an invite to a community
 
-To start from a generated project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in an empty folder and follow the steps it prints. To set up the bot by hand instead:
+To start from a generated project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in an empty folder, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. To set up the bot by hand instead:
 
 1. Create a folder for the bot containing a `package.json` file with `{ "type": "module" }`, then install the SDK in that folder as shown above
 2. Save the token in a file named `.env` as `FLUXER_BOT_TOKEN=paste-the-token-here`, and add `.env` to `.gitignore`

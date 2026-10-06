@@ -12,6 +12,8 @@ The examples introduce each Effect concept before combining them into a bot
 
 ## Install the matching version
 
+To start from a generated Effect project with a test, run `npx @neontechspace/fluxerly init --template effect`, `pnpm dlx @neontechspace/fluxerly init --template effect` or `bunx @neontechspace/fluxerly init --template effect` in an empty folder.
+
 First install the SDK with [the quick start](/docs/{{version}}/quick-start/). Fluxerly is tested against Node.js 24.15 or newer. Use such a version, an ESM project with `"type": "module"`, and TypeScript 7 for typechecking with the Node.js types from the [TypeScript setup](/docs/{{version}}/create-a-bot/#typescript-setup). Native examples use TypeScript
 
 Fluxerly is tested against Effect {{effect-version}} and accepts later Effect 4 releases. The installed SDK lists its accepted range under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. Effect 3 and Effect 4 prereleases are incompatible

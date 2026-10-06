@@ -51,7 +51,7 @@ This bot replies **Pong!** to **!ping**
 
 A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs.
 
-To generate a starter project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in an empty folder and follow the steps it prints. To set up the bot by hand instead:
+To generate a starter project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in an empty folder, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. To set up the bot by hand instead:
 
 1. Add `"type": "module"` to the bot project's `package.json`
 2. Install the SDK with `npm install @neontechspace/fluxerly`, `pnpm add @neontechspace/fluxerly` or `bun add @neontechspace/fluxerly`
