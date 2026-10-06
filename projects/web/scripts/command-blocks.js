@@ -20,11 +20,12 @@ export function validateCommand(value) {
 }
 
 // Bun ignores npm's --save-exact and --save-dev without an error, so each manager names its own flags. Its `bun pm ls` ignores a
-// package filter, while `bun why` prints the installed version
+// package filter, while `bun why` prints the installed version. Exec commands run only an installed package and never download
+// one, because the unscoped fluxerly name on npm is not this SDK
 export const packageManagers = {
-    npm: { add: "npm install", exact: "--save-exact", dev: "--save-dev", list: "npm list", exec: "npx" },
+    npm: { add: "npm install", exact: "--save-exact", dev: "--save-dev", list: "npm list", exec: "npx --no" },
     pnpm: { add: "pnpm add", exact: "--save-exact", dev: "--save-dev", list: "pnpm list", exec: "pnpm exec" },
-    bun: { add: "bun add", exact: "--exact", dev: "--dev", list: "bun why", exec: "bunx" },
+    bun: { add: "bun add", exact: "--exact", dev: "--dev", list: "bun why", exec: "bunx --no-install" },
 }
 
 export function commandVariant(metadata, manager = "npm", language = "js") {

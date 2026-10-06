@@ -64,9 +64,10 @@ test("Development dependency installs use each manager's own flag", () => {
 })
 
 test("The agent setup command runs the installed SDK command with each manager", () => {
-    // pnpx and pnpm dlx would download a fresh copy instead of the installed version
+    // pnpx and pnpm dlx would download a fresh copy instead of the installed version, and plain npx or bunx would fetch an
+    // unrelated unscoped package outside an SDK project
     assert.deepEqual(managers.map((manager) => commandVariant({ kind: "agents" }, manager).command),
-        ["npx fluxerly agents", "pnpm exec fluxerly agents", "bunx fluxerly agents"])
+        ["npx --no fluxerly agents", "pnpm exec fluxerly agents", "bunx --no-install fluxerly agents"])
 })
 
 test("Invalid command metadata fails closed without exposing input", () => {

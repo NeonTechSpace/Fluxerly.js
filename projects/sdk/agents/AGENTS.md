@@ -191,5 +191,5 @@ Check each member's declaration rather than assuming every native member is an E
 
 ## Keep this guide in the project
 
-Run `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` in the application's folder to copy the rules above into its AGENTS.md, which many coding agent tools read automatically.
+Run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in the application's folder to copy the rules above into its AGENTS.md, which many coding agent tools read automatically.
 Running it again after an SDK update refreshes only that section

@@ -118,7 +118,7 @@ Recheck the SDK manifest when upgrading the SDK
 
 ## For coding agents
 
-Agent tools do not read instructions inside dependencies on their own. Run `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` in the bot project to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Run it again after an SDK update to refresh them.
+Agent tools do not read instructions inside dependencies on their own. Run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in the bot project, after installing the SDK there, to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Run it again after an SDK update to refresh them.
 The complete guide is `agents/AGENTS.md` inside the installed package. It explains which API to use, how to start and stop the client, and how to check the result
 
 Agents that read web pages can start from the docs' [llms.txt](https://preview.fluxerly.neontechspace.com/llms.txt), which links each documentation version's Markdown guides and condensed API reference

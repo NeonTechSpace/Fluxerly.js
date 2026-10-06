@@ -23,11 +23,12 @@ export class AgentsSectionError extends Error {
     override readonly name = "AgentsSectionError"
 }
 
-// The recorded command must run the installed copy, which is what `pnpm exec` and `bunx` do for their projects
+// The recorded command must run the installed copy and never download one, since the unscoped fluxerly package on npm is not this SDK
 function refreshCommand(project: string) {
     if (existsSync(join(project, "pnpm-lock.yaml"))) return "pnpm exec fluxerly agents"
-    if (existsSync(join(project, "bun.lock")) || existsSync(join(project, "bun.lockb"))) return "bunx fluxerly agents"
-    return "npx fluxerly agents"
+    if (existsSync(join(project, "bun.lock")) || existsSync(join(project, "bun.lockb")))
+        return "bunx --no-install fluxerly agents"
+    return "npx --no fluxerly agents"
 }
 
 function between(text: string, open: string, close: string, where: string) {

@@ -36,7 +36,7 @@ test("a project without AGENTS.md gets one with the rules, the installed version
     expect(text).toContain("@neontechspace/fluxerly 1000.0.0-rc.9")
     expect(text).toContain("node_modules/@neontechspace/fluxerly/agents/AGENTS.md")
     expect(text).toContain("Check `result.isErr()` before reading `result.value`")
-    expect(text).toContain("run `npx fluxerly agents` to refresh")
+    expect(text).toContain("run `npx --no fluxerly agents` to refresh")
 })
 
 test("the section is added after existing instructions, which stay unchanged", () => {
@@ -66,8 +66,8 @@ test("running again changes nothing until the SDK version changes, then replaces
 test("the refresh command matches the project's package manager", () => {
     for (const [lockfile, command] of [
         ["pnpm-lock.yaml", "pnpm exec fluxerly agents"],
-        ["bun.lock", "bunx fluxerly agents"],
-        ["package-lock.json", "npx fluxerly agents"],
+        ["bun.lock", "bunx --no-install fluxerly agents"],
+        ["package-lock.json", "npx --no fluxerly agents"],
     ]) {
         const project = temporary()
         writeFileSync(join(project, lockfile!), "")
