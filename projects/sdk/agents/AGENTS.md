@@ -87,7 +87,7 @@ Prefer the installed declarations when they differ from the website
 
 - A `require()` call fails with an error that explains the SDK is ESM-only
 - TypeScript checks need TypeScript 7 and `@types/node`, for example with `"types": ["node"]`, because handler signals are `AbortSignal` values and clients support `await using`. Running `node bot.ts` directly needs no compiler
-- A missing or blank token throws `ConfigurationError` with a hint that the variable is probably unset
+- A missing or blank token is logged with a hint, sets exit code 1 and returns `ConfigurationError` from `runBot` instead of throwing
 
 Keep the application's existing module and TypeScript settings when they work with the SDK. Report any incompatibility before proposing changes
 

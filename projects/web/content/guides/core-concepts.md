@@ -33,7 +33,7 @@ A client holds the token, the connection and everything the bot has registered. 
 - The `runBot` function creates a client from one options object, registers event handlers and commands, connects and keeps running until the bot stops. Most bots need only this, as the [quick start](/docs/{{version}}/quick-start/) and [small bot](/docs/{{version}}/small-bot/) show
 - The `createClient` function returns a client without connecting it. Use it for scripts that only send requests, or when the application must control connecting, running and stopping itself
 
-Invalid settings, such as a missing token or a misspelled option name, throw a `ConfigurationError` right away, before anything connects. A misspelled name comes with a suggestion, such as `Did you mean "processSignals"?`
+Invalid settings, such as a misspelled option name, throw a `ConfigurationError` right away, before anything connects. A missing token is reported instead: `runBot` logs it with a hint, sets exit code 1 and returns the error. A misspelled name comes with a suggestion, such as `Did you mean "processSignals"?`
 
 ## Events and handlers
 

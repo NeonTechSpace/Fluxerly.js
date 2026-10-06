@@ -87,7 +87,7 @@ The [troubleshooting guide](/docs/{{version}}/troubleshooting/) helps tell comma
 
 Requests such as `reply` do not throw. They return a Result, which is either a success or a failure. The handler returns the reply's Result, so the SDK logs a failed reply and the bot keeps running
 
-A failure that stops the whole bot, such as a rejected token, is logged once, and the process ends with exit code 1 so a shell or process manager can tell it from a normal stop. A setting that cannot work, such as a missing token, throws an error at once, before the bot connects. The [core concepts](/docs/{{version}}/core-concepts/) page explains Results in more detail
+A failure that stops the whole bot, such as a rejected token, is logged once, and the process ends with exit code 1 so a shell or process manager can tell it from a normal stop. A missing token is logged with a hint and also ends the process with exit code 1, before the bot connects. The [core concepts](/docs/{{version}}/core-concepts/) page explains Results in more detail
 
 </details>
 

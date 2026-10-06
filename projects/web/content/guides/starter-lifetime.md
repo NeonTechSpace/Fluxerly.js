@@ -8,7 +8,7 @@ The `runBot` function runs a whole bot from one options object. It creates the c
 
 ## From start to stop
 
-1. **Check.** The `runBot` call checks every option first. A missing token, an unknown event name or an invalid command throws `ConfigurationError` before anything connects, and a missing token's hint points at the unset environment variable
+1. **Check.** The `runBot` call checks every option first. An unknown event name or an invalid command throws `ConfigurationError` before anything connects. A missing token is logged with a hint instead, the run ends with exit code 1, and `runBot` returns the error
 2. **Register.** Event handlers and commands are registered, then the optional `setup(client, { signal })` callback runs for other startup work. Its `signal` aborts when the bot begins stopping, so timers that `setup` starts can stop with the bot. A failed `setup` stops the bot before it connects
 3. **Connect.** The client connects to the gateway and handlers start receiving events. Messages written by bots, including the bot's own replies, skip handlers and commands unless `ignoreBots` is `false`
 4. **Run.** The SDK reconnects after a lost connection and keeps each [handler](/docs/{{version}}/glossary/#handler) running. A failed handler is not retried and does not stop the bot. Its error is logged in full, or sent to `onError` when one is set. If a handler's subscription closes while the bot is running, the bot stops with `CriticalWorkerStoppedError`
