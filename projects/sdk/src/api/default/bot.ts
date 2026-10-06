@@ -387,7 +387,7 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
             taken = true
             return {
                 source: client,
-                logging: clientServices(client)?.logging,
+                logger: clientServices(client)?.logging,
                 get state() {
                     return client.state
                 },

@@ -416,6 +416,7 @@ export type {
     LogCategory,
     LogLevel,
     LoggingOptions,
+    LogLevelSettings,
     LogRecord,
     LogSink,
     LogThreshold,
@@ -644,6 +645,7 @@ export type {
 } from "./events.js"
 export type { CacheChange } from "./cache.js"
 export type { IdentifyCoordinator, SessionSnapshot, SessionStore } from "./sharding.js"
+export { fileSessionStore } from "./sharding.js"
 export type { GatewayOptions } from "./client.js"
 export type { EventMiddleware, MiddlewareRegistration } from "./api/default/events.js"
 export type { CacheObserver } from "./api/default/cache.js"
@@ -678,6 +680,7 @@ export type { WebhookClient } from "./api/default/webhook-client.js"
 export type { ClientCache } from "./api/default/cache.js"
 export type { RestRequests } from "./api/default/rest.js"
 export type { GatewayCommands } from "./api/default/gateway.js"
+export type { ClientLogging } from "./api/default/logging.js"
 export { RestRequestError } from "./rest.js"
 export type {
     DefaultRestRequest,

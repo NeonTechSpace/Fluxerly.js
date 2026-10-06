@@ -1,11 +1,13 @@
 import { Cause, Effect, Exit, Scope } from "effect"
 import { err } from "neverthrow"
 import { expect, onTestFinished, test } from "vitest"
-import { ApplicationError } from "../../src/index.js"
+import { ApplicationError, ClientClosedError } from "../../src/index.js"
 import {
     createTestBot as createDefaultTestBot,
     createTestClient as createDefaultTestClient,
     type TestRequest,
+    type TestSayOptions,
+    type WireMessage,
 } from "../../src/testing.js"
 import {
     createTestBot as createNativeTestBot,
@@ -27,7 +29,10 @@ interface Driver {
     replies(): { next(): Promise<TestRequest> }
     ready(): Promise<void>
     emit(type: string, payload: unknown): Promise<void>
+    say(content: string, options?: TestSayOptions): Promise<readonly WireMessage[]>
+    requests(): readonly TestRequest[]
     commands(): readonly { readonly op: number }[]
+    shutdown(): Promise<void>
 }
 
 /**
@@ -58,7 +63,10 @@ async function open(mode: Mode, calls: string[], setupFailure?: unknown): Promis
             },
             ready: () => bot.ready(),
             emit: async (type, payload) => bot.emit(type, payload),
+            say: (content, sayOptions) => bot.say(content, sayOptions),
+            requests: () => bot.requests(),
             commands: () => bot.commands(),
+            shutdown: () => bot.shutdown(),
         }
     }
     const scope = Scope.makeUnsafe()
@@ -87,7 +95,10 @@ async function open(mode: Mode, calls: string[], setupFailure?: unknown): Promis
         },
         ready: () => unwrap(bot.ready()),
         emit: (type, payload) => unwrap(bot.emit(type, payload)),
+        say: (content, sayOptions) => unwrap(bot.say(content, sayOptions)),
+        requests: () => bot.requests(),
         commands: () => bot.commands(),
+        shutdown: () => unwrap(bot.shutdown()),
     }
 }
 
@@ -109,6 +120,50 @@ test.each(modes)("%s createTestBot runs runBot events, commands and setup agains
         expect.objectContaining({ content: "Pong!", message_reference: expect.anything() }),
         expect.objectContaining({ content: "Hello", message_reference: expect.anything() }),
     ])
+})
+
+test.each(modes)("%s say returns the messages the bot sent in response, or nothing", async (mode) => {
+    const bot = await open(mode, [])
+    await bot.ready()
+    // No rest.respond fixture: The test transport answers each reply with an echoed message
+    const [pong, ...rest] = await bot.say("!ping")
+    expect(rest).toEqual([])
+    expect(pong).toMatchObject({ content: "Pong!", channel_id: bot.fixtures.ids.channel, author: { bot: true } })
+    expect(await bot.say("hi")).toEqual([expect.objectContaining({ content: "Hello" })])
+    expect(await bot.say("unrelated")).toEqual([])
+    // The bot ignores bot-authored messages by default, and the overrides change the delivered message
+    expect(await bot.say("hi", { message: { author: bot.fixtures.botUser() } })).toEqual([])
+    expect(bot.requests()).toHaveLength(2)
+})
+
+test.each(modes)("%s say reports what the bot sent even when a registered response answers", async (mode) => {
+    const bot = await open(mode, [])
+    const replies = bot.replies()
+    await bot.ready()
+    expect(await bot.say("!ping")).toEqual([expect.objectContaining({ content: "Pong!" })])
+    expect((await replies.next()).body).toMatchObject({ content: "Pong!" })
+})
+
+test.each(modes)("%s say rejects misuse and use before ready", async (mode) => {
+    const bot = await open(mode, [])
+    const failure = (run: () => Promise<unknown>) =>
+        Promise.resolve()
+            .then(run)
+            .then(
+                () => expect.fail("say should fail"),
+                (error: unknown) => error,
+            )
+    expect(await failure(() => bot.say("!ping"))).toMatchObject({ _tag: "ConfigurationError" })
+    await bot.ready()
+    expect(await failure(() => bot.say(42 as never))).toMatchObject({ _tag: "ConfigurationError" })
+    expect(await failure(() => bot.say("!ping", { timeoutMs: 0 }))).toMatchObject({ _tag: "ConfigurationError" })
+    expect(await failure(() => bot.say("!ping", { message: "x" as never }))).toMatchObject({
+        _tag: "ConfigurationError",
+    })
+    // Rejected calls delivered nothing
+    expect(bot.requests()).toEqual([])
+    await bot.shutdown()
+    expect(await failure(() => bot.say("!ping"))).toBeInstanceOf(ClientClosedError)
 })
 
 test.each(modes)("%s a failed test bot setup rejects ready before connecting", async (mode) => {
@@ -146,7 +201,9 @@ test.each(modes)(
                       .then(() => (create === "bot" ? createDefaultTestBot(options) : createDefaultTestClient(options)))
                       .catch((error: unknown) => error)
                 : await unwrap(
-                      Effect.scoped(create === "bot" ? createNativeTestBot(options) : createNativeTestClient(options)),
+                      Effect.scoped<unknown, unknown, Scope.Scope>(
+                          create === "bot" ? createNativeTestBot(options) : createNativeTestClient(options),
+                      ),
                   ).catch((error: unknown) => error)
         const bot = await misuse("bot", { comands: {} })
         expect(bot).toMatchObject({

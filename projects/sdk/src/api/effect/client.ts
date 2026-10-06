@@ -48,6 +48,7 @@ import { type Webhooks } from "./webhooks.js"
 import { type ClientCache } from "./cache.js"
 import { type RestRequests } from "./rest.js"
 import { type GatewayCommands } from "./gateway.js"
+import { type ClientLogging } from "./logging.js"
 import { type Presence } from "./presence.js"
 import { type CurrentBotApplication } from "./application.js"
 import { type Users } from "./users.js"
@@ -260,6 +261,10 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Send gateway commands without an SDK method on this client's ready shards
      */
     readonly gateway: GatewayCommands
+    /**
+     * Change the log level and per-category levels while the client runs
+     */
+    readonly logging: ClientLogging
     /**
      * Register a handler for future events of one type, before or after connecting the client.
      * Use the returned Subscription to close it and observe waitForClose.
@@ -629,6 +634,7 @@ export function openClient<E = never, R = never, const F extends MessageFields |
                 messages: namespaces.messages,
                 rest: namespaces.rest,
                 gateway: namespaces.gateway,
+                logging: namespaces.logging,
                 on: <E, R, E2 = never, R2 = never, K extends EventName = "messageCreate">(
                     event: K,
                     handler: (event: EventMap<M>[K], context: EventContext) => Effect.Effect<unknown, E, R>,

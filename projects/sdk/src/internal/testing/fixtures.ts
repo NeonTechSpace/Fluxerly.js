@@ -17,7 +17,7 @@ const snowflakeEpochMs = 1_420_070_400_000n
 /** Creation time encoded in every fixture ID and used for fixture timestamps */
 const fixtureTimeMs = 1_767_225_600_000n
 /** ISO 8601 form of the fixture creation time, 2026-01-01T00:00:00.000Z */
-const fixtureTimestamp = new Date(Number(fixtureTimeMs)).toISOString()
+export const fixtureTimestamp = new Date(Number(fixtureTimeMs)).toISOString()
 
 /**
  * Wire-field overrides for a fixture builder. Listed fields keep their wire types, and any other field is copied unchanged,

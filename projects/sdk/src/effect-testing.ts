@@ -35,7 +35,10 @@
  * heartbeats and delivers emitted dispatches with increasing sequence numbers. The fake HTTP side serves hosted Fluxer's
  * discovery document, with presigned uploads off so attachments arrive as one multipart request, answers requests from
  * registered responses and records every request without its Authorization header.
- * Unmatched requests receive a Fluxer-shaped 404 and a testing.unmatchedRequest Warn record.
+ * Message sends and edits without a registered response receive an echoed bot message, and other unmatched requests
+ * receive a Fluxer-shaped 404 and a testing.unmatchedRequest Warn record.
+ * Waits such as idle and TestRoute.next have no deadline unless timeoutMs is passed, so the test runner's timeout
+ * bounds a test that hangs.
  * Log records go to logs() and to any sinks in the logging option instead of the Effect logger.
  * Closing the creating scope stops the client and closes the transport, leaving no sockets, timers or listeners behind,
  * and dies with UnhandledTestFailuresError when a handler or command failed without an onError hook and the test did
@@ -75,10 +78,11 @@ import type {
     TestRequestMatcher,
     TestResponder,
     TestResponse,
+    TestSayOptions,
     TestSettings,
     TestWaitOptions,
 } from "./internal/testing/types.js"
-import type { Fixtures } from "./internal/testing/fixtures.js"
+import type { Fixtures, WireMessage } from "./internal/testing/fixtures.js"
 
 export {
     createFixtures,
@@ -106,6 +110,7 @@ export type {
     TestDisconnectOptions,
     TestEmitOptions,
     TestGatewayCommand,
+    TestSayOptions,
     TestSettings,
     TestWaitOptions,
 } from "./internal/testing/types.js"
@@ -123,8 +128,10 @@ export interface TestRoute {
     /**
      * Succeed with the next request this registration answers. Each run returns a different request, in order, so a
      * request that arrived before the run is returned at once.
-     * It fails with TestTimeoutError when no request arrives within the timeout, default 2,000 ms, and dies with
-     * ClientClosedError when the test client shuts down first. Invalid options are a defect carrying ConfigurationError
+     * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose request never
+     * arrives. With timeoutMs it fails with TestTimeoutError when no request arrives in time.
+     * It dies with ClientClosedError when the test client shuts down first, and interruption ends the wait.
+     * Invalid options are a defect carrying ConfigurationError
      */
     next(options?: TestWaitOptions): Effect.Effect<TestRequest, TestTimeoutError>
     /** Stop answering requests. Earlier matching registrations and the default 404 apply again */
@@ -132,14 +139,18 @@ export interface TestRoute {
 }
 
 /**
- * Register fake Fluxer HTTP API responses for a native test client
+ * Register fake Fluxer HTTP API responses for a native test client.
+ * Without a registration, message sends (POST /channels/:id/messages) and edits (PATCH /channels/:id/messages/:id)
+ * receive an automatic reply: A message by the bot account that echoes the request's content, embeds, flags and tts,
+ * with a new fixture ID for a send and the edited ID for an edit. Other unmatched requests receive a Fluxer-shaped 404
  *
  * @category Testing
  */
 export interface TestRest {
     /**
      * Answer matching requests with a fixed response or a handler's response until the registration is removed.
-     * The newest matching registration wins. Invalid matchers or responses throw ConfigurationError
+     * The newest matching registration wins, including over the automatic message replies.
+     * Invalid matchers or responses throw ConfigurationError
      *
      * @example
      * ```ts
@@ -244,8 +255,9 @@ export interface TestClient<M extends MessageCore = Message> {
      * waiting for its test response, and no new log record, request or gateway command appeared for a few event loop
      * turns. Run it after emit to assert that the bot did nothing, or before inspecting results.
      * Open waits and collectors do not count as work, and onError hooks are not awaited.
-     * It fails with TestTimeoutError when the client is still busy after the timeout, default 2,000 ms, and dies with
-     * ClientClosedError after shutdown. Invalid options are a defect carrying ConfigurationError.
+     * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose client never
+     * settles. With timeoutMs it fails with TestTimeoutError when the client is still busy after it.
+     * It dies with ClientClosedError after shutdown. Invalid options are a defect carrying ConfigurationError.
      * Its timers stay real when a test fakes timers. The SDK runs on setImmediate, so fake timers must leave it real,
      * otherwise idle dies with ConfigurationError instead of settling while no handler can run
      */
@@ -292,6 +304,17 @@ export interface TestClient<M extends MessageCore = Message> {
 export function createTestClient<E = never, R = never, const F extends MessageFields | undefined = undefined>(
     options: TestClientOptions<E, R, F> = {} as TestClientOptions<E, R, F>,
 ): Effect.Effect<TestClient<SelectedMessage<F>>, never, Scope.Scope | R> {
+    return openTestClient(options).pipe(Effect.map(({ test }) => test))
+}
+
+/** Create a native test client together with the harness that createTestBot also drives */
+function openTestClient<E, R, F extends MessageFields | undefined>(
+    options: TestClientOptions<E, R, F>,
+): Effect.Effect<
+    { readonly test: TestClient<SelectedMessage<F>>; readonly harness: TestHarness },
+    never,
+    Scope.Scope | R
+> {
     return Effect.gen(function* () {
         const harness = yield* Effect.sync(() => new TestHarness(options))
         // Added before the client, so the scope closes the transport only after the client's own shutdown finalizer.
@@ -303,7 +326,7 @@ export function createTestClient<E = never, R = never, const F extends MessageFi
             }),
         )
         const client = yield* createClient<E, R, F>(harness.clientOptions(options) as ClientOptions<E, R, F>)
-        return Object.freeze({
+        const test: TestClient<SelectedMessage<F>> = Object.freeze({
             client,
             fixtures: harness.fixtures,
             rest: Object.freeze({
@@ -338,6 +361,7 @@ export function createTestClient<E = never, R = never, const F extends MessageFi
                     ),
                 ),
         })
+        return { test, harness }
     })
 }
 
@@ -397,7 +421,8 @@ export class FluxerTestClient extends Context.Service<FluxerTestClient, TestClie
 }
 
 /**
- * A native test client running a bot written for runBot. It is a TestClient whose ready first runs the bot's setup
+ * A native test client running a bot written for runBot. It is a TestClient whose ready first runs the bot's setup,
+ * with say to talk to the bot as a user would
  *
  * @category Testing
  */
@@ -409,6 +434,36 @@ export interface TestBot<M extends MessageCore = Message> extends Omit<TestClien
      * connection fails with its connect failure
      */
     ready(): Effect.Effect<void, ConnectError | ApplicationError>
+    /**
+     * Deliver a message with this content from a human user, wait until the bot has settled as idle does, and succeed
+     * with the messages the bot sent meanwhile, in send order, or an empty list when it sent nothing. Run ready first.
+     * Each entry is a message send (POST /channels/:id/messages) in wire shape, built from the request body with the
+     * fields the automatic reply echoes, so it shows what the bot sent even when a rest.respond handler answered.
+     * Edits, reactions and other requests are not included, and remain visible through requests().
+     * The message comes from the fixture set's default human author in its default channel and community, and
+     * options.message replaces any of those wire fields. Like idle, say has no deadline unless options.timeoutMs is
+     * set, then fails with TestTimeoutError when the bot is still busy after it, and dies with ClientClosedError after
+     * shutdown. It dies with ConfigurationError for content that is not a string, invalid options, before ready and
+     * when gateway filtering would suppress the message, as emit does
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import { createTestBot } from "@neontechspace/fluxerly/effect/testing"
+     *
+     * export const sayTest = Effect.scoped(
+     *     Effect.gen(function* () {
+     *         const test = yield* createTestBot({
+     *             commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Pong!") } } },
+     *         })
+     *         yield* test.ready()
+     *         const replies = yield* test.say("!ping")
+     *         return replies.map((message) => message.content)
+     *     }),
+     * )
+     * ```
+     */
+    say(content: string, options?: TestSayOptions): Effect.Effect<readonly WireMessage[], TestTimeoutError>
 }
 
 /**
@@ -434,12 +489,9 @@ export interface TestBot<M extends MessageCore = Message> extends Omit<TestClien
  *         const test = yield* createTestBot({
  *             commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Pong!") } } },
  *         })
- *         const replies = test.rest.respond("POST /channels/:id/messages", {
- *             body: test.fixtures.message({ content: "Pong!" }),
- *         })
  *         yield* test.ready()
- *         yield* test.emit("MESSAGE_CREATE", test.fixtures.message({ content: "!ping" }))
- *         return yield* replies.next()
+ *         // The test transport answers the reply with an echoed message, so no rest.respond fixture is needed
+ *         return yield* test.say("!ping")
  *     }),
  * )
  * ```
@@ -505,7 +557,7 @@ export function createTestBot<
             drainMs: _drainMs,
             ...clientOptions
         } = options
-        const test = yield* createTestClient({
+        const { test, harness } = yield* openTestClient({
             ...clientOptions,
             ...(token === undefined ? {} : { token }),
         } as TestClientOptions<OptionsError, OptionsServices, F>)
@@ -521,6 +573,8 @@ export function createTestBot<
         return Object.freeze({
             ...test,
             ready: () => setupOnce.pipe(Effect.andThen(test.ready())),
+            say: (content: string, sayOptions?: TestSayOptions) =>
+                testWait((signal) => harness.say(() => test.client.diagnostics(), content, sayOptions, signal)),
         })
     }) as never
 }

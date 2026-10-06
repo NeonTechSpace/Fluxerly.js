@@ -27,6 +27,7 @@ export const clientNamespaces = Object.freeze(
         { type: "ClientCache", member: "cache", typeArguments: "<M>" },
         { type: "RestRequests", member: "rest" },
         { type: "GatewayCommands", member: "gateway" },
+        { type: "ClientLogging", member: "logging" },
     ].map((namespace) =>
         Object.freeze({ ...namespace, signature: `${namespace.type}${namespace.typeArguments ?? ""}` }),
     ),

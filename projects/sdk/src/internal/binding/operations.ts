@@ -26,6 +26,8 @@ import type { MessagePinsQuery } from "#sdk/pins"
 import type { ReactionEmojiInput, ReactionUsersQuery } from "#sdk/reactions"
 import type { MessageCleanupOptions, MessageCleanupPlan, MessageCleanupSelection } from "#sdk/message-cleanup"
 import { cleanup, previewCleanup } from "#sdk/internal/message-cleanup"
+import { configureLogging } from "#sdk/internal/logging"
+import type { LogLevelSettings } from "#sdk/logging"
 import { searchMessagePagination } from "#sdk/internal/message-search-workflow"
 import type {
     BanInput,
@@ -306,6 +308,9 @@ function defineOperations<M extends MessageCore>() {
             clear: custom("custom", defaultCacheClear<M>, nativeCacheClear<M>),
             delete: custom("custom", defaultCacheDelete<M>, nativeCacheDelete<M>),
             onChange: custom("custom", defaultCacheOnChange<M>, nativeCacheOnChange<M>),
+        },
+        logging: {
+            configure: pure((owner: Owner, settings: LogLevelSettings) => configureLogging(owner.logging, settings)),
         },
         rest: {
             // Generic in the response body and typed with each API's own request shape, so each API adapts it

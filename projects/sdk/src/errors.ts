@@ -376,6 +376,7 @@ export type Operation =
     | import("./guilds.js").GuildOperation
     | import("./rest.js").RestOperation
     | "gateway.send"
+    | "logging.configure"
     | "cache.onChange"
     | import("./pagination.js").PaginationOperation
     | "createClient"

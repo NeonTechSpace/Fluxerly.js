@@ -31,6 +31,7 @@ export type Paired = {
     ClientCache: [Default.ClientCache, Native.ClientCache]
     RestRequests: [Default.RestRequests, Native.RestRequests]
     GatewayCommands: [Default.GatewayCommands, Native.GatewayCommands]
+    ClientLogging: [Default.ClientLogging, Native.ClientLogging]
     format: [typeof Default.format, typeof Native.format]
     snowflakes: [typeof Default.snowflakes, typeof Native.snowflakes]
     display: [typeof Default.display, typeof Native.display]

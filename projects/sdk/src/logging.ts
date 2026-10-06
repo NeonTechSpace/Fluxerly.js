@@ -174,6 +174,13 @@ export interface LoggingOptions {
 }
 
 /**
+ * The level and categories settings of LoggingOptions, which client.logging.configure replaces while a client runs
+ *
+ * @category Logging and diagnostics
+ */
+export type LogLevelSettings = Pick<LoggingOptions, "level" | "categories">
+
+/**
  * Running totals for one client since creation, returned by diagnostics().counters. Values only increase
  *
  * @category Logging and diagnostics

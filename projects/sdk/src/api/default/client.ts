@@ -55,6 +55,7 @@ import { type Webhooks } from "./webhooks.js"
 import { type ClientCache } from "./cache.js"
 import { type RestRequests } from "./rest.js"
 import { type GatewayCommands } from "./gateway.js"
+import { type ClientLogging } from "./logging.js"
 import { type Instance } from "./instance.js"
 import { bindDefault, defaultContext } from "#sdk/internal/binding/default"
 import { fromExit } from "#sdk/internal/binding/execute"
@@ -200,6 +201,10 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      * Send gateway commands without an SDK method on this client's ready shards
      */
     readonly gateway: GatewayCommands
+    /**
+     * Change the log level and per-category levels while the client runs
+     */
+    readonly logging: ClientLogging
     /**
      * Register a handler for future events of one type, before or after connecting the client.
      * Use the returned Subscription to close it and observe waitForClose.
@@ -597,6 +602,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
             messages: namespaces.messages,
             rest: namespaces.rest,
             gateway: namespaces.gateway,
+            logging: namespaces.logging,
             on: <K extends EventName>(
                 event: K,
                 handler: (event: EventMap<M>[K], signal: AbortSignal, context: EventContext) => unknown,

@@ -4,7 +4,7 @@
  * testing entry points compile in consumers that lack those type packages, as their main entry points do.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
-import type { WireUser } from "./fixtures.js"
+import type { WireMessage, WireOverrides, WireUser } from "./fixtures.js"
 
 /**
  * Settings that only test clients accept, alongside the usual client options
@@ -110,7 +110,10 @@ export interface TestRequest {
     readonly body: unknown
     /** Attachment parts of a multipart upload, empty for other requests */
     readonly files: readonly TestRequestFile[]
-    /** Whether a registered response answered the request. False means it received the default 404 */
+    /**
+     * Whether a registered response answered the request. False means the test transport answered it itself, with the
+     * automatic reply to a message send or edit, or otherwise with the default 404
+     */
     readonly matched: boolean
 }
 
@@ -171,8 +174,9 @@ export interface TestRoute {
     /**
      * Resolve with the next request this registration answers. Each call returns a different request, in order, so
      * a request that arrived before the call is returned at once.
-     * The promise rejects with TestTimeoutError when no request arrives within the timeout, default 2,000 ms, and
-     * with ClientClosedError when the test client shuts down first. Invalid options throw ConfigurationError
+     * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose request never
+     * arrives. With timeoutMs the promise rejects with TestTimeoutError when no request arrives in time.
+     * It rejects with ClientClosedError when the test client shuts down first. Invalid options throw ConfigurationError
      */
     next(options?: TestWaitOptions): Promise<TestRequest>
     /** Stop answering requests. Earlier matching registrations and the default 404 apply again */
@@ -180,26 +184,45 @@ export interface TestRoute {
 }
 
 /**
- * Limit how long a test wait, such as TestRoute.next or idle, may take
+ * Limit how long a test wait, such as TestRoute.next, idle or say, may take
  *
  * @category Testing
  */
 export interface TestWaitOptions {
-    /** Milliseconds before the wait fails with TestTimeoutError, an integer from 1 through 2,147,483,647, default 2,000.
+    /**
+     * Milliseconds before the wait fails with TestTimeoutError, an integer from 1 through 2,147,483,647.
+     * Omit it to wait without an SDK deadline, so the test runner's own timeout bounds a wait that never settles.
      * The timeout uses real timers, so it still fires when a test fakes timers
      */
     readonly timeoutMs?: number
 }
 
 /**
- * Register fake Fluxer HTTP API responses for a test client
+ * Choose the message a test bot's say delivers and how long say waits for the bot to settle
+ *
+ * @category Testing
+ */
+export interface TestSayOptions extends TestWaitOptions {
+    /**
+     * Wire fields that replace the defaults of the delivered MESSAGE_CREATE payload, as in fixtures.message.
+     * By default the message comes from the fixture set's human author in its default channel and community
+     */
+    readonly message?: WireOverrides<WireMessage>
+}
+
+/**
+ * Register fake Fluxer HTTP API responses for a test client.
+ * Without a registration, message sends (POST /channels/:id/messages) and edits (PATCH /channels/:id/messages/:id)
+ * receive an automatic reply: A message by the bot account that echoes the request's content, embeds, flags and tts,
+ * with a new fixture ID for a send and the edited ID for an edit. Other unmatched requests receive a Fluxer-shaped 404
  *
  * @category Testing
  */
 export interface TestRest {
     /**
      * Answer matching requests with a fixed response or a handler's response until the registration is removed.
-     * The newest matching registration wins. Invalid matchers or responses throw ConfigurationError
+     * The newest matching registration wins, including over the automatic message replies.
+     * Invalid matchers or responses throw ConfigurationError
      *
      * @example
      * ```ts

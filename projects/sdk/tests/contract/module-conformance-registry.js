@@ -75,6 +75,7 @@ const shared = {
     "error tools": ["describeError", "errors"],
     "client factory": ["createClient", "runBot"],
     "standalone webhook factory": ["createWebhookClient"],
+    "session persistence": ["fileSessionStore"],
     "OAuth client tools": ["oauth"],
     "command tools": ["commands", "guards"],
     "supervisor factory and tools": ["supervisor"],

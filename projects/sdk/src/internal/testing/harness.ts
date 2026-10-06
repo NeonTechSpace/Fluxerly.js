@@ -15,11 +15,11 @@ import type { ClientDiagnostics } from "#sdk/client"
 import type { LogCode } from "../code-catalogue.js"
 import { clientOptionKeys } from "../configuration.js"
 import { unsupportedKeyHint } from "../suggest.js"
-import { createFixtures, fixtureToken, type Fixtures } from "./fixtures.js"
+import { createFixtures, fixtureToken, type Fixtures, type WireMessage } from "./fixtures.js"
 import { TestGateway } from "./gateway.js"
 import { TestHttp } from "./http.js"
 import { UnhandledTestFailuresError } from "./errors.js"
-import type { TestSettings, TestWaitOptions } from "./types.js"
+import type { TestSayOptions, TestSettings, TestWaitOptions } from "./types.js"
 import { timedWait, waitTimeout } from "./wait.js"
 
 const defaultHeartbeatIntervalMs = 41_250
@@ -125,8 +125,9 @@ export class TestHarness {
         this.#logging = typeof logging === "object" && logging !== null ? (logging as LoggingOptions) : undefined
         const sink = this.#logging?.sink
         this.#callerSinks = typeof sink === "function" ? [sink] : Array.isArray(sink) ? (sink as LogSink[]) : []
-        this.http = new TestHttp((record) => this.#record(record))
-        this.gateway = new TestGateway({ user: user ?? this.fixtures.botUser(), heartbeatIntervalMs })
+        const bot = user ?? this.fixtures.botUser()
+        this.http = new TestHttp((record) => this.#record(record), { fixtures: this.fixtures, author: bot })
+        this.gateway = new TestGateway({ user: bot, heartbeatIntervalMs })
     }
 
     /** Client options with the fake transport, a default token and log capture added to the caller's settings */
@@ -237,6 +238,33 @@ export class TestHarness {
                 this.#idleWaits.delete(fail)
             }
         })
+    }
+
+    /**
+     * Deliver a MESSAGE_CREATE from a human author, wait until the client settles as idle does, then return the
+     * messages the client sent meanwhile. Misuse and emitting before ready throw synchronously, as idle and emit do
+     */
+    say(
+        diagnostics: () => ClientDiagnostics,
+        content: string,
+        options: TestSayOptions | undefined,
+        signal?: AbortSignal,
+    ): Promise<readonly WireMessage[]> {
+        if (typeof content !== "string")
+            throw new ConfigurationError("configuration", "Test say content must be a string")
+        waitTimeout(options)
+        const overrides = options?.message
+        if (
+            overrides !== undefined &&
+            (typeof overrides !== "object" || overrides === null || Array.isArray(overrides))
+        )
+            throw new ConfigurationError("configuration", "Test say message overrides must be an object of wire fields")
+        if (this.#closed) return Promise.reject(new ClientClosedError())
+        const before = this.http.requests().length
+        this.gateway.emit("MESSAGE_CREATE", this.fixtures.message({ ...overrides, content }), undefined)
+        return this.idle(diagnostics, options, signal).then(() =>
+            this.http.sentMessages(this.http.requests().slice(before)),
+        )
     }
 
     /** Record a test transport event in logs() and in caller sinks, at the caller's thresholds */

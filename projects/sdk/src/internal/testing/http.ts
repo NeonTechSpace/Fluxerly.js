@@ -1,14 +1,16 @@
 /**
  * In-memory HTTP transport for test clients: Instance discovery, registered REST responses and the request record.
  * Invariant: No request leaves the process. The hosted discovery bootstrap is answered directly, every other request is
- * recorded without its Authorization header or webhook token and answered by the newest matching registration, and
- * an unmatched request receives a Fluxer-shaped 404 together with a Warn record. Cancellation settles a pending
- * handler's request at once with the signal's reason.
+ * recorded without its Authorization header or webhook token and answered by the newest matching registration. An
+ * unmatched message send or edit receives an echoed bot message, and any other unmatched request receives a
+ * Fluxer-shaped 404 together with a Warn record. Cancellation settles a pending handler's request at once with the
+ * signal's reason.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import type { LogRecord } from "#sdk/logging"
 import { hostedDiscoveryDocument, hostedDiscoveryUrl } from "./discovery.js"
+import { fixtureTimestamp, type Fixtures, type WireMessage, type WireUser } from "./fixtures.js"
 import type {
     TestRequest,
     TestRequestFile,
@@ -47,6 +49,50 @@ const nullBodyStatuses = new Set([204, 205, 304])
 
 function redactWebhookToken(text: string): string {
     return text.replace(/(\/webhooks\/\d+\/)[^/?#]+/g, "$1[redacted]")
+}
+
+/** The fixtures and bot account that automatic message replies are built from */
+export interface TestReplies {
+    readonly fixtures: Fixtures
+    readonly author: WireUser
+}
+
+const isMessageSend = (request: Pick<TestRequest, "method" | "path">) =>
+    request.method === "POST" && pathPattern("/channels/:channel/messages")(request.path)
+const isMessageEdit = (request: Pick<TestRequest, "method" | "path">) =>
+    request.method === "PATCH" && pathPattern("/channels/:channel/messages/:message")(request.path)
+
+/** Turn a request embed into the response shape, which adds the rich type, media flags and field inline defaults */
+function echoedEmbed(embed: unknown): unknown {
+    if (typeof embed !== "object" || embed === null) return embed
+    const object = (value: unknown, defaults: object) =>
+        typeof value === "object" && value !== null ? { ...defaults, ...value } : value
+    const { image, thumbnail, fields, ...rest } = embed as Record<string, unknown>
+    return {
+        type: "rich",
+        ...rest,
+        ...(image === undefined ? {} : { image: object(image, { flags: 0 }) }),
+        ...(thumbnail === undefined ? {} : { thumbnail: object(thumbnail, { flags: 0 }) }),
+        ...(Array.isArray(fields) ? { fields: fields.map((field) => object(field, { inline: false })) } : {}),
+    }
+}
+
+/** Build the message a send or edit request describes, echoing the fields a bot usually sets */
+function echoedMessage(replies: TestReplies, request: TestRequest, edit: boolean): WireMessage {
+    const [, , channelId, , messageId] = request.path.split("/")
+    const body =
+        typeof request.body === "object" && request.body !== null ? (request.body as Record<string, unknown>) : {}
+    const { guild_id: _, ...message } = replies.fixtures.message({
+        id: edit ? messageId! : replies.fixtures.nextId(),
+        channel_id: channelId!,
+        author: replies.author,
+        content: typeof body.content === "string" ? body.content : "",
+        embeds: Array.isArray(body.embeds) ? body.embeds.map(echoedEmbed) : [],
+        flags: typeof body.flags === "number" ? body.flags : 0,
+        tts: body.tts === true,
+        edited_timestamp: edit ? fixtureTimestamp : null,
+    })
+    return Object.freeze(message)
 }
 
 /** Compile a string path pattern, where :name matches one segment */
@@ -190,10 +236,15 @@ export class TestHttp implements TestRest {
     readonly #requests: TestRequest[] = []
     /** Pending next calls of every route, failed with ClientClosedError when the transport closes */
     readonly #waits = new Set<(error: unknown) => void>()
+    /** Messages described by recorded sends, built once when the automatic reply or sentMessages first needs them */
+    readonly #sent = new WeakMap<TestRequest, WireMessage>()
     #inFlight = 0
     #closed = false
 
-    constructor(private readonly record: (record: Omit<LogRecord, "time">) => void) {}
+    constructor(
+        private readonly record: (record: Omit<LogRecord, "time">) => void,
+        private readonly replies: TestReplies,
+    ) {}
 
     /** Requests received but not yet answered, including ones whose response handler is still running */
     get inFlight() {
@@ -231,6 +282,17 @@ export class TestHttp implements TestRest {
     /** Requests received so far, in order, excluding the discovery bootstrap */
     requests(): readonly TestRequest[] {
         return Object.freeze([...this.#requests])
+    }
+
+    /** The messages described by the message sends among these requests, in order */
+    sentMessages(requests: readonly TestRequest[]): readonly WireMessage[] {
+        return Object.freeze(requests.filter(isMessageSend).map((request) => this.#sentMessage(request)))
+    }
+
+    #sentMessage(request: TestRequest): WireMessage {
+        let message = this.#sent.get(request)
+        if (!message) this.#sent.set(request, (message = echoedMessage(this.replies, request, false)))
+        return message
     }
 
     /** The fetch-compatible function passed to the client's transport option */
@@ -278,6 +340,8 @@ export class TestHttp implements TestRest {
         )
         const recorded: TestRequest = Object.freeze({ ...base, matched: route !== undefined })
         this.#requests.push(recorded)
+        if (!route && isMessageSend(recorded)) return Response.json(this.#sentMessage(recorded))
+        if (!route && isMessageEdit(recorded)) return Response.json(echoedMessage(this.replies, recorded, true))
         if (!route) {
             this.record({
                 level: "warn",

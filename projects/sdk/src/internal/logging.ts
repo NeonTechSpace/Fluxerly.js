@@ -15,7 +15,7 @@ import * as References from "effect/References"
 import type { ClientCounters, ErrorInfo, LogCategory, LogLevel, LogRecord, LogSink, LogThreshold } from "#sdk/logging"
 import { ConfigurationError, FluxerlyError } from "#sdk/errors"
 import { record } from "./decode/primitives.js"
-import { readCaller } from "./defects.js"
+import { readCaller, suspendMarked } from "./defects.js"
 import { metrics } from "./metrics.js"
 import { describeValue, errorSummary, maskPayload, maskText } from "./masking.js"
 import { unsupportedKeyHint } from "./suggest.js"
@@ -344,6 +344,8 @@ type Dedupe = { shownAt: number; suppressed: number; last: LogInput | undefined 
 /** One client's logging configuration, counters and output. Emission is synchronous and never fails its caller */
 export class ClientLogger {
     readonly #settings: Settings
+    /** Category thresholds, replaced by configure while the client runs */
+    #thresholds: Readonly<Record<LogCategory, number>>
     #secrets: string[] = []
     readonly #counters: Counters = {
         handlerFailures: 0,
@@ -377,6 +379,33 @@ export class ClientLogger {
         readonly native: boolean,
     ) {
         this.#settings = settings
+        this.#thresholds = settings.thresholds
+    }
+
+    /**
+     * Replace the level and category thresholds from caller settings, applying the debug setting and FLUXERLY_DEBUG
+     * read at creation again. Invalid settings return ConfigurationError and change nothing. Caller reads are marked,
+     * so the caller must run this under a defect boundary
+     */
+    configure(value: unknown): ConfigurationError | undefined {
+        const thresholds = readCaller(() => {
+            if (!record(value)) return new ConfigurationError("logging", "Logging level settings must be an object")
+            const unsupported = Object.keys(value).find((key) => key !== "level" && key !== "categories")
+            if (unsupported !== undefined)
+                return new ConfigurationError(
+                    "logging",
+                    `Unsupported logging level setting ${JSON.stringify(unsupported)}`,
+                    {
+                        hint: `${unsupportedKeyHint(unsupported, ["level", "categories"], "settings")}. Other logging settings are fixed at creation`,
+                    },
+                )
+            return levelThresholds(value)
+        })
+        if (thresholds instanceof ConfigurationError) return thresholds
+        for (const category of this.#settings.debugCategories)
+            thresholds[category] = Math.min(thresholds[category], rank.debug)
+        this.#thresholds = Object.freeze(thresholds)
+        return undefined
     }
 
     /** Mask this credential in every later record */
@@ -389,7 +418,7 @@ export class ClientLogger {
     }
 
     enabled(level: LogLevel, category: LogCategory): boolean {
-        return rank[level] >= this.#settings.thresholds[category]
+        return rank[level] >= this.#thresholds[category]
     }
 
     unsafePayloads(category: LogCategory): boolean {
@@ -462,7 +491,7 @@ export class ClientLogger {
     #unsafeVisible(): boolean {
         const unsafe = this.#settings.unsafe
         if (!unsafe) return false
-        for (const category of unsafe) if (this.#settings.thresholds[category] < rank.silent) return true
+        for (const category of unsafe) if (this.#thresholds[category] < rank.silent) return true
         return false
     }
 
@@ -489,7 +518,7 @@ export class ClientLogger {
      * A silent category prints nothing. Otherwise the unsafe banner precedes the first payload record
      */
     payload(category: LogCategory, code: LogCode, message: string, value: unknown, extra?: Partial<LogInput>) {
-        if (!this.unsafePayloads(category) || this.#settings.thresholds[category] >= rank.silent) return
+        if (!this.unsafePayloads(category) || this.#thresholds[category] >= rank.silent) return
         this.#unsafeBanner(undefined)
         this.#emit(
             {
@@ -767,19 +796,8 @@ interface LoggingInput {
     readonly unsafe: Set<LogCategory> | undefined
 }
 
-/** Validate caller logging settings, reading each setting once so the validated value is the one used */
-function loggingInput(value: unknown): LoggingInput | ConfigurationError {
-    if (value !== undefined && !record(value))
-        return new ConfigurationError("logging", "Logging settings must be an object")
-    const settings = (value ?? {}) as Record<string, unknown>
-    const keys = ["level", "categories", "debug", "format", "sink", "dedupe", "unsafe"]
-    const unsupported = Object.keys(settings).filter((key) => !keys.includes(key))
-    if (unsupported.length)
-        return new ConfigurationError("logging", `Unsupported logging setting ${JSON.stringify(unsupported[0])}`, {
-            hint: unsupported.some((key) => ["development", "measurements", "minimumLevel", "logger"].includes(key))
-                ? "The settings development, measurements, minimumLevel and logger no longer exist. Use level, categories, debug, format and sink instead"
-                : unsupportedKeyHint(unsupported[0]!, keys, "settings"),
-        })
+/** Validate the level and categories settings into category thresholds, reading each setting once */
+function levelThresholds(settings: Record<string, unknown>): Record<LogCategory, number> | ConfigurationError {
     const level = settings.level
     const base = level === undefined ? "info" : threshold(level, "level", "logging.level")
     if (base instanceof ConfigurationError) return base
@@ -805,6 +823,24 @@ function loggingInput(value: unknown): LoggingInput | ConfigurationError {
             thresholds[category as LogCategory] = rank[parsed]
         }
     }
+    return thresholds
+}
+
+/** Validate caller logging settings, reading each setting once so the validated value is the one used */
+function loggingInput(value: unknown): LoggingInput | ConfigurationError {
+    if (value !== undefined && !record(value))
+        return new ConfigurationError("logging", "Logging settings must be an object")
+    const settings = (value ?? {}) as Record<string, unknown>
+    const keys = ["level", "categories", "debug", "format", "sink", "dedupe", "unsafe"]
+    const unsupported = Object.keys(settings).filter((key) => !keys.includes(key))
+    if (unsupported.length)
+        return new ConfigurationError("logging", `Unsupported logging setting ${JSON.stringify(unsupported[0])}`, {
+            hint: unsupported.some((key) => ["development", "measurements", "minimumLevel", "logger"].includes(key))
+                ? "The settings development, measurements, minimumLevel and logger no longer exist. Use level, categories, debug, format and sink instead"
+                : unsupportedKeyHint(unsupported[0]!, keys, "settings"),
+        })
+    const thresholds = levelThresholds(settings)
+    if (thresholds instanceof ConfigurationError) return thresholds
     const debugCategories: LogCategory[] = []
     const debug = settings.debug
     if (debug !== undefined) {
@@ -890,6 +926,13 @@ function loggingInput(value: unknown): LoggingInput | ConfigurationError {
     }
     return { thresholds, debugCategories, format, sinks, dedupeMs, unsafe }
 }
+
+/** Run client.logging.configure: Replace the logger's thresholds, failing with ConfigurationError for invalid settings */
+export const configureLogging = (logger: ClientLogger, settings: unknown): Effect.Effect<void, ConfigurationError> =>
+    suspendMarked(() => {
+        const failure = logger.configure(settings)
+        return failure === undefined ? Effect.void : Effect.fail(failure)
+    })
 
 /**
  * Validate and copy logging settings, then create the logger. Both entry points accept the same keys.

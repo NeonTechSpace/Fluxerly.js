@@ -334,6 +334,30 @@ describe.each(modes)("%s test client", (mode) => {
         )
     })
 
+    test("message sends and edits without a registered response receive an echoed bot message", async () => {
+        const driver = await open(mode)
+        const { client, fixtures } = driver.test
+        const sent = await settle(
+            client.messages.send(fixtures.ids.channel, { content: "hello", embeds: [{ title: "Card" }] }),
+        )
+        expect(sent).toMatchObject({
+            channelId: fixtures.ids.channel,
+            content: "hello",
+            author: { id: fixtures.ids.bot },
+            embeds: [expect.objectContaining({ title: "Card" })],
+        })
+        const edited = await settle(client.messages.edit(sent, { content: "edited" }))
+        expect(edited).toMatchObject({ id: sent.id, content: "edited", editedAt: expect.anything() })
+        expect(driver.test.requests().map((request) => request.matched)).toEqual([false, false])
+        expect(driver.test.logs()).not.toContainEqual(expect.objectContaining({ code: "testing.unmatchedRequest" }))
+
+        // A registered response still wins over the automatic reply
+        driver.test.rest.respond("POST /channels/:id/messages", { body: fixtures.message({ content: "registered" }) })
+        expect(await settle(client.messages.send(fixtures.ids.channel, "hello"))).toMatchObject({
+            content: "registered",
+        })
+    })
+
     test("emitted dispatches reach the shard a guild routes to and resume with that shard's sequence", async () => {
         const driver = await open(mode, { sharding: { totalShards: 2 } })
         await driver.ready()

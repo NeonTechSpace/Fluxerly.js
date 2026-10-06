@@ -31,7 +31,10 @@
  * heartbeats and delivers emitted dispatches with increasing sequence numbers. The fake HTTP side serves hosted Fluxer's
  * discovery document, with presigned uploads off so attachments arrive as one multipart request, answers requests from
  * registered responses and records every request without its Authorization header.
- * Unmatched requests receive a Fluxer-shaped 404 and a testing.unmatchedRequest Warn record.
+ * Message sends and edits without a registered response receive an echoed bot message, and other unmatched requests
+ * receive a Fluxer-shaped 404 and a testing.unmatchedRequest Warn record.
+ * Waits such as idle and TestRoute.next have no deadline unless timeoutMs is passed, so the test runner's timeout
+ * bounds a test that hangs.
  * Log records go to logs() and to any sinks in the logging option instead of the console.
  * Shutdown stops the client and closes the transport, leaving no sockets, timers or listeners behind, and rejects when
  * a handler or command failed without an onError hook and the test did not read that failure from failures()
@@ -56,10 +59,11 @@ import type {
     TestGatewayCommand,
     TestRequest,
     TestRest,
+    TestSayOptions,
     TestSettings,
     TestWaitOptions,
 } from "./internal/testing/types.js"
-import type { Fixtures } from "./internal/testing/fixtures.js"
+import type { Fixtures, WireMessage } from "./internal/testing/fixtures.js"
 
 export {
     createFixtures,
@@ -89,6 +93,7 @@ export type {
     TestDisconnectOptions,
     TestEmitOptions,
     TestGatewayCommand,
+    TestSayOptions,
     TestSettings,
     TestWaitOptions,
 } from "./internal/testing/types.js"
@@ -173,8 +178,9 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
      * waiting for its test response, and no new log record, request or gateway command appeared for a few event loop
      * turns. Use it after emit to assert that the bot did nothing, or before inspecting results.
      * Open waits and collectors do not count as work, and onError hooks are not awaited.
-     * The promise rejects with TestTimeoutError when the client is still busy after the timeout, default 2,000 ms, and
-     * with ClientClosedError after shutdown. Invalid options throw ConfigurationError.
+     * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose client never
+     * settles. With timeoutMs the promise rejects with TestTimeoutError when the client is still busy after it.
+     * It rejects with ClientClosedError after shutdown. Invalid options throw ConfigurationError.
      * Its timers stay real when a test fakes timers. The SDK runs on setImmediate, so fake timers must leave it real,
      * otherwise idle rejects with ConfigurationError instead of settling while no handler can run
      */
@@ -218,6 +224,13 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
 export function createTestClient<const F extends MessageFields | undefined = undefined>(
     options: TestClientOptions<F> = {} as TestClientOptions<F>,
 ): TestClient<SelectedMessage<F>> {
+    return openTestClient(options).test
+}
+
+/** Create a test client together with the harness that createTestBot also drives */
+function openTestClient<F extends MessageFields | undefined>(
+    options: TestClientOptions<F>,
+): { readonly test: TestClient<SelectedMessage<F>>; readonly harness: TestHarness } {
     const harness = new TestHarness(options)
     const client = createClient<F>(harness.clientOptions(options) as ClientOptions<F>)
     let closing: Promise<void> | undefined
@@ -232,7 +245,7 @@ export function createTestClient<const F extends MessageFields | undefined = und
         await closing
         harness.checkFailures()
     }
-    return Object.freeze({
+    const test = Object.freeze({
         client,
         fixtures: harness.fixtures,
         rest: Object.freeze({ respond: harness.http.respond.bind(harness.http) }),
@@ -252,6 +265,7 @@ export function createTestClient<const F extends MessageFields | undefined = und
         shutdown,
         [Symbol.asyncDispose]: shutdown,
     })
+    return { test, harness }
 }
 
 /**
@@ -272,11 +286,46 @@ export type TestBotOptions<
     }
 
 /**
+ * A test client running a bot written for runBot, with say to talk to the bot as a user would
+ *
+ * @category Testing
+ */
+export interface TestBot<M extends MessageCore = Message> extends TestClient<M> {
+    /**
+     * Deliver a message with this content from a human user, wait until the bot has settled as idle does, and resolve
+     * with the messages the bot sent meanwhile, in send order, or an empty list when it sent nothing. Call ready first.
+     * Each entry is a message send (POST /channels/:id/messages) in wire shape, built from the request body with the
+     * fields the automatic reply echoes, so it shows what the bot sent even when a rest.respond handler answered.
+     * Edits, reactions and other requests are not included, and remain visible through requests().
+     * The message comes from the fixture set's default human author in its default channel and community, and
+     * options.message replaces any of those wire fields. Like idle, say has no deadline unless options.timeoutMs is
+     * set, then rejects with TestTimeoutError when the bot is still busy after it, and rejects with ClientClosedError
+     * after shutdown. It throws ConfigurationError for content that is not a string, invalid options, before ready and
+     * when gateway filtering would suppress the message, as emit does
+     *
+     * @example
+     * ```ts
+     * import assert from "node:assert/strict"
+     * import { createTestBot } from "@neontechspace/fluxerly/testing"
+     *
+     * await using test = createTestBot({
+     *     commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Pong!") } } },
+     * })
+     * await test.ready()
+     * const [reply] = await test.say("!ping")
+     * assert.equal(reply?.content, "Pong!")
+     * assert.deepEqual(await test.say("hello"), [])
+     * ```
+     */
+    say(content: string, options?: TestSayOptions): Promise<readonly WireMessage[]>
+}
+
+/**
  * Create a test client that runs a bot written for runBot: Its events, ignoreBots setting, commands and setup callback,
  * with the same handler contexts, delivery defaults and command router as runBot. Handlers and commands are registered at once,
  * and ready runs setup before connecting, as runBot does, so a test drives the bot exactly as Fluxer would.
  * The setup signal aborts when shutdown starts.
- * It returns the same test client as createTestClient, and shutdown or `await using` cleans it up. Automatic gateway
+ * It returns the controls of createTestClient plus say, and shutdown or `await using` cleans it up. Automatic gateway
  * filtering sees the bot's handlers, commands and setup registrations, and emit rejects dispatches that list suppresses
  *
  * @remarks
@@ -292,11 +341,13 @@ export type TestBotOptions<
  * await using test = createTestBot({
  *     commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Pong!") } } },
  * })
- * const replies = test.rest.respond("POST /channels/:id/messages", { body: test.fixtures.message({ content: "Pong!" }) })
  * await test.ready()
- * test.emit("MESSAGE_CREATE", test.fixtures.message({ content: "!ping" }))
- * const request = await replies.next()
- * assert.equal((request.body as { content?: unknown }).content, "Pong!")
+ * // The test transport answers the reply with an echoed message, so no rest.respond fixture is needed
+ * const replies = await test.say("!ping")
+ * assert.deepEqual(
+ *     replies.map((message) => message.content),
+ *     ["Pong!"],
+ * )
  * ```
  *
  * @category Testing
@@ -304,7 +355,7 @@ export type TestBotOptions<
 export function createTestBot<
     const F extends MessageFields | undefined = undefined,
     const S extends Readonly<Record<string, unknown>> = Readonly<Record<string, CommandArgumentSchema | undefined>>,
->(options: TestBotOptions<F, S>): TestClient<SelectedMessage<F>> {
+>(options: TestBotOptions<F, S>): TestBot<SelectedMessage<F>> {
     if (typeof options !== "object" || options === null || Array.isArray(options))
         throw new ConfigurationError("configuration", "Bot options must be an object")
     checkTestOptionKeys(options, botOptionKeys)
@@ -320,7 +371,7 @@ export function createTestBot<
         drainMs: _drainMs,
         ...clientOptions
     } = options
-    const test = createTestClient<F>({
+    const { test, harness } = openTestClient<F>({
         ...clientOptions,
         ...(token === undefined ? {} : { token }),
     } as TestClientOptions<F>)
@@ -346,5 +397,7 @@ export function createTestBot<
         stopping.abort()
         return test.shutdown()
     }
-    return Object.freeze({ ...test, ready, shutdown, [Symbol.asyncDispose]: shutdown })
+    const say = (content: string, sayOptions?: TestSayOptions) =>
+        harness.say(() => test.client.diagnostics(), content, sayOptions)
+    return Object.freeze({ ...test, ready, say, shutdown, [Symbol.asyncDispose]: shutdown })
 }

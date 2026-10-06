@@ -1,4 +1,9 @@
+import { randomUUID } from "node:crypto"
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises"
+import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import type { ConnectionState } from "./client.js"
+import { ConfigurationError } from "./errors.js"
 
 /**
  * Connection-attempt snapshot for one shard, a gateway connection owned by this client.
@@ -165,6 +170,82 @@ export interface SessionStore {
      * @param snapshot The frozen resumable state
      */
     save(shardId: number, snapshot: SessionSnapshot): Promise<void>
+}
+
+/**
+ * Create a SessionStore that keeps each shard's snapshot in its own file, shard-ID.json, inside one directory.
+ * Pass it as sharding.sessions so a restart within Fluxer's 60-second window resumes instead of starting new sessions.
+ * Use a directory that only the bot's account can read, outside version control, because each file holds a session ID
+ * that lets the bot's token resume that session. The store never logs snapshot contents
+ *
+ * @remarks
+ * A relative path resolves against the current working directory when the store is created, and a URL must use the
+ * file: scheme. An empty path or another URL scheme throws ConfigurationError.
+ * The store creates nothing until the first save. Each save creates the directory when missing, with mode 0700, writes
+ * the snapshot to a new temporary file with mode 0600 in that directory, flushes it to disk and renames it over the
+ * shard's file, so a crash never leaves a partly written snapshot and the previous file stays until the rename. A failed
+ * save removes its temporary file. Windows ignores these modes, so there the directory's access control list decides
+ * who can read the files.
+ * Load returns undefined when the shard has no file. It returns the parsed file without checking its fields, so the SDK
+ * ignores a malformed or outdated snapshot with a lifecycle.sessionSnapshotIgnored Warn. A file that is not valid JSON
+ * rejects with an Error that names the file but not its contents, and other file system failures reject with their
+ * Node.js error. The SDK logs those rejections as lifecycle.sessionLoadFailed or lifecycle.sessionSaveFailed and
+ * continues, as SessionStore describes.
+ * Separate processes must use separate directories unless their shard IDs never overlap
+ *
+ * @example
+ * ```ts
+ * import { createClient, fileSessionStore } from "@neontechspace/fluxerly"
+ *
+ * export function resumableClient(token: string) {
+ *     return createClient({ token, sharding: { totalShards: "auto", sessions: fileSessionStore("sessions") } })
+ * }
+ * ```
+ *
+ * @category Sharding and supervision
+ */
+export function fileSessionStore(directory: string | URL): SessionStore {
+    if (directory instanceof URL ? directory.protocol !== "file:" : typeof directory !== "string" || directory === "")
+        throw new ConfigurationError("sessions", "The session directory must be a non-empty path or a file: URL")
+    const root = resolve(directory instanceof URL ? fileURLToPath(directory) : directory)
+    const file = (shardId: number) => join(root, `shard-${shardId}.json`)
+    return Object.freeze({
+        async load(shardId: number): Promise<SessionSnapshot | undefined> {
+            let text: string
+            try {
+                text = await readFile(file(shardId), "utf8")
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
+                throw error
+            }
+            try {
+                return JSON.parse(text) as SessionSnapshot
+            } catch {
+                // allow-silent: The SyntaxError quotes file text, which can hold the session ID, so only the file is named
+                throw new Error(`The saved session file ${file(shardId)} is not valid JSON`)
+            }
+        },
+        async save(shardId: number, snapshot: SessionSnapshot): Promise<void> {
+            await mkdir(root, { recursive: true, mode: 0o700 })
+            const target = file(shardId)
+            const temporary = `${target}.${randomUUID()}.tmp`
+            try {
+                const handle = await open(temporary, "wx", 0o600)
+                try {
+                    await handle.writeFile(JSON.stringify(snapshot))
+                    await handle.sync()
+                } finally {
+                    await handle.close()
+                }
+                await rename(temporary, target)
+            } catch (error) {
+                await rm(temporary, { force: true }).catch(() => {
+                    // allow-silent: The save failure below is the outcome the SDK logs, and a leftover temporary file is harmless
+                })
+                throw error
+            }
+        },
+    })
 }
 
 /**

@@ -225,7 +225,7 @@ export function standaloneBotLogger(clientOptions: Readonly<Record<string, unkno
 interface RunnerClient<E> {
     readonly state: string
     /** The client logger, used for stop-request records */
-    readonly logging?: ClientLogger | undefined
+    readonly logger?: ClientLogger | undefined
     run(): Effect.Effect<void, E>
     shutdown(options?: ShutdownOptions): Effect.Effect<void>
 }
@@ -397,7 +397,7 @@ export function runBotCore<
             Effect.gen(function* () {
                 const stop = yield* stopSignals(options)
                 const client = yield* create
-                logger = client.logging ?? clientServices(client)?.logging
+                logger = client.logger ?? clientServices(client)?.logging
                 stop.attach(logger)
                 yield* Effect.addFinalizer(() => client.shutdown())
                 const installation = yield* Effect.forkScoped(install(client))

@@ -34,7 +34,8 @@ export class UnhandledTestFailuresError extends FluxerlyError {
 }
 
 /**
- * A test wait, such as TestRoute.next or idle, did not finish within its timeout
+ * A test wait, such as TestRoute.next, idle or say, did not finish within the timeoutMs the test passed.
+ * Waits without timeoutMs never fail with it. A say that times out reports the idle wait
  *
  * @category Testing
  */

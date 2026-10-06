@@ -30,6 +30,7 @@ operation|default|ClientCache.clear|(kind?: CacheKind | undefined) => void
 operation|default|ClientCache.delete|(kind: CacheKind, key: string) => void
 operation|default|ClientCache.entries|<K extends CacheKind>(kind: K, options?: CacheEntriesOptions | undefined) => readonly CachedResources<M>[K][]
 operation|default|ClientCache.onChange|(listener: (change: CacheChange) => unknown) => CacheObserver
+operation|default|ClientLogging.configure|(settings: LogLevelSettings) => void
 operation|default|CurrentBotApplication.fetch|(options?: DefaultBotApplicationOperationOptions | undefined) => ResultAsync<BotApplication, CancelledError | ConfigurationError | BotApplicationOperationFailure>
 operation|default|DirectMessages.close|(id: string, options?: DefaultUserOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | UserOperationFailure>
 operation|default|DirectMessages.editGroup|(id: string, input: DirectMessageGroupEdit, options?: DefaultUserOperationOptions | undefined) => ResultAsync<DirectMessageChannel, CancelledError | ConfigurationError | UserOperationFailure>
@@ -211,6 +212,7 @@ operation|native|ClientCache.clear|(kind?: CacheKind | undefined) => void
 operation|native|ClientCache.delete|(kind: CacheKind, key: string) => void
 operation|native|ClientCache.entries|<K extends CacheKind>(kind: K, options?: CacheEntriesOptions | undefined) => Effect<readonly CachedResources<M>[K][], never, never>
 operation|native|ClientCache.onChange|<E = never, R = never>(listener: (change: CacheChange) => Effect<unknown, E, R>) => Effect<CacheObserver, never, R | Scope>
+operation|native|ClientLogging.configure|(settings: LogLevelSettings) => void
 operation|native|CurrentBotApplication.fetch|(options?: BotApplicationOperationOptions | undefined) => Effect<BotApplication, BotApplicationOperationFailure, never>
 operation|native|DirectMessages.close|(id: string, options?: UserOperationOptions | undefined) => Effect<void, UserOperationFailure, never>
 operation|native|DirectMessages.editGroup|(id: string, input: DirectMessageGroupEdit, options?: UserOperationOptions | undefined) => Effect<DirectMessageChannel, UserOperationFailure, never>
@@ -373,6 +375,7 @@ member|default|Client.gatewayLatencyMs|number | null
 member|default|Client.guilds|Guilds
 member|default|Client.instance|Instance
 member|default|Client.invites|Invites
+member|default|Client.logging|ClientLogging
 member|default|Client.members|Members
 member|default|Client.messages|Messages<M>
 member|default|Client.permissions|PermissionHelpers
@@ -399,6 +402,7 @@ member|native|Client.gatewayLatencyMs|number | null
 member|native|Client.guilds|Guilds
 member|native|Client.instance|Instance
 member|native|Client.invites|Invites
+member|native|Client.logging|ClientLogging
 member|native|Client.members|Members
 member|native|Client.messages|Messages<M>
 member|native|Client.permissions|PermissionHelpers
@@ -1861,6 +1865,8 @@ field|shared|LinkChannelCreate.type|998|optional=false|nullable=false
 field|shared|LinkChannelCreate.url|null | string | undefined|optional=true|nullable=true
 field|shared|LinkChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|LinkChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
+field|shared|LogLevelSettings.categories|Readonly<Partial<Record<LogCategory, LogThreshold>>> | undefined|optional=true|nullable=false
+field|shared|LogLevelSettings.level|LogThreshold | undefined|optional=true|nullable=false
 field|shared|MemberChunk.count|number|optional=false|nullable=false
 field|shared|MemberChunk.guildId|string|optional=false|nullable=false
 field|shared|MemberChunk.index|number|optional=false|nullable=false
