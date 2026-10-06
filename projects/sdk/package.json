@@ -21,7 +21,7 @@
         "effect",
         "effect-ts"
     ],
-    "version": "1000.0.0-rc.4",
+    "version": "1000.0.0-rc.5",
     "private": true,
     "type": "module",
     "license": "Apache-2.0",
