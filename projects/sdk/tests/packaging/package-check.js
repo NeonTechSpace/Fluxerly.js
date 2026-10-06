@@ -429,29 +429,72 @@ try {
             )
             assert.ok(agents.includes("1. Import only from"), "AGENTS.md contains the rules")
 
-            // The installed command writes a starter project into an empty folder, whose own test passes after installing the SDK
+            // The installed command writes each starter project into an empty folder, whose own test passes after
+            // installing the dependencies its next steps name
             const cli = join(installed, "dist/cli.js")
-            const starter = join(temporary, "init")
-            mkdirSync(starter)
-            const initOutput = run(process.execPath, [cli, "init"], starter)
+            const invalid = join(temporary, "init-invalid")
+            mkdirSync(invalid)
+            assert.throws(
+                () => run(process.execPath, [cli, "init", "--template", "rust"], invalid),
+                (error) => error.status === 1 && error.stderr.includes("--template js|ts|effect"),
+                "An unknown template prints the usage and fails",
+            )
+            assert.deepEqual(readdirSync(invalid), [], "An unknown template writes nothing")
             // The printed install pins the packed version, exactly while it is a prerelease
             const exactFlag = manifest.version.includes("-") ? " --save-exact" : ""
-            assert.ok(
-                initOutput.includes(`npm install${exactFlag} ${manifest.name}@${manifest.version}`),
-                "fluxerly init prints the next steps with the installed version",
-            )
-            assert.throws(
-                () => run(process.execPath, [cli, "init"], starter),
-                (error) => error.status === 1 && /already exist.*wrote nothing/.test(error.stderr),
-                "A second fluxerly init refuses the existing files",
-            )
-            writeFileSync(join(starter, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
-            packageManager(
-                ["add", `file:${tarball.replaceAll("\\", "/")}`, "--prefer-offline", "--ignore-scripts"],
-                starter,
-            )
-            packageManager(["test"], starter)
-            console.log("fluxerly init starter project passed its generated test")
+            const effectVersion = manifest.peerDependencies.effect.replace(/^\^/, "")
+            for (const template of ["js", "ts", "effect"]) {
+                const starter = join(temporary, `init-${template}`)
+                mkdirSync(starter)
+                // Without a terminal, init writes the JavaScript starter unless --template names another one
+                const initArguments = ["init", ...(template === "js" ? [] : ["--template", template])]
+                const initOutput = run(process.execPath, [cli, ...initArguments], starter)
+                assert.ok(
+                    readdirSync(starter).includes(template === "js" ? "bot.js" : "bot.ts"),
+                    `fluxerly ${initArguments.join(" ")} writes the ${template} starter`,
+                )
+                assert.ok(
+                    initOutput.includes(`npm install${exactFlag} ${manifest.name}@${manifest.version}`),
+                    "fluxerly init prints the next steps with the installed version",
+                )
+                assert.equal(
+                    initOutput.includes(`npm install effect@${effectVersion}`),
+                    template === "effect",
+                    "Only the Effect starter's next steps install Effect",
+                )
+                assert.equal(
+                    initOutput.includes("npm install --save-dev @types/node"),
+                    template !== "js",
+                    "Only the TypeScript starters' next steps install the Node.js types",
+                )
+                assert.throws(
+                    () => run(process.execPath, [cli, ...initArguments], starter),
+                    (error) => error.status === 1 && /already exist.*wrote nothing/.test(error.stderr),
+                    "A second fluxerly init refuses the existing files",
+                )
+                writeFileSync(join(starter, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
+                const dependencies = [`file:${tarball.replaceAll("\\", "/")}`]
+                if (template === "effect") dependencies.push(`effect@${effectVersion}`)
+                packageManager(["add", ...dependencies, "--prefer-offline", "--ignore-scripts"], starter)
+                if (template !== "js") {
+                    // The pinned SDK types keep this check reproducible where the printed step takes the latest
+                    packageManager(
+                        [
+                            "add",
+                            "--save-dev",
+                            `@types/node@${manifest.devDependencies["@types/node"]}`,
+                            "--prefer-offline",
+                            "--ignore-scripts",
+                        ],
+                        starter,
+                    )
+                    // The editor's check of the generated tsconfig.json passes without changes
+                    run(process.execPath, [compiler, "-p", "tsconfig.json"], starter)
+                }
+                // node --test passes when it finds no test file, so the report must show the generated test passing
+                assert.match(packageManager(["test"], starter), /^(?:#|ℹ) pass 1$/m)
+                console.log(`fluxerly init ${template} starter project passed its generated test`)
+            }
         }
         const installedManifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"))
         assert.ok(!installedManifest.private && !installedManifest.scripts && !installedManifest.devDependencies)

@@ -41,44 +41,67 @@ const read = (project: string, name: string) => readFileSync(join(project, name)
 const eventsBlock = (source: string) =>
     /^ {4}events: \{\n[\s\S]*?\n {4}\},\n/m.exec(source.replaceAll("\r\n", "\n"))?.[0]
 
-test("an empty folder gets a runnable bot project with a token template, ignores, a test and agent rules", () => {
-    const project = temporary()
-    expect(writeStarterProject(project, sdk)).toEqual([
-        "package.json",
-        "bot.js",
-        "bot.test.js",
-        ".env.example",
-        ".gitignore",
-        "AGENTS.md",
-    ])
-    expect(readdirSync(project).toSorted()).toEqual(
-        ["package.json", "bot.js", "bot.test.js", ".env.example", ".gitignore", "AGENTS.md"].toSorted(),
-    )
+const starters = [
+    { template: "js", bot: "bot.js", test: "bot.test.js", testing: "testing", example: "bot.js" },
+    { template: "ts", bot: "bot.ts", test: "bot.test.ts", testing: "testing", example: "bot.ts" },
+    { template: "effect", bot: "bot.ts", test: "bot.test.ts", testing: "effect/testing", example: "bot-effect.ts" },
+] as const
 
-    const manifest = JSON.parse(read(project, "package.json"))
-    expect(manifest.type).toBe("module")
-    expect(manifest.scripts.start).toMatch(/^node .*\bbot\.js$/)
-    expect(manifest.scripts.test).toMatch(/^node --test\b/)
-    expect(manifest).not.toHaveProperty("dependencies")
-    expect(read(project, ".env.example")).toBe("FLUXER_BOT_TOKEN=\n")
-    expect(read(project, ".gitignore").split("\n")).toEqual(expect.arrayContaining(["node_modules", ".env"]))
-    expect(read(project, "bot.test.js")).toContain('from "@neontechspace/fluxerly/testing"')
-    expect(read(project, "bot.test.js")).toContain('from "./bot.js"')
+test.each(starters)(
+    "the $template starter is a runnable project with a token template, ignores, a test and agent rules",
+    ({ template, bot, test: botTest, testing }) => {
+        const project = temporary()
+        const typeScript = template === "js" ? [] : ["tsconfig.json"]
+        const files = ["package.json", ...typeScript, bot, botTest, ".env.example", ".gitignore", "AGENTS.md"]
+        expect(writeStarterProject(project, sdk, template)).toEqual(files)
+        expect(readdirSync(project).toSorted()).toEqual(files.toSorted())
 
-    // AGENTS.md is the file that fluxerly agents creates in the same folder
-    const agentsProject = temporary()
-    writeAgentsSection(agentsProject, sdk)
-    expect(read(project, "AGENTS.md")).toBe(read(agentsProject, "AGENTS.md"))
-})
+        const manifest = JSON.parse(read(project, "package.json"))
+        expect(manifest.type).toBe("module")
+        // Node.js runs the bot file itself, so neither script needs a build step
+        expect(manifest.scripts.start.split(" ")).toEqual(["node", expect.stringMatching(/^--env-file/), bot])
+        expect(manifest.scripts.test).toBe("node --test")
+        expect(manifest).not.toHaveProperty("dependencies")
+        expect(read(project, ".env.example")).toBe("FLUXER_BOT_TOKEN=\n")
+        expect(read(project, ".gitignore").split("\n")).toEqual(expect.arrayContaining(["node_modules", ".env"]))
+        expect(read(project, botTest)).toContain(`from "@neontechspace/fluxerly/${testing}"`)
+        expect(read(project, botTest)).toContain(`from "./${bot}"`)
+        expect(read(project, botTest)).toContain(".say(")
 
-test("the generated bot keeps the shipped starter's handlers", () => {
-    const project = temporary()
-    writeStarterProject(project, sdk)
-    const starter = eventsBlock(readFileSync(join(sdk, "examples/starter/bot.js"), "utf8"))
-    expect(starter).toBeDefined()
-    expect(eventsBlock(read(project, "bot.js"))).toBe(starter)
-    expect(read(project, "bot.js")).toContain("token: process.env.FLUXER_BOT_TOKEN")
-})
+        // AGENTS.md is the file that fluxerly agents creates in the same folder
+        const agentsProject = temporary()
+        writeAgentsSection(agentsProject, sdk)
+        expect(read(project, "AGENTS.md")).toBe(read(agentsProject, "AGENTS.md"))
+    },
+)
+
+test.each(starters.filter(({ template }) => template !== "js"))(
+    "the $template starter's tsconfig.json checks strictly for editors and leaves running to Node.js",
+    ({ template }) => {
+        const project = temporary()
+        writeStarterProject(project, sdk, template)
+        expect(JSON.parse(read(project, "tsconfig.json")).compilerOptions).toMatchObject({
+            module: "NodeNext",
+            types: ["node"],
+            strict: true,
+            noEmit: true,
+            allowImportingTsExtensions: true,
+        })
+    },
+)
+
+test.each(starters)(
+    "the generated $template bot keeps the shipped $example starter's handlers",
+    ({ template, bot, example }) => {
+        const project = temporary()
+        writeStarterProject(project, sdk, template)
+        const starter = eventsBlock(readFileSync(join(sdk, "examples/starter", example), "utf8"))
+        expect(starter).toBeDefined()
+        expect(eventsBlock(read(project, bot))).toBe(starter)
+        expect(read(project, bot)).toContain("token: process.env.FLUXER_BOT_TOKEN")
+        expect(read(project, bot)).toContain("if (import.meta.main)")
+    },
+)
 
 test("existing files stop init before it writes anything and are listed as conflicts", () => {
     const project = temporary()
