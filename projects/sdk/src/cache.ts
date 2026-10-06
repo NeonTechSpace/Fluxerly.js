@@ -13,10 +13,14 @@ import type { Message, MessageCore } from "./messages.js"
  * @example
  * ```ts
  * import type { Client } from "@neontechspace/fluxerly"
- * export function cacheSizeExample(client: Client, record: (kind: string, delta: number) => void) {
+ * // A set can replace an entry and a clear releases a whole kind, so track keys rather than counting events
+ * export function trackCachedKeys(client: Client, keys: Map<string, Set<string>>) {
  *     return client.cache.onChange((change) => {
- *         if (change.op === "set") record(change.kind, 1)
- *         if (change.op === "delete") record(change.kind, -1)
+ *         const kindKeys = keys.get(change.kind) ?? new Set<string>()
+ *         keys.set(change.kind, kindKeys)
+ *         if (change.op === "clear") kindKeys.clear()
+ *         else if (change.key !== null && change.op === "set") kindKeys.add(change.key)
+ *         else if (change.key !== null) kindKeys.delete(change.key)
  *     })
  * }
  * ```
@@ -42,7 +46,9 @@ export interface CacheChange {
 /** Set memory-only cache bounds for a resource category such as users, communities (the guilds category) or channels.
  * Use true or an options object in ClientOptions.cache to enable that category, which is otherwise disabled.
  * The SDK keeps frozen copies of resources encountered through supported reads and events, not every remote resource.
- * Fetches still contact Fluxer, writes still execute, and the SDK does no preload, persistence or background refresh.
+ * Fetches still contact Fluxer, writes still execute, and the SDK does no persistence or background refresh.
+ * It preloads nothing, except that a shard resuming a stored session refills enabled community, role and channel caches
+ * through REST unless sharding.refillCaches is false.
  * When capacity is full, the least recently used snapshot is removed first.
  * Expired entries, overlapping reads and lost gateway connections can make a lookup miss.
  * A connection gap clears affected users and direct messages even if the session resumes. Community-scoped snapshots stay

@@ -147,6 +147,28 @@ export async function sendChecklist(client: Client, channelId: string) {
 
 The builder keeps a reference to the bytes, and the send copies them when it is called. For larger files, pass a `file` source such as a `Blob`, or a `stream` with its exact `size`, instead of `data`. The [attachment input reference](/docs/{{version}}/api/modules/js-ts/#attachmentinput) lists these forms, which avoid loading everything into memory
 
+## Send a file from disk
+
+On Node.js, `openAsBlob` from `node:fs` opens a file without reading it into memory. Pass the result as `file` and give the upload a name. A path string is not accepted, so open the file first
+
+```ts
+import { openAsBlob } from "node:fs"
+import { basename } from "node:path"
+import { builders, type Client } from "@neontechspace/fluxerly"
+
+export async function sendReport(client: Client, channelId: string, path: string) {
+    const file = await openAsBlob(path)
+    const message = builders.message()
+        .content("Daily report")
+        .attachment({ file, filename: basename(path) })
+        .build()
+
+    return await client.messages.send(channelId, message)
+}
+```
+
+The send reads the file while it uploads, so keep the file unchanged until the send finishes
+
 ## Download an attachment when needed
 
 Received messages describe their attachments but do not download them. Set a byte limit and handle a failed download before processing any content
