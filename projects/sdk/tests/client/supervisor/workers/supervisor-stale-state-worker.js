@@ -1,17 +1,39 @@
-const onMessage = (message) => {
-    if (typeof message !== "object" || message === null || message.type !== "assignment") return
-    process.off("message", onMessage)
-    process.send?.({ type: "state", generation: message.generation, state: "Connected" })
-    process.send?.({ type: "ready", generation: message.generation })
-    process.send?.({ type: "state", generation: message.generation - 1, state: "Connected" })
-    setTimeout(() => {
-        process.send?.({ type: "state", generation: message.generation, state: "Connected" })
-        if (process.env.FLUXERLY_SUPERVISOR_DISCONNECT_AFTER_READY !== "1") return
-        setTimeout(() => {
+// The parent releases each later transition through loopback barriers, so its assertions never race a child timer
+const stateControl = process.env.FLUXERLY_SUPERVISOR_STATE_CONTROL
+const exitControl = process.env.FLUXERLY_SUPERVISOR_EXIT_CONTROL
+const keepAlive = setInterval(() => {}, 1_000)
+
+// Any value is accepted, so null fields only mark a point in the IPC message order
+const marker = Object.fromEntries(
+    ["state", "gatewayLatencyMs", "shards", "rest", "uploads", "gatewayRequests", "events", "caches", "counters"].map(
+        (key) => [key, null],
+    ),
+)
+
+const fail = () => process.exit(1)
+
+process.on("message", (message) => {
+    if (typeof message !== "object" || message === null) return
+    if (message.type === "shutdown") process.exit(0)
+    if (message.type !== "assignment") return
+    const { generation } = message
+    process.send?.({ type: "state", generation, state: "Connected" })
+    process.send?.({ type: "ready", generation })
+    process.send?.({ type: "state", generation: generation - 1, state: "Connected" })
+    // IPC keeps message order, so a parent that observes these diagnostics has already handled the stale state
+    process.send?.({ type: "diagnostics", generation, diagnostics: marker })
+    void fetch(stateControl).then((response) => {
+        if (!response.ok) return fail()
+        // The disconnect waits until the current state is written, so the parent receives it first
+        process.send?.({ type: "state", generation, state: "Connected" }, () => {
+            if (!exitControl) return
             process.disconnect?.()
-            setTimeout(() => process.exit(0), 500)
-        }, 25)
-    }, 100)
-}
-process.on("message", onMessage)
+            // The process stays alive without IPC until the parent answers or closes the barrier
+            const exit = () => process.exit(0)
+            void fetch(exitControl).then(exit, exit)
+        })
+    }, fail)
+})
 process.send?.({ type: "hello" })
+
+process.once("exit", () => clearInterval(keepAlive))

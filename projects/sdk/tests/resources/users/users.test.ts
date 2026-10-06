@@ -1,3 +1,4 @@
+import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
@@ -845,6 +846,9 @@ test.each(modes)(
     async (mode) => {
         let active = false
         let cleaned = false
+        // The aborted send finishes its cleanup only when the test releases it
+        const cleanup = Promise.withResolvers<void>()
+        let aborted = false
         rest(
             (url, init) =>
                 new Promise<Response>((resolve, reject) => {
@@ -855,28 +859,44 @@ test.each(modes)(
                     active = true
                     init.signal?.addEventListener(
                         "abort",
-                        () =>
-                            setTimeout(() => {
+                        () => {
+                            aborted = true
+                            void cleanup.promise.then(() => {
                                 cleaned = true
                                 reject(Error("fixture cancellation"))
-                            }, 15),
+                            })
+                        },
                         { once: true },
                     )
                 }),
         )
         const api = await setup(mode)
-        const controller = new AbortController()
-        const pending = api.native
-            ? Effect.runPromiseExit(api.native.directMessages.send("30", { content: "fixture" }), {
-                  signal: controller.signal,
-              })
-            : api.send("30", { content: "fixture" }, { signal: controller.signal }).catch((error) => error)
-        await vi.waitFor(() => expect(active).toBe(true))
-        controller.abort()
-        const error = await pending
-        if (mode === "default") expect(error).toMatchObject({ _tag: "CancelledError" })
-        else expect(Exit.isFailure(error) && Cause.hasInterruptsOnly(error.cause)).toBe(true)
-        expect(cleaned).toBe(true)
+        try {
+            const controller = new AbortController()
+            const pending = api.native
+                ? Effect.runPromiseExit(api.native.directMessages.send("30", { content: "fixture" }), {
+                      signal: controller.signal,
+                  })
+                : api.send("30", { content: "fixture" }, { signal: controller.signal }).catch((error) => error)
+            let settled = false
+            void pending.finally(() => {
+                settled = true
+            })
+            await vi.waitFor(() => expect(active).toBe(true))
+            controller.abort()
+            await vi.waitFor(() => expect(aborted).toBe(true))
+            // One host turn drains the promise jobs that would settle a send not waiting for its cleanup
+            await turn()
+            expect(settled).toBe(false)
+            cleanup.resolve()
+            const error = await pending
+            if (mode === "default") expect(error).toMatchObject({ _tag: "CancelledError" })
+            else expect(Exit.isFailure(error) && Cause.hasInterruptsOnly(error.cause)).toBe(true)
+            expect(cleaned).toBe(true)
+        } finally {
+            // Release the held cleanup so a failed assertion does not stall client shutdown
+            cleanup.resolve()
+        }
 
         await api.close()
         await expect(api.fetchUser()).rejects.toMatchObject({ _tag: "ClientClosedError" })

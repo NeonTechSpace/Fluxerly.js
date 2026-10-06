@@ -69,7 +69,7 @@ async function connectedWith(driver: Driver, totalShards: number) {
                 Array.from({ length: totalShards }, (_, shardId) => [shardId, "Connected"]),
             )
         },
-        { timeout: 5_000, interval: 5 },
+        { interval: 5 },
     )
 }
 

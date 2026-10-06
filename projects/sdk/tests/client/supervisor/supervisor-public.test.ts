@@ -393,9 +393,7 @@ test.each(modes)(
         fixture.releaseReady()
         await owner.waitForReady()
         // A later periodic snapshot reflects the connected client
-        await vi.waitFor(() => expect(owner.status().children[0]!.diagnostics!.client.state).toBe("Connected"), {
-            timeout: 3_000,
-        })
+        await vi.waitFor(() => expect(owner.status().children[0]!.diagnostics!.client.state).toBe("Connected"))
         const diagnostics = owner.status().children[0]!.diagnostics!
         expect(diagnostics.receivedAt).toBeGreaterThan(0)
         expect(diagnostics.client).toMatchObject({
@@ -471,14 +469,26 @@ test.each(modes)(
     "%s ignores pre-configuration and stale-generation Connected state before current readiness",
     async (mode) => {
         const entryPath = new URL("./workers/supervisor-stale-state-worker.js", import.meta.url)
+        const barrier = await disconnectBarrier("state")
+        onTestFinished(() => barrier.close())
+        const childEnvironment = { FLUXERLY_SUPERVISOR_STATE_CONTROL: barrier.origin }
+        // The child sends a diagnostics marker after its stale state, then waits for the barrier before reporting
+        // its current Connected state
+        const staleStateHandled = async (owner: { status(): SupervisorStatus }) => {
+            await vi.waitFor(() => expect(owner.status().children[0]!.diagnostics).not.toBeNull())
+            expect(owner.status().children[0]!.connectionState).toBeNull()
+            await barrier.entered
+            barrier.release()
+        }
         if (mode === "default") {
             const owner = defaultSupervisor.create({
                 entry: fileURLToPath(entryPath),
                 totalShards: 1,
                 assignments: [{ id: "only", shardIds: [0] }],
+                childEnvironment,
             })
             await owner.start().then((result) => result._unsafeUnwrap())
-            expect(owner.status().children[0]!.connectionState).toBeNull()
+            await staleStateHandled(owner)
             await owner.waitForReady().then((result) => result._unsafeUnwrap())
             expect(owner.status().children[0]!.connectionState).toBe("Connected")
             await owner.shutdown().then((result) => result._unsafeUnwrap())
@@ -489,10 +499,11 @@ test.each(modes)(
                 entry: entryPath,
                 totalShards: 1,
                 assignments: [{ id: "only", shardIds: [0] }],
+                childEnvironment,
             }),
         )
         await Effect.runPromise(owner.start())
-        expect(owner.status().children[0]!.connectionState).toBeNull()
+        await staleStateHandled(owner)
         await Effect.runPromise(owner.waitForReady())
         expect(owner.status().children[0]!.connectionState).toBe("Connected")
         await Effect.runPromise(owner.shutdown())
@@ -502,20 +513,31 @@ test.each(modes)(
 
 test("default clears a current-generation connection observation as soon as owned child IPC disconnects", async () => {
     const entry = new URL("./workers/supervisor-stale-state-worker.js", import.meta.url)
+    const state = await disconnectBarrier("state")
+    // The child disconnects after its current Connected state and stays alive until this barrier answers
+    const exit = await disconnectBarrier("exit")
     const owner = defaultSupervisor.create({
         entry: fileURLToPath(entry),
         totalShards: 1,
         assignments: [{ id: "only", shardIds: [0] }],
-        childEnvironment: { FLUXERLY_SUPERVISOR_DISCONNECT_AFTER_READY: "1" },
+        childEnvironment: {
+            FLUXERLY_SUPERVISOR_STATE_CONTROL: state.origin,
+            FLUXERLY_SUPERVISOR_EXIT_CONTROL: exit.origin,
+        },
     })
     onTestFinished(async () => {
-        await owner.shutdown()
+        const stopped = owner.shutdown()
+        await state.close()
+        await exit.close()
+        await stopped
     })
     await owner.start().then((result) => result._unsafeUnwrap())
+    await state.entered
+    state.release()
     await owner.waitForReady().then((result) => result._unsafeUnwrap())
     await vi.waitFor(
         () => expect(owner.status().children[0]).toMatchObject({ pid: expect.any(Number), connectionState: null }),
-        { interval: 5, timeout: 2_000 },
+        { interval: 5 },
     )
 }, 12_000)
 
@@ -615,7 +637,7 @@ test.each(modes)(
                     pid: expect.any(Number),
                     connectionState: null,
                 }),
-            { interval: 5, timeout: 2_000 },
+            { interval: 5 },
         )
         await Promise.all([owner.shutdown(), owner.shutdown()])
         await owner.waitForClose()
@@ -843,10 +865,27 @@ test.each(modes)(
                 minimumSpacingMs,
             ),
         )
+        // The parent clock moves only when the test advances it, so the gate cannot grant the second Identify early
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] })
+        const gateArmed = Promise.withResolvers<void>()
+        const fakeSetTimeout = globalThis.setTimeout
+        const scheduled = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+            callback: () => void,
+            delay?: number,
+        ) => {
+            // After a reported send the gate waits the full spacing, because the clock has not moved since
+            if (delay === minimumSpacingMs) gateArmed.resolve()
+            return fakeSetTimeout(callback, delay)
+        }) as typeof setTimeout)
+        const realTimers = () => {
+            scheduled.mockRestore()
+            vi.useRealTimers()
+        }
         let cleaned = false
         const cleanup = async () => {
             if (cleaned) return
             cleaned = true
+            if (vi.isFakeTimers()) realTimers()
             try {
                 await owner.shutdown()
             } finally {
@@ -859,18 +898,20 @@ test.each(modes)(
             expect(owner.status()).toMatchObject({ state: "running" })
             expect(fixture.readySends()).toBe(0)
             fixture.releaseReady()
-            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 8_000 })
+            await gateArmed.promise
+            expect(fixture.identifies.length).toBeLessThan(2)
+            // Only moving past the spacing releases the second grant
+            await vi.advanceTimersByTimeAsync(minimumSpacingMs)
+            realTimers()
+            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5 })
             expect(fixture.identifies.map((identify) => identify.shardId).sort()).toEqual([0, 1])
             expect(fixture.malformedGatewayPackets).toEqual([])
+            // Each child reports its own Identify send
             await vi.waitFor(() =>
                 expect(fixture.signals.filter((signal) => signal.operation === 2 && signal.mode === mode)).toHaveLength(
                     2,
                 ),
             )
-            const sends = fixture.signals
-                .filter((signal) => signal.operation === 2 && signal.mode === mode)
-                .sort((left, right) => left.at - right.at)
-            expect(sends[1]!.at - sends[0]!.at).toBeGreaterThanOrEqual(minimumSpacingMs)
             await owner.shutdown()
             await owner.waitForClose()
             await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(2))
@@ -950,7 +991,7 @@ test.each(modes)(
             expect(fixture.identifies).toHaveLength(1)
             expect(permits).toBe(2)
             releaseFreshIdentify.resolve()
-            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 10_000 })
+            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5 })
             expect(fixture.malformedGatewayPackets).toEqual([])
             await vi.waitFor(() =>
                 expect(fixture.signals.filter((signal) => signal.operation === 2 && signal.mode === mode)).toHaveLength(
@@ -1011,7 +1052,7 @@ test.each(modes)(
         try {
             fixture.releaseReady()
             const starting = owner.start()
-            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5, timeout: 8_000 })
+            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
             expect(fixture.identifies[0]!.shardId).toBe(0)
             expect(
                 await Promise.race([
@@ -1036,7 +1077,7 @@ test.each(modes)(
                         restarts: 1,
                         state: "restarting",
                     }),
-                { interval: 5, timeout: 8_000 },
+                { interval: 5 },
             )
             // The unacknowledged child has exited and its permit is reclaimed, yet the healthy sibling is still held
             expect(fixture.identifies).toHaveLength(1)
@@ -1046,7 +1087,7 @@ test.each(modes)(
             const unacknowledgedClosed = fixture.proofs.find(
                 (proof) => proof.mode === mode && proof.state === "Closed",
             )!
-            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 8_000 })
+            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5 })
             expect(fixture.identifies[1]!.shardId).toBe(1)
             expect(fixture.malformedGatewayPackets).toEqual([])
             await vi.waitFor(() =>

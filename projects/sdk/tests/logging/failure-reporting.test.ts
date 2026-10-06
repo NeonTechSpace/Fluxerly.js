@@ -100,7 +100,7 @@ test.each(modes)(
         )
         for (let timestamp = 1; timestamp <= 70; timestamp++) server.dispatch("TYPING_START", typing(timestamp))
         // The handler keeps running while the hook is stuck, so reporting never holds its only slot
-        await vi.waitFor(() => expect(handled).toHaveLength(70), { timeout: 5_000 })
+        await vi.waitFor(() => expect(handled).toHaveLength(70))
         await vi.waitFor(() => expect(counters(client).reportsDropped).toBe(5))
         expect(calls).toEqual(["fail-1"])
         // The hook never resolves, so completed shutdown proves it was not awaited beyond bounded cleanup

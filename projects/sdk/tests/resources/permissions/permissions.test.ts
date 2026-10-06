@@ -1,4 +1,5 @@
 import { typedResult } from "../../support/settle.js"
+import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Clock, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
@@ -325,39 +326,64 @@ test.each(modes)("%s gives later permission reads only the shared deadline remai
 
 test.each(modes)("%s permission fetch awaits request cleanup on cancellation", async (mode) => {
     let active = 0
+    // The aborted request finishes its cleanup only when the test releases it
+    const cleanup = Promise.withResolvers<void>()
+    let aborted = false
     rest(
         async (_url, init) =>
             new Promise<Response>((_resolve, reject) => {
                 active++
                 ;(init.signal as AbortSignal).addEventListener(
                     "abort",
-                    () =>
-                        setTimeout(() => {
+                    () => {
+                        aborted = true
+                        void cleanup.promise.then(() => {
                             active--
                             reject(new DOMException("Aborted", "AbortError"))
-                        }, 20),
+                        })
+                    },
                     { once: true },
                 )
             }),
     )
-    const api = await setup(mode)
-    const controller = new AbortController()
-    if (api.native) {
-        const pending = Effect.runPromiseExit(api.native.permissions.fetch(target), { signal: controller.signal })
-        await vi.waitFor(() => expect(active).toBe(1))
-        controller.abort()
-        const failure = await pending
-        expect(Exit.isFailure(failure) && Cause.hasInterruptsOnly(failure.cause)).toBe(true)
-    } else {
-        const pending = (async () => {
-            const result = await api.defaultApi!.permissions.fetch(target, { signal: controller.signal })
-            return result.isErr() ? result.error : undefined
-        })()
-        await vi.waitFor(() => expect(active).toBe(1))
-        controller.abort()
-        expect(await pending).toMatchObject({ _tag: "CancelledError" })
+    // Prove the cancelled operation still waits for the held cleanup, then release it
+    const release = async (pending: PromiseLike<unknown>) => {
+        let settled = false
+        const mark = () => {
+            settled = true
+        }
+        void pending.then(mark, mark)
+        await vi.waitFor(() => expect(aborted).toBe(true))
+        // One host turn drains the promise jobs that would settle an operation not waiting for its cleanup
+        await turn()
+        expect(settled).toBe(false)
+        cleanup.resolve()
     }
-    expect(active).toBe(0)
+    const api = await setup(mode)
+    try {
+        const controller = new AbortController()
+        if (api.native) {
+            const pending = Effect.runPromiseExit(api.native.permissions.fetch(target), { signal: controller.signal })
+            await vi.waitFor(() => expect(active).toBe(1))
+            controller.abort()
+            await release(pending)
+            const failure = await pending
+            expect(Exit.isFailure(failure) && Cause.hasInterruptsOnly(failure.cause)).toBe(true)
+        } else {
+            const pending = (async () => {
+                const result = await api.defaultApi!.permissions.fetch(target, { signal: controller.signal })
+                return result.isErr() ? result.error : undefined
+            })()
+            await vi.waitFor(() => expect(active).toBe(1))
+            controller.abort()
+            await release(pending)
+            expect(await pending).toMatchObject({ _tag: "CancelledError" })
+        }
+        expect(active).toBe(0)
+    } finally {
+        // Release the held cleanup so a failed assertion does not stall client shutdown
+        cleanup.resolve()
+    }
 })
 
 const wireGuild = () => ({ id: "20", owner_id: "99", name: "fixture", features: [], icon: null })

@@ -1,3 +1,4 @@
+import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Clock, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type ClientOptions, type GuildMember, type MemberReference } from "../../../src/index.js"
@@ -285,38 +286,63 @@ test.each(modes)("%s applies the shared deadline to an active role replacement a
 
 test.each(modes)("%s cancellation interrupts the role replacement and awaits transport cleanup", async (mode) => {
     let active = 0
+    // The aborted request finishes its cleanup only when the test releases it
+    const cleanup = Promise.withResolvers<void>()
+    let aborted = false
     stubFetchWithHostedDiscovery(
         (_url: string, init: RequestInit) =>
             new Promise<Response>((_resolve, reject) => {
                 active++
                 init.signal!.addEventListener(
                     "abort",
-                    () =>
-                        setTimeout(() => {
+                    () => {
+                        aborted = true
+                        void cleanup.promise.then(() => {
                             active--
                             reject(Error("aborted"))
-                        }, 5),
+                        })
+                    },
                     { once: true },
                 )
             }),
     )
-    const api = await setup(mode)
-    const controller = new AbortController()
-    if (api.native) {
-        const pending = Effect.runPromiseExit(api.native.members.setRoles(target, ["50"]), {
-            signal: controller.signal,
-        })
-        await vi.waitFor(() => expect(active).toBe(1))
-        controller.abort()
-        const result = await pending
-        expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true)
-    } else {
-        const pending = api
-            .defaultApi!.members.setRoles(target, ["50"], { signal: controller.signal })
-            .then((result) => (result.isErr() ? result.error : result.value))
-        await vi.waitFor(() => expect(active).toBe(1))
-        controller.abort()
-        expect(await pending).toMatchObject({ _tag: "CancelledError" })
+    // Prove the cancelled replacement still waits for the held cleanup, then release it
+    const release = async (pending: PromiseLike<unknown>) => {
+        let settled = false
+        const mark = () => {
+            settled = true
+        }
+        void pending.then(mark, mark)
+        await vi.waitFor(() => expect(aborted).toBe(true))
+        // One host turn drains the promise jobs that would settle a replacement not waiting for its cleanup
+        await turn()
+        expect(settled).toBe(false)
+        cleanup.resolve()
     }
-    expect(active).toBe(0)
+    const api = await setup(mode)
+    try {
+        const controller = new AbortController()
+        if (api.native) {
+            const pending = Effect.runPromiseExit(api.native.members.setRoles(target, ["50"]), {
+                signal: controller.signal,
+            })
+            await vi.waitFor(() => expect(active).toBe(1))
+            controller.abort()
+            await release(pending)
+            const result = await pending
+            expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true)
+        } else {
+            const pending = api
+                .defaultApi!.members.setRoles(target, ["50"], { signal: controller.signal })
+                .then((result) => (result.isErr() ? result.error : result.value))
+            await vi.waitFor(() => expect(active).toBe(1))
+            controller.abort()
+            await release(pending)
+            expect(await pending).toMatchObject({ _tag: "CancelledError" })
+        }
+        expect(active).toBe(0)
+    } finally {
+        // Release the held cleanup so a failed assertion does not stall client shutdown
+        cleanup.resolve()
+    }
 })

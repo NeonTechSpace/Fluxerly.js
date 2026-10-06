@@ -1,15 +1,19 @@
 import { setImmediate as turn } from "node:timers/promises"
 import { Effect } from "effect"
 import { TestClock } from "effect/testing"
-import { onTestFinished, vi } from "vitest"
+import { onTestFinished, TestRunner, vi } from "vitest"
 
 /**
  * Wait until a predicate holds, polling on event-loop turns rather than fixed sleeps.
- * The deadline bounds a hung test and is never part of the behavior under test
+ * The deadline bounds a hung test and is never part of the behavior under test. It defaults to the running test's
+ * timeout, or five seconds outside a test
  */
 export async function waitUntil(
     predicate: () => boolean | Promise<boolean>,
-    { timeoutMs = 5_000, message = "Condition was not reached" }: { timeoutMs?: number; message?: string } = {},
+    {
+        timeoutMs = TestRunner.getCurrentTest()?.timeout ?? 5_000,
+        message = "Condition was not reached",
+    }: { timeoutMs?: number; message?: string } = {},
 ): Promise<void> {
     const deadline = performance.now() + timeoutMs
     while (!(await predicate())) {

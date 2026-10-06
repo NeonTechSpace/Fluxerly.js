@@ -4,6 +4,7 @@
 import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
+import { Clock, Duration, Effect } from "effect"
 import WebSocket from "ws"
 import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
 import { createReporter } from "./support/reporting.js"
@@ -363,10 +364,59 @@ async function verifyQuality(client, token, run, fail) {
     report(stage, { passed: true, remoteMutations: false })
 }
 
+/**
+ * Control the SDK's default Effect Clock, which clients created without their own Clock read for deadlines and waits.
+ * Time stands still until advance moves it, so a window the check injects ends only when the check says so.
+ * Restoring waits until real time has caught up, so SDK time never runs backwards
+ */
+function controlledClock() {
+    const clock = Effect.runSync(Clock.Clock)
+    const start = clock.monotonicTimeNanosUnsafe()
+    let offsetMs = 0
+    let restored = false
+    const pending = new Set()
+    const now = () => start + BigInt(offsetMs) * 1_000_000n
+    clock.monotonicTimeNanosUnsafe = now
+    clock.sleep = (duration) =>
+        Effect.callback((resume) => {
+            const item = { at: offsetMs + Duration.toMillis(duration), wake: () => resume(Effect.void) }
+            if (item.at <= offsetMs) return resume(Effect.void)
+            pending.add(item)
+            return Effect.sync(() => pending.delete(item))
+        })
+    return {
+        advance(milliseconds) {
+            offsetMs += milliseconds
+            for (const item of [...pending])
+                if (item.at <= offsetMs) {
+                    pending.delete(item)
+                    item.wake()
+                }
+        },
+        async restore() {
+            if (restored) return
+            restored = true
+            while (process.hrtime.bigint() < now())
+                await sleep(Math.ceil(Number(now() - process.hrtime.bigint()) / 1e6))
+            delete clock.monotonicTimeNanosUnsafe
+            delete clock.sleep
+            // Sleeps started on the controlled clock end now, so their owners schedule again on real time
+            for (const item of pending) item.wake()
+            pending.clear()
+        },
+    }
+}
+
+/** Wait until a condition holds, observing it on host turns. The harness timeout bounds a hung check */
+async function observed(condition) {
+    while (!condition()) await sleep(5)
+}
+
 async function verifyRateLimits(client, guildId, userId, run, fail) {
     stage = "rate_limits_discovery"
     await run(client.instance.resolve())
     const originalFetch = globalThis.fetch
+    const retryAfterMs = 1_000
     let injected = 0
     let remoteReads = 0
     globalThis.fetch = async (input, init) => {
@@ -380,22 +430,34 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
             // A controlled rejection avoids deliberately exhausting the hosted bot's global limit
             return new Response("fixture non-JSON rejection", {
                 status: 429,
-                headers: { "retry-after": "1", "x-ratelimit-global": "true" },
+                headers: { "retry-after": String(retryAfterMs / 1_000), "x-ratelimit-global": "true" },
             })
         }
         remoteReads++
         return originalFetch(input, init)
     }
+    // The injected window runs on the controlled clock, so a slow host cannot let it lapse before the queued reads
+    const clock = controlledClock()
     try {
         stage = "rate_limits_injected_header_rejection"
         const rejected = await fail(client.users.fetchSelf({ timeoutMs: 500 }))
         assert.equal(rejected.status, 429)
         assert.equal(rejected.reason, "rateLimit")
-        const queued = await fail(client.guilds.fetch(guildId, { timeoutMs: 100 }))
+        // Each read waits in the queue behind the learned global pause until its own deadline passes
+        const holds = async (operation, timeoutMs) => {
+            const failure = fail(operation)
+            await observed(() => client.diagnostics().rest.queuedRequests === 1)
+            clock.advance(timeoutMs)
+            return failure
+        }
+        const queued = await holds(client.guilds.fetch(guildId, { timeoutMs: 100 }), 100)
         assert.equal(queued.reason, "timeout")
         assert.equal(queued.outcome, "notDispatched")
         // Raw requests share the client's admission, so the learned global wait also holds them back
-        const rawQueued = await fail(client.rest.request({ method: "GET", path: `/guilds/${guildId}`, timeoutMs: 100 }))
+        const rawQueued = await holds(
+            client.rest.request({ method: "GET", path: `/guilds/${guildId}`, timeoutMs: 100 }),
+            100,
+        )
         assert.equal(rawQueued._tag, "RestRequestError")
         assert.ok(rawQueued.reason === "timeout" || rawQueued.reason === "rateLimit")
         assert.equal(rawQueued.outcome, "notDispatched")
@@ -404,7 +466,9 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
         report(stage, { passed: true, injectedRejections: injected, remoteRequests: remoteReads })
 
         stage = "rate_limits_live_read_recovery"
-        await sleep(1100)
+        // The rest of the injected window passes, which ends the global pause
+        clock.advance(retryAfterMs - 200)
+        await clock.restore()
         assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
         assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
         const raw = await run(client.rest.request({ method: "GET", path: "/users/@me", timeoutMs: 10_000 }))
@@ -416,6 +480,7 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
         report(stage, { passed: true, remoteReads, remoteMutations: false })
     } finally {
         globalThis.fetch = originalFetch
+        await clock.restore()
     }
     await verifyBucketLearning(client, guildId, userId, run, fail)
 }

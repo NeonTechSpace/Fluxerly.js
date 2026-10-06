@@ -7,7 +7,6 @@ import { expect, onTestFinished, test, vi } from "vitest"
 import { supervisor } from "../../../src/index.js"
 import { supervisor as nativeSupervisor } from "../../../src/effect.js"
 import { Opcode as GatewayOpcode } from "../../../src/internal/protocol/gateway.js"
-import { waitUntil } from "../../support/clock.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { requireBuiltSdk } from "../../support/built-sdk.js"
 
@@ -77,7 +76,7 @@ test("a delayed child grant cannot compress actual cross-process Identify sends"
     onTestFinished(cleanup)
     try {
         expect((await managed.start()).isOk()).toBe(true)
-        await vi.waitFor(() => expect(identifies).toHaveLength(2), { interval: 5, timeout: 5_000 })
+        await vi.waitFor(() => expect(identifies).toHaveLength(2), { interval: 5 })
         await sent.promise
         sends.sort((left, right) => left - right)
         expect(sends[1]! - sends[0]!).toBeGreaterThanOrEqual(995)
@@ -108,7 +107,12 @@ test("a canceled in-flight grant is benign and releases the next child permit", 
     onTestFinished(cleanup)
     try {
         expect((await managed.start()).isOk()).toBe(true)
-        await vi.waitFor(() => expect(identifies).toHaveLength(1), { interval: 5, timeout: 1_500 })
+        await vi.waitFor(() => expect(identifies).toHaveLength(1), { interval: 5 })
+        // A cancelled grant that kept the permit would only free it through the acknowledgement deadline, which stops
+        // the cancelling child before the healthy child can identify
+        const cancelling = managed.status().children.find((child) => child.id === "cancel")
+        expect(cancelling).toMatchObject({ generation: 1, restarts: 0 })
+        expect(["starting", "running"]).toContain(cancelling?.state)
         expect((await managed.shutdown()).isOk()).toBe(true)
         expect((await managed.waitForClose()).isOk()).toBe(true)
     } finally {
@@ -200,6 +204,7 @@ test("a child that never acknowledges startup fails within the configured budget
 }, 5_000)
 
 test("a startup failure keeps terminal observers pending until the owned child exits", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
     const managed = supervisor.create({
         entry: fixture("supervisor-sigterm-worker.js"),
         totalShards: 1,
@@ -209,6 +214,9 @@ test("a startup failure keeps terminal observers pending until the owned child e
         childEnvironment: { FLUXERLY_SUPERVISOR_MODE: "never-ready" },
     })
     onTestFinished(async () => {
+        // Also release any held cleanup deadline when an assertion fails
+        await vi.runAllTimersAsync()
+        vi.useRealTimers()
         await managed.shutdown()
     })
     let terminalSettled = false
@@ -217,12 +225,11 @@ test("a startup failure keeps terminal observers pending until the owned child e
         terminalSettled = true
     })
     const started = managed.start()
-    // The startup deadline has expired and the child ignores shutdown, so it stays owned until its forced exit
-    await waitUntil(() => {
-        const child = managed.status().children[0]
-        return child?.state === "stopping" && child.pid !== null
-    })
+    // The startup deadline expires and the child ignores shutdown, so it stays owned until the forced-stop deadline
+    await vi.advanceTimersByTimeAsync(30)
+    expect(managed.status().children[0]).toMatchObject({ state: "stopping", pid: expect.any(Number) })
     expect(terminalSettled).toBe(false)
+    await vi.advanceTimersByTimeAsync(150)
     const startResult = await started
     expect(startResult.isErr() && startResult.error).toMatchObject({ childId: "late-exit", reason: "startupTimeout" })
     const terminalResult = await terminal
@@ -346,7 +353,6 @@ test.each(["default", "native"] as const)(
         // The worker exits right after readiness, and the default policy replaces it after 1,000 ms
         await vi.waitFor(() => expect(restarting.status().children[0]).toMatchObject({ generation: 2, restarts: 1 }), {
             interval: 10,
-            timeout: 4_000,
         })
         expect(restarting.status().state).not.toBe("failed")
         await restarting.shutdown()

@@ -10,9 +10,12 @@ async function searchIndexUrl(request: APIRequestContext, path: string) {
 const islandTree = async (page: Page) =>
     JSON.stringify(JSON.parse((await page.locator('astro-island[component-export="Docs"]').getAttribute("props"))!).tree)
 // Astro drops the ssr marker before React hydrates, and the shortcut listener is installed by an effect after it.
-// The Ctrl hint renders only once those effects have run
-async function openSearch(page: Page) {
+// The Ctrl hint renders only once those effects have run, so server-rendered controls then have their client actions
+async function committed(page: Page) {
     await expect(page.getByRole("button", { name: "Search Ctrl K", exact: true })).toBeVisible()
+}
+async function openSearch(page: Page) {
+    await committed(page)
     await page.keyboard.press("Control+k")
 }
 
@@ -31,6 +34,7 @@ test("Release channels preserve Stable history and select rolling prerelease pag
     expect(exactTree).not.toContain("/docs/1000.0.0/api/signature")
     expect(exactTree).not.toContain("/docs/latest/")
     expect(exactTree).not.toContain("/docs/1000.0.1/")
+    await committed(page)
     await page.getByRole("button", { name: "Stable", exact: true }).click()
     await page
         .getByRole("dialog")
@@ -39,6 +43,7 @@ test("Release channels preserve Stable history and select rolling prerelease pag
     await expect(page).toHaveURL(/\/docs\/1000\.0\.1\/api\/signature\/?$/)
     await expect(page.locator(".docs-content")).toContainText("sendOnce(): Promise<boolean>")
     await expect(page.locator(".docs-content")).toContainText("Lateststablemarker")
+    await committed(page)
     await page.getByRole("button", { name: "Stable", exact: true }).click()
     await page
         .getByRole("dialog")
@@ -48,7 +53,7 @@ test("Release channels preserve Stable history and select rolling prerelease pag
     await expect(page.locator(".docs-content")).toContainText("sendOnce(): Promise<string>")
     await expect(page.locator(".version-label")).toHaveText("SDK 1000.1.0-rc.1")
     await page.goto("/docs/1000.0.0/api/removed/")
-    await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+    await committed(page)
     await page.getByRole("button", { name: "Stable", exact: true }).click()
     await page
         .getByRole("dialog")
@@ -93,6 +98,7 @@ test("Latest redirects to the newest stable release while navigation and search 
     for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-canary.0", "1000.2.0-canary.1", "rc", "canary"])
         expect(tree).not.toContain(`/docs/${version}/`)
 
+    await committed(page)
     await page.getByRole("button", { name: "Stable", exact: true }).click()
     await expect(page.getByRole("dialog").getByRole("link", { name: "Stable", exact: true }))
         .toHaveAttribute("href", "/docs/1000.0.1/api/signature")
@@ -147,7 +153,7 @@ test("Version search never returns another release or unpublished index", async 
 test("Only channel labels appear and Canary opens the newest published snapshot", async ({ page }) => {
     for (const path of ["/docs/canary/api/signature/", "/docs/1000.0.0/quick-start/"]) {
         await page.goto(path)
-        await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+        await committed(page)
         await page.getByRole("button", { name: path.includes("signature") ? "Canary" : "Stable", exact: true }).click()
         await expect(page.getByRole("dialog").getByRole("link")).toHaveText(["Stable", "RC", "Canary"])
         await page.getByRole("dialog").getByRole("link", { name: "Canary", exact: true }).click()
@@ -164,7 +170,7 @@ test("Command preferences persist across exact releases without retaining the pr
     await expect(block.getByLabel("Package manager", { exact: true })).toBeEnabled()
     await block.getByLabel("Package manager", { exact: true }).selectOption("pnpm")
     await expect(block.locator("[data-command-code]")).toHaveText("pnpm add @neontechspace/fluxerly@1000.0.0")
-    await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+    await committed(page)
     await page.getByRole("button", { name: "Stable", exact: true }).click()
     await page.getByRole("dialog").getByRole("link", { name: "RC", exact: true }).click()
     await expect(page).toHaveURL(/\/docs\/rc\/quick-start\/?$/)

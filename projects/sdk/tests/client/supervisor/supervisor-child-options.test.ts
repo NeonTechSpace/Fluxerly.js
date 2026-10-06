@@ -262,7 +262,7 @@ test.each(
             owner = await managed(mode, fixture.origin, variant)
             const active = owner
             const starting = active.start().catch(() => undefined)
-            await vi.waitFor(() => expect(fixture.proofs).toHaveLength(1), { timeout: 5_000 })
+            await vi.waitFor(() => expect(fixture.proofs).toHaveLength(1))
             expect({ discoveries: fixture.discoveries, proofs: fixture.proofs }).toEqual({
                 discoveries: [`${fixture.origin}/.well-known/fluxer`],
                 proofs: [

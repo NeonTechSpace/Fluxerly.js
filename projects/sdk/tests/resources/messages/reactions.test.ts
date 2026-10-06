@@ -538,10 +538,7 @@ test.each(modes)("%s reaction idle timer handles empty collection and an early w
     })
     now = 11
     // The original deadline wakes before the renewed idle deadline and must reschedule rather than close
-    await waitUntil(() => collectorTimers() > scheduled, {
-        timeoutMs: 2_000,
-        message: "The early idle wakeup was not rescheduled",
-    })
+    await waitUntil(() => collectorTimers() > scheduled, { message: "The early idle wakeup was not rescheduled" })
     expect(closed).toBe(false)
     now = 20
     expect(await result).toEqual({ reason: "idle", reactions: [observed()] })

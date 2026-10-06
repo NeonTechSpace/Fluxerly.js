@@ -98,15 +98,19 @@ test("interrupted native deletion waits for fetch cleanup and evicts selected sn
         dispatched = resolve
     })
     let cleaned = false
+    // The aborted deletion finishes its cleanup only when the test releases it
+    const aborted = Promise.withResolvers<void>()
+    const cleanup = Promise.withResolvers<void>()
     stubFetchWithHostedDiscovery((_url: string, init: RequestInit) => {
         if (init.method === "GET") return Promise.resolve(Response.json(wire("10")))
         return new Promise((_resolve, reject) => {
-            init.signal!.addEventListener("abort", () =>
-                setTimeout(() => {
+            init.signal!.addEventListener("abort", () => {
+                aborted.resolve()
+                void cleanup.promise.then(() => {
                     cleaned = true
                     reject(new Error("aborted"))
-                }, 10),
-            )
+                })
+            })
             dispatched()
         })
     })
@@ -117,10 +121,19 @@ test("interrupted native deletion waits for fetch cleanup and evicts selected sn
                 yield* client.messages.fetch({ channelId: "20", id: "10" })
                 const fiber = yield* client.messages.deleteMany("20", ["10"]).pipe(Effect.forkChild)
                 yield* Effect.promise(() => started)
-                yield* Fiber.interrupt(fiber)
+                const interrupting = yield* Fiber.interrupt(fiber).pipe(Effect.forkChild)
+                yield* Effect.promise(() => aborted.promise)
+                // One scheduler turn lets the interruption finish all work except the held cleanup
+                yield* Effect.yieldNow
+                expect(interrupting.pollUnsafe()).toBeUndefined()
+                cleanup.resolve()
+                yield* Fiber.join(interrupting)
                 expect(cleaned).toBe(true)
                 expect(yield* client.messages.get({ channelId: "20", id: "10" })).toBeUndefined()
-            }),
+            }).pipe(
+                // Release the held cleanup so a failed assertion does not stall client shutdown
+                Effect.ensuring(Effect.sync(() => cleanup.resolve())),
+            ),
         ),
     )
 })

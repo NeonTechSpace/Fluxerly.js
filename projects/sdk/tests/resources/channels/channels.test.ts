@@ -1,3 +1,4 @@
+import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
@@ -842,37 +843,66 @@ test.each(modes)(
 
 test.each(modes)("%s awaits active channel request cleanup on cancellation and shutdown", async (mode) => {
     let active = 0
+    // Each aborted request finishes its cleanup only when the test releases it
+    const cleanups: (() => void)[] = []
+    let releasing = false
     rest(
         (_url, init) =>
             new Promise((_resolve, reject) => {
                 active++
                 init.signal!.addEventListener(
                     "abort",
-                    () =>
-                        setTimeout(() => {
+                    () => {
+                        const finish = () => {
                             active--
                             reject(Error("fixture cancellation"))
-                        }, 20),
+                        }
+                        if (releasing) finish()
+                        else cleanups.push(finish)
+                    },
                     { once: true },
                 )
             }),
     )
     const api = await setup(mode)
-    const controller = new AbortController()
-    const pending = api.native
-        ? Effect.runPromiseExit(api.native.channels.fetch("10"), { signal: controller.signal })
-        : api.fetch("10", { signal: controller.signal }).catch((error) => error)
-    await vi.waitFor(() => expect(active).toBe(1))
-    controller.abort()
-    const failure = await pending
-    if (api.native) expect(Exit.isFailure(failure) && Cause.hasInterruptsOnly(failure.cause)).toBe(true)
-    else expect(failure).toMatchObject({ _tag: "CancelledError" })
-    expect(active).toBe(0)
-    const closing = api.fetch().catch((error) => error)
-    await vi.waitFor(() => expect(active).toBe(1))
-    await api.close()
-    expect(await closing).toMatchObject({ _tag: "ClientClosedError" })
-    expect(active).toBe(0)
+    try {
+        const controller = new AbortController()
+        const pending = api.native
+            ? Effect.runPromiseExit(api.native.channels.fetch("10"), { signal: controller.signal })
+            : api.fetch("10", { signal: controller.signal }).catch((error) => error)
+        let cancelled = false
+        void pending.finally(() => {
+            cancelled = true
+        })
+        await vi.waitFor(() => expect(active).toBe(1))
+        controller.abort()
+        await vi.waitFor(() => expect(cleanups).toHaveLength(1))
+        // One host turn drains the promise jobs that would settle an operation not waiting for its cleanup
+        await turn()
+        expect(cancelled).toBe(false)
+        cleanups.shift()!()
+        const failure = await pending
+        if (api.native) expect(Exit.isFailure(failure) && Cause.hasInterruptsOnly(failure.cause)).toBe(true)
+        else expect(failure).toMatchObject({ _tag: "CancelledError" })
+        expect(active).toBe(0)
+        const closing = api.fetch().catch((error) => error)
+        await vi.waitFor(() => expect(active).toBe(1))
+        let closed = false
+        const close = api.close().finally(() => {
+            closed = true
+        })
+        await vi.waitFor(() => expect(cleanups).toHaveLength(1))
+        await turn()
+        expect(closed).toBe(false)
+        cleanups.shift()!()
+        await close
+        expect(await closing).toMatchObject({ _tag: "ClientClosedError" })
+        expect(active).toBe(0)
+    } finally {
+        // Release held and later cleanups so a failed assertion does not stall client shutdown
+        releasing = true
+        for (const finish of cleanups.splice(0)) finish()
+    }
 })
 
 /** Run a native Effect with an optional AbortSignal, throwing its typed failure */

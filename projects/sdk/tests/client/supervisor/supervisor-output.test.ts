@@ -175,19 +175,23 @@ test("prefix output pauses a child stream while the parent stream applies backpr
         return false
     })
     const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true)
+    // A paused forwarder waits for the parent stream with one drain listener. A forwarder that resumed without a drain
+    // would add another at each later pause
+    const listeners = process.stdout.listenerCount("drain")
+    const paused = () => expect(process.stdout.listenerCount("drain")).toBe(listeners + 1)
+    const long = () => stdout.some((line) => line.startsWith("[shard 0] long:"))
     try {
         const running = runFormatWorker("pretty")
-        await vi.waitFor(() => expect(stdout.length).toBeGreaterThan(0))
+        await vi.waitFor(paused)
         // The first chunk can hold several lines, and they are written together before the stream pauses
         const before = stdout.length
-        // Without a drain event the forwarder writes nothing further, even though the child has more lines
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        expect(stdout.length).toBe(before)
-        expect(stdout.some((line) => line.startsWith("[shard 0] long:"))).toBe(false)
-        while (!stdout.some((line) => line.startsWith("[shard 0] long:"))) {
+        expect(before).toBeGreaterThan(0)
+        expect(long()).toBe(false)
+        // Each drain resumes the child stream until the next refused write pauses it again
+        do {
             process.stdout.emit("drain")
-            await new Promise((resolve) => setTimeout(resolve, 5))
-        }
+            await vi.waitFor(paused)
+        } while (!long())
         expect(stdout.length).toBeGreaterThan(before)
         await running
     } finally {

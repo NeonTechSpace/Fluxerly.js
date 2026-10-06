@@ -128,7 +128,7 @@ test.each(modes)(
                 const started = await created.start()
                 expect(started.isOk()).toBe(true)
                 if (started.isErr()) throw started.error
-                await vi.waitFor(() => expect(fixture.proofs).toHaveLength(1), { timeout: 5_000 })
+                await vi.waitFor(() => expect(fixture.proofs).toHaveLength(1))
                 const terminal = await created.waitForClose()
                 expect(terminal.isErr()).toBe(true)
                 if (terminal.isOk()) throw new Error("Expected default supervisor child failure")
@@ -142,7 +142,7 @@ test.each(modes)(
                 const owner = await Effect.runPromise(nativeSupervisor.create(options(mode, fixture.origin)))
                 shutdown = () => Effect.runPromise(owner.shutdown())
                 await Effect.runPromise(owner.start())
-                await vi.waitFor(() => expect(fixture.proofs).toHaveLength(1), { timeout: 5_000 })
+                await vi.waitFor(() => expect(fixture.proofs).toHaveLength(1))
                 const terminal = await Effect.runPromiseExit(owner.waitForClose())
                 expect(Exit.isFailure(terminal)).toBe(true)
                 if (Exit.isSuccess(terminal)) throw new Error("Expected native supervisor child failure")

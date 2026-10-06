@@ -1,5 +1,5 @@
 import { Effect, Exit, Scope } from "effect"
-import { expect, onTestFinished } from "vitest"
+import { expect, onTestFinished, vi } from "vitest"
 import {
     commands,
     ConfigurationError,
@@ -181,11 +181,19 @@ interface Deliverer {
 }
 
 /**
- * Deliver a command to a separate default router on the same client and wait until it executes.
- * Earlier deliveries were emitted first and their processing is no longer than this one, so an effect they must not
- * cause would already be visible. This replaces fixed negative waits with an ordering signal
+ * Wait until the client runs no handler beyond the ones a test deliberately holds. The barrier command started after
+ * every earlier delivery, so its end leaves only the tested subscriptions' own invocations to finish
  */
-export async function defaultBarrier(remote: Deliverer, client: Client) {
+async function handlersSettled(client: Client | NativeClient, held: number) {
+    await vi.waitFor(() => expect(client.diagnostics().events.activeHandlers).toBe(held))
+}
+
+/**
+ * Deliver a command to a separate default router on the same client, wait until it executes, then wait until every
+ * other running handler except the held ones has finished. An effect earlier deliveries must not cause would then
+ * already be visible. This replaces fixed negative waits with completion signals
+ */
+export async function defaultBarrier(remote: Deliverer, client: Client, held = 0) {
     let passed = false
     const subscription = commands
         .create({ prefix: "#" })
@@ -199,10 +207,11 @@ export async function defaultBarrier(remote: Deliverer, client: Client) {
     remote.deliver("#barrier")
     await waitUntil(() => passed, { message: "The barrier command did not execute" })
     subscription.close()
+    await handlersSettled(client, held)
 }
 
 /** Native counterpart of defaultBarrier, attached in its own scope so it also works after a registration closed */
-export async function nativeBarrier(remote: Deliverer, client: NativeClient) {
+export async function nativeBarrier(remote: Deliverer, client: NativeClient, held = 0) {
     let passed = false
     const scope = Scope.makeUnsafe()
     onTestFinished(async () => {
@@ -218,11 +227,12 @@ export async function nativeBarrier(remote: Deliverer, client: NativeClient) {
     await Effect.runPromise(router.attach(client).pipe(Scope.provide(scope)))
     remote.deliver("#barrier")
     await waitUntil(() => passed, { message: "The barrier command did not execute" })
+    await handlersSettled(client, held)
 }
 
-/** Run the barrier matching a connected client's API style */
-export function barrier(remote: Deliverer, connected: Connected): Promise<void> {
+/** Run the barrier matching a connected client's API style, leaving `held` deliberately blocked handlers running */
+export function barrier(remote: Deliverer, connected: Connected, held = 0): Promise<void> {
     return connected.mode === "default"
-        ? defaultBarrier(remote, connected.client)
-        : nativeBarrier(remote, connected.client)
+        ? defaultBarrier(remote, connected.client, held)
+        : nativeBarrier(remote, connected.client, held)
 }

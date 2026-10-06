@@ -1,3 +1,4 @@
+import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 import type { DefaultUserOperationOptions, UserProfileQuery } from "../../../src/index.js"
@@ -250,35 +251,60 @@ test.each(modes)("%s retries profile reads, redacts failure bodies, and awaits c
 
     let started = false
     let cleaned = false
+    // The aborted read finishes its cleanup only when the test releases it
+    const cleanup = Promise.withResolvers<void>()
+    let aborted = false
     rest(
         (_url, init) =>
             new Promise<Response>((_resolve, reject) => {
                 started = true
                 init.signal?.addEventListener(
                     "abort",
-                    () =>
-                        setTimeout(() => {
+                    () => {
+                        aborted = true
+                        void cleanup.promise.then(() => {
                             cleaned = true
                             reject(Error("profile cancellation"))
-                        }, 15),
+                        })
+                    },
                     { once: true },
                 )
             }),
     )
-    const controller = new AbortController()
-    if (mode === "default") {
-        const pending = api.fetchProfile("30", undefined, { signal: controller.signal })
-        await vi.waitFor(() => expect(started).toBe(true))
-        controller.abort()
-        await expect(pending).rejects.toMatchObject({ _tag: "CancelledError" })
-    } else {
-        const pending = Effect.runPromiseExit((api.client as NativeClient).users.fetchProfile("30"), {
-            signal: controller.signal,
-        })
-        await vi.waitFor(() => expect(started).toBe(true))
-        controller.abort()
-        const exit = await pending
-        expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    // Prove the cancelled read still waits for the held cleanup, then release it
+    const release = async (pending: Promise<unknown>) => {
+        let settled = false
+        const mark = () => {
+            settled = true
+        }
+        void pending.then(mark, mark)
+        await vi.waitFor(() => expect(aborted).toBe(true))
+        // One host turn drains the promise jobs that would settle a read not waiting for its cleanup
+        await turn()
+        expect(settled).toBe(false)
+        cleanup.resolve()
     }
-    expect(cleaned).toBe(true)
+    try {
+        const controller = new AbortController()
+        if (mode === "default") {
+            const pending = api.fetchProfile("30", undefined, { signal: controller.signal })
+            await vi.waitFor(() => expect(started).toBe(true))
+            controller.abort()
+            await release(pending)
+            await expect(pending).rejects.toMatchObject({ _tag: "CancelledError" })
+        } else {
+            const pending = Effect.runPromiseExit((api.client as NativeClient).users.fetchProfile("30"), {
+                signal: controller.signal,
+            })
+            await vi.waitFor(() => expect(started).toBe(true))
+            controller.abort()
+            await release(pending)
+            const exit = await pending
+            expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+        }
+        expect(cleaned).toBe(true)
+    } finally {
+        // Release the held cleanup so a failed assertion does not stall client shutdown
+        cleanup.resolve()
+    }
 })

@@ -76,11 +76,11 @@ function recordIdentifySends(now = () => Number(process.hrtime.bigint()) / 1_000
 
 /** Wait for the given number of Identify sends, then move SDK time past the spacing that holds the next one */
 async function releaseNextIdentify(fixture: Fixture, clock: SdkClock, sent: number) {
-    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(sent), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(sent), { interval: 5 })
     await clock.waiting(1_000)
     expect(fixture.identifies).toHaveLength(sent)
     await clock.advance(1_000)
-    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(sent + 1), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(sent + 1), { interval: 5 })
 }
 
 function outcome<A>(exit: Exit.Exit<A, unknown>): Outcome<A> {
@@ -234,7 +234,7 @@ async function gatewayFixture(autoReady = true, sendHelloAutomatically = true) {
                     for (const socket of [...connections.map((connection) => connection.socket), ...wsTarget.sockets])
                         expect(socket.readyState).toBe(WebSocket.CLOSED)
                 },
-                { interval: 5, timeout: 4_000 },
+                { interval: 5 },
             )
         },
         async close() {
@@ -409,14 +409,14 @@ test.each(modes)("%s waits for both sharded READY frames and exposes immutable a
         return value
     })
 
-    await vi.waitFor(() => expect(fixture.connections).toHaveLength(2), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.connections).toHaveLength(2), { interval: 5 })
     // Socket creation races do not select a shard. Holding one Hello exercises pacing at actual Identify send time:
     // the held handshake finishes 900 ms of logical time after the first Identify and must still wait out the spacing
     fixture.hello(fixture.connections[1]!)
-    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
     clock.advance(900)
     fixture.hello(fixture.connections[0]!)
-    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 4_000 })
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5 })
     const identifies = [...fixture.identifies]
     expect(identifies.map(shardTuple).sort((left, right) => left[0] - right[0])).toEqual([
         [0, 2],
@@ -449,7 +449,6 @@ test.each(modes)("%s waits for both sharded READY frames and exposes immutable a
 
     await vi.waitFor(() => expect(driver.client.shards.every((shard) => shard.gatewayLatencyMs !== null)).toBe(true), {
         interval: 5,
-        timeout: 2_000,
     })
     const readySnapshot = driver.client.shards
     const latencies = readySnapshot.map((shard) => shard.gatewayLatencyMs!)
@@ -469,7 +468,7 @@ test.each(modes)("%s resumes only a failed shard while its healthy sibling remai
     fixture.autoResume = false
     fixture.closeShard(0)
 
-    await vi.waitFor(() => expect(driver.client.state).toBe("Recovering"), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(driver.client.state).toBe("Recovering"), { interval: 5 })
     expect(driver.client.gatewayLatencyMs).toBe(null)
     expect(driver.client.shards).toEqual([
         {
@@ -484,7 +483,6 @@ test.each(modes)("%s resumes only a failed shard while its healthy sibling remai
     const pending = fetchCounts(driver, ["4194304"])
     await vi.waitFor(() => expect(fixture.commands.filter((command) => command.op === 15)).toHaveLength(1), {
         interval: 5,
-        timeout: 2_000,
     })
     const count = fixture.commands.find((command) => command.op === 15)!
     expect(count.connection.shardId).toBe(1)
@@ -494,11 +492,11 @@ test.each(modes)("%s resumes only a failed shard while its healthy sibling remai
     await clock.waiting(500)
     expect(fixture.resumes).toEqual([])
     await clock.advance(500)
-    await vi.waitFor(() => expect(fixture.resumes).toHaveLength(1), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.resumes).toHaveLength(1), { interval: 5 })
     expect(fixture.identifies).toHaveLength(2)
     expect(fixture.resumes[0]!.connection.shardId).toBe(0)
     fixture.resumed(fixture.resumes[0]!)
-    await vi.waitFor(() => expect(driver.client.state).toBe("Connected"), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(driver.client.state).toBe("Connected"), { interval: 5 })
     expect(driver.client.shards).toEqual([
         expect.objectContaining({ shardId: 0, state: "Connected", recovery: null }),
         expect.objectContaining({ shardId: 1, state: "Connected", recovery: null }),
@@ -516,7 +514,7 @@ test.each(modes)("%s keeps a guild-scoped collector alive across another shard's
     fixture.autoResume = false
     fixture.closeShard(0)
 
-    await vi.waitFor(() => expect(driver.client.state).toBe("Recovering"), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(driver.client.state).toBe("Recovering"), { interval: 5 })
     expect(await legacy.wait()).toMatchObject({
         kind: "failure",
         error: { _tag: "CollectorError", reason: "connectionLost" },
@@ -548,7 +546,6 @@ test.each(modes)("%s distinguishes an unassigned route from a provider count omi
     const pending = fetchCounts(driver, ["1"])
     await vi.waitFor(() => expect(fixture.commands.filter((command) => command.op === 15)).toHaveLength(1), {
         interval: 5,
-        timeout: 2_000,
     })
     fixture.countReply(fixture.commands.find((command) => command.op === 15)!)
     await expect(pending).resolves.toEqual({ kind: "success", value: { counts: [], omittedGuildIds: ["1"] } })
@@ -633,7 +630,7 @@ test.each(modes)(
         fixture.ready(ready)
         await vi.waitFor(
             () => expect(driver.client.shards.find((shard) => shard.shardId === readyShardId)?.state).toBe("Connected"),
-            { interval: 5, timeout: 2_000 },
+            { interval: 5 },
         )
         fixture.dispatch(ready.connection, "MESSAGE_CREATE", {
             id: cachedTarget.id,
@@ -644,7 +641,6 @@ test.each(modes)(
         })
         await vi.waitFor(() => cachedMessage(driver).then((message) => expect(message?.content).toBe("gateway seed")), {
             interval: 5,
-            timeout: 2_000,
         })
         const collector = await openCollector(driver, "20", guildId)
 
@@ -663,7 +659,7 @@ test.each(modes)(
                 )
         })
         const stale = fetchMessage(driver)
-        await vi.waitFor(() => expect(fixture.restRequests).toHaveLength(1), { interval: 5, timeout: 2_000 })
+        await vi.waitFor(() => expect(fixture.restRequests).toHaveLength(1), { interval: 5 })
 
         const failing = fixture.identifies[1]!
         const [failingShardId, totalShards] = shardTuple(failing)
@@ -701,10 +697,10 @@ test.each(modes)("%s preserves the aggregate startup deadline when a ready shard
         settled = true
     })
     // The second shard identifies after the one-second Identify spacing
-    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
     await clock.waiting(1_000)
     await clock.advance(1_000)
-    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5 })
     const ready = fixture.identifies[0]!
     fixture.ready(ready)
     await vi.waitFor(
@@ -712,7 +708,7 @@ test.each(modes)("%s preserves the aggregate startup deadline when a ready shard
             expect(driver.client.shards.find((shard) => shard.shardId === shardTuple(ready)[0])?.state).toBe(
                 "Connected",
             ),
-        { interval: 5, timeout: 2_000 },
+        { interval: 5 },
     )
     fixture.autoResume = false
     fixture.closeShard(shardTuple(ready)[0])
@@ -722,10 +718,10 @@ test.each(modes)("%s preserves the aggregate startup deadline when a ready shard
             expect(driver.client.shards.find((shard) => shard.shardId === shardTuple(ready)[0])?.state).toBe(
                 "Recovering",
             ),
-        { interval: 5, timeout: 2_000 },
+        { interval: 5 },
     )
     expect(driver.client.state).toBe("Connecting")
-    await vi.waitFor(() => expect(fixture.resumes).toHaveLength(1), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.resumes).toHaveLength(1), { interval: 5 })
     // Both shards have reached READY individually, so only the aggregate startup guard can expire
     const sibling = fixture.identifies[1]!
     fixture.ready(sibling)
@@ -734,7 +730,7 @@ test.each(modes)("%s preserves the aggregate startup deadline when a ready shard
             expect(driver.client.shards.find((shard) => shard.shardId === shardTuple(sibling)[0])?.state).toBe(
                 "Connected",
             ),
-        { interval: 5, timeout: 2_000 },
+        { interval: 5 },
     )
     expect(driver.client.state).toBe("Connecting")
     // The deadline counts from the start of connect, plus one second of Identify spacing for the second shard
@@ -754,7 +750,7 @@ test.each(modes)("%s cancels sharded startup before a scheduled sibling Identify
     const { clock, fixture, driver } = await setupWithSdkClock(mode, { totalShards: 2 }, false)
     const identifySentAt = recordIdentifySends(clock.now)
     const startup = startConnect(driver)
-    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
     await clock.waiting(1_000)
     await startup.cancel()
     const result = await startup.done
@@ -808,16 +804,16 @@ test("an attached parent permit gates each fresh Identify and bypasses Resume", 
         await fixture.close()
     })
     const connecting = Promise.all([Effect.runPromise(first.connect()), Effect.runPromise(second.connect())])
-    await vi.waitFor(() => expect(permits).toHaveLength(2), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(permits).toHaveLength(2), { interval: 5 })
     expect(fixture.identifies).toEqual([])
     permits[0]!.grant()
-    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
     expect(shardTuple(fixture.identifies[0]!)[0]).toBe(permits[0]!.shardId)
     permits[1]!.grant()
     await connecting
     expect(fixture.identifies.map((command) => shardTuple(command)[0])).toEqual(permits.map((permit) => permit.shardId))
     fixture.closeShard(0)
-    await vi.waitFor(() => expect(fixture.resumes).toHaveLength(1), { interval: 5, timeout: 2_000 })
+    await vi.waitFor(() => expect(fixture.resumes).toHaveLength(1), { interval: 5 })
     expect(permits).toHaveLength(2)
     expect(fixture.identifies).toHaveLength(2)
 })

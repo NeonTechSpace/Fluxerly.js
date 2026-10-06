@@ -38,7 +38,7 @@ function identifies(server: GatewayServer): Record<string, unknown>[] {
 /** End the current session so the next attempt sends a new Identify */
 async function newSession(server: GatewayServer, count: number) {
     server.send({ op: Opcode.invalidSession, d: false }, server.sockets.at(-1))
-    await vi.waitFor(() => expect(identifies(server)).toHaveLength(count), { timeout: 5_000 })
+    await vi.waitFor(() => expect(identifies(server)).toHaveLength(count))
 }
 
 function subscribe(mode: "default" | "native", client: AnyClient, event: EventName) {

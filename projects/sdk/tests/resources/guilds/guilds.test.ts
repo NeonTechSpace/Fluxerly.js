@@ -1,4 +1,5 @@
 import { typedResult } from "../../support/settle.js"
+import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
@@ -281,7 +282,7 @@ test.each(modes)("%s ban events invalidate member observations before delivery a
     await vi.waitFor(() => expect(seen).toHaveLength(1))
     expect(seen[0]).toEqual({ event: "guildBanAdd", value: target, cached: undefined })
     wsTarget.sockets[0]!.terminate()
-    await vi.waitFor(() => expect(wsTarget.sockets).toHaveLength(2), { timeout: 5_000 })
+    await vi.waitFor(() => expect(wsTarget.sockets).toHaveLength(2))
     await vi.waitFor(() => expect(api.state()).toBe("Connected"))
     await api.member()
     dispatch("GUILD_BAN_REMOVE", { guild_id: "20", user: { id: "30" } })
@@ -917,17 +918,14 @@ test.each(modes)(
             await vi.waitFor(() => expect(seen).toHaveLength(1))
 
             wsTarget.sockets[0]!.terminate()
-            await vi.waitFor(() => expect(seen).toHaveLength(2), { timeout: 5_000 })
-            await vi.waitFor(() => expect(api.state()).toBe("Connected"), { timeout: 5_000 })
+            await vi.waitFor(() => expect(seen).toHaveLength(2))
+            await vi.waitFor(() => expect(api.state()).toBe("Connected"))
 
             wsTarget.sockets.at(-1)!.terminate()
-            await vi.waitFor(
-                () => expect(dispatch.authenticationModes).toEqual(["identify", "resume", "resume", "identify"]),
-                {
-                    timeout: 5_000,
-                },
+            await vi.waitFor(() =>
+                expect(dispatch.authenticationModes).toEqual(["identify", "resume", "resume", "identify"]),
             )
-            await vi.waitFor(() => expect(api.state()).toBe("Connected"), { timeout: 5_000 })
+            await vi.waitFor(() => expect(api.state()).toBe("Connected"))
 
             dispatch("GUILD_CREATE", guildCreate("22", false))
             await vi.waitFor(() => expect(seen).toHaveLength(3))
@@ -1437,29 +1435,50 @@ test.each(modes)("%s cache eviction after cancellation waits for dispatched writ
     }
     expect(await api.getMember()).toBeDefined()
     let started = false,
-        cleaned = false
+        cleaned = false,
+        aborted = false
+    // The aborted write finishes its cleanup only when the test releases it
+    const cleanup = Promise.withResolvers<void>()
     rest(
         async (_url, init) =>
             new Promise<Response>((_resolve, reject) => {
                 started = true
                 init.signal!.addEventListener(
                     "abort",
-                    () =>
-                        setTimeout(() => {
+                    () => {
+                        aborted = true
+                        void cleanup.promise.then(() => {
                             cleaned = true
                             reject(new Error("fixture cancellation"))
-                        }, 30),
+                        })
+                    },
                     { once: true },
                 )
             }),
     )
-    const abort = new AbortController()
-    const writing = api.role(true, "50", { signal: abort.signal }).catch(() => undefined)
-    await vi.waitFor(() => expect(started).toBe(true))
-    abort.abort()
-    await writing
-    expect(cleaned).toBe(true)
-    expect(await api.getMember()).toBeUndefined()
+    try {
+        const abort = new AbortController()
+        let settled = false
+        const writing = api
+            .role(true, "50", { signal: abort.signal })
+            .catch(() => undefined)
+            .finally(() => {
+                settled = true
+            })
+        await vi.waitFor(() => expect(started).toBe(true))
+        abort.abort()
+        await vi.waitFor(() => expect(aborted).toBe(true))
+        // One host turn drains the promise jobs that would settle a write not waiting for its cleanup
+        await turn()
+        expect(settled).toBe(false)
+        cleanup.resolve()
+        await writing
+        expect(cleaned).toBe(true)
+        expect(await api.getMember()).toBeUndefined()
+    } finally {
+        // Release the held cleanup so a failed assertion does not stall client shutdown
+        cleanup.resolve()
+    }
 })
 
 test.each(modes)("%s rejects invalid resource settings without running policies", async (mode) => {
@@ -2054,7 +2073,7 @@ test.each(modes)("%s delivers member events across resume without synthesizing R
     await vi.waitFor(() => expect(seen).toHaveLength(3))
     expect(seen[2]).toEqual({ event: "guildMemberRemove", value: target })
     wsTarget.sockets[0]!.terminate()
-    await vi.waitFor(() => expect(wsTarget.sockets).toHaveLength(2), { timeout: 5_000 })
+    await vi.waitFor(() => expect(wsTarget.sockets).toHaveLength(2))
     await vi.waitFor(() => expect(api.state()).toBe("Connected"))
     dispatch("GUILD_MEMBER_UPDATE", { ...member(), guild_id: "20" })
     await vi.waitFor(() => expect(seen).toHaveLength(4))

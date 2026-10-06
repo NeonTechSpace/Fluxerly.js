@@ -770,7 +770,7 @@ test("a late REST response crossing a resumed connection gap cannot repopulate t
     const late = client.messages.fetch(target)
     await vi.waitFor(() => expect(server.requests).toHaveLength(2))
     server.closeCurrentSocket()
-    await vi.waitFor(() => expect(server.commands.some((command) => command.op === 6)).toBe(true), { timeout: 2_000 })
+    await vi.waitFor(() => expect(server.commands.some((command) => command.op === 6)).toBe(true))
     reply()
     expect(value(await late).content).toBe("late")
     await vi.waitFor(() => expect(client.state).toBe("Connected"))
@@ -806,7 +806,7 @@ test("a fetch queued before a gateway gap cannot populate after its delayed admi
     await waitUntil(() => client.diagnostics().rest.queuedRequests === 1 || server.requests.length > 4)
     expect(server.requests).toHaveLength(4)
     server.closeCurrentSocket()
-    await vi.waitFor(() => expect(server.commands.some((command) => command.op === 6)).toBe(true), { timeout: 2_000 })
+    await vi.waitFor(() => expect(server.commands.some((command) => command.op === 6)).toBe(true))
     // The fetch is still waiting for admission after the gap, because every slot is still held
     expect(server.requests).toHaveLength(4)
     for (const reply of held) reply()

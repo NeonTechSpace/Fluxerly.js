@@ -245,21 +245,18 @@ for (const mode of modes) {
         // slot is free rather than sleeping for a fixed time: a busy attempt fails at once and sends no request
         let replacement!: ReturnType<typeof f.iterate>
         let next!: Promise<IteratorResult<MemberChunk>>
-        await vi.waitFor(
-            async () => {
-                const candidate = f.iterate()
-                const attempt = candidate.next()
-                let failure: unknown
-                attempt.catch((error: unknown) => {
-                    failure = error ?? "failed"
-                })
-                await waitUntil(() => failure !== undefined || f.requestCount() === 2)
-                expect(failure).toBeUndefined()
-                replacement = candidate
-                next = attempt
-            },
-            { timeout: 5_000 },
-        )
+        await vi.waitFor(async () => {
+            const candidate = f.iterate()
+            const attempt = candidate.next()
+            let failure: unknown
+            attempt.catch((error: unknown) => {
+                failure = error ?? "failed"
+            })
+            await waitUntil(() => failure !== undefined || f.requestCount() === 2)
+            expect(failure).toBeUndefined()
+            replacement = candidate
+            next = attempt
+        })
         const fresh = await f.request(2)
         f.chunk(fresh.nonce, [member("31")], 0, 2)
         await next

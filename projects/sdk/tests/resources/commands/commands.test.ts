@@ -2056,8 +2056,9 @@ test.each(modes)(
             remote.deliver("!missing")
             await vi.waitFor(() => expect(failed).toHaveLength(3))
             await vi.waitFor(() => expect(entered).toBe(1))
-            // Every failure has happened, and the barrier lets their reports reach the queue while the first is held
-            await barrier(remote, connected)
+            // Every failure has happened, and the barrier lets their reports reach the queue while the first is held.
+            // Only the two slow commands keep running
+            await barrier(remote, connected, 2)
             expect(entered).toBe(1)
             expect(reports).toEqual([])
         } finally {

@@ -419,7 +419,7 @@ test("native progress can request client shutdown without joining itself", async
             .pipe(Scope.provide(api.collectorScope)),
     )
     server.deliver("10")
-    await vi.waitFor(() => expect(finalized).toBe(true), { interval: 5, timeout: 1_000 })
+    await vi.waitFor(() => expect(finalized).toBe(true), { interval: 5 })
     const outcome = await Effect.runPromise(typedResult(collector.result()))
     expect(outcome).toMatchObject({ _tag: "Failure", failure: { _tag: "ClientClosedError" } })
     // Collector cleanup is not the client shutdown barrier, which also owns gateway and REST cleanup

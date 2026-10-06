@@ -173,6 +173,8 @@ describe.each(modes)("%s command cooldowns", (mode) => {
                     (await Effect.runPromise(store.claim({ key, durationMs })))._tag,
             }
         }
+        // Wall time stays frozen, so every reservation stays active and only eviction frees a key
+        vi.spyOn(Date, "now").mockReturnValue(Date.now())
         const large = memoryStore()
         expect(large.store.maxEntries).toBe(10_000)
         // The 1,025th distinct user is not refused, and the first user's reservation is still active

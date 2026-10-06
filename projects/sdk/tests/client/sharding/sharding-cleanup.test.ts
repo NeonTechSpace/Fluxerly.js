@@ -143,7 +143,7 @@ async function gatewayFixture() {
             return transport.closed.has(clientFor(shardId))
         },
         async waitClientClosed(shardId: number) {
-            await vi.waitFor(() => expect(this.clientClosed(shardId)).toBe(true), { interval: 5, timeout: 2_000 })
+            await vi.waitFor(() => expect(this.clientClosed(shardId)).toBe(true), { interval: 5 })
         },
         async close() {
             transport.terminationGate?.unblock()
@@ -189,7 +189,7 @@ async function makeDriver(mode: Mode, startupTimeoutMs?: number, maxStartupAttem
 }
 
 async function waitForIdentifies(fixture: Awaited<ReturnType<typeof gatewayFixture>>) {
-    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5, timeout: 4_000 })
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5 })
     const first = fixture.identifies.find((command) => shardTuple(command)[0] === 0)
     const second = fixture.identifies.find((command) => shardTuple(command)[0] === 1)
     if (!first || !second) throw new Error("Expected both assigned shards")
@@ -238,7 +238,7 @@ test.each(modes)("%s retains a permanent shard failure and a sibling socket clea
         fixture.ready(first)
         await vi.waitFor(
             () => expect(driver.client.shards.find((shard) => shard.shardId === 0)?.state).toBe("Connected"),
-            { interval: 5, timeout: 2_000 },
+            { interval: 5 },
         )
         const cleanupGate = fixture.failClose(0, cleanup)
         const [shardId, totalShards] = shardTuple(second)
@@ -300,7 +300,7 @@ test.each(modes)("%s retains a startup timeout and a socket cleanup defect", asy
         const pending = driver.defaultApi
             ? Promise.resolve(driver.defaultApi.connect())
             : Effect.runPromiseExit(driver.native!.connect())
-        await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5, timeout: 2_000 })
+        await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
         const [startedShard] = shardTuple(fixture.identifies[0]!)
         const cleanupGate = fixture.failClose(startedShard, cleanup)
         await clock.advance(budgetMs)
@@ -350,7 +350,7 @@ test.each(modes)("%s retains caller interruption and a socket cleanup defect", a
         const pending = driver.defaultApi
             ? Promise.resolve(driver.defaultApi.connect({ signal: controller.signal }))
             : Effect.runPromiseExit(driver.native!.connect(), { signal: controller.signal })
-        await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5, timeout: 2_000 })
+        await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
         const [startedShard] = shardTuple(fixture.identifies[0]!)
         const cleanupGate = fixture.failClose(startedShard, cleanup)
         controller.abort()

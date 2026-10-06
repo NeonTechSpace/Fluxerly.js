@@ -72,9 +72,10 @@ describe.each(modes)("%s rejection replies", (mode) => {
     test('onReject "reply" answers an active cooldown once and a guard denial once per user and command every 5 seconds', async () => {
         const remote = await commandFixture()
         const connected = await connect(mode)
-        const realNow = Date.now.bind(Date)
+        // Wall time stays frozen, so only the explicit step below moves past the reply window
+        const startMs = Date.now()
         let offsetMs = 0
-        vi.spyOn(Date, "now").mockImplementation(() => realNow() + offsetMs)
+        vi.spyOn(Date, "now").mockImplementation(() => startMs + offsetMs)
         const executed: string[] = []
         const execute = ({ name }: { name: string }) => act(mode, () => void executed.push(name))
         const router = createRouter(mode, { prefix: "!", onReject: "reply" }).registerMany({

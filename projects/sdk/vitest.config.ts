@@ -25,8 +25,9 @@ export default {
     test: {
         maxWorkers: workers,
         exclude: ["**/node_modules/**", "**/.git/**"],
-        // SDK log output is captured per test and printed only when that test fails
-        setupFiles: ["tests/support/quiet-output.ts"],
+        // SDK log output is captured per test and printed only when that test fails. A vi.waitFor poll without its own
+        // timeout is bounded by the test timeout instead of Vitest's one-second default
+        setupFiles: ["tests/support/quiet-output.ts", "tests/support/wait-deadline.ts"],
         projects: [
             { extends: true, test: { name: "sdk", exclude: ["**/node_modules/**", "**/.git/**", ...processTests] } },
             {

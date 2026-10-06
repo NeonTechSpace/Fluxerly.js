@@ -12,7 +12,7 @@ import assert from "node:assert/strict"
 import { randomUUID, createHash } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
 import WebSocket from "ws"
-import { Cause, Logger, References } from "effect"
+import { Cause, Clock, Effect, Logger, References } from "effect"
 import { observeUploads, safeFailure } from "./upload-diagnostics.mjs"
 import {
     cleanupGuildChannelFixtures,
@@ -1545,8 +1545,18 @@ async function verifyCacheProjectionConflict(send, fetch, get, channelId) {
 
 async function verifyCacheExpiry(send, get, channelId) {
     stage = "cache_active_expiry"
-    const sent = await send(channelId, { content: `cache-expire-${randomUUID()}` })
-    assert.equal((await get(sent)).id, sent.id)
+    // SDK time stands still on the default Effect Clock until the lookup proves retention, so a slow host cannot pass
+    // the short expiry first. Releasing it resumes real time, which is ahead of the held reading and passes the expiry
+    const clock = Effect.runSync(Clock.Clock)
+    const held = clock.monotonicTimeNanosUnsafe()
+    clock.monotonicTimeNanosUnsafe = () => held
+    let sent
+    try {
+        sent = await send(channelId, { content: `cache-expire-${randomUUID()}` })
+        assert.equal((await get(sent))?.id, sent.id)
+    } finally {
+        delete clock.monotonicTimeNanosUnsafe
+    }
     await waitForCache(get, sent, (snapshot) => snapshot === undefined)
     const actual = await api("GET", `/channels/${channelId}/messages/${sent.id}`)
     assert.equal(actual.status, 200)
@@ -3317,19 +3327,25 @@ try {
         const pong = `pong-${randomUUID()}`
         const sdkRequests = []
         const typingRequests = []
+        // Runs after each typing request is recorded, before the SDK receives its response
+        let onTypingRequest = () => {}
         if (cache || search || typing) {
             // Sandbox setup and independent readback keep using rawFetch. This observes only the SDK's own REST behavior
             globalThis.fetch = async (...args) => {
                 const url = new URL(args[0])
                 if (cache || search) sdkRequests.push(url.pathname)
+                // Refresh spacing is measured from when the SDK sent each request, not from its network response
+                const at = performance.now()
                 const response = await rawFetch(...args)
-                if (typing && url.pathname === `/v1/channels/${channel.id}/typing`)
+                if (typing && url.pathname === `/v1/channels/${channel.id}/typing`) {
                     typingRequests.push({
-                        at: performance.now(),
+                        at,
                         body: args[1]?.body,
                         method: args[1]?.method,
                         status: response.status,
                     })
+                    onTypingRequest()
+                }
                 return response
             }
         }
@@ -3412,11 +3428,16 @@ try {
                     stage = "typing_scoped_refresh"
                     const scopedStart = typingRequests.length
                     const complete = Promise.withResolvers()
+                    // The scoped work completes as the second refresh is answered, so no third refresh can start first
+                    onTypingRequest = () => {
+                        if (typingRequests.length === scopedStart + 2) complete.resolve("completed")
+                    }
                     const scoped = client.messages.keepTyping(channel.id, () => complete.promise)
                     let completed
                     try {
                         await waitForTypingRequests(typingRequests, scopedStart + 2)
                     } finally {
+                        onTypingRequest = () => {}
                         complete.resolve("completed")
                         completed = await scoped
                     }
@@ -4227,10 +4248,16 @@ try {
                             stage = "typing_scoped_refresh"
                             const scopedStart = typingRequests.length
                             const complete = Deferred.makeUnsafe()
+                            // The scoped work completes as the second refresh is answered, so no third refresh can start first
+                            onTypingRequest = () => {
+                                if (typingRequests.length === scopedStart + 2)
+                                    Deferred.doneUnsafe(complete, Effect.succeed("completed"))
+                            }
                             const scoped = yield* Effect.forkChild(
                                 client.messages.keepTyping(channel.id, Deferred.await(complete)),
                             )
                             yield* Effect.promise(() => waitForTypingRequests(typingRequests, scopedStart + 2))
+                            onTypingRequest = () => {}
                             Deferred.doneUnsafe(complete, Effect.succeed("completed"))
                             assert.equal(yield* Fiber.join(scoped), "completed")
                             const refreshes = typingRequests.slice(scopedStart)

@@ -1,4 +1,4 @@
-import { test, expect, type Locator } from "@playwright/test"
+import { test, expect, type Locator, type Page } from "@playwright/test"
 import { existsSync, readFileSync } from "node:fs"
 import AxeBuilder from "@axe-core/playwright"
 
@@ -19,6 +19,12 @@ const authoredGuides = guideInventory.pages.flatMap((slug) => {
         examples: slug === "quick-start" ? 4 : source.split(/\r?\n/).filter((line) => /^```\S+$/.test(line)).length,
     }]
 })
+
+// Astro drops the ssr marker before React commits. The Ctrl hint renders only after its effects, so server-rendered
+// controls then have their client actions
+async function committed(page: Page) {
+    await expect(page.getByRole("button", { name: "Search Ctrl K", exact: true })).toBeVisible()
+}
 
 // Sidebar section labels are the separators of the authored guide inventory
 const navigationGroups = guideInventory.pages.flatMap((entry) => /^---(.+)---$/.exec(entry)?.[1] ?? [])
@@ -142,7 +148,7 @@ test("Search opens by keyboard, finds the current API and returns focus", async 
     await page.keyboard.press("Enter")
     await expect(page).toHaveURL(/\/docs\/preview\/api\/modules\/(?:js-ts|Effect)\/?#createclient$/)
     await page.goBack()
-    await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+    await expect(trigger).toBeVisible()
     await trigger.click()
     await expect(input).toBeVisible()
     await page.keyboard.press("Escape")
@@ -167,7 +173,7 @@ test("Dark reading remains usable with enlarged text and reduced motion", async 
 test("API navigation stays compact on a deep symbol without losing reference access", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto("/docs/preview/api/interfaces/js-ts.Client/#messages")
-    await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+    await committed(page)
     // Symbol pages are absent from the browser tree, so their breadcrumbs are built with the page
     const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" })
     await expect(breadcrumb.getByRole("link", { name: "API reference", exact: true })).toHaveAttribute("href", "/docs/preview/api")
@@ -209,7 +215,9 @@ test("Reference navigation highlights the clicked link without moving it and lan
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto("/docs/preview/")
     const docs = page.locator('astro-island[component-export="Docs"]')
-    await expect(docs).not.toHaveAttribute("ssr")
+    await committed(page)
+    // Loaded fonts fix the link positions compared before and after each click
+    await page.evaluate(() => document.fonts.ready)
     const sidebar = page.locator("#nd-sidebar")
     const activeLinks = sidebar.locator('a[data-active="true"]')
     const top = (link: Locator) => link.evaluate((element) => Math.round(element.getBoundingClientRect().top))
@@ -224,7 +232,7 @@ test("Reference navigation highlights the clicked link without moving it and lan
         const before = await top(link)
         await link.click()
         await expect(page.getByRole("heading", { level: 1, name: heading, exact: true })).toBeVisible()
-        await expect(docs).not.toHaveAttribute("ssr")
+        await committed(page)
         // Exactly the clicked link is current, and the new sidebar keeps it where it was clicked
         await expect(activeLinks).toHaveCount(1)
         await expect(activeLinks).toHaveAccessibleName(name)
@@ -233,6 +241,7 @@ test("Reference navigation highlights the clicked link without moving it and lan
     // Both entry points have a Messages category, and only the clicked one becomes current
     await sidebar.getByRole("link", { name: "Effect API", exact: true }).click()
     await expect(page.getByRole("heading", { level: 1, name: "Effect API", exact: true })).toBeVisible()
+    await committed(page)
     const category = sidebar.getByRole("link", { name: "Messages (JavaScript & TypeScript)", exact: true })
     await category.scrollIntoViewIfNeeded()
     const before = await top(category)
@@ -264,14 +273,24 @@ for (const width of [390, 1440]) {
             if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`)
         })
         await page.goto("/docs/preview/quick-start/")
+        // React has committed the hydrated tree, which Astro's ssr marker does not prove. The shortcut hint that other
+        // tests use is not rendered at mobile widths
+        const island = page.locator('astro-island[component-export="Docs"]')
+        await expect.poll(() => island.evaluate((element) => {
+            const key = Object.keys(element).find((key) => key.startsWith("__reactContainer"))
+            const root = key === undefined ? undefined : (element as unknown as Record<string, { stateNode: { current: { memoizedState: { isDehydrated: boolean } } } }>)[key]
+            return root?.stateNode.current.memoizedState.isDehydrated ?? true
+        })).toBe(false)
+        // Loaded fonts set the label widths that the overflow checks compare
+        await page.evaluate(() => document.fonts.ready)
         const sidebar = page.locator(width < 768 ? "#nd-sidebar-mobile" : "#nd-sidebar")
         const openMobileSidebar = async () => {
             await page.getByRole("button", { name: "Open Sidebar", exact: true }).click()
             await expect(sidebar).toHaveAttribute("data-state", "open")
         }
         if (width < 768) {
-            // The server-rendered trigger is focusable before React installs its keyboard action
-            await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+            // The server-rendered trigger is focusable before React installs its keyboard action, which the committed
+            // hydration above rules out
             await expect(sidebar).toHaveAttribute("data-state", "closed")
             const trigger = page.getByRole("button", { name: "Open Sidebar", exact: true })
             await trigger.focus()
@@ -510,7 +529,7 @@ test("Guide pages send only the navigation tree the sidebar renders", async ({ p
 
 test("A skip link moves keyboard focus past the navigation to the page content", async ({ page }) => {
     await page.goto("/docs/preview/quick-start/")
-    await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
+    await committed(page)
     await page.keyboard.press("Tab")
     const skip = page.getByRole("link", { name: "Skip to content", exact: true })
     await expect(skip).toBeFocused()

@@ -97,8 +97,9 @@ describe.each(modes)("%s mentionPrefix bot ID", (mode) => {
         remote.deliver("<@!99> ping three")
         try {
             await vi.waitFor(() => expect(selfReads).toBeGreaterThan(0))
-            // The mentions were delivered before the barrier, so each reached the bot ID lookup while the read is open
-            await barrier(remote, connected)
+            // The mentions were delivered before the barrier, so each reached the bot ID lookup while the read is open.
+            // All three keep running until the read is answered
+            await barrier(remote, connected, 3)
             expect(selfReads).toBe(1)
         } finally {
             answer()

@@ -48,6 +48,7 @@ async function cleanup() {
 async function runMode(channel) {
     const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
     const { Effect, Exit, Scope } = await import("effect")
+    const { default: WebSocket } = await import("ws")
     const scope = mode === "effect" ? Scope.makeUnsafe() : undefined
     const value = async (operation) => {
         if (mode === "default") {
@@ -65,7 +66,20 @@ async function runMode(channel) {
     let ready = false
     let typingRequests = 0
     let lastTypingAt = 0
-    const earliest = Math.floor(Date.now() / 1000) - 5
+    // Provider timestamps of the target member's raw typing frames, kept without any other frame content
+    const rawTypingTimestamps = []
+    const emit = WebSocket.prototype.emit
+    WebSocket.prototype.emit = function (event, ...args) {
+        if (event === "message")
+            try {
+                const frame = JSON.parse(args[0].toString())
+                if (frame.t === "TYPING_START" && frame.d?.channel_id === channel.id && frame.d?.user_id === targetId)
+                    rawTypingTimestamps.push(frame.d.timestamp)
+            } catch {
+                // Frames that are not JSON carry no typing timestamp
+            }
+        return Reflect.apply(emit, this, [event, ...args])
+    }
     confirmedMode = undefined
     confirmationSource = undefined
     try {
@@ -99,13 +113,15 @@ async function runMode(channel) {
             if (event.channelId !== channel.id || event.userId !== targetId) return
             assert.ok(Object.isFrozen(event))
             assert.ok(event.guildId === undefined || event.guildId === guildId)
-            assert.ok(
-                Number.isSafeInteger(event.timestamp) &&
-                    event.timestamp >= earliest &&
-                    event.timestamp <= Date.now() / 1000 + 5,
-            )
+            // The event keeps the provider's timestamp from the raw frame. Its distance from this machine's clock
+            // depends on both clocks, so it is reported rather than asserted
+            assert.ok(Number.isSafeInteger(event.timestamp) && rawTypingTimestamps.includes(event.timestamp))
             if (!received)
-                report("inbound_typing_observed", { frozen: true, guildContext: event.guildId !== undefined })
+                report("inbound_typing_observed", {
+                    frozen: true,
+                    guildContext: event.guildId !== undefined,
+                    clockSkewSeconds: event.timestamp - Math.floor(Date.now() / 1000),
+                })
             received = true
         })
         await value(client.connect())
@@ -157,6 +173,7 @@ async function runMode(channel) {
         report(stage)
     } finally {
         globalThis.fetch = rawFetch
+        WebSocket.prototype.emit = emit
         try {
             if (client) {
                 await value(client.shutdown())

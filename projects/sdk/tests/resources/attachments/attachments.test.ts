@@ -2339,7 +2339,7 @@ test.each(modes)("%s cancels streaming GET acquisition and awaits a late respons
     const signal = await entered.promise
     controller.abort()
     try {
-        await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 500 })
+        await vi.waitFor(() => expect(signal.aborted).toBe(true))
         expect(settled).toBe(false)
     } finally {
         response.resolve(

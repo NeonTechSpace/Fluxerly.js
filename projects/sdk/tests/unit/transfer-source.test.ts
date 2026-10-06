@@ -34,10 +34,13 @@ test.each(paths)("%s %s allows host timers before exhausting sustained empty chu
                 data = true
                 return { value: new Uint8Array([42]) }
             }
-            if (empties === 0)
+            if (empties === 0) {
                 setTimeout(() => {
                     timerSaw = empties
                 }, 0)
+                // The zero-delay timer is due on the controlled clock and runs at the first host turn the source yields
+                setImmediate(() => vi.runOnlyPendingTimers())
+            }
             if (empties++ < 100_000) return { value: new Uint8Array(0) }
             if (!data) {
                 data = true
@@ -49,10 +52,15 @@ test.each(paths)("%s %s allows host timers before exhausting sustained empty chu
         releaseLock: vi.fn(),
     }
     const { body, getReader } = transfer(kind, reader)
-    expect([...new Uint8Array(await new Response(body.body).arrayBuffer())]).toEqual([42])
-    await body.verify()
-    await body.finish()
-    await body.stop()
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    try {
+        expect([...new Uint8Array(await new Response(body.body).arrayBuffer())]).toEqual([42])
+        await body.verify()
+        await body.finish()
+        await body.stop()
+    } finally {
+        vi.useRealTimers()
+    }
     expect(timerSaw).toBeDefined()
     expect(timerSaw).toBeLessThan(100_000)
     expect(getReader).toHaveBeenCalledTimes(1)

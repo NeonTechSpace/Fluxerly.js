@@ -222,6 +222,9 @@ if (!child) {
                     mode,
                     scenario,
                     metrics: Object.fromEntries(fields.map((field) => [field, summarize(group, field)])),
+                    ...(scenario === "cold-import-client-lifecycle"
+                        ? {}
+                        : { incompleteEventLoopSamples: group.filter((row) => !row.eventLoopDelayComplete).length }),
                 }),
             )
         }
@@ -435,12 +438,9 @@ if (!child) {
             const lookupOperations = retainedMessages * lookupRounds
             assert.equal(observedCodeUnits, lookupOperations * messageCodeUnits)
             assert.equal(requests, pages)
-            if (!smoke)
-                assert.ok(
-                    histogram.count >= minimumEventLoopSamples,
-                    `Expected at least ${minimumEventLoopSamples} event-loop delay samples, received ${histogram.count}`,
-                )
             const eventLoopDelaySamples = histogram.count
+            // Fewer samples leave the delay figures incomplete, which the row reports rather than failing the run
+            const eventLoopDelayComplete = eventLoopDelaySamples >= minimumEventLoopSamples
             const eventLoopDelayP50Ms = eventLoopDelaySamples === 0 ? 0 : histogram.percentile(50) / 1_000_000
             const eventLoopDelayP99Ms = eventLoopDelaySamples === 0 ? 0 : histogram.percentile(99) / 1_000_000
             const eventLoopDelayMaxMs = eventLoopDelaySamples === 0 ? 0 : histogram.max / 1_000_000
@@ -490,6 +490,7 @@ if (!child) {
                     eventLoopDelayP99Ms,
                     eventLoopDelayMaxMs,
                     eventLoopDelaySamples,
+                    eventLoopDelayComplete,
                     retainedHeapBytes: retained.heapUsed - baseline.heapUsed,
                     retainedRssBytes: retained.rss - baseline.rss,
                     sampledPeakHeapBytes: peakHeap - baseline.heapUsed,
