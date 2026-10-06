@@ -1,5 +1,16 @@
 # @neontechspace/fluxerly
 
+## 1000.0.0-rc.5
+
+### Patch Changes
+
+- f1aebe9: The coding agent guide's list of APIs that Fluxerly does not have, such as `client.login` and message methods, now stands on its own without naming another library. Its rules section, which `fluxerly agents` copies into an application's `AGENTS.md`, keeps the instruction to use only declared methods. Run the command again to refresh an existing section
+- 6655b27: The `AGENTS.md` section that `fluxerly agents` writes now records `npx --no fluxerly agents` or `bunx --no-install fluxerly agents` as its refresh command, and pnpm projects keep `pnpm exec fluxerly agents`. These forms never install a package automatically, because the unscoped `fluxerly` name on npm is not this SDK, so the SDK must already be installed in the project. Run the command again to update an existing section
+- f0e7941: The `CacheChange` example now tracks cached keys, so replaced entries and cleared kinds stay accurate. The `ResourceCacheSettings` description now names the one preload, the refill after a shard resumes a stored session, which `sharding.refillCaches` controls
+- 2b9efdf: Cancelling a connect while a failed discovery response is being cleaned up again keeps the discovery `ConnectionError` alongside the interruption and the cleanup defect. The native Cause holds all three, and the default API's `SdkDefect` lists them as reasons. With Effect 4.0.1, the discovery failure had been dropped
+- 06be6c0: The hosted `links.installation` URL now starts at Fluxer's API authorization route, `https://api.fluxer.app/v1/oauth2/authorize`, which redirects to the hosted installation page. The previous `https://fluxer.app/oauth2/authorize` URL showed a page-not-found error. Installation links for a discovered instance still open that instance's web app directly
+- 9df8363: Update the WebSocket gateway transport dependency from ws 8.21.3 to 8.22.0
+
 ## 1000.0.0-rc.4
 
 ### Major Changes
