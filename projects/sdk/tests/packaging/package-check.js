@@ -434,7 +434,12 @@ try {
             const starter = join(temporary, "init")
             mkdirSync(starter)
             const initOutput = run(process.execPath, [cli, "init"], starter)
-            assert.ok(initOutput.includes(`npm install ${manifest.name}`), "fluxerly init prints the next steps")
+            // The printed install pins the packed version, exactly while it is a prerelease
+            const exactFlag = manifest.version.includes("-") ? " --save-exact" : ""
+            assert.ok(
+                initOutput.includes(`npm install${exactFlag} ${manifest.name}@${manifest.version}`),
+                "fluxerly init prints the next steps with the installed version",
+            )
             assert.throws(
                 () => run(process.execPath, [cli, "init"], starter),
                 (error) => error.status === 1 && /already exist.*wrote nothing/.test(error.stderr),
